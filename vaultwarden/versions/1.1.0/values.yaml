@@ -24,7 +24,7 @@ backup:
 # registration with domainsWhitelist.
 signups:
   allowed: true # open registration on the public endpoint — turn off after onboarding
-  domainsWhitelist: [] # email domains that may register even when allowed=false, e.g. [mycompany.com]
+  domainsWhitelist: [] # when set, ONLY these email domains can register (overrides allowed) and receive org invites, e.g. [mycompany.com]
   verify: false # require email verification at registration (needs smtp.host)
 
 invitations:

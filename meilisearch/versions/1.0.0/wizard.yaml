@@ -1,0 +1,414 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Meilisearch
+# One stateful replica on its own volume and no location handling: every GVC location would run an
+# independent, diverging index behind one endpoint.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Master key
+    description: The prerequisite secret that holds the master key protecting the Meilisearch API.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'The master-key secret must exist **before** you install. If it is missing, the deployment waits on it ' +
+          'and `cpln logs` shows nothing at all; the reason is in `cpln workload get-deployments ' +
+          context.releaseName + '-meilisearch --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+          ' -o yaml` under `status.versions[].message`. Once the secret exists it recovers on its own within ' +
+          'about 10 minutes, or at once with `cpln workload force-redeployment ' + context.releaseName +
+          '-meilisearch --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+        text: >-
+          The master-key secret must exist **before** you install. If it is missing, the deployment waits on
+          it and `cpln logs` shows nothing at all; the reason is in
+          `cpln workload get-deployments RELEASE_NAME-meilisearch --gvc GVC_NAME -o yaml` under
+          `status.versions[].message`. Once the secret exists it recovers on its own within about 10 minutes,
+          or at once with `cpln workload force-redeployment RELEASE_NAME-meilisearch --gvc GVC_NAME`.
+      - path: auth.secretName
+        type: ref
+        label: Master key secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) whose whole payload is the master key, at least 16 bytes while the
+          environment is `production`. Every route except `GET /health` requires a key.
+        help: >-
+          Meilisearch derives its four built-in API keys (search, admin, read-only admin and chat) from the
+          master key, so a new master key changes every one of them and breaks every client until you hand
+          out the new keys. A changed payload takes effect only after
+          `cpln workload force-redeployment RELEASE_NAME-meilisearch --gvc GVC_NAME`. Create the secret with:
+          `printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+        docs: "#master-key"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-meilisearch-master-key'"
+            hint: "Generate the key with: openssl rand -base64 32"
+    rules:
+      # meilisearch.validate refuses an empty auth.secretName (required on the field; restated for the
+      # mirror, suppressed while REQUIRED shows).
+      - rule: self.auth.secretName != null && self.auth.secretName != ''
+        mirrors: meilisearch.validate
+        paths: [auth.secretName]
+        message: Choose the opaque secret that holds the master key.
+      - rule: oldSelf == null || self.auth.secretName == oldSelf.auth.secretName
+        severity: info
+        paths: [auth.secretName]
+        message: >-
+          A different master key changes every Meilisearch API key derived from it, so every client needs its
+          new key after this upgrade. Fetch them again from GET /keys with the new master key.
+
+  - id: server
+    title: Server
+    description: The Meilisearch image, its compute and memory budget, and how the server runs.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Meilisearch runs a single replica, so an upgrade that changes the workload takes search offline
+              until the new replica is ready, and the outage starts a while after the upgrade command returns.
+              Have your application fall back while search is unavailable.
+          - path: image
+            type: string
+            format: image
+            label: Meilisearch image
+            required: true
+            description: >-
+              A newer tag cannot open a database written by an older one until it is migrated: turn on
+              Upgrade the database for the deploy that raises the tag, after a backup.
+            docs: "#upgrading-meilisearch"
+          - path: server.upgradeDb
+            type: boolean
+            label: Upgrade the database
+            when: context.mode == 'upgrade' || self.server.upgradeDb
+            description: >-
+              Migrates the database on start, for the one deploy that raises the image tag. The migration is
+              not atomic: confirm a recent backup first, and turn this off again once the workload is ready on
+              the new tag.
+            docs: "#upgrading-meilisearch"
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              A single stateful replica. Searches run from a memory-mapped index; indexing is the phase that
+              needs memory, and its budget is a share of the maximum memory.
+            docs: "#resources"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: tuning.indexingMemoryPercent
+            type: integer
+            label: Indexing memory
+            unit: "%"
+            required: true
+            min: 20
+            max: 80
+            description: >-
+              The share of the maximum memory Meilisearch may use while indexing; the rest is left for search.
+              Above 80 the container gets OOM-killed while indexing, and below 20 indexing starves. Raise the
+              maximum memory to index faster.
+            suggestions: [30, 50, 70]
+          - type: note
+            when: >-
+              self.resources.maxMemory != null && string(self.resources.maxMemory).matches('^[0-9]+(Mi|Gi)$') &&
+              self.tuning.indexingMemoryPercent != null
+            textExpression: >-
+              'Meilisearch may use up to ' +
+              string(int(string(self.resources.maxMemory).substring(0, size(string(self.resources.maxMemory)) - 2)) *
+              (string(self.resources.maxMemory).endsWith('Gi') ? 1024 : 1) * self.tuning.indexingMemoryPercent / 100) +
+              ' MiB while indexing (`MEILI_MAX_INDEXING_MEMORY`).'
+            text: >-
+              Meilisearch may use this share of the maximum memory while indexing (`MEILI_MAX_INDEXING_MEMORY`).
+        rules:
+          - when: oldSelf != null && self.image.split(':')[size(self.image.split(':')) - 1] != oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]
+            rule: self.server.upgradeDb
+            severity: warning
+            paths: [server.upgradeDb]
+            message: >-
+              The image tag changes, and the new Meilisearch refuses to open the database written by the
+              running one: the new replica restarts in a loop and search goes down. Turn on Upgrade the
+              database for this deploy, after confirming a recent backup.
+          - when: >-
+              oldSelf != null && oldSelf.server.upgradeDb && self.image == oldSelf.image
+            rule: "!self.server.upgradeDb"
+            severity: info
+            paths: [server.upgradeDb]
+            message: >-
+              The database was migrated by the previous deploy. Once the workload is ready on this image,
+              turn Upgrade the database off so the migration flag is not left on.
+          - when: oldSelf == null
+            rule: "!self.server.upgradeDb"
+            severity: info
+            paths: [server.upgradeDb]
+            message: A new release starts with an empty database, so there is nothing to upgrade; leave it off.
+          - rule: self.tuning.indexingMemoryPercent >= 20 && self.tuning.indexingMemoryPercent <= 80
+            mirrors: meilisearch.validate
+            paths: [tuning.indexingMemoryPercent]
+            message: >-
+              Use 20 to 80 %. Above 80 leaves nothing for search and gets the container OOM-killed while
+              indexing; below 20 starves indexing.
+          - rule: string(self.resources.maxMemory).matches('^[0-9]+(Mi|Gi)$')
+            mirrors: meilisearch.validate
+            paths: [resources]
+            message: >-
+              Give the maximum memory as a whole number of Mi or Gi, such as 2Gi or 1536Mi: the chart derives
+              the indexing budget from it.
+          - when: string(self.resources.maxMemory).matches('^[0-9]+(Mi|Gi)$')
+            rule: >-
+              int(string(self.resources.maxMemory).substring(0, size(string(self.resources.maxMemory)) - 2)) *
+              (string(self.resources.maxMemory).endsWith('Gi') ? 1024 : 1) * self.tuning.indexingMemoryPercent / 100 > 0
+            mirrors: meilisearch.validate
+            paths: [resources]
+            message: The indexing budget rounds to 0 MiB; raise the maximum memory.
+      - title: Server settings
+        docs: "#server"
+        fields:
+          - path: server.env
+            type: enum
+            label: Environment
+            widget: cards
+            required: true
+            options:
+              - value: production
+                label: Production
+                description: >-
+                  The API only. GET / answers with a short JSON status, which is a healthy server.
+              - value: development
+                label: Development
+                description: >-
+                  Also serves the browser search preview at /. The master key still protects every route.
+          - path: server.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            options: [ERROR, WARN, INFO, DEBUG, TRACE]
+          - path: server.maxPayloadSize
+            type: string
+            label: Largest request body
+            required: true
+            description: >-
+              In Meilisearch's size syntax, such as `100 MB`. A bigger import is rejected with HTTP 413 and
+              nothing from it is written: send documents in batches.
+            suggestions: ["10 MB", "100 MB", "500 MB", "1 GB"]
+          - path: server.telemetry
+            type: boolean
+            label: Send anonymous usage data upstream
+        rules:
+          - rule: self.server.env in ['production', 'development']
+            mirrors: meilisearch.validate
+            paths: [server.env]
+            message: Choose Production or Development.
+          - rule: self.server.logLevel in ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE']
+            mirrors: meilisearch.validate
+            paths: [server.logLevel]
+            message: Choose ERROR, WARN, INFO, DEBUG or TRACE.
+      - id: metrics
+        title: Prometheus metrics
+        toggle: metrics.enabled
+        description: >-
+          An experimental Meilisearch feature: index-level metrics (documents indexed, searches per index,
+          database size) at /metrics on port 7700, which the platform's built-in workload metrics cannot see.
+          Scrapers need an API key with the metrics.get action.
+        docs: "#metrics"
+        fields: []
+
+  - id: storage
+    title: Storage and backups
+    description: The volume that holds the index, and the snapshots that back it up.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            description: >-
+              One volume holds the index, Meilisearch snapshots and dumps. Uninstalling the release deletes it;
+              a final snapshot is kept for the retention below.
+            docs: "#storage"
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: meilisearch.validate
+            paths: [volumeset.capacity]
+            message: The initial capacity must be at least 10 GiB.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: Snapshot retention
+        fields:
+          - path: backup.retention
+            type: string
+            label: Keep volume snapshots for
+            required: true
+            placeholder: 7d
+            description: >-
+              Applies to the scheduled snapshots and to the final snapshot taken when the release is
+              uninstalled.
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
+            suggestions: [7d, 14d, 30d]
+      - id: backup
+        title: Scheduled volume snapshots
+        toggle: backup.enabled
+        description: >-
+          Platform snapshots of the whole volume on a schedule, the backup for this template. No cloud account
+          or bucket is needed. With this off, no scheduled snapshots are taken.
+        docs: "#backup"
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            required: true
+        rules:
+          - rule: self.backup.schedule != null && self.backup.schedule != ''
+            mirrors: meilisearch.validate
+            paths: [backup.schedule]
+            message: Give a snapshot schedule, such as 0 3 * * *.
+          - rule: self.backup.schedule == null || self.backup.schedule == '' || self.backup.schedule.trim().matches('^[0-5]?[0-9] ')
+            severity: warning
+            paths: [backup.schedule]
+            message: >-
+              Snapshots run at most hourly: start the schedule with a single fixed minute, such as 0 3 * * *.
+              The platform refuses a more frequent schedule at install.
+      - id: snapshots
+        title: Meilisearch snapshots
+        toggle: snapshots.enabled
+        description: >-
+          Meilisearch's own application-consistent .snapshot file, written to /meili_data/snapshots on the same
+          volume; only the newest is kept. It opens only with the version that wrote it, which makes it the
+          rollback point before a version upgrade (restore it with the old image).
+        docs: "#snapshots"
+        fields:
+          - path: snapshots.intervalSeconds
+            type: integer
+            label: Interval
+            unit: seconds
+            min: 1
+            required: true
+            suggestions:
+              - { value: 3600, label: "1 hour" }
+              - { value: 21600, label: "6 hours" }
+              - { value: 86400, label: "1 day" }
+        rules:
+          - rule: self.snapshots.intervalSeconds >= 1
+            mirrors: meilisearch.validate
+            paths: [snapshots.intervalSeconds]
+            message: The interval must be at least 1 second.
+
+  - id: network
+    title: Network
+    description: Who can reach the Meilisearch API.
+    sections:
+      - title: Public access
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              Serve the REST API on the workload's public *.cpln.app endpoint, for front-ends that search
+              straight from the browser.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Anyone on the internet can reach the API; the master key is the only thing protecting it, on ' +
+              'every route except `GET /health`. Never put the master key in a browser or front-end: give ' +
+              'front-ends the Default Search API Key from `GET /keys`, which can search but not write. See ' +
+              '[Use a Scoped API Key](/template-catalog/templates/meilisearch#use-a-scoped-api-key). Read the ' +
+              'address from `status.canonicalEndpoint` in `cpln workload get ' + context.releaseName +
+              '-meilisearch --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. ' +
+              'Firewall changes can take a few minutes to apply.'
+            text: >-
+              Anyone on the internet can reach the API; the master key is the only thing protecting it, on
+              every route except `GET /health`. Never put the master key in a browser or front-end: give
+              front-ends the Default Search API Key from `GET /keys`, which can search but not write. See
+              [Use a Scoped API Key](/template-catalog/templates/meilisearch#use-a-scoped-api-key). Read the
+              address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-meilisearch --gvc GVC_NAME -o yaml`. Firewall changes can take a
+              few minutes to apply.
+      - title: Internal access
+        docs: "#access"
+        fields:
+          - type: note
+            textExpression: >-
+              'To reach the API from your computer, run `cpln port-forward ' + context.releaseName +
+              '-meilisearch 7700:7700 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '` and call http://localhost:7700. Inside the GVC the address is http://' + context.releaseName +
+              '-meilisearch.' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:7700.'
+            text: >-
+              To reach the API from your computer, run
+              `cpln port-forward RELEASE_NAME-meilisearch 7700:7700 --gvc GVC_NAME` and call
+              http://localhost:7700. Inside the GVC the address is
+              http://RELEASE_NAME-meilisearch.GVC_NAME.cpln.local:7700.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes can take a few minutes to apply.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload.yaml writes inboundAllowWorkload only for workload-list, so the list is shown only there.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list, from this GVC or another one; no other workload can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: meilisearch.validate
+        paths: [internalAccess.type]
+        message: Choose one of None, Same GVC, Same org or Specific workloads.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With Specific workloads and an empty list, no workload can connect.
+      - when: self.internalAccess.type != 'workload-list'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          The chart uses the workload list only with Specific workloads; the workloads listed in the values
+          are ignored with this choice.
+      - when: self.internalAccess.type == 'none'
+        rule: self.publicAccess.enabled
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          With None and no public endpoint, nothing can reach Meilisearch except cpln port-forward.

@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-cluster` (**stateful**, `replicas` brokers) | The brokers. Container command is `/bin/bash /scripts/redpanda-init.sh`, not the image CMD |
-| volumeset `{release}-data` | Topic data, one volume per broker. **No `snapshots` block** (unlike `kafka`) |
+| volumeset `{release}-data` | Topic data, one volume per broker. Daily snapshots since 1.1.0 (see below) |
 | secret `{release}-init` (opaque, plain) | Assembles `/etc/redpanda/redpanda.yaml` at boot from injected credentials, then `exec`s redpanda |
 | workload `{release}-console` (**standard**, optional) | Redpanda Console UI on 8080. Command is `/bin/sh /scripts/console-init.sh` |
 | secret `{release}-console-init` (opaque, plain) | Assembles `/tmp/redpanda-console/config.yaml` at boot, then `exec`s `/app/console` |
@@ -22,8 +22,8 @@
 | *(user-created)* dictionary secret per SASL user | `username` + `password` |
 | domain (optional) | Only when external Kafka access or `redpanda_console.domain` is set |
 
-## Key knobs (shipped 1.1.0 defaults)
-`redpanda.replicas` (3; 1/3/5 only) | `redpanda.image` (`redpandadata/redpanda:v26.1.9`) | `cpu`/`memory`/`minCpu`/`minMemory` (1500m / 4Gi / 500m / 2Gi) | `smp` (1) | `reserveMemory` (1G) | `volume.initialCapacity` (10 GB) / `performanceClass` (`general-purpose-ssd`) / `fileSystemType` (`xfs`) | `auth.saslMechanism` (`SCRAM-SHA-256`) | `auth.users[].credentialsSecretName` (`my-redpanda-admin-credentials`, **must exist before install**) | `auth.superusers` (`[]`) | `acl.allowEveryoneIfNoAclFound` (false) | `listeners.pandaproxy.enabled` (false) | `firewall.internal_inboundAllowType` (`same-gvc`) | `redpanda_console.enabled` (true) | console `external_inboundAllowCIDR` (**commented out = closed**)
+## Key knobs (shipped 1.2.0 defaults)
+`redpanda.replicas` (3; 1/3/5 only) | `redpanda.image` (`redpandadata/redpanda:v26.1.9`) | `maxCpu`/`maxMemory`/`minCpu`/`minMemory` (1500m / 4Gi / 500m / 2Gi; renamed from `cpu`/`memory` in 1.2.0) | `smp` (1) | `reserveMemory` (1G) | `volume.initialCapacity` (10 GB) / `performanceClass` (`general-purpose-ssd`) / `fileSystemType` (`xfs`) | `auth.saslMechanism` (`SCRAM-SHA-256`) | `auth.users[].credentialsSecretName` (`my-redpanda-admin-credentials`, **must exist before install**) | `auth.superusers` (`[]`) | `acl.allowEveryoneIfNoAclFound` (false) | `listeners.pandaproxy.enabled` (false) | `firewall.internal_inboundAllowType` (`same-gvc`) | `redpanda_console.enabled` (true) | console `external_inboundAllowCIDR` (**commented out = closed**)
 
 ## Troubleshooting / considerations
 - **Security history — 1.0.x is dangerous on two counts.** It shipped `auth.users[].password: "your-admin-password"` (a working value, banned `your-…` prefix) *and* published the console to `0.0.0.0/0`. Rows 18 of the 2026-08 catalog secrets audit.
@@ -35,7 +35,7 @@
 - **SASL users live in cluster metadata, not in the config.** They are created by the `postStart` hook on broker 0 (`rpk security user create … || true`). Editing a credentials secret afterwards does **not** rotate the user — it only changes what the internal clients present, which will then fail to authenticate. Rotate with `rpk security user update` and update the secret to match.
 - **The broker Admin API (9644) is unauthenticated for READS AND WRITES** and open to the whole GVC under the default `same-gvc` firewall. Measured 2026-08-19: a neighbouring workload with no credentials **created and deleted a SASL user** through it. Any workload in the GVC is effectively a cluster admin. The readiness probe, the `postStart` hook and Console all rely on that. Turning on `http_basic` there would need probe/hook credentials too — a real follow-up, not a quiet edit.
 - **`maxUnavailableReplicas` was REMOVED from the broker workload in 1.1.0.** The API silently drops it on a `stateful` workload, so 1.0.x had permanent rendered-vs-stored drift *and* implied a serialized rolling restart that was never in force. A rolling upgrade can restart brokers together — say so rather than promising otherwise.
-- **`cpu:minCpu` is 3:1 (1500m:500m)** on a stateful workload, inside the 4:1 cap. Anyone raising `cpu` must raise `minCpu` with it.
+- **`cpu:minCpu` is 3:1 (1500m:500m)** on a stateful workload, inside the 4:1 cap. Anyone raising `maxCpu` must raise `minCpu` with it.
 - **The volumeset now ships snapshots** (`createFinalSnapshot` / `retentionDuration: 7d` / `schedule: 0 0 * * *`), matching kafka's surface. Added in 1.1.0 after the knobs audit flagged topic data as the only durable state with nothing backing it up. Declarative and platform-native, so it rode the existing test round rather than needing its own.
 - **A missing prerequisite secret wedges silently** — zero lines from `cpln logs`; the only diagnostic is `status.versions[].message` from `cpln workload get-deployments` (plain `get` has no `versions` key). Documented in the README.
 - **No `aws::ReadOnlyAccess`** — the identity has no cloud bindings at all, so the catalog-wide sweep had nothing to remove here.

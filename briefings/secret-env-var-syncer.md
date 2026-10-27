@@ -22,7 +22,7 @@ Does not create a GVC. Creates no secrets of its own beyond its configuration.
 | Knob | Default | Notes |
 |---|---|---|
 | `schedule` | `*/5 * * * *` | standard cron; every five minutes |
-| `timeoutSeconds` | `300` | raise it for a large entry list |
+| `timeoutSeconds` | `300` | the workload's request timeout; nothing bounds a run (no `job.activeDeadlineSeconds`) |
 | `sevsConfig.entries[]` | one example entry | each maps a source secret to a target |
 | `image` | `secret-env-var-syncer:v1.3.1` | pinned |
 
@@ -44,7 +44,7 @@ Workload targets require both `gvc` and `container`; the image rejects the entry
   GVC-level env vars reach only containers with `inheritEnv: true`.
 - **There is no endpoint to check.** It is a cron job, so confirm it works from the target workload's
   environment after a run, or from the job's own logs — not by connecting to anything.
-- **Runs never overlap.** `concurrencyPolicy: Forbid` skips a tick while a run is active; a run is killed at
-  `timeoutSeconds`.
+- **Runs never overlap.** `concurrencyPolicy: Forbid` skips a tick while a run is active. Nothing bounds a run's
+  length: `timeoutSeconds` is the platform request timeout, not a job deadline.
 - **One bad entry stops the run.** Entries run in order and the first error ends the job, so every later
   entry goes unsynced until it is fixed. Read `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-sevs"}'`.

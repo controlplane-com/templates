@@ -1,0 +1,534 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Thanos
+# No gvc block: Query is stateless and runs in every location of the GVC. The optional Compactor has no
+# location handling (one replica per location, all on one bucket), so its section carries a location rule.
+
+steps:
+  - id: stores
+    title: Store endpoints
+    description: The Store API endpoints Query fans each PromQL query out over.
+    fields:
+      - path: stores
+        type: list
+        label: Store API endpoints
+        widget: tags
+        unique: true
+        description: >-
+          Usually the Thanos sidecar of each Prometheus install, as its fully qualified service name and gRPC
+          port, for example `RELEASE_NAME-prometheus.GVC_NAME.cpln.local:10901`. Changing the list redeploys Query.
+        help: >-
+          Use the fully qualified `WORKLOAD_NAME.GVC_NAME.cpln.local:10901` form, also in this GVC: the bare
+          workload name is not reliable. An endpoint in another GVC must allow inbound traffic from this Query
+          workload on its own side: set the Prometheus install's internal access to Same org, or list
+          `//gvc/GVC_NAME/workload/RELEASE_NAME-thanos` there. A store shown as down in the Query UI is almost
+          always that firewall. Queries to stores in other locations incur egress charges.
+        docs: "#store-endpoints"
+        item:
+          type: string
+          label: Endpoint
+          placeholder: my-prometheus-prometheus.my-gvc.cpln.local:10901
+          pattern: '^(?!.*://).*:'
+          patternMessage: Enter host:port without a scheme, for example my-prometheus-prometheus.my-gvc.cpln.local:10901.
+      - path: queryReplicaLabels
+        type: list
+        label: Deduplication labels
+        widget: tags
+        unique: true
+        description: >-
+          External labels that tell the two copies of an HA Prometheus pair apart; Query merges series that
+          differ only in them. Use exactly the external label name the pair sets, such as `replica`.
+        item:
+          type: string
+          label: Label name
+          pattern: '^[a-zA-Z_][a-zA-Z0-9_]*$'
+          patternMessage: Enter a Prometheus label name, such as replica.
+    rules:
+      - rule: self.stores.all(s, !s.contains('://') && s.contains(':'))
+        mirrors: thanos.validate
+        paths: [stores]
+        message: Write every store endpoint as host:port, with no scheme, for example my-prometheus-prometheus.my-gvc.cpln.local:10901.
+
+  - id: long-term
+    title: Long-term storage
+    description: An optional Store Gateway and Compactor over the bucket your Prometheus sidecars upload blocks to.
+    sections:
+      - id: store-gateway
+        title: Store Gateway
+        toggle: storeGateway.enabled
+        description: >-
+          Serves the historical blocks in your bucket to Query, next to the live data of the store endpoints.
+          It needs the bucket your Prometheus Thanos sidecars upload to, and for AWS S3 or Google Cloud Storage
+          a cloud account (for S3 also an IAM policy), or for an S3-compatible server a keys secret, created first.
+        fields:
+          - path: storeGateway.volumeset.capacity
+            type: integer
+            label: Cache volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            description: >-
+              A local index cache over the bucket; losing it costs a rebuild on the next start, never data. On
+              first start the Store Gateway builds it over every block, which takes a while on a large bucket.
+              You can raise it later, never lower it.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: storeGateway.resources
+            type: resources
+            label: Store Gateway resources
+            required: true
+            advanced: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || !oldSelf.storeGateway.enabled || oldSelf.storeGateway.volumeset.capacity == null ||
+              self.storeGateway.volumeset.capacity >= oldSelf.storeGateway.volumeset.capacity
+            paths: [storeGateway.volumeset.capacity]
+            message: Keep the cache volume capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: compactor
+        title: Compactor
+        toggle: compactor.enabled
+        description: >-
+          Compacts and downsamples the blocks in your bucket and applies retention. Run exactly one Compactor
+          per bucket, across every install and region, and only in a GVC with one location: it runs one replica
+          in each location, and a second Compactor on the same bucket corrupts the block layout.
+        fields:
+          - path: compactor.retention.raw
+            type: string
+            label: Keep raw blocks for
+            required: true
+            placeholder: 30d
+            description: "`0d` keeps them forever."
+            pattern: '^[0-9]+(ms|s|m|h|d|w|y)$'
+            patternMessage: Enter a number and a unit, such as 0d, 30d, 2w or 1y.
+          - path: compactor.retention.fiveMinutes
+            type: string
+            label: Keep 5-minute downsampled blocks for
+            required: true
+            placeholder: 90d
+            description: "`0d` keeps them forever."
+            pattern: '^[0-9]+(ms|s|m|h|d|w|y)$'
+            patternMessage: Enter a number and a unit, such as 0d, 90d, 12w or 1y.
+          - path: compactor.retention.oneHour
+            type: string
+            label: Keep 1-hour downsampled blocks for
+            required: true
+            placeholder: 1y
+            description: "`0d` keeps them forever."
+            pattern: '^[0-9]+(ms|s|m|h|d|w|y)$'
+            patternMessage: Enter a number and a unit, such as 0d, 180d, 52w or 2y.
+          - path: compactor.volumeset.capacity
+            type: integer
+            label: Workspace volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [20, 50, 100, 250]
+            description: Scratch space for compaction; size it at about twice two weeks of raw blocks. You can raise it later, never lower it.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: compactor.resources
+            type: resources
+            label: Compactor resources
+            required: true
+            advanced: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: string(self.compactor.retention.raw).matches('^[0-9]+(ms|s|m|h|d|w|y)$')
+            mirrors: thanos.validate
+            paths: [compactor.retention.raw]
+            message: Write the retention of raw blocks as a number and a unit, such as 0d, 30d, 2w or 1y.
+          - rule: string(self.compactor.retention.fiveMinutes).matches('^[0-9]+(ms|s|m|h|d|w|y)$')
+            mirrors: thanos.validate
+            paths: [compactor.retention.fiveMinutes]
+            message: Write the retention of 5-minute downsampled blocks as a number and a unit, such as 0d, 30d, 2w or 1y.
+          - rule: string(self.compactor.retention.oneHour).matches('^[0-9]+(ms|s|m|h|d|w|y)$')
+            mirrors: thanos.validate
+            paths: [compactor.retention.oneHour]
+            message: Write the retention of 1-hour downsampled blocks as a number and a unit, such as 0d, 30d, 2w or 1y.
+          - when: oldSelf == null || !oldSelf.compactor.enabled
+            rule: context.gvcLocations == null || size(context.gvcLocations) <= 1
+            severity: warning
+            paths: [compactor.enabled]
+            messageExpression: >-
+              'This GVC has ' + string(size(context.gvcLocations)) + ' locations, and the Compactor runs one replica in each, ' +
+              'all on the same bucket, which corrupts its block layout. Enable the Compactor only in a release whose GVC has one location.'
+            message: >-
+              This GVC has several locations, and the Compactor runs one replica in each, all on the same bucket,
+              which corrupts its block layout. Enable the Compactor only in a release whose GVC has one location.
+          - when: oldSelf != null && oldSelf.compactor.enabled
+            rule: context.gvcLocations == null || size(context.gvcLocations) <= 1
+            severity: info
+            paths: [compactor.enabled]
+            message: >-
+              This release's GVC has more than one location, so a Compactor runs in each of them on the same bucket.
+              Turn the Compactor off here and run it from a release in a GVC with one location.
+          - rule: >-
+              oldSelf == null || !oldSelf.compactor.enabled || oldSelf.compactor.volumeset.capacity == null ||
+              self.compactor.volumeset.capacity >= oldSelf.compactor.volumeset.capacity
+            paths: [compactor.volumeset.capacity]
+            message: Keep the workspace volume capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: object-storage
+        title: Object storage
+        when: self.storeGateway.enabled || self.compactor.enabled
+        description: >-
+          The same bucket and backend your Prometheus Thanos sidecars upload blocks to. The bucket must exist
+          before you install.
+        docs: "#object-storage"
+        fields:
+          - path: storage.type
+            type: enum
+            label: Backend
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless, through a Control Plane cloud account and an IAM policy.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Keyless, through a Control Plane cloud account.
+              - value: minio
+                label: MinIO or S3-compatible
+                description: MinIO, R2, Wasabi and others, with access keys from a secret you create.
+        rules:
+          - rule: self.storage.type in ['aws', 'gcp', 'minio']
+            mirrors: thanos.validate
+            paths: [storage.type]
+            message: Choose AWS S3, Google Cloud Storage or MinIO or S3-compatible as the object storage backend.
+          - rule: >-
+              oldSelf == null || !(oldSelf.storeGateway.enabled || oldSelf.compactor.enabled) ||
+              oldSelf.storage.type == 'minio' || self.storage.type == oldSelf.storage.type
+            severity: info
+            paths: [storage.type]
+            message: >-
+              The identity keeps the AWS or Google Cloud binding of the previous backend after the switch. Remove it by
+              editing the identity, or uninstall and reinstall the release.
+      - title: AWS S3
+        when: (self.storeGateway.enabled || self.compactor.enabled) && self.storage.type == 'aws'
+        fields:
+          - path: storage.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: storage.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: storage.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy), by its bare name.
+            help: >-
+              The policy needs `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the bucket
+              and on its objects; the JSON is under
+              [Prerequisites](/template-catalog/templates/thanos#prerequisites).
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the bare name of your IAM policy, using letters, digits and + = , . @ _ -."
+      - title: Google Cloud Storage
+        when: (self.storeGateway.enabled || self.compactor.enabled) && self.storage.type == 'gcp'
+        fields:
+          - path: storage.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            description: The chart grants the workload identity `roles/storage.objectAdmin` on this bucket only.
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: storage.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "A GCP [cloud account](/guides/create-cloud-account) for the project that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+      - title: MinIO or S3-compatible
+        when: (self.storeGateway.enabled || self.compactor.enabled) && self.storage.type == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            textExpression: >-
+              'Version 1.2.0 moved the access keys out of the values and into the secret below. Create it with the ' +
+              'keys `accessKey` (the old `storage.minio.accessKey`) and `secretKey` (the old `storage.minio.accessSecret`). ' +
+              'To read the keys this release uses, run `cpln secret reveal ' + context.releaseName + '-thanos-objstore -o yaml` ' +
+              '(`access_key` and `secret_key`) before you upgrade: the upgrade rewrites that secret without them.'
+            text: >-
+              Version 1.2.0 moved the access keys out of the values and into the secret below. Create it with the
+              keys `accessKey` (the old `storage.minio.accessKey`) and `secretKey` (the old `storage.minio.accessSecret`).
+              To read the keys this release uses, run `cpln secret reveal RELEASE_NAME-thanos-objstore -o yaml`
+              (`access_key` and `secret_key`) before you upgrade: the upgrade rewrites that secret without them.
+          - type: note
+            severity: warning
+            textExpression: >-
+              'The keys secret must exist **before** you install. If it is missing, ' +
+              (self.storeGateway.enabled && self.compactor.enabled ? 'the Store Gateway and the Compactor wait' :
+              self.storeGateway.enabled ? 'the Store Gateway waits' : 'the Compactor waits') +
+              ' on it and `cpln logs` shows nothing at all; the reason is in `cpln workload get-deployments ' +
+              context.releaseName + (self.storeGateway.enabled ? '-thanos-store' : '-thanos-compact') +
+              ' --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` under `status.versions[].message`. ' +
+              'Once the secret exists it recovers on its own within about 10 minutes, or at once with ' +
+              '`cpln workload force-redeployment`.'
+            text: >-
+              The keys secret must exist **before** you install. If it is missing, the Store Gateway and the
+              Compactor wait on it and `cpln logs` shows nothing at all; the reason is in
+              `cpln workload get-deployments RELEASE_NAME-thanos-store --gvc GVC_NAME -o yaml` under
+              `status.versions[].message`. Once the secret exists it recovers on its own within about 10 minutes,
+              or at once with `cpln workload force-redeployment`.
+          - path: storage.minio.credentialsSecretName
+            type: ref
+            label: Access keys secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`, for a key pair that can read and write the bucket.
+            help: >-
+              Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry accessKey='YOUR-ACCESS-KEY' --entry secretKey='YOUR-SECRET-KEY'`.
+              After changing the keys inside this secret, force a redeployment of `RELEASE_NAME-thanos-store` and
+              `RELEASE_NAME-thanos-compact` (`cpln workload force-redeployment`): running workloads keep the keys
+              they started with.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-thanos-minio-credentials'"
+          - path: storage.minio.endpoint
+            type: string
+            label: Endpoint
+            required: true
+            example: true
+            placeholder: my-minio.my-gvc.cpln.local:9000
+            description: >-
+              The S3 API address as `host:port`. For a server in Control Plane use the fully qualified
+              `WORKLOAD_NAME.GVC_NAME.cpln.local:PORT`.
+            pattern: '^(?!.*://)'
+            patternMessage: Leave out the scheme (http:// or https://); enter host:port only.
+          - path: storage.minio.insecure
+            type: boolean
+            label: Plain HTTP endpoint
+            description: On when the endpoint serves plain HTTP rather than HTTPS.
+          - path: storage.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.minio.region
+            type: string
+            label: Bucket region
+            placeholder: us-east-1
+        rules:
+          - rule: "!self.storage.minio.endpoint.contains('://')"
+            mirrors: thanos.validate
+            paths: [storage.minio.endpoint]
+            message: Write the MinIO endpoint as host:port, with no scheme.
+          - rule: self.storage.minio.credentialsSecretName != null && self.storage.minio.credentialsSecretName != ''
+            mirrors: thanos.validateObjstoreCreds
+            paths: [storage.minio.credentialsSecretName]
+            message: The access keys secret is required.
+    rules:
+      - when: "!self.compactor.enabled"
+        rule: >-
+          string(self.compactor.retention.raw).matches('^[0-9]+(ms|s|m|h|d|w|y)$') &&
+          string(self.compactor.retention.fiveMinutes).matches('^[0-9]+(ms|s|m|h|d|w|y)$') &&
+          string(self.compactor.retention.oneHour).matches('^[0-9]+(ms|s|m|h|d|w|y)$')
+        mirrors: thanos.validate
+        paths: [compactor.enabled]
+        message: >-
+          A Compactor retention is not a duration such as 0d, 30d, 2w or 1y, and the chart refuses it even with
+          the Compactor off. Turn the Compactor on and correct it.
+      - when: "!self.storeGateway.enabled && !self.compactor.enabled && self.storage.type == 'minio'"
+        rule: self.storage.minio.credentialsSecretName != null && self.storage.minio.credentialsSecretName != ''
+        mirrors: thanos.validateObjstoreCreds
+        paths: [storeGateway.enabled]
+        message: >-
+          The object storage backend is still MinIO or S3-compatible, and the chart then needs the access keys
+          secret even with the Store Gateway and the Compactor off. Turn one of them on and choose the secret, or
+          choose AWS S3 or Google Cloud Storage as the backend before you turn them off.
+      # The chart refuses the removed keys whenever the backend is minio, with the storage tier on or off;
+      # one rule per state so the issue shows on a visible field once.
+      - when: self.storage.type == 'minio' && (self.storeGateway.enabled || self.compactor.enabled)
+        rule: "!has(self.storage.minio.accessKey) && !has(self.storage.minio.accessSecret)"
+        mirrors: thanos.validateObjstoreCreds
+        paths: [storage.minio.credentialsSecretName]
+        message: >-
+          storage.minio.accessKey and storage.minio.accessSecret were removed in 1.2.0. Put the keys in a
+          dictionary secret with the keys accessKey and secretKey, choose it as the access keys secret, and
+          remove both from the values.
+      - when: self.storage.type == 'minio' && !self.storeGateway.enabled && !self.compactor.enabled
+        rule: "!has(self.storage.minio.accessKey) && !has(self.storage.minio.accessSecret)"
+        mirrors: thanos.validateObjstoreCreds
+        paths: [storeGateway.enabled]
+        message: >-
+          storage.minio.accessKey and storage.minio.accessSecret were removed in 1.2.0, and the chart refuses them
+          while the backend is MinIO or S3-compatible, even with the Store Gateway and the Compactor off. Remove
+          both from the values.
+      - rule: self.storeGateway.enabled || size(self.stores) > 0
+        severity: info
+        paths: [storeGateway.enabled]
+        message: >-
+          Query has nothing to query yet: list Store API endpoints under Store endpoints, or turn the Store
+          Gateway on.
+      - rule: >-
+          oldSelf == null || !(oldSelf.storeGateway.enabled || oldSelf.compactor.enabled) ||
+          oldSelf.storage.type == 'minio' || self.storeGateway.enabled || self.compactor.enabled
+        severity: info
+        paths: [storeGateway.enabled]
+        message: >-
+          Turning the Store Gateway and the Compactor off does not remove the AWS or Google Cloud binding from the
+          identity. Remove it by editing the identity, or uninstall and reinstall the release.
+
+  - id: query
+    title: Query
+    description: The size of the stateless Query tier.
+    fields:
+      - path: replicas
+        type: integer
+        label: Replicas per location
+        min: 1
+        required: true
+        suggestions: [1, 2, 3]
+        description: Two or more keep queries answering through restarts and the loss of a replica.
+        docs: "#scaling-and-availability"
+      - path: resources
+        type: resources
+        label: Query resources
+        required: true
+        description: Per Query replica.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: image
+        type: string
+        format: image
+        label: Thanos image
+        required: true
+        advanced: true
+        description: Also used by the optional Store Gateway and Compactor.
+    rules:
+      - rule: self.replicas >= 1
+        mirrors: thanos.validate
+        paths: [replicas]
+        message: Run at least one Query replica.
+
+  - id: access
+    title: Access
+    description: Who can reach the Query UI and PromQL API.
+    sections:
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - type: note
+            textExpression: >-
+              'Query has no login of its own. While it is private, open the UI through a tunnel: `cpln port-forward ' +
+              context.releaseName + '-thanos 10902:10902 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, then browse to http://localhost:10902. Inside the GVC, Grafana and other clients use ' +
+              'http://' + context.releaseName + '-thanos.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:10902 as a Prometheus data source.'
+            text: >-
+              Query has no login of its own. While it is private, open the UI through a tunnel:
+              `cpln port-forward RELEASE_NAME-thanos 10902:10902 --gvc GVC_NAME`, then browse to
+              http://localhost:10902. Inside the GVC, Grafana and other clients use
+              http://RELEASE_NAME-thanos.GVC_NAME.cpln.local:10902 as a Prometheus data source.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Anyone with the URL can then run queries, because Query has no authentication. Leave it off, or put an
+              authenticating proxy in front of Query.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-thanos --gvc GVC_NAME -o yaml`; see
+              [Connecting](/template-catalog/templates/thanos#connecting). Turning it on or off can take up to about ten
+              minutes to take effect.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to Query inside Control Plane. Access changes can take up to about ten minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org, for example a Query tier or Grafana in another GVC.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list, for example your Grafana; no other workload can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: thanos.validate
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: No workload is listed, so no workload can connect to Query.
+
+migrations:
+  # 1.1.0 renamed the limits of all three resource blocks; the defaults did not change.
+  - { fromVersions: "<1.1.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: resources.memory, to: resources.maxMemory }
+  - { fromVersions: "<1.1.0", from: storeGateway.resources.cpu, to: storeGateway.resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: storeGateway.resources.memory, to: storeGateway.resources.maxMemory }
+  - { fromVersions: "<1.1.0", from: compactor.resources.cpu, to: compactor.resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: compactor.resources.memory, to: compactor.resources.maxMemory }
+  # 1.2.0 moved the MinIO keys into a prerequisite secret: plaintext cannot follow.
+  - fromVersions: "<1.2.0"
+    from: storage.minio.accessKey
+    note: >-
+      Only if your backend is MinIO or S3-compatible: the keys moved to a dictionary secret with the keys
+      accessKey and secretKey, chosen under Long-term storage. Put this value in accessKey.
+  - fromVersions: "<1.2.0"
+    from: storage.minio.accessSecret
+    note: >-
+      Only if your backend is MinIO or S3-compatible: the keys moved to a dictionary secret with the keys
+      accessKey and secretKey, chosen under Long-term storage. Put this value in secretKey.

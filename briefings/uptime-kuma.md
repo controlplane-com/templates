@@ -30,5 +30,6 @@
 - **Ping monitors work** (test-proven): ICMP ping succeeded in-container on the platform — no caveat needed. All monitor types tested green: HTTP, TCP, DNS, ping; webhook notifications e2e; websocket setup flow worked on the public endpoint with no platform interference.
 - **Health = HTTP 302:** the app's own healthcheck treats a redirect (302) on `/` as healthy — a 200 is actually a failure signal for probes; the template execs upstream's bundled healthcheck binary to avoid getting this wrong.
 - **Backups:** none in v1 — data durability is the volumeset plus a 7-day final snapshot on uninstall. Uninstall+reinstall = fresh instance, admin recreated via the wizard.
-- **Don't switch SQLite→MariaDB in place:** upstream says the migration is unsupported; the planned MariaDB mode (v1.1, via the catalog `mariadb` template) is a fresh-install choice only.
-- **Forgot admin password:** `cpln workload exec` into the container and run `npm run reset-password` (upstream's documented recovery).
+- **SQLite only:** the chart hard-codes `UPTIME_KUMA_DB_TYPE=sqlite`; there is no MariaDB mode.
+- **Upgrading from 1.1.0 or earlier:** `publicAccess.enabled` default flipped to `false`; a CLI upgrade that omits it makes the instance private (the wizard carries the release's setting).
+- **Forgot admin password:** `cpln workload exec {release}-uptime-kuma --gvc {gvc} --container uptime-kuma --stdin --tty -- npm run reset-password` (measured: without `--stdin --tty` it prints `Error: readline was closed` and exits 0 without resetting).

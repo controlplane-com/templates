@@ -1,0 +1,316 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PocketBase
+# One stateful replica on its own volume and no location handling: every GVC location would run an
+# independent PocketBase with its own, separate database behind the same endpoint.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the superuser login and the settings encryption key.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (oldSelf != null && self.credentials.secretName != oldSelf.credentials.secretName)
+        textExpression: >-
+          'The credentials secret must exist **before** you install or switch to it. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all: the reason is only under `status.versions[].message` in
+          `cpln workload get-deployments ' + context.releaseName + '-pocketbase --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret exists the deployment
+          recovers on its own within about ten minutes, or at once with `cpln workload force-redeployment ' +
+          context.releaseName + '-pocketbase --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+        text: >-
+          The credentials secret must exist **before** you install or switch to it. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all: the reason is only under `status.versions[].message` in
+          `cpln workload get-deployments RELEASE_NAME-pocketbase --gvc GVC_NAME -o yaml`. Once the secret
+          exists the deployment recovers on its own within about ten minutes, or at once with
+          `cpln workload force-redeployment RELEASE_NAME-pocketbase --gvc GVC_NAME`.
+      - path: credentials.secretName
+        type: ref
+        label: Credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `email` and `password` (the superuser login for the `/_/`
+          dashboard, a password of at least 8 characters) and `encryptionKey` (32 random characters).
+        help: >-
+          PocketBase applies the superuser from this secret on every start, so a password changed in the
+          dashboard is reverted at the next restart: change it in the secret instead. `encryptionKey`
+          encrypts the SMTP, OAuth2 and S3 settings stored in the database; never change it after install.
+          Create the secret with:
+          `cpln secret create-dictionary --name SECRET_NAME --entry email=admin@example.com --entry password='YOUR-STRONG-PASSWORD' --entry encryptionKey="$(openssl rand -hex 16)"`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [email, password, encryptionKey]
+          create:
+            suggestName: "context.releaseName + '-pocketbase-credentials'"
+            hint: "Password: at least 8 characters. Generate the encryptionKey with: openssl rand -hex 16"
+      - type: note
+        severity: info
+        when: context.mode == 'upgrade'
+        textExpression: >-
+          'To change the superuser password, update `password` in the secret, keep `email` and `encryptionKey`
+          exactly as they are, then run `cpln workload force-redeployment ' + context.releaseName +
+          '-pocketbase --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`. The workload does not
+          pick up a changed secret on its own: until the redeployment the old password keeps working. The new
+          password then replaces the login, because PocketBase applies the secret on every start.'
+        text: >-
+          To change the superuser password, update `password` in the secret, keep `email` and `encryptionKey`
+          exactly as they are, then run `cpln workload force-redeployment RELEASE_NAME-pocketbase --gvc GVC_NAME`.
+          The workload does not pick up a changed secret on its own: until the redeployment the old password
+          keeps working. The new password then replaces the login, because PocketBase applies the secret on
+          every start.
+    rules:
+      - rule: self.credentials.secretName != null && self.credentials.secretName != ''
+        mirrors: pocketbase.validate
+        paths: [credentials.secretName]
+        message: Choose the dictionary secret that holds the email, password and encryptionKey keys.
+      - rule: oldSelf == null || self.credentials.secretName == oldSelf.credentials.secretName
+        severity: info
+        paths: [credentials.secretName]
+        message: >-
+          PocketBase signs the superuser in with the new secret from the next start. Copy the encryptionKey
+          of the installed secret into it unchanged, or the SMTP, OAuth2 and S3 settings stored in the
+          database can no longer be decrypted.
+
+  - id: server
+    title: Server
+    description: The PocketBase image and the compute of its single replica.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              PocketBase runs exactly one replica, so an upgrade that changes the container restarts it: the
+              API and the dashboard are down for a minute or two while the volume moves to the new replica.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              PocketBase scales vertically only: it runs a single replica with an embedded SQLite database.
+            docs: "#pocketbase-instance"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: image
+            type: string
+            format: image
+            label: PocketBase image
+            required: true
+            advanced: true
+            description: >-
+              A community build, as there is no official image. Another image must run as root with
+              `pocketbase` on its PATH.
+        rules:
+          - rule: "!has(self.resources.cpu)"
+            mirrors: pocketbase.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu is not a setting of this chart; the CPU limit is resources.maxCpu. Rename it in
+              the values.
+          - rule: "!has(self.resources.memory)"
+            mirrors: pocketbase.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.memory is not a setting of this chart; the memory limit is resources.maxMemory.
+              Rename it in the values.
+
+  - id: storage
+    title: Storage and backups
+    description: The volume set that holds the database and uploads, and its snapshots.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            description: >-
+              Holds the SQLite database, uploaded files and PocketBase's local backup archives. Changing it
+              later does not resize the installed volume, so size it for your uploads now.
+            help: >-
+              Sizes only a new volume: an existing volume keeps its size. Uninstalling the release deletes the
+              volume set.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: pocketbase.validate
+            paths: [volumeset.capacity]
+            message: The capacity must be at least 10 GiB.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity == oldSelf.volumeset.capacity
+            severity: info
+            paths: [volumeset.capacity]
+            message: >-
+              The capacity sizes only a new volume; the installed volume keeps its size.
+      - id: backup
+        title: Scheduled snapshots
+        toggle: backup.enabled
+        description: >-
+          The platform snapshots the data volume on a schedule; no cloud account or bucket is needed. The
+          snapshots stay in the platform storage alongside the volume; for an off-platform copy, set up
+          S3 backups in the PocketBase dashboard under Settings, Backups.
+        docs: "#backup"
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as 0 3 * * *. Snapshots cannot run more often
+              than hourly.
+      - fields:
+          - path: backup.retention
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            description: >-
+              Applies to the scheduled snapshots and to the final snapshot taken when the release is
+              uninstalled.
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
+            docs: "/reference/volumeset#snapshots"
+
+  - id: network
+    title: Network
+    description: Who can reach the API and the dashboard, and which browser origins may call the API.
+    sections:
+      - title: Public access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              Serve the REST API, realtime and the `/_/` dashboard on the workload's canonical HTTPS endpoint.
+              The superuser exists before the server starts listening, and new collections are
+              superuser-only until you write an API rule.
+            help: >-
+              Realtime subscriptions are closed after ten minutes per connection, so clients must reconnect and
+              resubscribe; the official PocketBase SDKs do this automatically. Access changes can take a few
+              minutes to take effect.
+          - type: note
+            severity: info
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Read the public address from status.canonicalEndpoint in `cpln workload get ' +
+              context.releaseName + '-pocketbase --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml`.'
+            text: >-
+              Read the public address from status.canonicalEndpoint in
+              `cpln workload get RELEASE_NAME-pocketbase --gvc GVC_NAME -o yaml`.
+          - type: note
+            severity: info
+            when: "!self.publicAccess.enabled"
+            textExpression: >-
+              'To open the dashboard from your computer, run `cpln port-forward ' + context.releaseName +
+              '-pocketbase 8090:8090 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '` and open http://localhost:8090/_/.'
+            text: >-
+              To open the dashboard from your computer, run
+              `cpln port-forward RELEASE_NAME-pocketbase 8090:8090 --gvc GVC_NAME` and open
+              http://localhost:8090/_/.
+      - title: Internal access
+        fields:
+          - type: note
+            severity: info
+            textExpression: >-
+              'Workloads reach the API at `http://' + context.releaseName + '-pocketbase.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:8090`.'
+            text: >-
+              Workloads reach the API at `http://RELEASE_NAME-pocketbase.GVC_NAME.cpln.local:8090`.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Workloads that call the API from inside Control Plane.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload.yaml writes internalAccess.workloads only with workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            unique: true
+            description: The only workloads that can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+      - title: Browser origins (CORS)
+        docs: "#api"
+        fields:
+          - path: cors.allowedOrigins
+            type: list
+            label: Allowed origins
+            widget: tags
+            unique: true
+            description: >-
+              Browser origins allowed to call the API, such as `https://app.example.com`; `*` allows any.
+            item:
+              type: string
+              placeholder: https://app.example.com
+              pattern: '^[^,\s]+$'
+              patternMessage: One origin per entry, without commas or spaces.
+        rules:
+          - rule: size(self.cors.allowedOrigins) > 0
+            mirrors: pocketbase.validate
+            paths: [cors.allowedOrigins]
+            message: List at least one origin, or * to allow any.
+      - when: context.mode == 'install'
+        fields:
+          - type: note
+            severity: info
+            when: context.mode == 'install'
+            text: >-
+              After the install, sign in at `/_/` with the email and password from the secret and set
+              **Settings › Application › Application URL** to the address you serve PocketBase on:
+              verification and password-reset emails build their links from it. SMTP and OAuth2 providers are
+              also set there, in the dashboard.
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: pocketbase.validate
+        paths: [internalAccess.type]
+        message: Choose one of None, Same GVC, Same org or Specific workloads.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With Specific workloads and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'none'
+        rule: self.publicAccess.enabled
+        severity: info
+        paths: [internalAccess.type]
+        message: >-
+          With None and the public endpoint off, PocketBase is reachable only through cpln port-forward.

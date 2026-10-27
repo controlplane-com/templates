@@ -67,11 +67,14 @@ prerequisites:
     secretType: opaque
     valuesPath: cloud.apiKeySecretName
     required: true
+    when: cloud.enabled
     description: Control Plane service account API key Jenkins uses to create and delete agent workloads. When it is missing the deployment waits with no logs.
   - kind: other
     required: true
+    when: cloud.enabled
     description: Policy bindings for that service account - view, create and delete on workloads in the agent GVC, view on GVCs, identities and volume sets. Without them no agents start.
   - kind: other
     valuesPath: cloud.gvc
     required: true
+    when: cloud.enabled
     description: An agent GVC with exactly one location (empty cloud.gvc means the release GVC). The plugin rejects multi-location GVCs.

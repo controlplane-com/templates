@@ -35,7 +35,7 @@ SEVS runs as a cron workload on Control Plane. Your sync configuration is stored
 | `image` | The SEVS container image. Do not change unless upgrading. |
 | `resources.cpu` / `resources.memory` | Resource limits for the workload container. |
 | `schedule` | Cron expression controlling how often the sync runs (default: `*/5 * * * *`). |
-| `timeoutSeconds` | Maximum time for a single run (default: `300`). |
+| `timeoutSeconds` | The workload's request timeout (default: `300`); it does not limit how long a sync run takes. |
 | `sevsConfig` | The full sync configuration — a list of entries (see below). |
 
 ---

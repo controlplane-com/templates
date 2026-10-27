@@ -1,0 +1,681 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MySQL
+# One stateful replica with its own volume set and no location handling: every GVC location would
+# run its own unrelated copy of the database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The database, user and passwords that the chart stores in a secret of its own.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These values are stored in the release values and in the dictionary secret the chart creates
+          for MySQL. The default passwords are published in the template and shared by every install that
+          keeps them, so set your own. MySQL applies all four values only when its data directory is first
+          initialized. 1.5.0 and later read the credentials from secrets you create instead.
+        textExpression: >-
+          'These values are stored in the release values and in the dictionary secret `' +
+          context.releaseName + '-mysql-config`, which the chart creates for MySQL. The default passwords
+          are published in the template and shared by every install that keeps them, so set your own. MySQL
+          applies all four values only when its data directory is first initialized. 1.5.0 and later read the
+          credentials from secrets you create instead.'
+      - path: config.db
+        type: string
+        label: Database name
+        required: true
+        immutable: MySQL creates this database once, when its data directory is initialized.
+        # The official mysql image (docker-entrypoint.sh, identical in its 8.4 and 9.7 images; mysql:9 is
+        # 9.7) runs CREATE DATABASE `<name>` with the name unescaped, and MySQL 9.7 refuses database names
+        # over 64 characters, with characters outside the BMP or ending with a space (reference manual,
+        # "Schema Object Names" and "Identifier Length Limits"). Initialization then fails.
+        maxLength: 64
+        pattern: '^(?!.* $)[^\x00-\x1f\x7f\u2028\u2029`\ud800-\udfff]*$'
+        patternMessage: >-
+          Leave out backticks, control characters and emoji or other characters outside the Basic
+          Multilingual Plane, and do not end the name with a space. The MySQL image writes the name between
+          backticks without escaping it, and MySQL refuses characters outside that plane and a trailing
+          space.
+      - path: config.user
+        type: string
+        label: Database user
+        required: true
+        immutable: MySQL creates this user once, when its data directory is initialized.
+        # The image refuses MYSQL_USER=root and writes the name into CREATE USER '<name>'@'%' unescaped;
+        # MySQL 9.7 user names are up to 32 characters (reference manual, "User Names and Passwords").
+        maxLength: 32
+        pattern: '^(?!root$)[^\x00-\x1f\x7f\u2028\u2029''\\]*$'
+        patternMessage: >-
+          Use a name other than root, and leave out quotes ('), backslashes and control characters. The
+          MySQL image refuses root here, and it writes the name into SQL without escaping quotes or
+          backslashes.
+      - path: config.password
+        type: string
+        label: User password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        pattern: '^[^\x00-\x1f\x7f\u2028\u2029]*$'
+        patternMessage: Leave out control characters and line breaks.
+        rules:
+          # The image writes it into IDENTIFIED BY '<password>' unescaped when it initializes the data
+          # directory (install only): a quote ends the string and a backslash starts an escape sequence, so
+          # initialization fails or stores another password than the secret holds.
+          - when: context.mode == 'install'
+            rule: >-
+              !self.config.password.matches("['\\\\]")
+            message: >-
+              Leave out quotes (') and backslashes: the MySQL image writes the user password into SQL
+              without escaping it when it initializes the database.
+          - rule: oldSelf == null || self.config.password == oldSelf.config.password
+            severity: info
+            message: >-
+              MySQL keeps the password it was initialized with. Change it in MySQL with `ALTER USER`
+              first, or the new value in the secret no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.password != 'password'
+            severity: info
+            message: >-
+              This release still uses the template's published default user password. Change it in
+              MySQL with `ALTER USER`, then enter the new password here.
+      - path: config.rootPassword
+        type: string
+        label: Root password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: The optional backup job and phpMyAdmin console also receive it in their environment.
+        # The readiness probe runs sh -c 'mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}' with the
+        # expansion unquoted (templates/workload-mysql.yaml), so whitespace splits the password.
+        pattern: '^[^\s\x00-\x1f\x7f]+$'
+        patternMessage: >-
+          Leave out spaces, tabs, line breaks and other control characters. The readiness check passes the
+          root password to the shell unquoted, so whitespace would split it.
+        rules:
+          # At initialization (install only) the image writes it unescaped into IDENTIFIED BY '<password>'
+          # and into its client option file as password="<password>": a quote ends the SQL string, a
+          # backslash starts an escape in both, and a " followed by # cuts the option file value.
+          - when: context.mode == 'install'
+            rule: >-
+              !self.config.rootPassword.matches("['\"\\\\]")
+            message: >-
+              Leave out quotes and backslashes: the MySQL image writes the root password into SQL and into
+              its client options without escaping it when it initializes the database.
+          - rule: oldSelf == null || self.config.rootPassword == oldSelf.config.rootPassword
+            severity: info
+            message: >-
+              MySQL keeps the root password it was initialized with. Change it in MySQL first with
+              `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, or the secret, which the optional
+              backup job reads, no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.rootPassword != 'root-password'
+            severity: info
+            message: >-
+              This release still uses the template's published default root password. Change it in MySQL
+              with `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, then enter the new password
+              here.
+
+  - id: server
+    title: Server
+    description: The MySQL image and the compute of its single stateful replica.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: MySQL image
+        required: true
+        description: >-
+          This version was published with mysql:9. Another image is untested with this version; after a
+          change, check that MySQL starts and, with backups on, that a backup run succeeds.
+        # Written unquoted (templates/workload-mysql.yaml); `format: image` refuses the values YAML would read
+        # as a boolean, null or number (guide §17.3.1).
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        docs: "#resources"
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        rules:
+          # templates/workload-mysql.yaml writes `cpu: {{ .Values.resources.maxCpu }}` unquoted, and the
+          # platform's Cpu type is a string: a whole number of cores renders as a YAML number and is refused.
+          - rule: type(self.resources.maxCpu) == string && self.resources.maxCpu.endsWith('m')
+            paths: [resources.maxCpu]
+            message: >-
+              Enter the maximum CPU in millicores, such as 1000m for one core. The chart writes this value
+              unquoted, and the platform refuses a plain number of cores.
+      - path: timeoutSeconds
+        type: integer
+        label: Request timeout
+        required: true
+        advanced: true
+        description: The workload's maximum request duration (`defaultOptions.timeoutSeconds`).
+        docs: "/reference/workload/general#timeout-seconds"
+        unit: seconds
+        min: 1
+        max: 3600
+    rules:
+      # MySQL 9.7 reference manual, "Downgrading MySQL": an in-place downgrade is supported only within an
+      # LTS series; to an earlier series only by a logical dump and load.
+      - rule: oldSelf == null || oldSelf.image == null || self.image == oldSelf.image
+        severity: info
+        paths: [image]
+        messageExpression: >-
+          imageMajor(self.image) >= 0 && imageMajor(oldSelf.image) >= 0 &&
+          imageMajor(self.image) < imageMajor(oldSelf.image) ?
+          'A new image restarts MySQL, and MySQL supports an in-place downgrade only within one LTS series,
+          so going from MySQL ' + string(imageMajor(oldSelf.image)) + ' back to ' +
+          string(imageMajor(self.image)) + ' needs a logical dump and load: dump the database with `mysqldump`
+          and load it into a new release.' :
+          'A new image restarts MySQL. It runs a single replica, so clients cannot connect until it is back.
+          Going back to an older MySQL release works in place only within one LTS series.'
+        message: >-
+          A new image restarts MySQL, and it runs a single replica, so clients cannot connect until it is
+          back. MySQL supports an in-place downgrade only within one LTS series.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the MySQL data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Grows the volume set when its free space drops below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: >-
+          oldSelf == null || oldSelf.volumeset.capacity == null ||
+          self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network and phpMyAdmin
+    description: Who can connect to MySQL, and the optional phpMyAdmin console.
+    sections:
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: The workloads that can reach MySQL on port 3306.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type: templates/workload-mysql.yaml:58-59 writes any non-empty list into
+          # inboundAllowWorkload, and the platform validates every entry, though it applies the workload
+          # links only with same-gvc and workload-list (actuator workloadAuthorizationPolicy.ts:193-205).
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: >-
+              Workloads allowed to connect, for example from another GVC. The platform applies the list with
+              Same GVC and Specific workloads.
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - id: phpmyadmin
+        title: phpMyAdmin console
+        toggle: enablePhpMyAdmin
+        description: >-
+          A web console for the database. This version publishes it to the internet with no setting to
+          restrict who can reach it, runs the `latest` phpMyAdmin image and puts the root password in its
+          environment. Turn it off unless you need the console.
+        fields: []
+    rules:
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: Same org already lets every workload of the org connect, so these entries add nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes these workloads into the firewall, where the platform checks every entry,
+          but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.enablePhpMyAdmin && !self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        messageExpression: >-
+          '"None" also blocks ' + (self.enablePhpMyAdmin ? 'the phpMyAdmin console' : '') +
+          (self.enablePhpMyAdmin && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? 'the backup job' : '') +
+          (self.enablePhpMyAdmin && self.backup.enabled ? ', which connect' : ', which connects') +
+          ' to MySQL like any other workload.'
+        message: >-
+          "None" also blocks the phpMyAdmin console and the backup job, which connect to MySQL like any
+          other workload.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no client can connect.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.enablePhpMyAdmin ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.enablePhpMyAdmin ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin' : '') +
+          (self.enablePhpMyAdmin && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup' : '') +
+          (self.enablePhpMyAdmin && self.backup.enabled ? ', or they cannot connect.' : ', or it cannot connect.')
+        message: >-
+          The chart does not add its own workloads to the list; add the phpMyAdmin and backup workloads,
+          or they cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.enablePhpMyAdmin ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup'] : [])
+
+  - id: backup
+    title: Backups
+    description: Scheduled backups of the database to an S3 or GCS bucket.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        docs: "#backup"
+        description: >-
+          Adds a cron workload that uploads a gzipped `mysqldump` to your bucket. In this version the
+          default backup image needs the database name, which the chart does not pass (fixed in 1.4.3).
+        fields:
+          # The default ghcr.io/controlplane-com/backup-images/mysql-backup:1.0.0 requires MYSQL_DATABASE,
+          # which this version's backup workload never sets (inheritEnv: false); the earlier
+          # controlplanecorporation/mysql-backup images dump a database named test.
+          - type: note
+            severity: warning
+            when: self.backup.enabled && self.backup.image.startsWith('ghcr.io/controlplane-com/backup-images/mysql-backup:')
+            text: >-
+              This version's default backup image needs the database name, and the chart does not pass it, so
+              every backup run fails and nothing is uploaded. Install 1.4.3 or later for backups.
+          - type: note
+            severity: warning
+            when: >-
+              self.backup.enabled && self.backup.image.startsWith('controlplanecorporation/mysql-backup:') &&
+              self.config.db != 'test'
+            text: >-
+              This backup image always dumps a database named test. If the database under Credentials has
+              another name, every backup run fails and nothing is uploaded (fixed in 1.4.3).
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            # This version writes the schedule unquoted (templates/workload-backup.yaml): measured, helm
+            # template fails on any schedule starting with * ("did not find expected alphabetic or numeric
+            # character"); 1.4.3 quotes it.
+            # The platform's ScheduleType (nodelibs/schema/src/workload.ts) accepts five numeric fields only, each
+            # within its range (checkCronValues): no macros, no month or day names (single spaces between the
+            # fields keep the never-fires rule below simple; tabs are refused). Its cron scheduler
+            # (regulator/pkg/jobs/cron/scheduler.go, robfig/cron v3) drops a schedule with a step of 0 or one
+            # that never fires and only logs "Invalid schedule", so the job would never run.
+            pattern: '^(\*(/(0?[1-9]|[1-5]\d))?|([0-5]?\d)(-([0-5]?\d))?(/0*[1-9]\d*)?)(,(\*(/(0?[1-9]|[1-5]\d))?|([0-5]?\d)(-([0-5]?\d))?(/0*[1-9]\d*)?))* (\*(/(0?[1-9]|1\d|2[0-3]))?|([01]?\d|2[0-3])(-([01]?\d|2[0-3]))?(/0*[1-9]\d*)?)(,(\*(/(0?[1-9]|1\d|2[0-3]))?|([01]?\d|2[0-3])(-([01]?\d|2[0-3]))?(/0*[1-9]\d*)?))* (\*(/(0?[1-9]|[12]\d|3[01]))?|(0?[1-9]|[12]\d|3[01])(-(0?[1-9]|[12]\d|3[01]))?(/0*[1-9]\d*)?)(,(\*(/(0?[1-9]|[12]\d|3[01]))?|(0?[1-9]|[12]\d|3[01])(-(0?[1-9]|[12]\d|3[01]))?(/0*[1-9]\d*)?))* (\*(/(0?[1-9]|1[0-2]))?|(0?[1-9]|1[0-2])(-(0?[1-9]|1[0-2]))?(/0*[1-9]\d*)?)(,(\*(/(0?[1-9]|1[0-2]))?|(0?[1-9]|1[0-2])(-(0?[1-9]|1[0-2]))?(/0*[1-9]\d*)?))* (\*(/(0?[1-6]))?|(0?[0-6])(-(0?[0-6]))?(/0*[1-9]\d*)?)(,(\*(/(0?[1-6]))?|(0?[0-6])(-(0?[0-6]))?(/0*[1-9]\d*)?))*$'
+            patternMessage: >-
+              Use five numeric fields separated by single spaces (minute 0-59, hour 0-23, day 1-31, month
+              1-12, weekday 0-6), such as 0 2 * * *, with steps (/n) of at least 1; macros such as @daily and
+              names such as MON are not accepted.
+            rules:
+              - rule: "!self.backup.schedule.startsWith('*')"
+                message: >-
+                  This version writes the schedule unquoted, so a schedule starting with * fails to render.
+                  Start the minute field with a number, for example 0-59/5 instead of */5, or install 1.4.3 or
+                  later, which quotes it.
+              # With the weekday unrestricted (* or */1), cron runs only on the chosen days of the chosen
+              # months: the earliest chosen day must fit in the longest chosen month (February 29, April,
+              # June, September and November 30). A range, step or * in the months counts as 31 days.
+              - rule: >-
+                  !self.backup.schedule.matches('^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [*](/0*1)?$') ||
+                  self.backup.schedule.split(' ')[2].split(',').exists(d,
+                  self.backup.schedule.split(' ')[3].split(',').exists(m,
+                  (d.startsWith('*') ? 1 : int(d.split('/')[0].split('-')[0])) <=
+                  (m.matches('^[0-9]+$') ? (int(m) == 2 ? 29 : int(m) in [4, 6, 9, 11] ? 30 : 31) : 31)))
+                message: >-
+                  None of the chosen months has the chosen day, so the backup would never run. February has at
+                  most 29 days, and April, June, September and November 30.
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            # Written unquoted (templates/workload-backup.yaml), as the MySQL image; `format: image` covers it.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: mysql.validateBackupConfig
+            paths: [backup.provider]
+            message: The backup destination must be AWS S3 or Google Cloud Storage.
+          - rule: >-
+              oldSelf == null || oldSelf.backup.enabled != true || oldSelf.backup.provider == null ||
+              self.backup.provider == oldSelf.backup.provider
+            severity: info
+            paths: [backup.provider]
+            message: >-
+              The backups already written stay in the previous destination; the job writes new backups only
+              to the destination chosen here.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket, an AWS cloud account and the IAM policy **before** you install. The policy
+              allows `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`,
+              `s3:GetObjectVersion` and `s3:DeleteObjectVersion` on the bucket and its objects.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The chart attaches it to the identity that MySQL, the optional phpMyAdmin console and the
+              backup job share, together with `cpln-connector` and the AWS managed policy
+              `aws::ReadOnlyAccess`.
+            # The platform's identity PolicyRef pattern (the chart writes the name inside double quotes).
+            pattern: '^(aws::)?[A-Za-z0-9/+=,.@_-]+$'
+            patternMessage: >-
+              Use letters, digits and / + = , . @ _ -, optionally after aws:: for an AWS managed policy.
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
+            maxLength: 4096
+            # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
+            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
+            patternMessage: >-
+              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
+              YAML words such as true or null.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and a GCP cloud account **before** you install. The cloud account's service
+              account needs the Storage Admin role.
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            # Written unquoted into the identity's GCP binding (templates/identity.yaml).
+            pattern: '^(?:[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]|(?=.{3,222}$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9_.-]*\.[a-z0-9_.-]*[a-z0-9])$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, hyphens and underscores, starting and ending with a
+              letter or digit; a name with dots can have up to 222 characters, with at most 63 between dots.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account). The chart grants its identity
+              `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
+            maxLength: 4096
+            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
+            patternMessage: >-
+              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
+              YAML words such as true or null.
+
+rules:
+  # 1.0.0 and 1.1.0 named the workload and the volume set after the release; 1.2.0 renamed them.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '1.2.0') >= 0
+    messageExpression: >-
+      'Do not upgrade a 1.0.0 or 1.1.0 release in place. Those versions named the MySQL workload and its
+      volume set `' + context.releaseName + '`; this version names them `' + context.releaseName + '-mysql` and `' +
+      context.releaseName + '-mysql-vs`, so the upgrade starts MySQL on a new, empty volume set at a new
+      endpoint and removes the old workload and volume set with your data. Install this version as a new
+      release, copy the data over with `mysqldump`, then uninstall the old release.'
+    message: >-
+      Do not upgrade a 1.0.0 or 1.1.0 release in place. Those versions named the MySQL workload and its
+      volume set after the release; this version adds the suffixes `-mysql` and `-mysql-vs`, so the upgrade
+      starts MySQL on a new, empty volume set at a new endpoint and removes the old workload and volume set
+      with your data. Install this version as a new release, copy the data over with `mysqldump`, then
+      uninstall the old release.
+
+migrations:
+  # 1.2.0 split the limits into min and max values.
+  - { fromVersions: "<1.2.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.2.0", from: resources.memory, to: resources.maxMemory }
+  # 1.2.0 changed the default passwords (root-pw and pw), and MySQL keeps the ones it was initialized
+  # with: carry them even when the release kept the old defaults (the upgrade is blocked above anyway).
+  - fromVersions: "<1.2.0"
+    to: config.rootPassword
+    valueExpr: self.config.rootPassword
+    note: MySQL keeps the root password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.2.0"
+    to: config.password
+    valueExpr: self.config.password
+    note: MySQL keeps the user password it was initialized with, so the installed one is kept.
+  # 1.3.0 replaced backup.aws.enabled / backup.gcp.enabled with backup.provider and flattened the
+  # provider blocks.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.provider
+    valueExpr: "self.backup.gcp.enabled && !self.backup.aws.enabled ? dyn('gcp') : null"
+    note: The backup provider is now chosen with backup.provider; Google Cloud Storage was on, so it is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    from: backup.aws.enabled
+    note: Replaced by the Destination choice (backup.provider) under Backups.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    from: backup.gcp.enabled
+    note: Replaced by the Destination choice (backup.provider) under Backups.
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.aws.s3.bucket, to: backup.aws.bucket }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.aws.s3.region, to: backup.aws.region }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.aws.s3.cloudAccountName, to: backup.aws.cloudAccountName }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.aws.s3.policyName, to: backup.aws.policyName }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.aws.s3.prefix, to: backup.aws.prefix }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.gcp.gcs.bucket, to: backup.gcp.bucket }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.gcp.gcs.cloudAccountName, to: backup.gcp.cloudAccountName }
+  - { fromVersions: ">=1.2.0 <1.3.0", from: backup.gcp.gcs.prefix, to: backup.gcp.prefix }
+  # A rename moves changed values only, and 1.3.0 changed the default prefix (mysql/my-cluster became
+  # mysql/backups): keep the folder the release writes its backups to.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.aws.prefix
+    valueExpr: "self.backup.enabled && self.backup.aws.enabled ? dyn(self.backup.aws.s3.prefix) : null"
+    note: Backups to this provider were on, so the installed folder is kept and new backups land next to the earlier ones.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.gcp.prefix
+    valueExpr: "self.backup.enabled && self.backup.gcp.enabled ? dyn(self.backup.gcp.gcs.prefix) : null"
+    note: Backups to this provider were on, so the installed folder is kept and new backups land next to the earlier ones.
+  # 1.4.0 renamed the default backup names (mysql-backup-* became my-backup-*), and a rename moves changed
+  # values only: a release with backups on keeps the bucket, cloud account and IAM policy it runs with.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.aws.bucket
+    valueExpr: "self.backup.enabled && self.backup.aws.enabled ? dyn(self.backup.aws.s3.bucket) : null"
+    note: Backups to AWS S3 were on, so the installed bucket is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.aws.cloudAccountName
+    valueExpr: "self.backup.enabled && self.backup.aws.enabled ? dyn(self.backup.aws.s3.cloudAccountName) : null"
+    note: Backups to AWS S3 were on, so the installed cloud account is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.aws.policyName
+    valueExpr: "self.backup.enabled && self.backup.aws.enabled ? dyn(self.backup.aws.s3.policyName) : null"
+    note: Backups to AWS S3 were on, so the installed IAM policy name is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.gcp.bucket
+    valueExpr: "self.backup.enabled && self.backup.gcp.enabled ? dyn(self.backup.gcp.gcs.bucket) : null"
+    note: Backups to Google Cloud Storage were on, so the installed bucket is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: backup.gcp.cloudAccountName
+    valueExpr: "self.backup.enabled && self.backup.gcp.enabled ? dyn(self.backup.gcp.gcs.cloudAccountName) : null"
+    note: Backups to Google Cloud Storage were on, so the installed cloud account is kept.
+  - fromVersions: "=1.3.0"
+    to: backup.aws.bucket
+    valueExpr: "self.backup.enabled && self.backup.provider == 'aws' ? dyn(self.backup.aws.bucket) : null"
+    note: Backups to AWS S3 were on, so the installed bucket is kept.
+  - fromVersions: "=1.3.0"
+    to: backup.aws.cloudAccountName
+    valueExpr: "self.backup.enabled && self.backup.provider == 'aws' ? dyn(self.backup.aws.cloudAccountName) : null"
+    note: Backups to AWS S3 were on, so the installed cloud account is kept.
+  - fromVersions: "=1.3.0"
+    to: backup.aws.policyName
+    valueExpr: "self.backup.enabled && self.backup.provider == 'aws' ? dyn(self.backup.aws.policyName) : null"
+    note: Backups to AWS S3 were on, so the installed IAM policy name is kept.
+  - fromVersions: "=1.3.0"
+    to: backup.gcp.bucket
+    valueExpr: "self.backup.enabled && self.backup.provider == 'gcp' ? dyn(self.backup.gcp.bucket) : null"
+    note: Backups to Google Cloud Storage were on, so the installed bucket is kept.
+  - fromVersions: "=1.3.0"
+    to: backup.gcp.cloudAccountName
+    valueExpr: "self.backup.enabled && self.backup.provider == 'gcp' ? dyn(self.backup.gcp.cloudAccountName) : null"
+    note: Backups to Google Cloud Storage were on, so the installed cloud account is kept.
+  # 1.4.0 turned backups off by default (1.3.0 had them on): keep the installed setting.
+  - fromVersions: "=1.3.0"
+    to: backup.enabled
+    valueExpr: self.backup.enabled
+    note: 1.3.0 had backups on by default and this version has them off, so the installed setting is kept.
+  # 1.4.0 turned phpMyAdmin on by default (1.2.0 and 1.3.0 had it off): keep the installed setting,
+  # or the upgrade would publish the console to the internet.
+  - fromVersions: ">=1.2.0 <1.4.0"
+    to: enablePhpMyAdmin
+    valueExpr: self.enablePhpMyAdmin
+    note: >-
+      1.2.0 and 1.3.0 had phpMyAdmin off by default and this version has it on, published to the internet,
+      so the installed setting is kept.
+  # 1.4.2 changed the default backup image to one that needs the database name, which 1.4.2 does not
+  # pass; the earlier image works when the database is named test. A rename moves changed values only,
+  # so keep the installed image where its backups worked.
+  - fromVersions: ">=1.2.0 <1.4.2"
+    to: backup.image
+    valueExpr: "self.backup.enabled && self.config.db == 'test' ? dyn(self.backup.image) : null"
+    note: >-
+      Backups ran with the installed image, and this version's default image fails without the database
+      name, so the installed image is kept and backups keep working.

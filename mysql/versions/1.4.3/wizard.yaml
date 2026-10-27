@@ -371,13 +371,13 @@ steps:
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.4.3') < 0 && oldSelf != null && oldSelf.backup.enabled == true
             text: >-
-              Before 1.4.3 the backup job targeted a placeholder database, not the one under Credentials, so do
-              not rely on backups written before this upgrade. After this upgrade, start a run with
+              Before 1.4.3 backup runs failed outright: on 1.2.0 to 1.4.1 unless the database was named test,
+              and always on 1.4.2. Do not rely on backups written before this upgrade. After this upgrade, start a run with
               `cpln workload cron start RELEASE-mysql-backup --gvc GVC` and check that the new file in the
               bucket contains your database.
             textExpression: >-
-              'Before 1.4.3 the backup job targeted a placeholder database, not the one under Credentials, so do
-              not rely on backups written before this upgrade. After this upgrade, start a run with
+              'Before 1.4.3 backup runs failed outright: on 1.2.0 to 1.4.1 unless the database was named test,
+              and always on 1.4.2. Do not rely on backups written before this upgrade. After this upgrade, start a run with
               `cpln workload cron start ' + context.releaseName +
               '-mysql-backup --gvc ' +
               (context.gvc == null ? 'GVC' : context.gvc) + '` and check that the new file in the bucket

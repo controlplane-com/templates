@@ -1,0 +1,300 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MySQL
+# One stateful replica with its own volume set and no location handling: every GVC location would
+# run its own unrelated copy of the database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The database, user and passwords that the chart stores in a secret of its own.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These values are stored in the release values and in the dictionary secret the chart creates
+          for MySQL. The default passwords are published in the template and shared by every install that
+          keeps them, so set your own. MySQL applies all four values only when its data directory is first
+          initialized. 1.5.0 and later read the credentials from secrets you create instead.
+        textExpression: >-
+          'These values are stored in the release values and in the dictionary secret `' +
+          context.releaseName + '-conf`, which the chart creates for MySQL. The default passwords
+          are published in the template and shared by every install that keeps them, so set your own. MySQL
+          applies all four values only when its data directory is first initialized. 1.5.0 and later read the
+          credentials from secrets you create instead.'
+      - path: config.db
+        type: string
+        label: Database name
+        required: true
+        immutable: MySQL creates this database once, when its data directory is initialized.
+        # The official mysql image (docker-entrypoint.sh, identical in its 8.4 and 9.7 images; mysql:9 is
+        # 9.7) runs CREATE DATABASE `<name>` with the name unescaped, and MySQL 9.7 refuses database names
+        # over 64 characters, with characters outside the BMP or ending with a space (reference manual,
+        # "Schema Object Names" and "Identifier Length Limits"). Initialization then fails.
+        maxLength: 64
+        pattern: '^(?!.* $)[^\x00-\x1f\x7f\u2028\u2029`\ud800-\udfff]*$'
+        patternMessage: >-
+          Leave out backticks, control characters and emoji or other characters outside the Basic
+          Multilingual Plane, and do not end the name with a space. The MySQL image writes the name between
+          backticks without escaping it, and MySQL refuses characters outside that plane and a trailing
+          space.
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
+          # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
+          # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
+          # every install path uses is unproven. Checked only when the value changes.
+          - when: oldSelf == null || self.config.db != oldSelf.config.db
+            rule: >-
+              !self.config.db.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.db.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.db.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.db.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.db.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !self.config.db.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
+              !self.config.db.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
+              !self.config.db.matches('^\\s|\\s$|\\t') &&
+              !self.config.db.contains(': ') && !self.config.db.contains(' #') && !self.config.db.endsWith(':') &&
+              !(self.config.db.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the database name into its secret unquoted, so some values break the install or
+              are stored as something else. Avoid a value that is only a number or a date, words such as
+              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
+              and tabs, or install 1.3.0 or later, which quotes it.
+      - path: config.user
+        type: string
+        label: Database user
+        required: true
+        immutable: MySQL creates this user once, when its data directory is initialized.
+        # The image refuses MYSQL_USER=root and writes the name into CREATE USER '<name>'@'%' unescaped;
+        # MySQL 9.7 user names are up to 32 characters (reference manual, "User Names and Passwords").
+        maxLength: 32
+        pattern: '^(?!root$)[^\x00-\x1f\x7f\u2028\u2029''\\]*$'
+        patternMessage: >-
+          Use a name other than root, and leave out quotes ('), backslashes and control characters. The
+          MySQL image refuses root here, and it writes the name into SQL without escaping quotes or
+          backslashes.
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
+          # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
+          # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
+          # every install path uses is unproven. Checked only when the value changes.
+          - when: oldSelf == null || self.config.user != oldSelf.config.user
+            rule: >-
+              !self.config.user.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.user.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.user.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.user.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.user.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !self.config.user.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
+              !self.config.user.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
+              !self.config.user.matches('^\\s|\\s$|\\t') &&
+              !self.config.user.contains(': ') && !self.config.user.contains(' #') && !self.config.user.endsWith(':') &&
+              !(self.config.user.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the user name into its secret unquoted, so some values break the install or
+              are stored as something else. Avoid a value that is only a number or a date, words such as
+              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
+              and tabs, or install 1.3.0 or later, which quotes it.
+      - path: config.password
+        type: string
+        label: User password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        pattern: '^[^\x00-\x1f\x7f\u2028\u2029]*$'
+        patternMessage: Leave out control characters and line breaks.
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
+          # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
+          # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
+          # every install path uses is unproven. Checked only when the value changes.
+          - when: oldSelf == null || self.config.password != oldSelf.config.password
+            rule: >-
+              !self.config.password.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.password.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.password.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.password.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.password.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
+              !self.config.password.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
+              !self.config.password.matches('^\\s|\\s$|\\t') &&
+              !self.config.password.contains(': ') && !self.config.password.contains(' #') && !self.config.password.endsWith(':') &&
+              !(self.config.password.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the user password into its secret unquoted, so some values break the install or
+              are stored as something else. Avoid a value that is only a number or a date, words such as
+              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
+              and tabs, or install 1.3.0 or later, which quotes it.
+          # The image writes it into IDENTIFIED BY '<password>' unescaped when it initializes the data
+          # directory (install only): a quote ends the string and a backslash starts an escape sequence, so
+          # initialization fails or stores another password than the secret holds.
+          - when: context.mode == 'install'
+            rule: >-
+              !self.config.password.matches("['\\\\]")
+            message: >-
+              Leave out quotes (') and backslashes: the MySQL image writes the user password into SQL
+              without escaping it when it initializes the database.
+          - rule: oldSelf == null || self.config.password == oldSelf.config.password
+            severity: info
+            message: >-
+              MySQL keeps the password it was initialized with. Change it in MySQL with `ALTER USER`
+              first, or the new value in the secret no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.password != 'pw'
+            severity: info
+            message: >-
+              This release still uses the template's published default user password. Change it in
+              MySQL with `ALTER USER`, then enter the new password here.
+      - path: config.rootPassword
+        type: string
+        label: Root password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: The optional phpMyAdmin console also receives it in its environment.
+        # The readiness and liveness probes run sh -c 'mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}' with
+        # the expansion unquoted (templates/workload-mysql.yaml), so whitespace splits the password.
+        pattern: '^[^\s\x00-\x1f\x7f]+$'
+        patternMessage: >-
+          Leave out spaces, tabs, line breaks and other control characters. The readiness check passes the
+          root password to the shell unquoted, so whitespace would split it.
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
+          # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
+          # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
+          # every install path uses is unproven. Checked only when the value changes.
+          - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
+            rule: >-
+              !self.config.rootPassword.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.rootPassword.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.rootPassword.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.rootPassword.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.rootPassword.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !self.config.rootPassword.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
+              !self.config.rootPassword.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
+              !self.config.rootPassword.matches('^\\s|\\s$|\\t') &&
+              !self.config.rootPassword.contains(': ') && !self.config.rootPassword.contains(' #') && !self.config.rootPassword.endsWith(':') &&
+              !(self.config.rootPassword.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the root password into its secret unquoted, so some values break the install or
+              are stored as something else. Avoid a value that is only a number or a date, words such as
+              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
+              and tabs, or install 1.3.0 or later, which quotes it.
+          # At initialization (install only) the image writes it unescaped into IDENTIFIED BY '<password>'
+          # and into its client option file as password="<password>": a quote ends the SQL string, a
+          # backslash starts an escape in both, and a " followed by # cuts the option file value.
+          - when: context.mode == 'install'
+            rule: >-
+              !self.config.rootPassword.matches("['\"\\\\]")
+            message: >-
+              Leave out quotes and backslashes: the MySQL image writes the root password into SQL and into
+              its client options without escaping it when it initializes the database.
+          - rule: oldSelf == null || self.config.rootPassword == oldSelf.config.rootPassword
+            severity: info
+            message: >-
+              MySQL keeps the root password it was initialized with. Change it in MySQL first with
+              `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, or the secret, which the readiness
+              and liveness checks read, no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.rootPassword != 'root-pw'
+            severity: info
+            message: >-
+              This release still uses the template's published default root password. Change it in MySQL
+              with `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, then enter the new password
+              here.
+
+  - id: server
+    title: Server
+    description: >-
+      The compute of the single stateful MySQL replica. This version always runs the `mysql:9` image and has
+      no setting to change it.
+    fields:
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          The limits of the MySQL container. This version sets no reservation (minimum CPU or memory).
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        rules:
+          # templates/workload-mysql.yaml writes both values unquoted, and the platform's Cpu type is a
+          # string: a whole number of cores renders as a YAML number and is refused.
+          - rule: type(self.resources.cpu) == string && self.resources.cpu.endsWith('m')
+            paths: [resources.cpu]
+            message: >-
+              Enter the CPU in millicores, such as 1000m for one core. This version writes this value
+              unquoted, and the platform refuses a plain number of cores.
+          - rule: type(self.resources.memory) == string && self.resources.memory.matches('[A-Za-z]$')
+            severity: warning
+            paths: [resources.memory]
+            message: >-
+              Give memory with a unit, such as 1024Mi. This version writes this value unquoted, so a value
+              without a unit is written as a number rather than a quantity.
+      - path: timeoutSeconds
+        type: integer
+        label: Request timeout
+        required: true
+        advanced: true
+        description: The workload's maximum request duration (`defaultOptions.timeoutSeconds`).
+        docs: "/reference/workload/general#timeout-seconds"
+        unit: seconds
+        min: 1
+        max: 3600
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the MySQL data directory.
+    fields:
+      - path: volumeset.capacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        max: 65536
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        description: This version has no setting to grow the volume set automatically.
+        docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: >-
+          oldSelf == null || oldSelf.volumeset.capacity == null ||
+          self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: phpMyAdmin
+    description: >-
+      The optional phpMyAdmin console. In this version MySQL accepts connections from every workload in
+      this GVC, with no setting to change it.
+    sections:
+      - id: phpmyadmin
+        title: phpMyAdmin console
+        toggle: enablePhpMyAdmin
+        description: >-
+          A web console for the database. This version publishes it to the internet with no setting to
+          restrict who can reach it, runs the `latest` phpMyAdmin image and puts the root password in its
+          environment. Turn it off unless you need the console.
+        fields: []
+
+migrations:
+  # 1.0.0 created the volume set with a fixed 20 GiB; 1.1.0 made it configurable with a default of 10.
+  - fromVersions: "<1.1.0"
+    to: volumeset.capacity
+    valueExpr: dyn(20)
+    note: 1.0.0 created the volume set with 20 GiB, so the installed capacity is kept.

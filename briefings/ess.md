@@ -25,7 +25,7 @@ at `/usr/src/app/sync.yaml`.
 | Knob | Default | Notes |
 |---|---|---|
 | `configSecretName` | `my-ess-config` | **prerequisite** `opaque` secret holding `sync.yaml` (2.1.0+) |
-| `port` | `3004` | container + probe port only — the chart sets no `PORT` env, so ESS always listens on 3004; changing it breaks the probe |
+| `port` | `3004` | container + probe port; the platform injects it as `PORT` and ESS listens on it (measured: a wizard upgrade to `3005` gave `PORT=3005`, node listening on 3005, ready) |
 | `allowedIp` | `1.2.3.4` | CIDRs allowed to reach the admin API externally — **replace it** |
 | `resources` | `200m` / `256Mi` | |
 
@@ -44,7 +44,7 @@ at `/usr/src/app/sync.yaml`.
   secret`). That is inherent to what a syncer does — it creates and updates arbitrary Control Plane secrets —
   but it is the widest grant in the catalog, so treat the workload as security-sensitive: keep `allowedIp`
   narrow, and remember that anyone who can reach the admin API can trigger syncs.
-- **`allowedIp` ships as `1.2.3.4`**, a placeholder that admits nothing. That is deliberate — the admin API
+- **`allowedIp` ships as `1.2.3.4`**, a placeholder that admits only the host `1.2.3.4`, not any operator. That is deliberate — the admin API
   should not be publicly reachable — but it means an operator who expects to curl it externally sees a
   connection failure rather than a permission error.
 - **Editing `sync.yaml` needs a forced redeployment.** ESS polls its mounted file every 5 s and reloads on

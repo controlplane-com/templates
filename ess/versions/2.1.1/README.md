@@ -84,8 +84,8 @@ your values file, since it was stored in the Helm release.
 |---|---|
 | `image` | The ESS container image. Do not change unless upgrading. |
 | `resources.cpu` / `resources.memory` | Resource limits for the workload container. |
-| `port` | Container port and health-check port for the admin API (default: `3004`). The chart does not pass it to ESS, which always listens on `3004`, so leave it at the default. |
-| `allowedIp` | List of CIDRs allowed to reach the ESS admin API on its public endpoint. The `1.2.3.4` placeholder admits nobody; replace it with your CIDR. Other workloads in the GVC cannot reach the admin API. |
+| `port` | Container port and health-check port for the admin API (default: `3004`). The platform passes it to ESS as the `PORT` environment variable, and ESS listens on it. |
+| `allowedIp` | List of CIDRs allowed to reach the ESS admin API on its public endpoint. The `1.2.3.4` placeholder admits only the host `1.2.3.4`, not you; replace it with your CIDR, or set `[]` to close the admin API to the internet. Other workloads in the GVC cannot reach the admin API. |
 | `configSecretName` | Name of the `opaque` secret holding your `sync.yaml` — the full sync configuration. See [Prerequisites](#prerequisites). |
 
 ---
@@ -350,8 +350,8 @@ Priority (highest wins):
 
 | What | Value |
 |---|---|
-| Admin API (public) | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-ess --gvc GVC_NAME -o yaml`, reachable only from the CIDRs in `allowedIp` (the default placeholder admits nobody) |
-| Admin API (private) | `cpln port-forward RELEASE_NAME-ess 3004:3004 --gvc GVC_NAME` — other workloads in the GVC cannot reach it |
+| Admin API (public) | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-ess --gvc GVC_NAME -o yaml`, reachable only from the CIDRs in `allowedIp` (the default placeholder admits only the host `1.2.3.4`) |
+| Admin API (private) | `cpln port-forward RELEASE_NAME-ess PORT:PORT --gvc GVC_NAME`, where `PORT` is the `port` value (default `3004`) — other workloads in the GVC cannot reach it |
 | Health check | `GET /about` |
 
 The synced secrets themselves are ordinary Control Plane secrets — workloads consume them by name, with no dependency on this template being reachable.

@@ -1,0 +1,380 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: SFTPGo
+
+steps:
+  - id: mode
+    title: Mode
+    description: Whether SFTPGo sleeps when idle behind a small always-on proxy, or stays running.
+    sections:
+      - docs: "#mode-and-scale-to-zero"
+        fields:
+          - path: mode
+            type: enum
+            label: Mode
+            widget: cards
+            required: true
+            options:
+              - value: scale_to_zero
+                label: Scale to zero
+                description: >-
+                  SFTPGo suspends when idle; the proxy wakes it on the next connection. Clients
+                  need a timeout of at least 120 seconds.
+              - value: always_warm
+                label: Always warm
+                description: SFTPGo runs all the time with its own endpoint. Works with any client.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && oldSelf != null && self.mode != oldSelf.mode
+            text: >-
+              Switching modes moves the client-facing endpoint between the proxy and SFTPGo
+              workloads. Plan a client cutover.
+      - title: Scale to zero
+        when: self.mode == 'scale_to_zero'
+        fields:
+          - path: scaleToZero.idleHold
+            type: string
+            label: Suspend after idle
+            required: true
+            pattern: '^[0-9]+(ms|s|m|h)$'
+            patternMessage: A duration such as 90s, 5m or 1h.
+            suggestions: [90s, 5m, 15m, 1h]
+            description: SFTPGo suspends after this long with no active connection.
+          - path: scaleToZero.proxy.image
+            type: string
+            format: image
+            label: Proxy image
+            required: true
+            advanced: true
+          - path: scaleToZero.proxy.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Proxy CPU reservation
+            required: true
+            advanced: true
+            description: All SFTP traffic flows through the proxy.
+          - path: scaleToZero.proxy.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Proxy CPU limit
+            required: true
+            advanced: true
+          - path: scaleToZero.proxy.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Proxy memory reservation
+            required: true
+            advanced: true
+          - path: scaleToZero.proxy.resources.memory
+            type: quantity
+            quantity: memory
+            label: Proxy memory limit
+            required: true
+            advanced: true
+
+  - id: admin
+    title: Administrator
+    description: The SFTPGo administrator, created on first boot.
+    fields:
+      - path: admin.username
+        type: string
+        label: Administrator username
+        required: true
+        description: Guards the REST API and web admin.
+      - path: admin.password
+        type: string
+        label: Administrator password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: Stored in the release values.
+        help: >-
+          SFTPGo reads it only when its database has no administrator yet, on first boot; later
+          changes go through the web admin or API.
+    rules:
+      - rule: oldSelf == null || self.admin.password == oldSelf.admin.password
+        severity: info
+        paths: [admin.password]
+        message: >-
+          SFTPGo reads the administrator login only on first boot; a new value here does not
+          change the existing administrator.
+
+  - id: storage
+    title: Storage
+    description: The bucket that holds the SFTP files.
+    sections:
+      - docs: "#storage-backend"
+        fields:
+          - path: storage.type
+            type: enum
+            label: Storage backend
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless, through a Control Plane cloud account.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Keyless, through a Control Plane cloud account.
+              - value: minio
+                label: S3-compatible
+                description: MinIO, R2, Wasabi and others, with static access keys.
+      - title: AWS S3
+        when: self.storage.type == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket, the AWS cloud account and the IAM policy must exist **before** the release uses them, on install or when you switch storage; the README's Storage setup section has the steps.
+          - path: storage.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: storage.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: storage.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the bucket's account."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: >-
+              An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+              The README has the policy JSON.
+          - path: storage.aws.keyPrefix
+            type: string
+            label: Folder prefix
+            placeholder: sftp/
+            description: Optional bucket-wide folder; each user gets a folder below it.
+      - title: Google Cloud Storage
+        when: self.storage.type == 'gcp'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket and the GCP cloud account must exist **before** the release uses them, on install or when you switch storage; the README's Storage setup section has the steps.
+          - path: storage.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account). The template grants the
+              workload `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: storage.gcp.keyPrefix
+            type: string
+            label: Folder prefix
+            placeholder: sftp/
+            description: Optional bucket-wide folder; each user gets a folder below it.
+      - title: S3-compatible
+        when: self.storage.type == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket must exist **before** the release uses it, on install or when you switch storage; the README's Storage setup section has the steps.
+          - path: storage.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000
+            description: The URL including the scheme and port.
+          - path: storage.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.minio.region
+            type: string
+            label: Region
+            required: true
+            placeholder: us-east-1
+          - path: storage.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+            description: Stored in the release values.
+          - path: storage.minio.accessSecret
+            type: string
+            label: Secret key
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Stored in the release values.
+          - path: storage.minio.keyPrefix
+            type: string
+            label: Folder prefix
+            placeholder: sftp/
+            description: Optional bucket-wide folder; each user gets a folder below it.
+
+  - id: users
+    title: Users
+    description: The SFTP logins. Each user is isolated to its own folder in the bucket.
+    fields:
+      - path: users
+        type: list
+        label: Users
+        required: true
+        uniqueBy: [username]
+        widget: table
+        newItem: { username: "", password: "", publicKeys: [] }
+        itemLabel: item.username
+        description: >-
+          Declared users are re-applied on every start, so edits to them in the web admin are
+          reverted. Each user needs a password, public keys, or both.
+        docs: "#users"
+        item:
+          type: object
+          fields:
+            - path: username
+              type: string
+              label: Username
+              required: true
+            - path: password
+              type: string
+              label: Password
+              widget: password
+              absent: true
+              sensitive: true
+              description: Stored in the release values. Leave empty for a keys-only user.
+            - path: publicKeys
+              type: list
+              label: SSH public keys
+              item: { type: string, placeholder: ssh-ed25519 AAAA... user@host }
+            - path: keyPrefix
+              type: string
+              absent: true
+              label: Folder override
+              placeholder: custom/folder/
+          rules:
+            - rule: >-
+                (has(item.password) && item.password != null && item.password != '') ||
+                (has(item.publicKeys) && item.publicKeys != null && size(item.publicKeys) > 0)
+              mirrors: sftpgo.validate
+              paths: [password]
+              message: Give this user a password or at least one public key, or it can never log in.
+
+  - id: network
+    title: Network
+    description: Who can reach SFTP, and the web admin.
+    sections:
+      - title: Access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public SFTP endpoint
+            description: >-
+              A dedicated load balancer on port 2022, on the proxy in scale-to-zero mode or on
+              SFTPGo in always-warm mode.
+          - path: internalAccess.type
+            type: enum
+            label: Who in Control Plane can connect to SFTPGo
+            widget: cards
+            required: true
+            description: Firewall changes take up to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect. Not allowed in scale-to-zero mode.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, plus the proxy.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: webAdmin.enabled
+            type: boolean
+            label: Web admin port
+            description: >-
+              Declares SFTPGo's web admin and REST API port 8080. In always-warm mode with the
+              public endpoint on, it is served on the canonical endpoint.
+    rules:
+      - rule: "!(self.mode == 'scale_to_zero' && self.internalAccess.type == 'none')"
+        mirrors: sftpgo.validate
+        paths: [internalAccess.type]
+        message: Scale-to-zero mode needs internal access, so the proxy can reach SFTPGo.
+
+  - id: server
+    title: Server
+    description: The SFTPGo image, its compute and the volume for its database and host keys.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: SFTPGo image
+        required: true
+      - path: resources.minCpu
+        type: quantity
+        quantity: cpu
+        label: SFTPGo CPU reservation
+        required: true
+        description: CPU governs transfer throughput and wake speed.
+      - path: resources.cpu
+        type: quantity
+        quantity: cpu
+        label: SFTPGo CPU limit
+        required: true
+      - path: resources.minMemory
+        type: quantity
+        quantity: memory
+        label: SFTPGo memory reservation
+        required: true
+      - path: resources.memory
+        type: quantity
+        quantity: memory
+        label: SFTPGo memory limit
+        required: true
+      - path: volumeset.capacity
+        type: integer
+        label: Volume capacity
+        unit: GiB
+        min: 10
+        required: true
+        description: Holds the embedded database and SSH host keys.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.

@@ -184,8 +184,8 @@ kafka:
 
 1.1.2 moves the database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7
 (CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief
-interruption of writes while the leader changes; Debezium also restarts, as on any upgrade. Upgrade in a quiet window. Debezium resumes on the new leader
-from its failover replication slot, and changes around a leader change can be delivered twice. Existing data needs nothing. If you pinned
+interruption of writes while the leader changes. The upgrade does not redeploy Debezium; it restarts once when the database leader changes
+and resumes from its failover replication slot, so changes around the leader change may be delivered twice. Upgrade in a quiet window. Existing data needs nothing. If you pinned
 `postgres-highly-available.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. The
 pipeline does not use the `vector` extension; if you created it in your database, run
 `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports.

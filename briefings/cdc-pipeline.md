@@ -105,7 +105,7 @@ database.
   tags 0.1–0.7 with pg-ha 2.8.1's matching, and an empty value (which would fall back to the subchart's 0.7);
   a top-level wizard rule mirrors it (the image field comes from the pg-ha import, with an override help line).
   The pipeline does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout),
-  giving a brief write interruption while the leader changes; the HAProxy proxy workload does not restart (stays `Unchanged`; measured on the chatwoot and keycloak rounds). Debezium restarts as on any version upgrade; it resumes from its failover slot (at-least-once, as above).
+  giving a brief write interruption while the leader changes; the HAProxy proxy workload does not restart (helm may print `Updated` for it from a tag bump, but its replicas keep running). The upgrade does not redeploy Debezium; it restarts once at the leader change and resumes from its failover slot (at-least-once, as above; the measured round delivered 0 duplicates).
   Drop the pin, or keep it equal to pg-ha's default, once the chart vendors pg-ha 2.8.1+.
 - **E2E onboarded** (`cdc-pipeline/tests/`): a row written through HAProxy must arrive as a change event on
   `dbserver1.public.e2e` (consumed from the kafka chart's `-client` workload), plus wrong-password, upgrade

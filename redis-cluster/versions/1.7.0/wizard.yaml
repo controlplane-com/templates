@@ -61,7 +61,13 @@ steps:
             required: true
             min: 64Mi
             description: The default is a floor; a cache at 250Mi starts evicting soon under real load.
-            suggestions: [250Mi, 512Mi, 1Gi, 2Gi, 4Gi]
+            suggestions: [250Mi, 512Mi, 1Gi, 1600Mi]
+        rules:
+          - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+            paths: [memory]
+            message: >-
+              The platform refuses more than 8Mi of memory per millicore of CPU, for example 2Gi needs at least
+              256m. Raise the CPU or lower the memory.
 
   - id: auth
     title: Authentication
@@ -157,6 +163,22 @@ steps:
                   (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
                   self.redis.password.matches("^[^\\s\"'\\x00-\\x1f\\x7f]+$")
                 message: Leave out spaces, quotes, line breaks and other control characters.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  (!self.redis.password.matches('^\\s') && !self.redis.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+                  !self.redis.password.matches('^[-?:](\\s|$)') && !self.redis.password.matches('\\t') &&
+                  !self.redis.password.contains(': ') && !self.redis.password.contains(' #') &&
+                  !self.redis.password.endsWith(':') && !self.redis.password.endsWith(' ') &&
+                  !(self.redis.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.redis.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+                  !self.redis.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.redis.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.redis.password.matches('^\\.(nan|NaN|NAN)$') &&
+                  !self.redis.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  The chart writes this password into its secret unquoted, so a value that reads as a number,
+                  true, false, null or a date, that starts with a character such as # & * ! [ { or ,, or that ends
+                  with a colon, breaks the install or changes the password.
               - rule: >-
                   !(self.redis.password in ['change-me-redis-cluster-password', 'your-secure-password-here']) ||
                   (oldSelf != null && self.redis.password == oldSelf.redis.password)
@@ -331,6 +353,10 @@ steps:
             format: cron
             label: Schedule (UTC)
             required: true
+            pattern: '^[^*@]'
+            patternMessage: >-
+              Start with a number, such as `0 2 * * *` or `0-59/15 * * * *`. The chart writes the schedule
+              unquoted, so one that starts with * or @ stops it from rendering.
           - path: backup.image
             type: string
             format: image
@@ -393,6 +419,17 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              !self.backup.aws.bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.aws.bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.aws.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$') &&
+              !(self.backup.aws.bucket in ['true', 'false', 'null'])
+            paths: [backup.aws.bucket]
+            message: >-
+              The chart writes the bucket name unquoted, so a name that reads as a number, a date, true, false
+              or null reaches the platform as one and the backup workload is rejected. Use a bucket name that
+              does not read as any of these.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -419,6 +456,17 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              !self.backup.gcp.bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.gcp.bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.gcp.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$') &&
+              !(self.backup.gcp.bucket in ['true', 'false', 'null'])
+            paths: [backup.gcp.bucket]
+            message: >-
+              The chart writes the bucket name unquoted, so a name that reads as a number, a date, true, false
+              or null reaches the platform as one and the backup workload is rejected. Use a bucket name that
+              does not read as any of these.
 
   - id: advanced
     title: Advanced

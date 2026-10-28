@@ -1,0 +1,587 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Tyk API Gateway
+
+# The gateway is stateless, but the bundled Redis and Sentinel are stateful workloads with no location
+# handling: every extra GVC location would run its own, separate store, so keys and rate limits would
+# differ by location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: secrets
+    title: Admin key and APIs
+    description: The admin API key, and the prerequisite secrets that hold your APIs and policies.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version keeps the admin API key in the Helm release values, readable by anyone who can read the
+              release, and stores it in the secret RELEASE_NAME-tyk-gateway-secret. 1.3.0 reads it from a
+              prerequisite secret instead.
+            textExpression: >-
+              'This version keeps the admin API key in the Helm release values, readable by anyone who can read ' +
+              'the release, and stores it in the secret ' + context.releaseName + '-tyk-gateway-secret. 1.3.0 ' +
+              'reads it from a prerequisite secret instead.'
+          - path: adminSecret
+            type: string
+            label: Admin API key
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: >-
+              The key for the Gateway admin API (`/tyk/*`, sent as `X-Tyk-Authorization`). Whoever holds it can
+              create and revoke every API key. Generate one with `openssl rand -hex 32`.
+            rules:
+              - rule: "!(oldSelf != null && self.adminSecret == oldSelf.adminSecret) || self.adminSecret != 'mysecret'"
+                severity: info
+                message: >-
+                  This release runs on the published admin key `mysecret`. Replace it with a random key, and treat
+                  the API keys issued so far as exposed.
+      - title: APIs and policies
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The API and policy secrets must exist **before** you install, unless you leave them empty. If one is
+              missing, the deployment waits and `cpln logs` shows nothing at all.
+          - type: note
+            severity: warning
+            when: self.apiSecretName == null || self.apiSecretName == ''
+            text: >-
+              No API definitions: the gateway serves Tyk's built-in demo API ("Tyk Test API"), not yours.
+          - path: apiSecretName
+            type: ref
+            label: API definitions secret
+            description: >-
+              A dictionary secret with one Tyk API definition per `*.json` key. The gateway's egress is closed, so
+              each API's `target_url` must be inside this GVC (`*.cpln.local`).
+            help: Read at boot. After editing the secret, force a redeployment of the gateway.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-tyk-apis'"
+          - path: policySecretName
+            type: ref
+            label: Policies secret
+            description: >-
+              An opaque secret (encoding plain) holding your Tyk policies as one JSON object. Leave empty to run
+              without policies.
+            help: Read at boot. After editing the secret, force a redeployment of the gateway.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-tyk-policies'"
+          - type: note
+            severity: warning
+            text: >-
+              This version always allows master keys: a key created through `/tyk/keys` without an `access_rights`
+              section can call every API on this gateway. 1.3.0 adds a switch for it, off by default.
+
+  - id: gateway
+    title: Gateway
+    description: The gateway image and port, its compute and its autoscaling.
+    docs: "#configuration"
+    sections:
+      - title: Server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Tyk Gateway image
+            required: true
+          - path: listenPort
+            type: integer
+            label: Listen port
+            required: true
+            min: 1
+            max: 65535
+            description: Serves both your APIs and the `/tyk` admin API.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 64Mi }
+          - path: multiZone
+            type: boolean
+            label: Spread replicas across zones
+            description: Check that your location supports multiple zones.
+        rules:
+          - rule: >-
+              !([8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000].exists(p, p == self.listenPort))
+            severity: warning
+            paths: [listenPort]
+            message: Control Plane reserves this port and rejects the workload. Pick another one, such as 8080.
+      - title: Autoscaling
+        docs: "#resources-and-autoscaling"
+        fields:
+          - path: autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            description: 0 lets the gateway scale to zero, which only Requests per second supports.
+          - path: autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+          - path: autoscaling.metric
+            type: enum
+            label: Scale on
+            required: true
+            options:
+              - { value: cpu, label: CPU }
+              - { value: memory, label: Memory }
+              - { value: rps, label: Requests per second }
+              - { value: latency, label: Latency }
+          - path: autoscaling.target
+            type: integer
+            label: Target
+            required: true
+            min: 1
+            description: The metric value per replica that triggers scaling (a percentage for CPU and memory).
+          - path: autoscaling.scaleToZeroDelay
+            type: integer
+            label: Scale-to-zero delay (seconds)
+            required: true
+            when: self.autoscaling.minScale == 0
+            min: 30
+            max: 3600
+            advanced: true
+            description: How long the gateway waits without traffic before it scales to zero.
+        rules:
+          - rule: self.autoscaling.maxScale >= self.autoscaling.minScale
+            paths: [autoscaling.maxScale]
+            message: The maximum must be at least the minimum.
+          - rule: self.autoscaling.minScale >= 1 || self.autoscaling.metric == 'rps'
+            paths: [autoscaling.minScale]
+            message: >-
+              Only Requests per second can scale the gateway to zero; set the minimum to 1 or more, or scale on
+              Requests per second.
+
+  - id: access
+    title: Access
+    description: Who can reach the gateway, and with it the `/tyk` admin API.
+    fields:
+      - path: externalAccess
+        type: boolean
+        label: Serve on the public endpoint
+        description: >-
+          Publishes the gateway on its `*.cpln.app` endpoint, including the `/tyk` admin API on the same port,
+          with only the admin key in front of it.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take from 30 seconds to a few minutes to take effect.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list' || self.internalAccess.type == 'same-gvc'
+        widget: tags
+        description: >-
+          Workload links such as `//gvc/GVC_NAME/workload/WORKLOAD_NAME`. With Same GVC, these are extra
+          workloads from other GVCs that may also connect.
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List at least one workload, or nothing inside Control Plane can reach the gateway.
+      - rule: self.externalAccess || self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: With public access off and no internal access, nothing could reach the gateway.
+
+  - id: redis
+    title: Redis and Sentinel
+    description: >-
+      The bundled store for keys, rate limits and quotas: Redis with replicas, and Sentinel for failover. The
+      gateway connects through Sentinel.
+    sections:
+      - id: redis-password
+        title: Redis password
+        toggle: redis.redis.auth.password.enabled
+        description: >-
+          On, Redis requires a password, and the gateway sends it. Off, the GVC firewall is the only boundary in front of Redis.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version keeps the Redis and Sentinel passwords in the Helm release values, readable by anyone who can
+              read the release. 1.4.0 reads them from prerequisite secrets instead.
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Letters, digits and symbols, without spaces, quotes or backslashes.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.redis.auth.password.enabled && self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value) ||
+                  self.redis.redis.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled redis chart writes the Redis password into the
+                  Redis configuration file, where a space, quote or backslash breaks the line.
+              - rule: "(oldSelf != null && oldSelf.redis.redis.auth.password.enabled && self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value) || !(self.redis.redis.auth.password.value in ['change-me-tyk-redis', 'change-me-tyk-sentinel', 'mySentinelPassword', 'your-password'])"
+                severity: warning
+                messageExpression: >-
+                  '`' + self.redis.redis.auth.password.value + '` is an example password that this template or its README publishes. Choose your own.'
+                message: This is an example password that this template or its README publishes. Choose your own.
+              - rule: "!(oldSelf != null && oldSelf.redis.redis.auth.password.enabled && self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value) || !(self.redis.redis.auth.password.value in ['change-me-tyk-redis', 'change-me-tyk-sentinel', 'myRedisPassword', 'mySentinelPassword', 'your-password'])"
+                severity: info
+                messageExpression: >-
+                  'This release runs on the example password `' + self.redis.redis.auth.password.value + '`, which this template publishes. ' +
+                  'Changing it in an upgrade deadlocks the rollout; to replace it, install a new release.'
+                message: This release runs on an example password that this template publishes.
+        rules:
+          - rule: "!self.redis.redis.auth.password.enabled || self.redis.redis.auth.password.value != ''"
+            severity: warning
+            paths: [redis.redis.auth.password.value]
+            message: Enter the Redis password, or turn the Redis password off.
+      - id: sentinel-password
+        title: Sentinel password
+        toggle: redis.sentinel.auth.password.enabled
+        description: >-
+          On, Sentinel requires a password, and the gateway sends it. Off, the GVC firewall is the only boundary in front of Sentinel.
+        fields:
+          - path: redis.sentinel.auth.password.value
+            type: string
+            label: Sentinel password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Letters, digits and symbols, without spaces, quotes or backslashes.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.sentinel.auth.password.enabled && self.redis.sentinel.auth.password.value == oldSelf.redis.sentinel.auth.password.value) ||
+                  self.redis.sentinel.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled redis chart writes the Sentinel password into the
+                  Sentinel configuration file, where a space, quote or backslash breaks the line.
+              - rule: "(oldSelf != null && oldSelf.redis.sentinel.auth.password.enabled && self.redis.sentinel.auth.password.value == oldSelf.redis.sentinel.auth.password.value) || !(self.redis.sentinel.auth.password.value in ['change-me-tyk-redis', 'change-me-tyk-sentinel', 'myRedisPassword', 'your-password'])"
+                severity: warning
+                messageExpression: >-
+                  '`' + self.redis.sentinel.auth.password.value + '` is an example password that this template or its README publishes. Choose your own.'
+                message: This is an example password that this template or its README publishes. Choose your own.
+              - rule: "!(oldSelf != null && oldSelf.redis.sentinel.auth.password.enabled && self.redis.sentinel.auth.password.value == oldSelf.redis.sentinel.auth.password.value) || !(self.redis.sentinel.auth.password.value in ['change-me-tyk-redis', 'change-me-tyk-sentinel', 'myRedisPassword', 'mySentinelPassword', 'your-password'])"
+                severity: info
+                messageExpression: >-
+                  'This release runs on the example password `' + self.redis.sentinel.auth.password.value + '`, which this template publishes. ' +
+                  'Changing it in an upgrade deadlocks the rollout; to replace it, install a new release.'
+                message: This release runs on an example password that this template publishes.
+        rules:
+          - rule: "!self.redis.sentinel.auth.password.enabled || self.redis.sentinel.auth.password.value != ''"
+            severity: warning
+            paths: [redis.sentinel.auth.password.value]
+            message: Enter the Sentinel password, or turn the Sentinel password off.
+      - title: Redis
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: One primary, the rest replicas.
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Persist Redis data
+            description: Keeps keys, rate-limit counters and quotas on a volume across restarts.
+          - path: redis.redis.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU limit
+            required: true
+            advanced: true
+            min: 25m
+          - path: redis.redis.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU reservation
+            required: true
+            advanced: true
+            min: 25m
+          - path: redis.redis.resources.memory
+            type: quantity
+            quantity: memory
+            label: Redis memory limit
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: redis.redis.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Redis memory reservation
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Redis
+            required: true
+            advanced: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+        rules:
+          # Redis is a stateful workload: the API refuses a reservation above the limit, a limit above 4 times the
+          # reservation or more than 4000m / 4096Mi above it, and memory (MiB) at 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.redis.resources.minCpu) <= cpuMillicores(self.redis.redis.resources.cpu)
+            paths: [redis.redis.resources.minCpu]
+            message: The Redis CPU reservation cannot exceed its CPU limit.
+          - rule: memoryBytes(self.redis.redis.resources.minMemory) <= memoryBytes(self.redis.redis.resources.memory)
+            paths: [redis.redis.resources.minMemory]
+            message: The Redis memory reservation cannot exceed its memory limit.
+          - rule: cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu)
+            paths: [redis.redis.resources.minCpu]
+            message: >-
+              Redis is a stateful workload, and Control Plane allows a CPU limit of at most 4 times the CPU
+              reservation: raise the reservation or lower the limit.
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minMemory]
+            message: >-
+              Redis is a stateful workload, and Control Plane allows a memory limit of at most 4 times the memory
+              reservation: raise the reservation or lower the limit.
+          - rule: cpuMillicores(self.redis.redis.resources.cpu) - cpuMillicores(self.redis.redis.resources.minCpu) <= 4000
+            paths: [redis.redis.resources.minCpu]
+            message: The Redis CPU limit can be at most 4000m above the reservation in a stateful workload.
+          - rule: memoryBytes(self.redis.redis.resources.memory) - memoryBytes(self.redis.redis.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.redis.resources.minMemory]
+            message: The Redis memory limit can be at most 4096Mi above the reservation in a stateful workload.
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+            paths: [redis.redis.resources.memory]
+            message: >-
+              The Redis memory limit in Mi can be at most 8 times its CPU limit in millicores: raise the CPU
+              limit or lower the memory limit.
+            messageExpression: >-
+              'The Redis memory limit can be at most ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
+              'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.redis.resources.cpu)) +
+              'm (at most 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
+          - rule: "![self.redis.redis.resources.cpu, self.redis.redis.resources.minCpu].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+            severity: warning
+            paths: [redis.redis.resources.cpu, redis.redis.resources.minCpu]
+            message: >-
+              Give the Redis CPU values a unit, such as `200m`. The bundled redis chart writes them unquoted, so a
+              bare number reaches the platform as a number and the workload is rejected.
+          - rule: "![self.redis.redis.resources.memory, self.redis.redis.resources.minMemory].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+            severity: warning
+            paths: [redis.redis.resources.memory, redis.redis.resources.minMemory]
+            message: >-
+              Give the Redis memory values a unit, such as `256Mi`. The bundled redis chart writes them unquoted, so
+              a bare number reaches the platform as a number and the workload is rejected.
+      - title: Sentinel
+        fields:
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinel replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Use an odd number so the sentinels can agree on a failover.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Persist Sentinel state
+            description: Keeps the current primary and the known replicas across Sentinel restarts.
+          - path: redis.sentinel.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU limit
+            required: true
+            advanced: true
+            min: 25m
+          - path: redis.sentinel.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU reservation
+            required: true
+            advanced: true
+            min: 25m
+          - path: redis.sentinel.resources.memory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory limit
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: redis.sentinel.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory reservation
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: redis.sentinel.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Sentinel
+            required: true
+            advanced: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+        rules:
+          # Sentinel is a stateful workload: the API refuses a reservation above the limit, a limit above 4 times the
+          # reservation or more than 4000m / 4096Mi above it, and memory (MiB) at 8 times the CPU (millicores) or more.
+          - rule: cpuMillicores(self.redis.sentinel.resources.minCpu) <= cpuMillicores(self.redis.sentinel.resources.cpu)
+            paths: [redis.sentinel.resources.minCpu]
+            message: The Sentinel CPU reservation cannot exceed its CPU limit.
+          - rule: memoryBytes(self.redis.sentinel.resources.minMemory) <= memoryBytes(self.redis.sentinel.resources.memory)
+            paths: [redis.sentinel.resources.minMemory]
+            message: The Sentinel memory reservation cannot exceed its memory limit.
+          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) <= 4 * cpuMillicores(self.redis.sentinel.resources.minCpu)
+            paths: [redis.sentinel.resources.minCpu]
+            message: >-
+              Sentinel is a stateful workload, and Control Plane allows a CPU limit of at most 4 times the CPU
+              reservation: raise the reservation or lower the limit.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minMemory]
+            message: >-
+              Sentinel is a stateful workload, and Control Plane allows a memory limit of at most 4 times the memory
+              reservation: raise the reservation or lower the limit.
+          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) - cpuMillicores(self.redis.sentinel.resources.minCpu) <= 4000
+            paths: [redis.sentinel.resources.minCpu]
+            message: The Sentinel CPU limit can be at most 4000m above the reservation in a stateful workload.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) - memoryBytes(self.redis.sentinel.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.sentinel.resources.minMemory]
+            message: The Sentinel memory limit can be at most 4096Mi above the reservation in a stateful workload.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+            paths: [redis.sentinel.resources.memory]
+            message: >-
+              The Sentinel memory limit in Mi can be at most 8 times its CPU limit in millicores: raise the CPU
+              limit or lower the memory limit.
+            messageExpression: >-
+              'The Sentinel memory limit can be at most ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'm (at most 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
+          - rule: "![self.redis.sentinel.resources.cpu, self.redis.sentinel.resources.minCpu].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+            severity: warning
+            paths: [redis.sentinel.resources.cpu, redis.sentinel.resources.minCpu]
+            message: >-
+              Give the Sentinel CPU values a unit, such as `200m`. The bundled redis chart writes them unquoted, so a
+              bare number reaches the platform as a number and the workload is rejected.
+          - rule: "![self.redis.sentinel.resources.memory, self.redis.sentinel.resources.minMemory].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+            severity: warning
+            paths: [redis.sentinel.resources.memory, redis.sentinel.resources.minMemory]
+            message: >-
+              Give the Sentinel memory values a unit, such as `256Mi`. The bundled redis chart writes them unquoted, so
+              a bare number reaches the platform as a number and the workload is rejected.
+
+    rules:
+      # The gateway reads RELEASE-redis-auth-password and RELEASE-sentinel-auth-password whatever the switches
+      # say, and the redis chart creates them only while the password is on.
+      - rule: self.redis.redis.auth.password.enabled && self.redis.sentinel.auth.password.enabled
+        severity: warning
+        message: >-
+          Keep both passwords on. In this version the gateway always reads the Redis and Sentinel password
+          secrets, which the bundled redis chart creates only while the password is on, so the gateway waits for
+          a secret that does not exist. 1.3.0 fixes it.
+      - when: oldSelf != null && oldSelf.redis.redis.auth.password.enabled && self.redis.redis.auth.password.enabled
+        rule: self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value
+        severity: warning
+        message: >-
+          Changing the Redis password on a running release deadlocks the rollout: restarted Redis nodes cannot
+          authenticate to the old primary, and with Sentinel persistence on, Sentinel keeps the old password on
+          its volume. Keep the installed password, or reinstall.
+      - when: >-
+          oldSelf != null && oldSelf.redis.sentinel.persistence.enabled && self.redis.sentinel.persistence.enabled &&
+          oldSelf.redis.sentinel.auth.password.enabled && self.redis.sentinel.auth.password.enabled
+        rule: self.redis.sentinel.auth.password.value == oldSelf.redis.sentinel.auth.password.value
+        severity: warning
+        message: >-
+          Sentinel keeps the password it first started with on its volume, so a new Sentinel password locks the
+          gateway out of its store. Keep the installed password, or reinstall.
+      - when: oldSelf != null
+        rule: self.redis.redis.auth.password.enabled == oldSelf.redis.redis.auth.password.enabled
+        severity: warning
+        message: >-
+          Turning the Redis password on or off on a running release deadlocks the rollout: restarted Redis nodes
+          cannot replicate from the not-yet-restarted primary. Keep the installed setting, or reinstall.
+      - when: >-
+          oldSelf != null && oldSelf.redis.sentinel.persistence.enabled && self.redis.sentinel.persistence.enabled
+        rule: self.redis.sentinel.auth.password.enabled == oldSelf.redis.sentinel.auth.password.enabled
+        severity: warning
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so turning
+          its password on or off does not reach it and can deadlock the rollout. Keep the installed setting, or
+          reinstall.
+      - rule: oldSelf == null || !oldSelf.redis.redis.persistence.enabled || self.redis.redis.persistence.enabled
+        severity: info
+        paths: [redis.redis.persistence.enabled]
+        message: >-
+          Turning Redis persistence off deletes the Redis volume set with the keys, rate-limit counters and
+          quotas on it, and it cannot be turned on again for this release.
+      - rule: oldSelf == null || oldSelf.redis.redis.persistence.enabled || !self.redis.redis.persistence.enabled
+        paths: [redis.redis.persistence.enabled]
+        message: >-
+          Redis persistence cannot be turned on for a running release: the rollout stalls. Turn it on at install,
+          or reinstall.
+      - rule: oldSelf == null || oldSelf.redis.sentinel.persistence.enabled || !self.redis.sentinel.persistence.enabled
+        paths: [redis.sentinel.persistence.enabled]
+        message: >-
+          Sentinel persistence cannot be turned on for a running release: the rollout stalls. Turn it on at
+          install, or reinstall.
+
+rules:
+  # 1.1.0 moved to redis chart 3.1.1, which renamed the volume sets (<release>-redis became <release>-redis-vs,
+  # and the same for Sentinel): an upgrade from 1.0.0 deletes the volume sets the store runs on.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+      (!oldSelf.redis.redis.persistence.enabled && !oldSelf.redis.sentinel.persistence.enabled)
+    message: >-
+      Do not upgrade this release in place: 1.1.0 renamed the Redis and Sentinel volume sets, so the upgrade
+      deletes the ones the release runs on, with every API key, rate-limit counter and quota on them. Install
+      this version as a new release, recreate or copy the keys, then uninstall the old release.
+    messageExpression: >-
+      'Do not upgrade this release in place: 1.1.0 renamed the Redis and Sentinel volume sets (' +
+      context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so ' +
+      (oldSelf.redis.redis.persistence.enabled ?
+        'the upgrade deletes the ones the release runs on, with every API key, rate-limit counter and quota on ' +
+        'them. Install this version as a new release, recreate or copy the keys, then uninstall the old release.' :
+        'the upgrade deletes the Sentinel volume set the release runs on. Install this version as a new release, ' +
+        'then uninstall the old release.')
+
+migrations:
+  # 1.0.0 ignored `resources` and ran the gateway with 100m CPU and 256Mi; 1.1.0 honours the values (50m / 128Mi
+  # by default). Keep the size the gateway runs with.
+  - fromVersions: "<1.1.0"
+    to: resources.cpu
+    valueExpr: "'100m'"
+    note: >-
+      1.0.0 ran the gateway with 100m CPU and 256Mi whatever `resources` said; the release keeps that size. Lower
+      it here if you want the smaller default.
+  - fromVersions: "<1.1.0"
+    to: resources.memory
+    valueExpr: "'256Mi'"

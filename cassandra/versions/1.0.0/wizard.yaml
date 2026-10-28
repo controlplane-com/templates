@@ -74,50 +74,62 @@ steps:
           the keyspace into CQL unquoted.
     rules:
       # secret-credentials.yaml writes these four values unquoted, so YAML types such a value.
-      - rule: "!self.superuserPassword.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+      - rule: >-
+          (oldSelf != null && self.superuserPassword == oldSelf.superuserPassword) ||
+          [self.superuserPassword].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [superuserPassword]
-        messageExpression: >-
-          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
-          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
-          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
         message: >-
-          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
-          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
-          boolean or null instead of text. Add a letter or another character so it stays text.
-      - rule: "!self.username.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+          This version writes the superuser password unquoted into YAML, so some values break the install or are
+          stored as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space,
+          and tabs, and values that read as a number, a date, true/false or null.
+      - rule: >-
+          (oldSelf != null && self.username == oldSelf.username) ||
+          [self.username].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [username]
-        messageExpression: >-
-          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
-          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
-          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
         message: >-
-          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
-          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
-          boolean or null instead of text. Add a letter or another character so it stays text.
-      - rule: "!self.password.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+          This version writes the user name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null.
+      - rule: >-
+          (oldSelf != null && self.password == oldSelf.password) ||
+          [self.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [password]
-        messageExpression: >-
-          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
-          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
-          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
         message: >-
-          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
-          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
-          boolean or null instead of text. Add a letter or another character so it stays text.
-      - rule: "!self.keyspaceName.matches('^(0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|[-+]?[0-9][0-9_]*([.][0-9_]*)?([eE][-+]?[0-9]+)?|[yY]|[yY][eE][sS]|[nN]|[nN][oO]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[oO][nN]|[oO][fF][fF]|[nN][uU][lL][lL])$')"
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null.
+      - rule: >-
+          (oldSelf != null && self.keyspaceName == oldSelf.keyspaceName) ||
+          [self.keyspaceName].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [keyspaceName]
-        messageExpression: >-
-          'The chart writes this value unquoted into the ' + context.releaseName + '-cassandra-credentials
-          secret, where a value that is only a number, or a word such as true, yes, on, off or null, is read
-          as a number, boolean or null instead of text. Add a letter or another character so it stays text.'
         message: >-
-          The chart writes this value unquoted into the RELEASE_NAME-cassandra-credentials secret, where a
-          value that is only a number, or a word such as true, yes, on, off or null, is read as a number,
-          boolean or null instead of text. Add a letter or another character so it stays text.
+          This version writes the keyspace unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null.
       - rule: oldSelf == null || self.superuserPassword == oldSelf.superuserPassword
         severity: info
         paths: [superuserPassword]

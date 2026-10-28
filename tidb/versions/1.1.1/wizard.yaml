@@ -63,6 +63,10 @@ steps:
                     0 suspends this location, and a suspended location's workloads stay unreachable from the other
                     locations even after it is resumed. Remove the location instead.
         rules:
+          # workload-pd.yaml reads (index .Values.gvc.locations 1): one location fails to render.
+          - rule: size(self.gvc.locations) >= 2
+            paths: [gvc.locations]
+            message: This version needs at least 2 locations; with one, the chart fails to render.
           - when: oldSelf != null
             rule: >-
               oldSelf == null ||
@@ -102,6 +106,18 @@ steps:
               connections.
             cpu: { min: 25m }
             memory: { min: 32Mi }
+        rules:
+          # The chart writes memory unquoted, so a value without a unit reaches the API as a number, which the
+          # platform's Memory schema (Joi.string()) refuses.
+          - rule: string(self.resources.pd.memory).matches('[A-Za-z]$')
+            paths: [resources.pd]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.tikv.memory).matches('[A-Za-z]$')
+            paths: [resources.tikv]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.server.memory).matches('[A-Za-z]$')
+            paths: [resources.server]
+            message: Give memory a unit such as Mi or Gi.
 
   - id: database
     title: Database

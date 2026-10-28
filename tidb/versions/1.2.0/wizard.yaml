@@ -1,0 +1,542 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: TiDB
+# createsGvc: true — the chart creates its own GVC from gvc.name, so there is no target GVC to limit (§14.2).
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The GVC this release creates, the locations it runs in, and the compute of each tier.
+    sections:
+      - id: gvc
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version creates its own GVC with the name below and puts every workload in it. Use a name no
+              GVC in the org has: the release takes over an existing GVC of that name, and uninstalling the
+              release then deletes that GVC with every workload in it. A GVC that another release created is
+              refused. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          # Briefing: "Region-aware placement was broken before 1.7.0" (secret-tikv-config.yaml puts the store label
+          # in a top-level [labels] table TiKV ignores, under the key zone; PD's location-labels appear only in the
+          # restart config, which PD ignores after bootstrap), and "on 1.x's
+          # non-region-aware placement some regions lose 2 of 3 copies" when one location restarts.
+          - type: note
+            severity: warning
+            text: >-
+              This version does not place copies by location, so two of a region's three copies can sit in one
+              location, and losing that location takes the region offline. 1.7.0 places them by location for new
+              clusters.
+          # Same PD startup shape as 1.1.0 (advertise-client-urls = the member's own FQDN, no /etc/hosts pin in
+          # secret-pd-config.yaml); briefing: measured crash-looping on 1.1.0 and 2.0.0, fixed in 1.1.1 and 2.1.0.
+          - type: note
+            severity: warning
+            text: >-
+              After a restart a PD member can keep restarting, because its health check reaches its own address
+              through the mesh, which resets the connection. 2.1.0 fixes it.
+          # 1.1.1 pins each PD member's own FQDN to 127.0.0.1 (secret-pd-config.yaml); this version does not.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && context.fromVersion == '1.1.1'
+            text: >-
+              This version does not have 1.1.1's PD fix, which lets a PD member reach its own address after a
+              restart, or 1.1.1's per-server health check. Both return in 2.1.0.
+          # gvc.yaml, every workload: the name is written unquoted. The platform's name pattern already rules
+          # out numbers and dates; true, false and null are the names YAML would read as another type.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this
+              one with everything in it.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.gvc.name != oldSelf.gvc.name
+                rule: "!(self.gvc.name in ['true', 'false', 'null'])"
+                message: The chart writes the GVC name unquoted, so true, false and null are not names it can use.
+              - when: context.mode == 'install'
+                rule: self.gvc.name != 'tidb-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own, for example ' + context.releaseName + '-tidb.'
+                message: >-
+                  GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own.
+          - path: gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 1 }
+            itemLabel: "item.name + ' × ' + (item.replicas == null ? '?' : string(item.replicas))"
+            description: >-
+              The locations of the GVC. Each runs the given number of TiKV nodes and the same number of TiDB
+              servers; the PD members are spread across them.
+            help: >-
+              Surviving the loss of a location needs at least three locations. Clients reach only the TiDB
+              servers in their own location.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: TiKV nodes and TiDB servers
+                  required: true
+                  min: 0
+                  suggestions: [1, 2, 3]
+              rules:
+                # workload-tikv.yaml, workload-server.yaml: replicas 0 renders localOptions[].suspend.
+                - rule: item.replicas == null || item.replicas != 0
+                  severity: warning
+                  paths: [replicas]
+                  message: >-
+                    0 suspends this location, and a suspended location's workloads stay unreachable from the other
+                    locations even after it is resumed. Remove the location instead.
+          - path: gvc.pdReplicas
+            type: enum
+            label: PD members
+            widget: segmented
+            required: true
+            description: >-
+              The placement driver quorum, spread evenly across the locations with any remainder in the first
+              ones.
+            options: [3, 5, 7]
+        rules:
+          - rule: size(self.gvc.locations) >= 3
+            mirrors: tidb.validateLocations
+            paths: [gvc.locations]
+            message: TiDB needs at least 3 locations.
+          - rule: self.gvc.pdReplicas in [3, 5, 7]
+            mirrors: tidb.validatePdReplicas
+            paths: [gvc.pdReplicas]
+            message: PD needs 3, 5 or 7 members.
+          - rule: self.gvc.pdReplicas != 3 || size(self.gvc.locations) == 3
+            mirrors: tidb.validatePdReplicasLocations
+            paths: [gvc.pdReplicas]
+            message: With 3 PD members the chart needs exactly 3 locations. Choose 5 or 7 members for more locations.
+          # secret-pd-config.yaml: the first PD member of the FIRST location starts the cluster, and with no PD data
+          # of its own it runs --force-new-cluster, so a first location without PD data starts a new, empty cluster.
+          - when: >-
+              oldSelf != null && size(oldSelf.gvc.locations) > 0 && size(self.gvc.locations) > 0 &&
+              self.gvc.locations[0].name != ''
+            rule: oldSelf == null || oldSelf.gvc.locations.exists(l, l.name == self.gvc.locations[0].name)
+            severity: warning
+            paths: [gvc.locations]
+            message: >-
+              The first location's first PD member starts the cluster, and one with no PD data starts a new, empty
+              cluster. Keep a location this release already runs in first.
+          - when: >-
+              oldSelf != null && size(oldSelf.gvc.locations) > 0 && size(self.gvc.locations) > 0 &&
+              self.gvc.locations[0].name != ''
+            rule: >-
+              oldSelf == null || oldSelf.gvc.locations[0].name == self.gvc.locations[0].name ||
+              !oldSelf.gvc.locations.exists(l, l.name == self.gvc.locations[0].name)
+            severity: info
+            paths: [gvc.locations]
+            message: >-
+              The first location changed. Its first PD member starts the cluster when it has no PD data of its
+              own, so the new first location must already run a PD member, or PD starts a new, empty cluster.
+      - id: compute
+        title: Compute
+        description: The defaults are sized for testing.
+        fields:
+          # PD and TiKV are stateful, so maxRatio 4 (§6.7); the check needs the four-key shape and is inert on
+          # these {cpu, memory} limit blocks.
+          - path: resources.pd
+            type: resources
+            label: PD resources
+            required: true
+            description: Per PD member. For production, PD wants 4 to 8 CPU and 8 to 16Gi.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.tikv
+            type: resources
+            label: TiKV resources
+            required: true
+            description: Per TiKV node. For production, TiKV wants 8 to 16 CPU and 32 to 64Gi, memory for caching.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.server
+            type: resources
+            label: TiDB server resources
+            required: true
+            description: >-
+              Per TiDB server. For production, 8 to 16 CPU and 16 to 32Gi; it scales with concurrent
+              connections.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          # The chart writes memory unquoted, so a value without a unit reaches the API as a number, which the
+          # platform's Memory schema (Joi.string()) refuses.
+          - rule: string(self.resources.pd.memory).matches('[A-Za-z]$')
+            paths: [resources.pd]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.tikv.memory).matches('[A-Za-z]$')
+            paths: [resources.tikv]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.server.memory).matches('[A-Za-z]$')
+            paths: [resources.server]
+            message: Give memory a unit such as Mi or Gi.
+
+  - id: database
+    title: Database
+    description: The root password and the application database and user, and the job that applies them.
+    sections:
+      - id: auto-create
+        title: Set the root password and create the database
+        toggle: autoCreateDatabase.enabled
+        description: >-
+          An init workload sets root's password and creates the application database and user. Root has no
+          password until it has run; off, root keeps none: set one with `ALTER USER` before any client can reach
+          the cluster.
+        fields:
+          # Briefing (2.0.0): as a standard workload the init workload completed, restarted and completed again,
+          # reporting not ready while the cluster was healthy; 2.0.0 made it a cron.
+          - type: note
+            text: >-
+              The init workload runs whenever this is on. It is a standard workload, so after it finishes it
+              restarts and reports not ready. Once the cluster is initialized you can turn this off; the database,
+              user and passwords stay.
+          - type: note
+            severity: warning
+            text: >-
+              This version takes these credentials as plain values, so they are stored in the Helm release. 1.8.0
+              reads them from a dictionary secret you create instead.
+          - path: autoCreateDatabase.database.rootPassword
+            type: string
+            label: Root password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.autoCreateDatabase.database.rootPassword != oldSelf.autoCreateDatabase.database.rootPassword
+                rule: >-
+                  !self.autoCreateDatabase.database.rootPassword.matches('^\\s') && !self.autoCreateDatabase.database.rootPassword.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.autoCreateDatabase.database.rootPassword.matches('^[-?:](\\s|$)') && !self.autoCreateDatabase.database.rootPassword.matches('\\t') &&
+                  !self.autoCreateDatabase.database.rootPassword.contains(': ') && !self.autoCreateDatabase.database.rootPassword.contains(' #') && !self.autoCreateDatabase.database.rootPassword.endsWith(':') && !self.autoCreateDatabase.database.rootPassword.endsWith(' ') &&
+                  !(self.autoCreateDatabase.database.rootPassword in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.autoCreateDatabase.database.rootPassword.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.autoCreateDatabase.database.rootPassword.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.autoCreateDatabase.database.rootPassword.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.autoCreateDatabase.database.rootPassword.matches('^\\.(nan|NaN|NAN)$') && !self.autoCreateDatabase.database.rootPassword.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-db-config.yaml: the init workload writes the value into SQL unescaped.
+              - when: oldSelf == null || self.autoCreateDatabase.database.rootPassword != oldSelf.autoCreateDatabase.database.rootPassword
+                rule: >-
+                  !self.autoCreateDatabase.database.rootPassword.contains("'") && !self.autoCreateDatabase.database.rootPassword.contains('\\')
+                severity: warning
+                message: The init workload writes the password into SQL unescaped, so it cannot contain ' or \.
+          - path: autoCreateDatabase.database.user
+            type: string
+            label: Application user
+            required: true
+            maxLength: 32
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.autoCreateDatabase.database.user != oldSelf.autoCreateDatabase.database.user
+                rule: >-
+                  !self.autoCreateDatabase.database.user.matches('^\\s') && !self.autoCreateDatabase.database.user.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.autoCreateDatabase.database.user.matches('^[-?:](\\s|$)') && !self.autoCreateDatabase.database.user.matches('\\t') &&
+                  !self.autoCreateDatabase.database.user.contains(': ') && !self.autoCreateDatabase.database.user.contains(' #') && !self.autoCreateDatabase.database.user.endsWith(':') && !self.autoCreateDatabase.database.user.endsWith(' ') &&
+                  !(self.autoCreateDatabase.database.user in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.autoCreateDatabase.database.user.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.autoCreateDatabase.database.user.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.autoCreateDatabase.database.user.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.autoCreateDatabase.database.user.matches('^\\.(nan|NaN|NAN)$') && !self.autoCreateDatabase.database.user.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-db-config.yaml: the init workload writes the value into SQL unescaped.
+              - when: oldSelf == null || self.autoCreateDatabase.database.user != oldSelf.autoCreateDatabase.database.user
+                rule: >-
+                  !self.autoCreateDatabase.database.user.contains("'") && !self.autoCreateDatabase.database.user.contains('\\')
+                severity: warning
+                message: The init workload writes the user into SQL unescaped, so it cannot contain ' or \.
+          - path: autoCreateDatabase.database.password
+            type: string
+            label: Application user password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.autoCreateDatabase.database.password != oldSelf.autoCreateDatabase.database.password
+                rule: >-
+                  !self.autoCreateDatabase.database.password.matches('^\\s') && !self.autoCreateDatabase.database.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.autoCreateDatabase.database.password.matches('^[-?:](\\s|$)') && !self.autoCreateDatabase.database.password.matches('\\t') &&
+                  !self.autoCreateDatabase.database.password.contains(': ') && !self.autoCreateDatabase.database.password.contains(' #') && !self.autoCreateDatabase.database.password.endsWith(':') && !self.autoCreateDatabase.database.password.endsWith(' ') &&
+                  !(self.autoCreateDatabase.database.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.autoCreateDatabase.database.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.autoCreateDatabase.database.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.autoCreateDatabase.database.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.autoCreateDatabase.database.password.matches('^\\.(nan|NaN|NAN)$') && !self.autoCreateDatabase.database.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-db-config.yaml: the init workload writes the value into SQL unescaped.
+              - when: oldSelf == null || self.autoCreateDatabase.database.password != oldSelf.autoCreateDatabase.database.password
+                rule: >-
+                  !self.autoCreateDatabase.database.password.contains("'") && !self.autoCreateDatabase.database.password.contains('\\')
+                severity: warning
+                message: The init workload writes the password into SQL unescaped, so it cannot contain ' or \.
+          - path: autoCreateDatabase.database.db
+            type: string
+            label: Database name
+            required: true
+            maxLength: 64
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.autoCreateDatabase.database.db != oldSelf.autoCreateDatabase.database.db
+                rule: >-
+                  !self.autoCreateDatabase.database.db.matches('^\\s') && !self.autoCreateDatabase.database.db.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.autoCreateDatabase.database.db.matches('^[-?:](\\s|$)') && !self.autoCreateDatabase.database.db.matches('\\t') &&
+                  !self.autoCreateDatabase.database.db.contains(': ') && !self.autoCreateDatabase.database.db.contains(' #') && !self.autoCreateDatabase.database.db.endsWith(':') && !self.autoCreateDatabase.database.db.endsWith(' ') &&
+                  !(self.autoCreateDatabase.database.db in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.autoCreateDatabase.database.db.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.autoCreateDatabase.database.db.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.autoCreateDatabase.database.db.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.autoCreateDatabase.database.db.matches('^\\.(nan|NaN|NAN)$') && !self.autoCreateDatabase.database.db.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-db-config.yaml: the init workload writes the value into SQL unescaped.
+              - when: oldSelf == null || self.autoCreateDatabase.database.db != oldSelf.autoCreateDatabase.database.db
+                rule: "!self.autoCreateDatabase.database.db.contains('`')"
+                severity: warning
+                message: The init workload writes the database name into SQL unescaped, so it cannot contain a backtick.
+        rules:
+          # README: Database Initialization; the init workload applies the values once, when the cluster first starts.
+          - when: oldSelf != null && oldSelf.autoCreateDatabase.enabled
+            rule: >-
+              oldSelf == null || oldSelf.autoCreateDatabase.database == null ||
+              (self.autoCreateDatabase.database.rootPassword == oldSelf.autoCreateDatabase.database.rootPassword &&
+              self.autoCreateDatabase.database.user == oldSelf.autoCreateDatabase.database.user &&
+              self.autoCreateDatabase.database.password == oldSelf.autoCreateDatabase.database.password &&
+              self.autoCreateDatabase.database.db == oldSelf.autoCreateDatabase.database.db)
+            severity: info
+            paths: [autoCreateDatabase.database]
+            message: >-
+              These are applied when the cluster is first initialized only. Changing them here does not change the
+              passwords, user or database of a running cluster; change them with `ALTER USER` first so they match.
+
+  - id: storage
+    title: Storage
+    description: The TiKV and PD volume sets.
+    sections:
+      - id: tikv-storage
+        title: TiKV volumes
+        description: One volume per TiKV node.
+        fields:
+          # volumeset.yaml: snapshots carry a retention but no schedule (2.2.0 README: "2.1.0 declared the
+          # retention but never scheduled a snapshot"; this version renders the same block).
+          - type: note
+            severity: warning
+            text: >-
+              This version takes no volume snapshots: the volume sets declare a retention but no schedule.
+              2.2.0 snapshots every PD and TiKV volume daily.
+          - path: volumeset.tikv.capacity
+            type: integer
+            label: TiKV initial capacity
+            required: true
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+      - id: pd-storage
+        title: PD volumes
+        description: One volume per PD member. PD holds only cluster metadata, so it has no autoscaling.
+        fields:
+          - path: volumeset.pd.capacity
+            type: integer
+            label: PD initial capacity
+            required: true
+            unit: GiB
+            min: 10
+            suggestions: [10, 20, 50, 100]
+    rules:
+      - rule: oldSelf == null || self.volumeset.tikv.capacity >= oldSelf.volumeset.tikv.capacity
+        paths: [volumeset.tikv.capacity]
+        message: Keep the TiKV capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: oldSelf == null || self.volumeset.pd.capacity >= oldSelf.volumeset.pd.capacity
+        paths: [volumeset.pd.capacity]
+        message: Keep the PD capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Who can reach each tier, and outbound internet access.
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              In this version the chart does not add its own workloads to these lists, and access changes take
+              up to about 10 minutes to apply.
+      - id: server-access
+        title: TiDB servers
+        description: The MySQL endpoint on port 4000.
+        fields:
+          - path: internal_access.server.type
+            type: enum
+            label: Who can reach the TiDB servers
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: "Any workload in this release's GVC, plus the workloads listed below." }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.server.workloads
+            type: list
+            label: TiDB server client workloads
+            widget: tags
+            unique: true
+            when: self.internal_access.server.type in ['same-gvc', 'workload-list']
+            description: Workloads allowed to connect, including ones in other GVCs.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          # Chart bug (workload-server.yaml prints the list with Go formatting): two entries merge into one
+          # string, and a leading ":" breaks the YAML. maxItems and the item pattern keep the render valid.
+          - path: external_access.server_outboundAllowCIDR
+            type: list
+            label: TiDB server outbound CIDRs
+            widget: tags
+            description: Internet addresses the TiDB servers may connect to, such as `0.0.0.0/0`.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
+          - path: exposeServer
+            type: boolean
+            label: Public status port
+            advanced: true
+            description: >-
+              Opens the TiDB servers to the internet. Only the unauthenticated status port (10080) is served
+              publicly; the MySQL port is not.
+            rules:
+              - rule: "!self.exposeServer"
+                severity: warning
+                message: >-
+                  This exposes TiDB's unauthenticated status and API port to the internet. Reach the servers over
+                  the internal name instead.
+        rules:
+          # workload-db-init.yaml connects to the TiDB servers on 4000; the chart does not add it to the list.
+          - when: self.internal_access.server.type == 'workload-list' && self.autoCreateDatabase.enabled
+            rule: >-
+              ('//gvc/' + self.gvc.name + '/workload/' + context.releaseName + '-tidb-db-init') in
+              self.internal_access.server.workloads
+            severity: warning
+            paths: [internal_access.server.workloads]
+            messageExpression: >-
+              'The init workload connects to the TiDB servers and the chart does not add it to the list. Add //gvc/' +
+              self.gvc.name + '/workload/' + context.releaseName + '-tidb-db-init.'
+            message: >-
+              The init workload connects to the TiDB servers and the chart does not add it to the list. Add the
+              release's tidb-db-init workload.
+      - id: tikv-access
+        title: TiKV
+        fields:
+          - path: internal_access.tikv.type
+            type: enum
+            label: Who can reach TiKV
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: "Any workload in this release's GVC." }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: No workload can be listed in this version. }
+          - path: external_access.tikv_outboundAllowCIDR
+            type: list
+            label: TiKV outbound CIDRs
+            widget: tags
+            description: Internet addresses TiKV may connect to.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
+      - id: pd-access
+        title: PD
+        fields:
+          - path: internal_access.pd.type
+            type: enum
+            label: Who can reach PD
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: "Any workload in this release's GVC." }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: No workload can be listed in this version. }
+          - path: external_access.pd_outboundAllowCIDR
+            type: list
+            label: PD outbound CIDRs
+            widget: tags
+            description: Internet addresses PD may connect to.
+            maxItems: 1
+            item:
+              type: string
+              format: cidr
+              pattern: '^[^:]'
+              patternMessage: Write a leading `::` with a zero, such as `0::/0`.
+    rules:
+      # workload-pd.yaml, workload-tikv.yaml: a non-empty list renders inboundAllowWorkload twice, and cpln's YAML
+      # parser refuses the duplicated key (measured with js-yaml 4.2.0: "duplicated mapping key").
+      - rule: >-
+          [self.internal_access.tikv].all(m, !m.exists(k, k == 'workloads' && m[k] != null && size(m[k]) > 0)) &&
+          [self.internal_access.pd].all(m, !m.exists(k, k == 'workloads' && m[k] != null && size(m[k]) > 0))
+        message: >-
+          internal_access.tikv.workloads and internal_access.pd.workloads must stay empty: this version writes the
+          allow list twice for those tiers, and the install fails on the duplicated key.
+      # Same templates: with workload-list the list renders empty, and the chart does not add its own workloads.
+      - rule: self.internal_access.tikv.type != 'workload-list' && self.internal_access.pd.type != 'workload-list'
+        severity: warning
+        message: >-
+          With Specific workloads, this version renders an empty allow list for TiKV or PD, so no workload, not
+          even this release's TiDB servers, TiKV and PD, may reach it. Choose Same GVC or Same org.
+
+yamlOnly:
+  - path: internal_access.tikv.workloads
+    reason: Must stay empty in this version; a list breaks the install (see the Access rules).
+  - path: internal_access.pd.workloads
+    reason: Must stay empty in this version; a list breaks the install (see the Access rules).
+
+migrations:
+  # 1.1.x → 1.2.0 changed the default locations; a release keeps the GVC locations it runs in.
+  - fromVersions: "<1.2.0"
+    to: gvc.locations
+    valueExpr: self.gvc.locations
+    note: The release keeps the locations its GVC already has.
+  - { fromVersions: "<1.2.0", from: database, to: autoCreateDatabase.database }
+  # 1.1.x ran one PD member per location, plus one in the first location when the count was even.
+  - fromVersions: "<1.2.0"
+    to: gvc.pdReplicas
+    valueExpr: >-
+      size(self.gvc.locations) >= 7 ? 7 :
+      (size(self.gvc.locations) % 2 == 0 ? size(self.gvc.locations) + 1 : size(self.gvc.locations))
+    note: The release keeps the number of PD members it runs.
+  # 1.1.x set access for the TiDB servers only (PD and TiKV were fixed at same-gvc), with the default same-org;
+  # 1.2.0's default is same-gvc, so the installed value is carried whatever it is.
+  - fromVersions: "<1.2.0"
+    to: internal_access.server.type
+    valueExpr: self.internal_access.type
+    note: Access is now set per tier; the TiDB servers keep the access they had.
+  - fromVersions: "<1.2.0"
+    from: internal_access.type
+  - { fromVersions: "<1.2.0", from: internal_access.workloads, to: internal_access.server.workloads }

@@ -109,5 +109,7 @@ checks:
       stdout: "^AVAIL 0\\.8\\.7$"
     # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
     # old image; this runs long enough for the rollout to finish.
-    retries: 12
-    retryDelaySeconds: 15
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30

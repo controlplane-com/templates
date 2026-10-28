@@ -129,6 +129,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: >-
@@ -147,6 +148,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -205,6 +207,7 @@ steps:
             label: etcd initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             description: Per member.
@@ -527,6 +530,17 @@ steps:
             advanced: true
             description: The logical backup job, or the WAL-G sidecar next to each member.
         rules:
+          - when: self.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.backup.mode == 'wal-g' &&
+              self.backup.resources.memory == oldSelf.backup.resources.memory) ||
+              memoryBytes(self.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
           - rule: self.backup.mode in ['logical', 'wal-g']
             mirrors: pg-ha.validateBackupMode
             paths: [backup.mode]

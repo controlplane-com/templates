@@ -98,6 +98,82 @@ checks:
     retries: 4
     retryDelaySeconds: 15
 
+  - id: crm-record-survives-upgrade
+    description: >-
+      Through Twenty's own API: the first user signs up and creates the workspace (on the first run), signs in
+      with the real password while a wrong one is refused, writes a Company named after the running version,
+      and reads back the Company the scenario's first version wrote. After an upgrade that proves CRM data
+      written by the old version survives the HA database's member restarts and the app's own migrations.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request, urllib.error
+        B = "http://{release}-twenty.{gvc}.cpln.local:3000"
+        EMAIL, PW = "e2e-admin@example.com", "E2e-" + "{pg_password}"[:20]
+
+        def gql(path, query, variables, token=None):
+            req = urllib.request.Request(B + path, json.dumps(dict(query=query, variables=variables)).encode(),
+                                         dict([("content-type", "application/json")] +
+                                              ([("authorization", "Bearer " + token)] if token else [])))
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                return json.loads(e.read() or b"null") or dict(errors=[dict(message="HTTP %d" % e.code)])
+
+        def data(resp, key):
+            if resp.get("errors"):
+                raise SystemExit("API ERROR %s: %s" % (key, resp["errors"][0].get("message")))
+            return resp["data"][key]
+
+        def login(password):
+            return gql("/metadata", "mutation($e: String!, $p: String!, $o: String!) "
+                       "{ getLoginTokenFromCredentials(email: $e, password: $p, origin: $o) { loginToken { token } } }",
+                       dict(e=EMAIL, p=password, o=B))
+
+        def access(login_token):
+            r = gql("/metadata", "mutation($t: String!, $o: String!) { getAuthTokensFromLoginToken(loginToken: $t, "
+                    "origin: $o) { tokens { accessOrWorkspaceAgnosticToken { token } } } }", dict(t=login_token, o=B))
+            return data(r, "getAuthTokensFromLoginToken")["tokens"]["accessOrWorkspaceAgnosticToken"]["token"]
+
+        exists = data(gql("/metadata", "query($e: String!) { checkUserExists(email: $e) { exists } }",
+                          dict(e=EMAIL)), "checkUserExists")["exists"]
+        if not exists:  # first run on this install: the real first-run flow, as the UI drives it
+            t0 = data(gql("/metadata", "mutation($e: String!, $p: String!) { signUp(email: $e, password: $p) "
+                          "{ tokens { accessOrWorkspaceAgnosticToken { token } } } }", dict(e=EMAIL, p=PW)),
+                      "signUp")["tokens"]["accessOrWorkspaceAgnosticToken"]["token"]
+            lt = data(gql("/metadata", "mutation($i: SignUpInNewWorkspaceInput) { signUpInNewWorkspace(input: $i) "
+                          "{ loginToken { token } } }", dict(i=dict(displayName="E2E")), t0),
+                      "signUpInNewWorkspace")["loginToken"]["token"]
+            data(gql("/metadata", "mutation($i: ActivateWorkspaceInput!) { activateWorkspace(data: $i) { id } }",
+                     dict(i=dict()), access(lt)), "activateWorkspace")
+
+        wrong = login(PW + "-wrong")
+        refused = bool(wrong.get("errors")) and not (wrong.get("data") or dict()).get("getLoginTokenFromCredentials")
+        tok = access(data(login(PW), "getLoginTokenFromCredentials")["loginToken"]["token"])
+
+        def companies(name):
+            r = gql("/graphql", "query($n: String!) { companies(filter: { name: { eq: $n } }) { totalCount } }",
+                    dict(n=name), tok)
+            return data(r, "companies")["totalCount"]
+
+        if companies("e2e-{version}") == 0:
+            data(gql("/graphql", "mutation($n: String!) { createCompany(data: { name: $n }) { id } }",
+                     dict(n="e2e-{version}"), tok), "createCompany")
+        n = companies("e2e-{installed_version}")
+        none = companies("e2e-never-written")
+        print("COMPANY e2e-{installed_version} %d | CONTROL %d | WRONG-PASSWORD %s"
+              % (n, none, "REFUSED" if refused else "ACCEPTED"))
+        PY
+    expect:
+      stdout: "^COMPANY e2e-\\S+ 1 \\| CONTROL 0 \\| WRONG-PASSWORD REFUSED$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
   - id: pgvector-0-8-7-available
     description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.4.1.
     issue: "#5376"

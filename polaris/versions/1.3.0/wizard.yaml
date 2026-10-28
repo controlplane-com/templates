@@ -328,7 +328,7 @@ steps:
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`; the database name must be
-              URL-safe.
+              URL-safe, and no `"` or `\` in the user or password.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Polaris connects with
               them. To change the password later, change it in the database first, then update the secret and

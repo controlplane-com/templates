@@ -90,7 +90,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password]
               create:
-                suggestName: "context.releaseName + '-unleash-admin'"
+                suggestName: "context.releaseName + '-unleash-admin-credentials'"
           - path: apiTokens.secretName
             type: ref
             label: SDK API tokens secret
@@ -108,6 +108,16 @@ steps:
               create:
                 suggestName: "context.releaseName + '-unleash-api-tokens'"
         rules:
+          # 1.0.x rendered its own admin secret named <release>-unleash-admin; upgrading to 1.1.0 or later
+          # prunes it, so a release pointed at that name would reference a secret the upgrade deletes.
+          - rule: >-
+              context.mode != 'upgrade' || context.fromVersion == null ||
+              semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.admin.secretName != context.releaseName + '-unleash-admin'
+            paths: [admin.secretName]
+            message: >-
+              That secret belongs to the 1.0.x release, and this upgrade deletes it. Create a new dictionary
+              secret with the keys username and password and choose it here.
           - rule: "!has(self.admin.username) && !has(self.admin.password)"
             mirrors: unleash.validateAdmin
             paths: [admin.secretName]
@@ -221,8 +231,9 @@ steps:
             description: A dictionary secret with the keys `username`, `password` and `database`.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Unleash connects with
-              them. To change the password later, change it in the database first, then update the secret and
-              force a redeployment.
+              them. The password must not contain double quotes or backslashes: the highly available database
+              writes it inside double quotes in its config. To change the password later, change it in the
+              database first, then update the secret and force a redeployment.
               In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
             docs: "#prerequisites"
             ref:
@@ -436,6 +447,101 @@ steps:
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
               credentials secret and remove them from the values.
     rules:
+      # Changing the database mode on an installed release swaps one subchart for the other, so Helm deletes the
+      # current database workloads and volume sets and the new one starts empty.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of Unleash's flags,
+          users and tokens, and starts an empty one. Keep the current database, or install a new release and move
+          the data.
+      # postgres-highly-available writes backup.<provider>.prefix unquoted: as the logical backup job's
+      # BACKUP_PREFIX env value (templates/workload-logical-backup.yaml), and after s3://bucket/ or gs://bucket/
+      # in the WAL-G prefix (templates/workload-patroni-postgres.yaml).
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+              !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+              !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+              !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: unleash.validate
         paths: [postgresHA.enabled, postgres.enabled]
@@ -480,6 +586,17 @@ steps:
         message: >-
           The previous version created the database secret itself, and this upgrade deletes it. Create a secret
           under a NEW name holding the same username, password and database, and name it here.
+      # Before 1.3.0 the HA database kept its credentials in its own secret <release>-postgres-config, which the
+      # upgrade prunes or rewrites (pg-ha 2.5.0 reuses the name for its backup settings).
+      - when: >-
+          oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 &&
+          self.postgresHA.enabled
+        rule: self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          That secret belongs to the previous version's highly available database, and this upgrade deletes or
+          rewrites it. Create a new dictionary secret with the same username, password and database and choose
+          it here.
       - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.5.0') >= 0)
         rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==

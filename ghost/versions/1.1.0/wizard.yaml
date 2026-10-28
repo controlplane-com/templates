@@ -1,0 +1,619 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Ghost
+
+# One stateful Ghost replica and one stateful MySQL, each with its own volume: every GVC location
+# would run its own copy of both.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+# The bundled mysql 1.4.3 keys are bound here as plain fields (not imported)
+# (they are all in this chart's `mysql:` block) and its chart checks are restated as rules.
+steps:
+  - id: ghost
+    title: Ghost
+    description: The database credentials, then the Ghost image, its compute and content volume.
+    sections:
+      - title: Database credentials
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These four values are stored in the release values and in the dictionary secret
+              `<release>-mysql-config`, which the chart creates. The default passwords are published in the
+              template and shared by every install that keeps them, so set your own. MySQL applies all four
+              only when its data directory is first initialized. Ghost 1.3.0 and later read them from
+              prerequisite secrets instead.
+            textExpression: >-
+              'These four values are stored in the release values and in the dictionary secret `' +
+              context.releaseName + '-mysql-config`, which the chart creates. The default passwords are
+              published in the template and shared by every install that keeps them, so set your own. MySQL
+              applies all four only when its data directory is first initialized. Ghost 1.3.0 and later read
+              them from prerequisite secrets instead.'
+          - path: mysql.config.db
+            type: string
+            label: Database name
+            required: true
+            immutable: MySQL creates this database once, when its data directory is initialized.
+            description: The database Ghost stores its posts, members and settings in.
+            # The official mysql image runs CREATE DATABASE `<name>` with the name unescaped, and MySQL refuses
+            # names over 64 characters, outside the BMP or ending with a space.
+            maxLength: 64
+            pattern: '^(?!.* $)[^\x00-\x1f\x7f\u2028\u2029`\ud800-\udfff]*$'
+            patternMessage: >-
+              Leave out backticks, control characters and emoji or other characters outside the Basic
+              Multilingual Plane, and do not end the name with a space. The MySQL image writes the name between
+              backticks without escaping it.
+          - path: mysql.config.user
+            type: string
+            label: Database user
+            required: true
+            immutable: MySQL creates this user once, when its data directory is initialized.
+            # The image refuses MYSQL_USER=root and writes the name into CREATE USER '<name>'@'%' unescaped;
+            # MySQL user names are up to 32 characters.
+            maxLength: 32
+            pattern: '^(?!root$)[^\x00-\x1f\x7f\u2028\u2029''\\]*$'
+            patternMessage: >-
+              Use a name other than root, and leave out quotes ('), backslashes and control characters. The
+              MySQL image refuses root here, and it writes the name into SQL without escaping quotes or
+              backslashes.
+          - path: mysql.config.password
+            type: string
+            label: Database password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Ghost connects with this user and password.
+            pattern: '^[^\x00-\x1f\x7f\u2028\u2029]*$'
+            patternMessage: Leave out control characters and line breaks.
+            rules:
+              # The image writes it into IDENTIFIED BY '<password>' unescaped when it initializes the data
+              # directory (install only).
+              - when: context.mode == 'install'
+                rule: >-
+                  !self.mysql.config.password.matches("['\\\\]")
+                message: >-
+                  Leave out quotes (') and backslashes: the MySQL image writes the user password into SQL
+                  without escaping it when it initializes the database.
+              - rule: oldSelf == null || self.mysql.config.password == oldSelf.mysql.config.password
+                severity: info
+                message: >-
+                  MySQL keeps the password it was initialized with. Change it in MySQL with `ALTER USER`
+                  first, or Ghost can no longer log in to its database.
+              - when: oldSelf != null
+                rule: self.mysql.config.password != 'change-me-ghost-db'
+                severity: info
+                message: >-
+                  This release still uses the template's published default database password. Change it in
+                  MySQL with `ALTER USER`, then enter the new password here.
+          - path: mysql.config.rootPassword
+            type: string
+            label: MySQL root password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Ghost never uses it; the optional backup job and phpMyAdmin console receive it.
+            # The mysql readiness probe runs sh -c 'mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}' with the
+            # expansion unquoted, so whitespace splits the password.
+            pattern: '^[^\s\x00-\x1f\x7f]+$'
+            patternMessage: >-
+              Leave out spaces, tabs, line breaks and other control characters. The MySQL readiness check passes
+              the root password to the shell unquoted, so whitespace would split it.
+            rules:
+              - when: context.mode == 'install'
+                rule: >-
+                  !self.mysql.config.rootPassword.matches("['\"\\\\]")
+                message: >-
+                  Leave out quotes and backslashes: the MySQL image writes the root password into SQL and into
+                  its client options without escaping it when it initializes the database.
+              - rule: oldSelf == null || self.mysql.config.rootPassword == oldSelf.mysql.config.rootPassword
+                severity: info
+                message: >-
+                  MySQL keeps the root password it was initialized with. Change it in MySQL first with
+                  `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, or the secret no longer matches
+                  the database.
+              - when: oldSelf != null
+                rule: self.mysql.config.rootPassword != 'change-me-mysql-root'
+                severity: info
+                message: >-
+                  This release still uses the template's published default root password. Change it in MySQL
+                  with `ALTER USER` for both `'root'@'localhost'` and `'root'@'%'`, then enter the new password
+                  here.
+        rules:
+          - rule: self.mysql.config.password != '' && self.mysql.config.rootPassword != ''
+            mirrors: ghost.validate
+            paths: [mysql.config.password, mysql.config.rootPassword]
+            message: Set both the database password and the MySQL root password; the chart does not render without them.
+      - title: Server
+        docs: "#ghost-application"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts Ghost, its single replica: the site is unavailable for a short time.
+          - path: image
+            type: string
+            format: image
+            label: Ghost image
+            required: true
+            help: >-
+              This version was tested with ghost:6.54.1-alpine. Another image is unproven here; try it on a
+              throwaway release first.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+          - path: volumeset.capacity
+            type: integer
+            label: Content volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: Uploaded images, themes, logs and adapters.
+            help: Uninstalling the release deletes the volume set with everything on it.
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: ghost.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.1.0. Remove the old keys from the values.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: site
+    title: Site and access
+    description: The public URL Ghost builds links with, and who reaches the site.
+    sections:
+      - title: Site URL
+        docs: "#site-url"
+        fields:
+          - path: publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://blog.example.com
+            description: >-
+              Used in every link and email. Leave empty to use the canonical endpoint; set it once a custom
+              domain fronts the workload.
+            # The start script writes it into export url="..." (templates/secret-start.yaml) under set -eu.
+            pattern: '^[^"$`\\]*$'
+            patternMessage: >-
+              Leave out double quotes, $, backticks and backslashes: the start script writes the URL into a
+              shell string, where they would change or stop it.
+      - title: Public access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: The site and the admin at `/ghost` on the workload's `*.cpln.app` endpoint.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: none, label: None, description: No workload can reach Ghost internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.internalAccess.type == 'same-org'
+                rule: size(self.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.internalAccess.type == 'none'
+                rule: size(self.internalAccess.workloads) == 0
+                severity: warning
+                message: >-
+                  The chart still writes these workloads into the firewall, but "None" lets none of them connect.
+                  Remove them.
+              - when: self.internalAccess.type == 'workload-list'
+                rule: size(self.internalAccess.workloads) > 0
+                severity: warning
+                message: With "Specific workloads" and an empty list, no workload can reach Ghost internally.
+
+  - id: email
+    title: Email
+    description: Outbound mail for member sign-in links, newsletters to members and staff email.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version leaves Ghost's staff device verification on, and Ghost emails the sign-in code.
+              Without SMTP, staff cannot sign in to `/ghost` from a new browser. Configure SMTP, or install
+              ghost 1.2.0 or later, which turns the check off by default.
+          - id: mailMode
+            virtual: true
+            type: enum
+            label: Email
+            widget: cards
+            required: true
+            init: "self.mail.secretName != '' ? 'smtp' : 'off'"
+            options:
+              - value: 'off'
+                label: Off
+                description: >-
+                  No email is sent; members cannot sign in by link and staff cannot sign in to the admin from a
+                  new browser. Choosing Off clears the SMTP login secret.
+                set: { mail.secretName: '' }
+              - value: smtp
+                label: SMTP
+                description: Ghost sends through your SMTP server.
+      - title: SMTP
+        when: ui.mailMode == 'smtp'
+        fields:
+          - path: mail.secretName
+            type: ref
+            label: SMTP login secret
+            required: true
+            description: A dictionary secret with the keys `user` and `password`.
+            help: After rotating it, force a redeployment of the Ghost workload; a running replica keeps the old login.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [user, password]
+              create:
+                suggestName: "context.releaseName + '-ghost-smtp'"
+          - path: mail.host
+            type: string
+            format: hostname
+            label: SMTP server
+            required: true
+            placeholder: smtp.mailgun.org
+          - path: mail.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+          - path: mail.secure
+            type: boolean
+            label: Implicit TLS
+            description: On for port 465; off for STARTTLS on 587.
+          - path: mail.from
+            type: string
+            label: Sender
+            required: true
+            placeholder: Ghost <noreply@example.com>
+        rules:
+          - rule: self.mail.host != '' && self.mail.from != ''
+            mirrors: ghost.validate
+            paths: [mail.host, mail.from]
+            message: The SMTP server and the sender are required when an SMTP login secret is set.
+          - rule: self.mail.secure == (self.mail.port == 465)
+            severity: info
+            paths: [mail.secure]
+            message: Implicit TLS is normally on for port 465 and off for every other port.
+    # Ghost 6 defaults security.staffDeviceVerification to true (ghost/core/core/shared/config/defaults.json at
+    # v6.54.1) and this chart does not set it; 1.2.0 added staffDeviceVerification: false (CHANGELOG.md).
+    rules:
+      - when: context.mode == 'install'
+        rule: self.mail.secretName != ''
+        severity: warning
+        message: >-
+          With email off, staff cannot sign in to the admin at /ghost from a new browser: this version leaves
+          Ghost's emailed sign-in code on. Choose SMTP, or install ghost 1.2.0 or later.
+      - when: context.mode != 'install'
+        rule: self.mail.secretName != ''
+        severity: info
+        message: >-
+          With email off, staff cannot sign in to the admin at /ghost from a new browser: this version leaves
+          Ghost's emailed sign-in code on. Choose SMTP, or upgrade to ghost 1.2.0 or later.
+
+  - id: database
+    title: Database
+    description: The bundled MySQL 8 that Ghost stores posts, members and settings in, and its backups.
+    sections:
+      - title: MySQL server
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that changes the database restarts MySQL; Ghost loses its connection until MySQL is
+              back.
+          - path: mysql.image
+            type: string
+            format: image
+            label: MySQL image
+            required: true
+            description: Ghost supports MySQL 8 only, not MySQL 9 or MariaDB.
+          - path: mysql.resources
+            type: resources
+            label: MySQL resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 50m }
+            memory: { min: 128Mi }
+          - path: mysql.volumeset.capacity
+            type: integer
+            label: Database volume capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            help: Uninstalling the release deletes the volume set and the database on it.
+        rules:
+          # mysql 1.4.3 templates/workload-mysql.yaml writes `cpu: {{ .Values.resources.maxCpu }}` unquoted,
+          # and the platform's Cpu type is a string: a whole number of cores renders as a YAML number.
+          - rule: type(self.mysql.resources.maxCpu) == string && self.mysql.resources.maxCpu.endsWith('m')
+            paths: [mysql.resources]
+            message: >-
+              Enter the MySQL maximum CPU in millicores, such as 1000m for one core. The mysql chart writes this
+              value unquoted, and the platform refuses a plain number of cores.
+          - rule: imageMajor(self.mysql.image) < 0 || imageMajor(self.mysql.image) == 8
+            severity: warning
+            paths: [mysql.image]
+            message: Ghost supports MySQL 8 only; it refuses other MySQL majors.
+          - rule: >-
+              oldSelf == null || imageMajor(self.mysql.image) < 0 || imageMajor(oldSelf.mysql.image) < 0 ||
+              imageMajor(self.mysql.image) == imageMajor(oldSelf.mysql.image)
+            severity: warning
+            paths: [mysql.image]
+            message: The data directory belongs to the installed MySQL major version; keep the same major.
+          - rule: oldSelf == null || self.mysql.volumeset.capacity >= oldSelf.mysql.volumeset.capacity
+            paths: [mysql.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: Database network
+        docs: /reference/workload/firewall
+        fields:
+          - path: mysql.internalAccess.type
+            type: enum
+            label: Who can connect to MySQL
+            widget: cards
+            required: true
+            description: >-
+              Ghost connects to its database like any other workload: keep Same GVC, or list the Ghost workload
+              under Specific workloads.
+            options:
+              - { value: none, label: None, description: No workload can connect. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # Not in values.yaml: the mysql 1.4.3 subchart reads it (null by default).
+          - path: mysql.internalAccess.workloads
+            type: list
+            absent: true
+            label: Workloads allowed to connect to MySQL
+            widget: tags
+            when: self.mysql.internalAccess.type == 'workload-list'
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.mysql.internalAccess.type != 'none'
+            paths: [mysql.internalAccess.type]
+            message: '"None" also blocks Ghost, which connects to its database like any other workload.'
+          - when: self.mysql.internalAccess.type == 'workload-list' && context.gvc != null && context.releaseName != null
+            rule: >-
+              self.mysql.internalAccess.workloads != null &&
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-ghost') in self.mysql.internalAccess.workloads &&
+              (!self.mysql.enablePhpMyAdmin ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin') in self.mysql.internalAccess.workloads) &&
+              (!self.mysql.backup.enabled ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup') in self.mysql.internalAccess.workloads)
+            severity: warning
+            paths: [mysql.internalAccess.workloads]
+            message: >-
+              The chart does not add its own workloads to the list. Add the Ghost workload, and the phpMyAdmin
+              and backup workloads when they are on, or they cannot reach the database.
+            fix:
+              path: mysql.internalAccess.workloads
+              items: >-
+                ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-ghost'] +
+                (self.mysql.enablePhpMyAdmin ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-phpmyadmin'] : []) +
+                (self.mysql.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-mysql-backup'] : [])
+      - id: phpmyadmin
+        title: phpMyAdmin console
+        toggle: mysql.enablePhpMyAdmin
+        description: >-
+          A web console for the database. This version publishes it to the internet with no setting to restrict
+          who can reach it, runs the `latest` phpMyAdmin image and puts the root password in its environment.
+        fields: []
+        rules:
+          - when: oldSelf == null || !oldSelf.mysql.enablePhpMyAdmin
+            rule: "!self.mysql.enablePhpMyAdmin"
+            severity: warning
+            paths: [mysql.enablePhpMyAdmin]
+            message: >-
+              Leave phpMyAdmin off. In this version it is public on the internet, runs the unpinned `latest`
+              phpMyAdmin image and has the MySQL root password in its environment. Ghost 1.3.0 replaces it with
+              an internal-only console on a pinned image.
+          - when: oldSelf != null && oldSelf.mysql.enablePhpMyAdmin
+            rule: "!self.mysql.enablePhpMyAdmin"
+            severity: info
+            paths: [mysql.enablePhpMyAdmin]
+            message: >-
+              phpMyAdmin is public on the internet, runs the unpinned `latest` image and has the MySQL root
+              password in its environment. A replica that pulled the image before 2026-10-27 may still run PHP
+              8.3.26, which is affected by CVE-2026-109618 and CVE-2026-109619: turn phpMyAdmin off, or force a
+              redeployment of the phpMyAdmin workload so it pulls the rebuilt image.
+      - id: backup
+        title: Scheduled backups
+        toggle: mysql.backup.enabled
+        description: Adds one cron workload that dumps the Ghost database and uploads it to your bucket.
+        fields:
+          - path: mysql.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: mysql.backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: mysql.backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: mysql.backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          # Restates the bundled mysql 1.4.3 chart's mysql.validateBackupConfig.
+          - rule: self.mysql.backup.provider in ['aws', 'gcp']
+            paths: [mysql.backup.provider]
+            message: The backup destination must be AWS S3 or Google Cloud Storage.
+      - title: AWS S3
+        when: self.mysql.backup.enabled && self.mysql.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket, an AWS cloud account and the IAM policy **before** you install. The policy
+              allows `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`,
+              `s3:GetObjectVersion` and `s3:DeleteObjectVersion` on the bucket and its objects.
+          - path: mysql.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: mysql.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: mysql.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: mysql.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The chart attaches it to the identity that MySQL, the optional phpMyAdmin console and the backup
+              job share, together with `cpln-connector` and the AWS managed policy `aws::ReadOnlyAccess`.
+            # The platform's identity PolicyRef pattern (the chart writes the name inside double quotes).
+            pattern: '^(aws::)?[A-Za-z0-9/+=,.@_-]+$'
+            patternMessage: >-
+              Use letters, digits and / + = , . @ _ -, optionally after aws:: for an AWS managed policy.
+          - path: mysql.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            maxLength: 4096
+            rules:
+              # BACKUP_PREFIX is written unquoted (mysql 1.4.3 templates/workload-backup.yaml).
+              - when: oldSelf == null || oldSelf.mysql.backup.aws.prefix != self.mysql.backup.aws.prefix
+                rule: >-
+                  !self.mysql.backup.aws.prefix.matches('^\\s') && !self.mysql.backup.aws.prefix.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.mysql.backup.aws.prefix.matches('^[-?:](\\s|$)') && !self.mysql.backup.aws.prefix.matches('\\t') &&
+                  !self.mysql.backup.aws.prefix.contains(': ') && !self.mysql.backup.aws.prefix.contains(' #') && !self.mysql.backup.aws.prefix.endsWith(':') && !self.mysql.backup.aws.prefix.endsWith(' ') &&
+                  !(self.mysql.backup.aws.prefix in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.mysql.backup.aws.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.mysql.backup.aws.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.mysql.backup.aws.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.mysql.backup.aws.prefix.matches('^\\.(nan|NaN|NAN)$') && !self.mysql.backup.aws.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The mysql chart writes the prefix unquoted, so YAML would change or break this value: leave
+                  out leading or trailing spaces, tabs, ': ', ' #', a trailing ':', a leading YAML symbol, and
+                  values YAML reads as a number, date, true, false or null.
+      - title: Google Cloud Storage
+        when: self.mysql.backup.enabled && self.mysql.backup.provider == 'gcp'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and a GCP cloud account **before** you install. The chart grants the cloud
+              account's identity `roles/storage.objectAdmin` on the bucket.
+          - path: mysql.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            # Written unquoted into the identity's GCP binding (mysql 1.4.3 templates/identity.yaml).
+            pattern: '^(?:[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]|(?=.{3,222}$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9_.-]*\.[a-z0-9_.-]*[a-z0-9])$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, hyphens and underscores, starting and ending with a
+              letter or digit; a name with dots can have up to 222 characters, with at most 63 between dots.
+          - path: mysql.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "A GCP [cloud account](/guides/create-cloud-account)."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: mysql.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            maxLength: 4096
+            rules:
+              # BACKUP_PREFIX is written unquoted (mysql 1.4.3 templates/workload-backup.yaml).
+              - when: oldSelf == null || oldSelf.mysql.backup.gcp.prefix != self.mysql.backup.gcp.prefix
+                rule: >-
+                  !self.mysql.backup.gcp.prefix.matches('^\\s') && !self.mysql.backup.gcp.prefix.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.mysql.backup.gcp.prefix.matches('^[-?:](\\s|$)') && !self.mysql.backup.gcp.prefix.matches('\\t') &&
+                  !self.mysql.backup.gcp.prefix.contains(': ') && !self.mysql.backup.gcp.prefix.contains(' #') && !self.mysql.backup.gcp.prefix.endsWith(':') && !self.mysql.backup.gcp.prefix.endsWith(' ') &&
+                  !(self.mysql.backup.gcp.prefix in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.mysql.backup.gcp.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.mysql.backup.gcp.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.mysql.backup.gcp.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.mysql.backup.gcp.prefix.matches('^\\.(nan|NaN|NAN)$') && !self.mysql.backup.gcp.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The mysql chart writes the prefix unquoted, so YAML would change or break this value: leave
+                  out leading or trailing spaces, tabs, ': ', ' #', a trailing ':', a leading YAML symbol, and
+                  values YAML reads as a number, date, true, false or null.
+
+migrations:
+  - fromVersions: "<1.1.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<1.1.0"
+    from: resources.memory
+    to: resources.maxMemory

@@ -46,26 +46,22 @@ steps:
           # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
           # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
           # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
-          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
-          # every install path uses is unproven. Checked only when the value changes.
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay strings: cpln helm parses with js-yaml 4.2.0
+          # (YAML 1.2). Checked only when the value changes.
           - when: oldSelf == null || self.config.db != oldSelf.config.db
             rule: >-
-              !self.config.db.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-              !self.config.db.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-              !self.config.db.matches('^[-+]?0[oO][0-7_]+$') &&
-              !self.config.db.matches('^[-+]?0[bB][01_]+$') &&
-              !self.config.db.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-              !self.config.db.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
-              !self.config.db.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
-              !self.config.db.matches('^\\s|\\s$|\\t') &&
-              !self.config.db.contains(': ') && !self.config.db.contains(' #') && !self.config.db.endsWith(':') &&
-              !(self.config.db.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+              [self.config.db].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             message: >-
-              This version writes the database name into its secret unquoted, so some values break the install or
-              are stored as something else. Avoid a value that is only a number or a date, words such as
-              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
-              and tabs, or install 1.3.0 or later, which quotes it.
+              This version writes the database name unquoted into YAML, so some values break the install or are stored
+              as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or later, which
+              quotes it.
       - path: config.user
         type: string
         label: Database user
@@ -83,26 +79,22 @@ steps:
           # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
           # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
           # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
-          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
-          # every install path uses is unproven. Checked only when the value changes.
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay strings: cpln helm parses with js-yaml 4.2.0
+          # (YAML 1.2). Checked only when the value changes.
           - when: oldSelf == null || self.config.user != oldSelf.config.user
             rule: >-
-              !self.config.user.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-              !self.config.user.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-              !self.config.user.matches('^[-+]?0[oO][0-7_]+$') &&
-              !self.config.user.matches('^[-+]?0[bB][01_]+$') &&
-              !self.config.user.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-              !self.config.user.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
-              !self.config.user.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
-              !self.config.user.matches('^\\s|\\s$|\\t') &&
-              !self.config.user.contains(': ') && !self.config.user.contains(' #') && !self.config.user.endsWith(':') &&
-              !(self.config.user.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+              [self.config.user].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             message: >-
-              This version writes the user name into its secret unquoted, so some values break the install or
-              are stored as something else. Avoid a value that is only a number or a date, words such as
-              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
-              and tabs, or install 1.3.0 or later, which quotes it.
+              This version writes the user name unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or later, which
+              quotes it.
       - path: config.password
         type: string
         label: User password
@@ -116,26 +108,22 @@ steps:
           # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
           # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
           # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
-          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
-          # every install path uses is unproven. Checked only when the value changes.
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay strings: cpln helm parses with js-yaml 4.2.0
+          # (YAML 1.2). Checked only when the value changes.
           - when: oldSelf == null || self.config.password != oldSelf.config.password
             rule: >-
-              !self.config.password.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-              !self.config.password.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-              !self.config.password.matches('^[-+]?0[oO][0-7_]+$') &&
-              !self.config.password.matches('^[-+]?0[bB][01_]+$') &&
-              !self.config.password.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-              !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
-              !self.config.password.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
-              !self.config.password.matches('^\\s|\\s$|\\t') &&
-              !self.config.password.contains(': ') && !self.config.password.contains(' #') && !self.config.password.endsWith(':') &&
-              !(self.config.password.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+              [self.config.password].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             message: >-
-              This version writes the user password into its secret unquoted, so some values break the install or
-              are stored as something else. Avoid a value that is only a number or a date, words such as
-              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
-              and tabs, or install 1.3.0 or later, which quotes it.
+              This version writes the password unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or later, which
+              quotes it.
           # The image writes it into IDENTIFIED BY '<password>' unescaped when it initializes the data
           # directory (install only): a quote ends the string and a backslash starts an escape sequence, so
           # initialization fails or stores another password than the secret holds.
@@ -174,26 +162,22 @@ steps:
           # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.3.0 quotes
           # it). Measured with helm template and the cpln CLI's YAML parser: "a: b" and a trailing ":" fail to
           # render, "#x" becomes null, "ab #c" is cut to "ab", 12345 becomes a number and 2024-01-01 a date;
-          # 9f8a7b6c5d stays a string. yes/no/on/off stay refused: they are YAML 1.1 booleans, and which parser
-          # every install path uses is unproven. Checked only when the value changes.
+          # 9f8a7b6c5d stays a string. yes/no/on/off stay strings: cpln helm parses with js-yaml 4.2.0
+          # (YAML 1.2). Checked only when the value changes.
           - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
             rule: >-
-              !self.config.rootPassword.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-              !self.config.rootPassword.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-              !self.config.rootPassword.matches('^[-+]?0[oO][0-7_]+$') &&
-              !self.config.rootPassword.matches('^[-+]?0[bB][01_]+$') &&
-              !self.config.rootPassword.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-              !self.config.rootPassword.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$') &&
-              !self.config.rootPassword.matches("^[!&*%@`'\"\\[\\]{}|>?,#]") &&
-              !self.config.rootPassword.matches('^\\s|\\s$|\\t') &&
-              !self.config.rootPassword.contains(': ') && !self.config.rootPassword.contains(' #') && !self.config.rootPassword.endsWith(':') &&
-              !(self.config.rootPassword.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+              [self.config.rootPassword].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             message: >-
-              This version writes the root password into its secret unquoted, so some values break the install or
-              are stored as something else. Avoid a value that is only a number or a date, words such as
-              true, yes, no or null, a leading quote, # or another YAML symbol, ': ', ' #', a trailing ':'
-              and tabs, or install 1.3.0 or later, which quotes it.
+              This version writes the root password unquoted into YAML, so some values break the install or are stored
+              as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or later, which
+              quotes it.
           # At initialization (install only) the image writes it unescaped into IDENTIFIED BY '<password>'
           # and into its client option file as password="<password>": a quote ends the SQL string, a
           # backslash starts an escape in both, and a " followed by # cuts the option file value.
@@ -533,16 +517,18 @@ steps:
               # YAML reads as a number or a date is stored as something else (measured as for the passwords).
               - when: oldSelf == null || self.backup.aws.s3.bucket != oldSelf.backup.aws.s3.bucket
                 rule: >-
-                  !self.backup.aws.s3.bucket.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-                  !self.backup.aws.s3.bucket.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-                  !self.backup.aws.s3.bucket.matches('^[-+]?0[oO][0-7_]+$') &&
-                  !self.backup.aws.s3.bucket.matches('^[-+]?0[bB][01_]+$') &&
-                  !self.backup.aws.s3.bucket.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-                  !self.backup.aws.s3.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$')
+                  [self.backup.aws.s3.bucket].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
                 severity: warning
                 message: >-
-                  This version writes the bucket name into its secret unquoted, so a name YAML reads as a number
-                  or a date is stored as something else. Use another name, or install 1.3.0 or later.
+                  This version writes the bucket name unquoted into YAML, so some values break the install or are
+                  stored as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or
+                  space, and tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or
+                  later.
           - path: backup.aws.s3.region
             type: string
             label: Bucket region
@@ -579,11 +565,20 @@ steps:
             required: true
             # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
             maxLength: 4096
-            # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
-            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
-            patternMessage: >-
-              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
-              YAML words such as true or null.
+            rules:
+              # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
+              - rule: >-
+                  (oldSelf != null && self.backup.aws.s3.prefix == oldSelf.backup.aws.s3.prefix) ||
+                  [self.backup.aws.s3.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the prefix unquoted. Leave out a leading space or YAML symbol, ": " and
+                  " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.gcp.enabled
         fields:
@@ -607,16 +602,18 @@ steps:
               # YAML reads as a number or a date is stored as something else (measured as for the passwords).
               - when: oldSelf == null || self.backup.gcp.gcs.bucket != oldSelf.backup.gcp.gcs.bucket
                 rule: >-
-                  !self.backup.gcp.gcs.bucket.matches('^[-+]?(\\.[0-9]+|[0-9][0-9_]*(\\.[0-9_]*)?)([eE][-+]?[0-9]+)?$') &&
-                  !self.backup.gcp.gcs.bucket.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
-                  !self.backup.gcp.gcs.bucket.matches('^[-+]?0[oO][0-7_]+$') &&
-                  !self.backup.gcp.gcs.bucket.matches('^[-+]?0[bB][01_]+$') &&
-                  !self.backup.gcp.gcs.bucket.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
-                  !self.backup.gcp.gcs.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$')
+                  [self.backup.gcp.gcs.bucket].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
                 severity: warning
                 message: >-
-                  This version writes the bucket name into its secret unquoted, so a name YAML reads as a number
-                  or a date is stored as something else. Use another name, or install 1.3.0 or later.
+                  This version writes the bucket name unquoted into YAML, so some values break the install or are
+                  stored as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or
+                  space, and tabs, and values that read as a number, a date, true/false or null, or install 1.3.0 or
+                  later.
           - path: backup.gcp.gcs.cloudAccountName
             type: ref
             label: Cloud account
@@ -635,10 +632,20 @@ steps:
             required: true
             # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
             maxLength: 4096
-            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
-            patternMessage: >-
-              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
-              YAML words such as true or null.
+            rules:
+              # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
+              - rule: >-
+                  (oldSelf != null && self.backup.gcp.gcs.prefix == oldSelf.backup.gcp.gcs.prefix) ||
+                  [self.backup.gcp.gcs.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the prefix unquoted. Leave out a leading space or YAML symbol, ": " and
+                  " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
 
 rules:
   # 1.0.0 and 1.1.0 named the workload and the volume set after the release; 1.2.0 renamed them.

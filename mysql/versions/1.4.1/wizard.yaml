@@ -494,11 +494,20 @@ steps:
             required: true
             # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
             maxLength: 4096
-            # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
-            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
-            patternMessage: >-
-              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
-              YAML words such as true or null.
+            rules:
+              # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
+              - rule: >-
+                  (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+                  [self.backup.aws.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the prefix unquoted. Leave out a leading space or YAML symbol, ": " and
+                  " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -536,10 +545,20 @@ steps:
             required: true
             # The platform caps an environment variable's value at 4 KiB (nodelibs/schema/src/env.ts).
             maxLength: 4096
-            pattern: '^(?!(?:[Yy]|[Yy]es|YES|[Nn]|[Nn]o|NO|[Tt]rue|TRUE|[Ff]alse|FALSE|[Oo]n|ON|[Oo]ff|OFF|[Nn]ull|NULL)$)(?=[A-Za-z]|[^/]*/)[A-Za-z0-9._/-]+$'
-            patternMessage: >-
-              Use letters, digits, ".", "_", "-" and "/", start with a letter or include a "/", and avoid
-              YAML words such as true or null.
+            rules:
+              # BACKUP_PREFIX is written unquoted (templates/workload-backup.yaml): keep it a plain YAML string.
+              - rule: >-
+                  (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+                  [self.backup.gcp.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the prefix unquoted. Leave out a leading space or YAML symbol, ": " and
+                  " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
 
 rules:
   # 1.0.0 and 1.1.0 named the workload and the volume set after the release; 1.2.0 renamed them.

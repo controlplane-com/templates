@@ -170,6 +170,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Holds the SQLite database, attachments, sends and the key that signs login sessions.
             help: >-

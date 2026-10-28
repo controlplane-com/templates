@@ -1,0 +1,435 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Vaultwarden
+# One stateful replica on its own volume and no location handling: every GVC location would run its own,
+# separate vault.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Server
+    description: The Vaultwarden image and the compute of its single stateful replica.
+    sections:
+      - title: Vaultwarden instance
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Vaultwarden runs as exactly one replica, so an upgrade that changes the workload restarts it
+              and the vault is unavailable for about a minute. Bitwarden apps keep a local copy of the vault,
+              so users can still read their items meanwhile.
+          - path: image
+            type: string
+            format: image
+            label: Vaultwarden image
+            required: true
+          - path: resources.cpu
+            type: quantity
+            quantity: cpu
+            label: CPU limit
+            required: true
+            min: 25m
+            description: >-
+              A single stateful replica; upstream does not support more than one instance, so scale by raising
+              these.
+          - path: resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: CPU reservation
+            required: true
+            min: 25m
+          - path: resources.memory
+            type: quantity
+            quantity: memory
+            label: Memory limit
+            required: true
+            min: 32Mi
+          - path: resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Memory reservation
+            required: true
+            min: 32Mi
+        rules:
+          - rule: cpuMillicores(self.resources.cpu) >= cpuMillicores(self.resources.minCpu)
+            severity: warning
+            paths: [resources.cpu, resources.minCpu]
+            message: The CPU limit must be at least the CPU reservation.
+          - rule: memoryBytes(self.resources.memory) >= memoryBytes(self.resources.minMemory)
+            severity: warning
+            paths: [resources.memory, resources.minMemory]
+            message: The memory limit must be at least the memory reservation.
+          - rule: cpuMillicores(self.resources.cpu) <= 4 * cpuMillicores(self.resources.minCpu)
+            paths: [resources.cpu, resources.minCpu]
+            message: >-
+              The CPU limit can be at most 4 times the CPU reservation. Control Plane refuses a higher ratio on a
+              stateful workload.
+
+  - id: access
+    title: Access
+    description: Where the vault is served, which workloads can call it, and website icons.
+    sections:
+      - title: Access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Reachable from the internet
+            description: >-
+              Serves the web vault and the API the Bitwarden apps use on the canonical `*.cpln.app` HTTPS
+              endpoint. Firewall changes take up to a few minutes.
+          - path: internalAccess.type
+            type: enum
+            label: Workloads that can connect
+            widget: cards
+            required: true
+            description: Other workloads calling Vaultwarden on port 80 inside Control Plane.
+            options:
+              - value: none
+                label: Nobody
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: vaultwarden.validate
+            paths: [internalAccess.type]
+            message: Choose which workloads can connect.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: warning
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no workload can connect.
+          - rule: self.publicAccess.enabled
+            severity: info
+            paths: [publicAccess.enabled]
+            message: >-
+              With public access off, the Bitwarden apps and the web vault cannot reach the server, because
+              they need its HTTPS endpoint.
+      - title: Custom domain
+        docs: "#domain"
+        fields:
+          - path: customDomain
+            type: string
+            format: url
+            label: Custom domain URL
+            placeholder: https://vault.example.com
+            description: >-
+              The URL Vaultwarden uses for its links and passkeys. It does not create the domain: create it in
+              Control Plane and route it to the workload separately. Empty uses the canonical URL.
+            help: >-
+              Passkey and security-key logins are bound to the exact URL they were registered on, so choose
+              the final domain before users register passkeys.
+        rules:
+          - rule: self.customDomain == '' || self.customDomain.startsWith('https://')
+            severity: info
+            paths: [customDomain]
+            message: Use an https URL. The Bitwarden apps and passkeys need HTTPS.
+          - rule: oldSelf == null || self.customDomain == oldSelf.customDomain
+            severity: info
+            paths: [customDomain]
+            message: >-
+              Passkey and security-key logins are bound to the URL they were registered on; after this change
+              users must register them again.
+      - title: Privacy
+        docs: "#privacy"
+        fields:
+          - path: icons.disableDownload
+            type: boolean
+            label: Do not download website icons
+            description: >-
+              Fetching a site's icon reveals which sites your users store. On, the apps show letter
+              placeholders instead.
+
+  - id: storage
+    title: Storage and snapshots
+    description: The data volume and its scheduled snapshots.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            description: Holds the SQLite database, attachments, sends and the key that signs login sessions.
+            help: >-
+              Uninstalling the release deletes the volume set after a final snapshot, so a reinstall starts
+              with an empty vault and every user logged out.
+            docs: "/reference/volumeset#capacity-and-billing"
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+          - path: backup.retention
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            description: Also applies to the final snapshot taken when the volume set is deleted.
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: vaultwarden.validate
+            paths: [volumeset.capacity]
+            message: The initial capacity must be at least 10 GiB.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: backup
+        title: Scheduled snapshots
+        toggle: backup.enabled
+        description: >-
+          Crash-consistent platform snapshots of the data volume, with no bucket or cloud account; SQLite
+          recovers cleanly from them. Off, no scheduled snapshots are taken. The snapshots stay on the
+          platform, not off-site, and restoring one loses every vault change made after it.
+        docs: "#backing-up"
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are
+              not accepted. Snapshots cannot run more often than hourly.
+
+  - id: email
+    title: Email
+    description: An optional SMTP server for invitations, email verification and email two-step login.
+    sections:
+      - title: SMTP
+        docs: "#smtp"
+        fields:
+          - id: smtpMode
+            virtual: true
+            type: enum
+            label: Outgoing email
+            widget: cards
+            required: true
+            init: >-
+              (self.smtp.host == null || self.smtp.host == '') &&
+              (self.smtp.authSecretName == null || self.smtp.authSecretName == '') ? 'off' : 'on'
+            options:
+              - value: 'off'
+                label: Off
+                description: >-
+                  No invitation, verification or password hint emails are sent. Choosing it clears the SMTP
+                  server and the login secret.
+                set: { smtp.host: "", smtp.authSecretName: "" }
+              - value: 'on'
+                label: Send through my SMTP server
+                description: Invitations, email verification, password hints and email two-step login.
+          - type: note
+            when: ui.smtpMode == 'off'
+            text: >-
+              Master passwords cannot be recovered or reset by anyone: a user who forgets theirs loses their
+              vault. Without email there are no password hint emails either.
+          - path: smtp.host
+            type: string
+            format: hostname
+            label: SMTP server
+            required: true
+            when: ui.smtpMode == 'on'
+            placeholder: smtp.example.com
+          - path: smtp.port
+            type: integer
+            label: Port
+            required: true
+            when: ui.smtpMode == 'on'
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+          - path: smtp.security
+            type: enum
+            label: Encryption
+            widget: cards
+            required: true
+            when: ui.smtpMode == 'on'
+            options:
+              - value: starttls
+                label: STARTTLS
+                description: Upgrades the connection to TLS, usually on port 587.
+              - value: force_tls
+                label: TLS
+                description: TLS from the first byte, usually on port 465.
+              - value: 'off'
+                label: None
+                description: Unencrypted, for a relay you trust.
+          - path: smtp.from
+            type: string
+            format: email
+            label: Sender address
+            required: true
+            when: ui.smtpMode == 'on'
+            placeholder: vaultwarden@example.com
+          - type: note
+            severity: warning
+            when: ui.smtpMode == 'on' && self.smtp.authSecretName != ''
+            text: >-
+              The SMTP login secret must exist **before** you install or upgrade. If it is missing, the
+              deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments
+              RELEASE_NAME-vaultwarden --gvc GVC_NAME -o yaml` shows why under `status.versions[].message`.
+              It recovers on its own within about 10 minutes of creating the secret, or at once with
+              `cpln workload force-redeployment`.
+            textExpression: >-
+              'The SMTP login secret must exist **before** you install or upgrade. If it is missing, the deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments ' +
+              context.releaseName + '-vaultwarden --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml` shows why under `status.versions[].message`. It recovers on its own within about 10 minutes of creating the secret, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-vaultwarden --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: smtp.authSecretName
+            type: ref
+            label: SMTP login secret
+            when: ui.smtpMode == 'on'
+            description: >-
+              A dictionary secret with the keys `username` and `password`. Leave it empty for a relay that
+              needs no login.
+            help: >-
+              Vaultwarden reads the login when the replica starts. After you change the secret, run
+              `cpln workload force-redeployment RELEASE_NAME-vaultwarden --gvc GVC_NAME`; until then the old
+              login stays in use.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-vaultwarden-smtp-auth'"
+    rules:
+      - rule: self.smtp.host == '' || self.smtp.from != ''
+        mirrors: vaultwarden.validate
+        paths: [smtp.from]
+        message: The sender address is required when an SMTP server is set.
+      - rule: self.smtp.authSecretName == '' || self.smtp.host != ''
+        mirrors: vaultwarden.validate
+        paths: [smtp.authSecretName]
+        message: The SMTP login secret is set but the SMTP server is empty. Set the server, or clear the secret.
+
+  - id: accounts
+    title: Accounts and admin
+    description: Who can register, and the optional /admin panel.
+    sections:
+      - title: Sign-ups and invitations
+        docs: "#sign-ups-and-invitations"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              self.signups.allowed && self.publicAccess.enabled && size(self.signups.domainsWhitelist) == 0
+            text: >-
+              With open registration, anyone who reaches the public endpoint can create an account. Once
+              your users are on board, upgrade the release with it off, or limit registration to your email
+              domains below.
+          - path: signups.allowed
+            type: boolean
+            label: Open registration
+            description: >-
+              Anyone can create an account in the web vault. On by default so the first users can register
+              right after install.
+          - path: signups.domainsWhitelist
+            type: list
+            label: Email domains allowed to register
+            widget: tags
+            unique: true
+            description: >-
+              When set, only addresses on these domains can register, whether open registration is on or
+              off, and organization owners can invite only these domains. Leave empty for no domain limit.
+            item:
+              type: string
+              format: hostname
+              label: Domain
+              placeholder: mycompany.com
+          - path: signups.verify
+            type: boolean
+            label: Require email verification
+            when: self.smtp.host != '' || self.signups.verify
+            description: New accounts must confirm their email address before they can sign in.
+          - path: invitations.allowed
+            type: boolean
+            label: Allow invitations
+            description: >-
+              Organization owners can invite users, and an invited address can register even while open
+              registration is off (only on the allowed domains, when that list is set).
+        rules:
+          - rule: "!self.signups.verify || self.smtp.host != ''"
+            mirrors: vaultwarden.validate
+            paths: [signups.verify]
+            message: Email verification needs an SMTP server. Set one under Email, or turn verification off.
+      - title: Admin panel
+        docs: "#admin-panel"
+        description: >-
+          The /admin page manages users, organizations and server settings. It stays disabled while no
+          token secret is chosen.
+        fields:
+          - type: note
+            severity: warning
+            when: self.admin.tokenSecretName != ''
+            text: >-
+              The admin token secret must exist **before** you install or upgrade. If it is missing, the
+              deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments
+              RELEASE_NAME-vaultwarden --gvc GVC_NAME -o yaml` shows why under `status.versions[].message`.
+              It recovers on its own within about 10 minutes of creating the secret, or at once with
+              `cpln workload force-redeployment`.
+            textExpression: >-
+              'The admin token secret must exist **before** you install or upgrade. If it is missing, the deployment waits silently and `cpln logs` shows nothing; `cpln workload get-deployments ' +
+              context.releaseName + '-vaultwarden --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml` shows why under `status.versions[].message`. It recovers on its own within about 10 minutes of creating the secret, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-vaultwarden --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: admin.tokenSecretName
+            type: ref
+            label: Admin token secret
+            description: >-
+              An opaque secret (encoding plain) holding the argon2 hash of the token you choose, stored as-is
+              (no doubled `$` signs). You sign in to /admin with the token itself, not the hash.
+            help: >-
+              Generate the hash with `docker run --rm -it vaultwarden/server:1.36.0 /vaultwarden hash`; it
+              prints a string starting with `$argon2`. Vaultwarden reads it when the replica starts, so after
+              you change the secret run `cpln workload force-redeployment RELEASE_NAME-vaultwarden --gvc GVC_NAME`;
+              until then the old token keeps working. See
+              [Rotating the admin token](#rotating-the-admin-token).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-vaultwarden-admin-token'"
+                hint: "Generate the content with: docker run --rm -it vaultwarden/server:1.36.0 /vaultwarden hash (store the $argon2 string as-is)"
+          - type: note
+            when: self.admin.tokenSecretName != ''
+            text: >-
+              Settings saved in /admin are written to `/data/config.json` and win over the values of this
+              release from then on. If a later values change does not take effect, change it in /admin
+              instead, or delete that file and restart.
+
+rules:
+  # The chart checks smtp.security even with email off, where the Email fields are hidden.
+  - rule: self.smtp.security in ['starttls', 'force_tls', 'off']
+    mirrors: vaultwarden.validate
+    message: >-
+      smtp.security must be starttls, force_tls or off; the chart refuses any other value even with email
+      off. Fix it in the values.
+

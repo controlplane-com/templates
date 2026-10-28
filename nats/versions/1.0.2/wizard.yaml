@@ -1,0 +1,355 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: NATS
+# createsGvc: true. The chart creates its own GVC from gvc.name and gvc.locations (templates/gvc.yaml), so there is
+# no target GVC to limit and no gvc block (guide 14.2); the location rules work on gvc.locations instead.
+# 1.0.2 has no `fail` defines; the rules below are hazard checks over what the chart renders. The image's own
+# config generator (nats-config-maker in controlplanecorporation/mynats:0.1) builds nats.conf from the release values,
+# which the chart mounts whole; field texts below were checked by running that generator on rendered values.
+# 1.0.2 hard-codes the image (controlplanecorporation/mynats:0.1), cpu 100m / memory 256Mi and internal access
+# same-gvc in templates/05-workloads.yaml, and names the workload, identity and config secret from values.
+
+steps:
+  - id: locations
+    title: GVC and locations
+    description: The GVC this release creates, and how many NATS servers run in each of its locations.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+              adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
+              workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this one
+              with everything in it.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              # The chart writes the GVC name unquoted (name: {{ .Values.gvc.name }}).
+              - rule: >-
+                  (oldSelf != null && self.gvc.name == oldSelf.gvc.name) ||
+                  !(self.gvc.name in ['true', 'false', 'null'])
+                severity: warning
+                message: >-
+                  This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+                  null and the GVC cannot be created. Choose another name.
+              - when: context.mode == 'install'
+                rule: self.gvc.name != 'monday-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+                  Give each release its own, for example ' + context.releaseName + '-nats.'
+                message: >-
+                  GVC names are org-wide: a release on this name is refused while another release manages that
+                  GVC. Give each release its own.
+          - type: note
+            when: size(self.gvc.locations) > 1
+            text: >-
+              Two or more locations are joined into a super cluster over NATS gateways. Cross-region gateway
+              traffic is billed.
+          - path: gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 3 }
+            itemLabel: "(item.name == null ? '' : item.name) + ' × ' + (item.replicas == null ? '' : string(item.replicas))"
+            description: >-
+              The locations of the GVC. Each location is its own NATS cluster; servers in it are joined by
+              routes.
+            help: >-
+              Three servers is NATS's recommended cluster size.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Servers
+                  required: true
+                  min: 0
+                  widget: stepper
+              rules:
+                # templates/workloads.yaml: replicas 0 renders the location suspended, and its gateway entry
+                # in the other locations' config has no URLs.
+                - rule: item.replicas == null || item.replicas != 0
+                  severity: info
+                  paths: [replicas]
+                  message: >-
+                    0 suspends this location: no server runs there, and the other locations get no gateway
+                    address for it.
+
+  - id: server
+    title: Server
+    description: The NATS workload and the names of the resources it uses.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade that changes the workload restarts the servers; core NATS clients reconnect on
+              their own.
+          - type: note
+            text: >-
+              This version runs every server on controlplanecorporation/mynats:0.1 with 100m CPU and 256Mi memory,
+              fixed in the chart. NATS 1.0.3 makes the image and the resources configurable.
+          - path: nats_defaults.workload_name
+            type: string
+            label: Workload name
+            required: true
+            description: The name of the NATS workload, and of its container.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Changing the workload name replaces the workload: the servers start again under the new name, and
+              clients must use the new address.
+          - path: identity.name
+            type: string
+            label: Identity name
+            required: true
+            advanced: true
+            description: The identity the servers run as, created in this release's GVC.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+          - path: secret.name
+            type: string
+            label: Configuration secret name
+            required: true
+            advanced: true
+            description: >-
+              The secret that holds the server configuration. Secrets are org-wide, so give every release its own.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version always names its extra-configuration secret nats-extra-data, whatever the release.
+              Secrets are org-wide, so a second NATS 1.0.2 release in the same org renders a secret the first
+              release already owns. For a second cluster in one org, install NATS 1.0.3 or later.
+          - type: note
+            text: >-
+              This version has no JetStream setting and no volume set. Turning JetStream on through Extra NATS configuration (jetstream: true)
+              runs it with no persistent volume, so streams do not survive a restart. NATS 2.0.0 adds JetStream
+              with a volume set.
+  - id: network
+    title: Network
+    description: The listener ports, the public WebSocket endpoint and internal access.
+    sections:
+      - title: Listeners
+        fields:
+          - type: note
+            text: >-
+              The default values also give the first location its own nats block, with these default ports and
+              the workload name nats. The chart does not use it, but the image's config generator reads the whole
+              release values. Running it with changed ports here and that block left in place was not checked: if
+              you change a port or the workload name, also edit or remove that block in YAML mode, and try the
+              change on a test release first.
+          - path: nats_defaults.port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats_defaults.cluster.port
+            type: integer
+            label: Route port
+            required: true
+            description: Connections between the servers in the same location.
+            min: 1
+            max: 65535
+          - path: nats_defaults.cluster.listen
+            type: string
+            label: Route listen address
+            required: true
+            advanced: true
+            description: The address the route listener binds, as host:port. Keep its port equal to the route port.
+          - path: nats_defaults.gateway.port
+            type: integer
+            label: Gateway port
+            required: true
+            description: Connections between locations.
+            min: 1
+            max: 65535
+          - path: nats_defaults.gateway.listen
+            type: string
+            label: Gateway listen address
+            required: true
+            advanced: true
+            description: The address the gateway listener binds, as host:port. Keep its port equal to the gateway port.
+        rules:
+          - rule: >-
+              ![8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000].exists(p,
+              p == self.nats_defaults.port || p == self.nats_defaults.cluster.port ||
+              p == self.nats_defaults.gateway.port ||
+              (self.nats_defaults.websocket.enabled && p == self.nats_defaults.websocket.port))
+            severity: warning
+            paths: [nats_defaults.port]
+            message: >-
+              A listener uses a port Control Plane reserves (8012, 8022, 9090, 9091, 15000, 15001, 15006,
+              15020, 15021, 15090, 41000), which the platform refuses at install. Pick another port.
+          - rule: >-
+              ([self.nats_defaults.port, self.nats_defaults.cluster.port, self.nats_defaults.gateway.port, 8222] +
+              (self.nats_defaults.websocket.enabled ? [self.nats_defaults.websocket.port] : []))
+              .all(p, ([self.nats_defaults.port, self.nats_defaults.cluster.port, self.nats_defaults.gateway.port, 8222] +
+              (self.nats_defaults.websocket.enabled ? [self.nats_defaults.websocket.port] : []))
+              .filter(q, q == p).size() == 1)
+            severity: warning
+            paths: [nats_defaults.port]
+            message: >-
+              Two listeners share a port (monitoring is fixed on 8222); the second one fails at boot with
+              `address already in use`. Give each listener its own port.
+          - rule: >-
+              self.nats_defaults.cluster.listen.endsWith(':' + string(self.nats_defaults.cluster.port)) &&
+              self.nats_defaults.gateway.listen.endsWith(':' + string(self.nats_defaults.gateway.port))
+            severity: warning
+            paths: [nats_defaults.cluster.listen]
+            message: >-
+              A listen address and its port disagree: the server binds the listen address but publishes and
+              advertises the port, so peers cannot connect. Make the port in each listen address match.
+      - id: websocket
+        title: WebSocket
+        toggle: nats_defaults.websocket.enabled
+        description: >-
+          A WebSocket listener for browser and edge clients, served on the workload's public endpoint on
+          port 443 for the inbound CIDRs below.
+        fields:
+          - path: nats_defaults.websocket.port
+            type: integer
+            label: WebSocket port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats_defaults.websocket.compression
+            type: boolean
+            label: Compression
+          - path: nats_defaults.websocket.noTls
+            type: boolean
+            label: Plain WebSocket behind the platform's TLS
+            advanced: true
+            description: Control Plane terminates TLS; leave it on unless you supply certificates.
+      - title: Public access
+        fields:
+          - path: allowCIDR
+            type: list
+            label: Public inbound CIDRs
+            widget: tags
+            unique: true
+            required: true
+            description: >-
+              Addresses allowed to reach the WebSocket endpoint from the internet. The default allows every
+              address. Firewall changes take up to about 10 minutes to take effect.
+            help: >-
+              This version cannot render an empty list, so it cannot close public access entirely: list only
+              ranges you trust. NATS 3.0.0 and later are closed by default.
+            item: { type: string, format: cidr }
+            rules:
+              # templates/workloads.yaml writes `inboundAllowCIDR:` with toYaml + nindent, so an empty list
+              # renders `[]` on its own line and helm template fails with a YAML error (reproduced).
+              - rule: size(self.allowCIDR) > 0
+                message: >-
+                  This version fails to render an empty list. List at least one range you trust, or install
+                  NATS 3.0.0 or later, which can be closed to the internet.
+              - when: context.mode == 'install'
+                rule: >-
+                  !self.allowCIDR.exists(c, c == '0.0.0.0/0' || c == '::/0') ||
+                  self.nats_extra_config.lowerAscii().matches('(^|[\\s{;,])(authorization|accounts)\\s*[{:=]')
+                severity: warning
+                message: >-
+                  This version configures no NATS authentication, so opening the endpoint to every address
+                  publishes an open message bus: anyone can publish and subscribe. Replace 0.0.0.0/0 with the
+                  ranges of your clients, or add an authorization block under Extra NATS configuration first.
+              - when: context.mode == 'upgrade' || !self.allowCIDR.exists(c, c == '0.0.0.0/0' || c == '::/0')
+                rule: >-
+                  self.nats_extra_config.lowerAscii().matches('(^|[\\s{;,])(authorization|accounts)\\s*[{:=]')
+                severity: info
+                message: >-
+                  This version configures no NATS authentication, so anyone in these ranges can publish and
+                  subscribe. Add an authorization block under Extra NATS configuration to require credentials.
+              - rule: self.nats_defaults.websocket.enabled
+                severity: info
+                message: The WebSocket listener is off, so nothing is served on the public endpoint.
+      - title: Internal access
+        fields:
+          - type: note
+            text: >-
+              This version fixes internal access to Same GVC: any workload in this release's GVC can connect, and
+              the servers reach each other the same way. NATS 1.0.3 makes it configurable.
+
+  - id: advanced
+    title: Advanced
+    description: Extra NATS configuration appended to the generated server config.
+    sections:
+      - title: Extra configuration
+        fields:
+          - path: nats_extra_config
+            type: string
+            multiline: true
+            label: Extra NATS configuration
+            description: >-
+              Appended verbatim to each server's config at startup. A syntax error stops the servers from
+              starting. This version has no authentication setting of its own; an `authorization` block here is
+              how you require credentials.
+            placeholder: "max_payload: 2MB"
+            rules:
+              # templates/05-workloads.yaml always mounts the nats-extra-data secret; templates/03-secret.yaml
+              # creates it only when the value is not empty (reproduced with helm template).
+              - rule: self.nats_extra_config != null && self.nats_extra_config != ''
+                severity: warning
+                message: >-
+                  This version always mounts the extra configuration but creates it only when this is not empty,
+                  so an empty value leaves the servers waiting on a secret that does not exist. Keep at least one
+                  line, such as the default jetstream: false.
+              - rule: "!self.nats_extra_config.lowerAscii().matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
+                severity: info
+                message: >-
+                  Credentials here are stored as plain text in the release values and in the release's
+                  secrets. NATS 3.1.0 reads them from a dictionary secret instead.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.0.2') >= 0
+    message: >-
+      Do not upgrade a NATS 1.0.0 or 1.0.1 release to this version: those versions created one GVC per entry of
+      gvcs, and the upgrade deletes them with every workload in them. Install this version as a new release
+      with its own GVC name, move your clients across, then uninstall the old release.
+
+yamlOnly:
+  - path: nats_defaults.allowNonTls
+    reason: Not read by this version; the generated config never contains it.
+  - path: nats_defaults.cluster.noAdvertise
+    reason: Not read by this version; the generated config never contains it.
+  - path: nats_defaults.image
+    reason: Not read by this version; the chart always runs controlplanecorporation/mynats:0.1.
+
+migrations:
+  # 1.0.0 and 1.0.1 (upgrade blocked above): explained for the install page's version switch.
+  - fromVersions: "<1.0.2"
+    from: gvcs
+    note: 1.0.2 replaced the GVC-per-entry layout with one GVC; set its name and locations under GVC and locations.
+  - fromVersions: "<1.0.2"
+    from: nats
+    note: 1.0.2 moved the NATS settings to Server and Network.
+  - fromVersions: "<1.0.2"
+    from: org
+    note: No version of the chart read this value.

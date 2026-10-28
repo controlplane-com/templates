@@ -1,0 +1,601 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Airflow
+# createsGvc: true. The chart creates its own GVC from gvc.name and gvc.locationLinks (01-gvc.yaml), so there is
+# no target GVC to limit and no gvc block (guide 14.2); the location rules work on gvc.locationLinks instead.
+
+steps:
+  - id: setup
+    title: GVC and credentials
+    description: The GVC this release creates, its locations, the JWT secret and the metadata database login.
+    sections:
+      - id: gvc
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below and puts every workload in it. Use a name no
+              GVC in the org has: the release takes over an existing GVC of that name, and uninstalling the
+              release then deletes that GVC with every workload in it. A GVC that another release created is
+              refused. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          # 01-gvc.yaml and every resource: the name is written unquoted. The name pattern already rules out
+          # numbers and dates; true, false and null are the names YAML would read as another type.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this
+              one with everything in it.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.gvc.name != oldSelf.gvc.name
+                rule: "!(self.gvc.name in ['true', 'false', 'null'])"
+                message: The chart writes the GVC name unquoted, so true, false and null are not names it can use.
+              - when: context.mode == 'install'
+                rule: self.gvc.name != 'airflow'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own, for example ' + context.releaseName + '-airflow.'
+                message: >-
+                  GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own.
+          - path: gvc.locationLinks
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            unique: true
+            widget: tags
+            description: The locations of the GVC this release creates.
+            item:
+              type: ref
+              ref: { kind: location, format: relativeLink, mustExist: error }
+            rules:
+              # No workload has localOptions or placement of its own, so every workload runs in every location
+              # of the GVC; CHANGELOG 2.0.0 calls this the placement bug it fixes.
+              # Warn on install, and on upgrade only when the list grows: an existing multi-location release
+              # can only shrink by deleting a location's data, so a blocking warning would trap it.
+              - when: oldSelf == null || size(self.gvc.locationLinks) > size(oldSelf.gvc.locationLinks)
+                rule: size(self.gvc.locationLinks) <= 1
+                severity: warning
+                message: >-
+                  This version runs every workload in every location of its GVC, so each location gets its own
+                  webserver and scheduler, metadata database, broker and Airflow home on its own volumes. Use
+                  one location; 2.0.0 runs in exactly one.
+              - when: oldSelf != null && size(self.gvc.locationLinks) <= size(oldSelf.gvc.locationLinks)
+                rule: size(self.gvc.locationLinks) <= 1
+                severity: info
+                message: >-
+                  This version runs every workload in every location of its GVC, so each location gets its own
+                  webserver and scheduler, metadata database, broker and Airflow home on its own volumes. Use
+                  one location; 2.0.0 runs in exactly one.
+              - rule: >-
+                  oldSelf == null || self.gvc.locationLinks.all(l, l in oldSelf.gvc.locationLinks)
+                severity: info
+                message: >-
+                  A location added to the list starts its own Airflow on new, empty volumes; nothing is copied
+                  from the existing location.
+      # 1.1.0's values.yaml puts auth, scheduler and celery under volumeset (an indentation slip), while the
+      # templates read them under airflow; with the shipped values `helm template` stops at
+      # 08-workload-airflow-celery.yaml ("nil pointer evaluating interface {}.jwtExpirationDelta").
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version's own defaults do not install: its values file places the JWT secret and the
+              scheduler and worker settings where the chart does not read them, so the wizard asks for each of
+              them (1.0.0 used 10 seconds for both scheduler intervals and 1 task per worker). In YAML mode keep
+              them under `airflow.auth`, `airflow.scheduler` and `airflow.celery`. 1.2.0 fixes the values file.
+      - id: auth
+        title: API tokens and login
+        fields:
+          # 08-workload-airflow-celery.yaml: the workers' AIRFLOW__API_AUTH__JWT_SECRET is a literal in the chart.
+          - type: note
+            severity: warning
+            text: >-
+              The JWT secret is stored in the Helm release values in this version. The workers do not use it:
+              the chart sets theirs to a fixed value published in the template repository, whatever you enter
+              here. 1.2.0 gives the webserver and the workers the same secret.
+          - path: airflow.auth.jwtSecret
+            type: string
+            absent: true
+            label: JWT secret
+            widget: password
+            required: true
+            sensitive: true
+            description: Signs the webserver's API access tokens. Generate it with `openssl rand -base64 48`.
+            rules:
+              - rule: >-
+                  oldSelf != null && self.airflow.auth.jwtSecret == oldSelf.airflow.auth.jwtSecret || self.airflow.auth.jwtSecret == null || self.airflow.auth.jwtSecret == '' ||
+                  !self.airflow.auth.jwtSecret.matches('^\\s') && !self.airflow.auth.jwtSecret.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.airflow.auth.jwtSecret.matches('^[-?:](\\s|$)') && !self.airflow.auth.jwtSecret.matches('\\t') &&
+                  !self.airflow.auth.jwtSecret.contains(': ') && !self.airflow.auth.jwtSecret.contains(' #') && !self.airflow.auth.jwtSecret.endsWith(':') && !self.airflow.auth.jwtSecret.endsWith(' ') &&
+                  !(self.airflow.auth.jwtSecret in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.airflow.auth.jwtSecret.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.airflow.auth.jwtSecret.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.airflow.auth.jwtSecret.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.airflow.auth.jwtSecret.matches('^\\.(nan|NaN|NAN)$') && !self.airflow.auth.jwtSecret.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                message: >-
+                  The chart writes the JWT secret unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": " or " #" or a tab, end with ":" or a space,
+                  or be a plain number, a date, true, false or null.
+          # Airflow 3.0.3: auth_manager defaults to SimpleAuthManager with simple_auth_manager_users "admin:admin"
+          # (config.yml); SimpleAuthManager.init generates a password, prints "Password for user 'admin': ..." and
+          # keeps it in AIRFLOW_HOME/simple_auth_manager_passwords.json.generated. With no FERNET_KEY set,
+          # write_default_airflow_configuration_if_needed generates one into AIRFLOW_HOME/airflow.cfg.
+          - type: note
+            severity: warning
+            text: >-
+              This version sets no admin login and no fernet key. Airflow creates the user `admin` with a
+              generated password, printed in the webserver log at its first start and kept in
+              `/opt/airflow/simple_auth_manager_passwords.json.generated` on the shared volume, and generates
+              the fernet key that encrypts Connections and Variables into `/opt/airflow/airflow.cfg`. Back that
+              file up. 1.3.0 lets you set both.
+      - id: metadata-db
+        title: Metadata database
+        description: >-
+          The login of the bundled PostgreSQL. The chart writes it into a secret of its own, and PostgreSQL
+          reads it only when its data directory is first initialized. This version names the database `test`.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The database password is stored in the Helm release values in this version, and the shipped
+              `password` is published. 2.1.0 takes the database login from a secret you create instead.
+          - path: postgres.config.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data directory is initialized.
+            pattern: '^[A-Za-z_][A-Za-z0-9_.-]*$'
+            patternMessage: >-
+              Use letters, digits, _, . and -, starting with a letter or _: the name goes into the database
+              connection URL.
+            rules:
+              # 03-airflow-secrets.yaml writes username and password without quote.
+              - rule: >-
+                  oldSelf != null && self.postgres.config.username == oldSelf.postgres.config.username || self.postgres.config.username == null || self.postgres.config.username == '' ||
+                  !self.postgres.config.username.matches('^\\s') && !self.postgres.config.username.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.postgres.config.username.matches('^[-?:](\\s|$)') && !self.postgres.config.username.matches('\\t') &&
+                  !self.postgres.config.username.contains(': ') && !self.postgres.config.username.contains(' #') && !self.postgres.config.username.endsWith(':') && !self.postgres.config.username.endsWith(' ') &&
+                  !(self.postgres.config.username in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.postgres.config.username.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.postgres.config.username.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.postgres.config.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.postgres.config.username.matches('^\\.(nan|NaN|NAN)$') && !self.postgres.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                message: >-
+                  The chart writes the database user unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": " or " #" or a tab, end with ":" or a space,
+                  or be a plain number, a date, true, false or null.
+          - path: postgres.config.password
+            type: string
+            label: Database password
+            widget: password
+            required: true
+            immutable: PostgreSQL keeps the password its data directory was initialized with.
+            example: true
+            sensitive: true
+            description: Set a random value now; it cannot be changed after the first install.
+            pattern: '^[^@%]*$'
+            patternMessage: 'Leave out @ and %: the password is written into the database connection URL as it is.'
+            rules:
+              - rule: >-
+                  oldSelf != null && self.postgres.config.password == oldSelf.postgres.config.password || self.postgres.config.password == null || self.postgres.config.password == '' ||
+                  !self.postgres.config.password.matches('^\\s') && !self.postgres.config.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.postgres.config.password.matches('^[-?:](\\s|$)') && !self.postgres.config.password.matches('\\t') &&
+                  !self.postgres.config.password.contains(': ') && !self.postgres.config.password.contains(' #') && !self.postgres.config.password.endsWith(':') && !self.postgres.config.password.endsWith(' ') &&
+                  !(self.postgres.config.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.postgres.config.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.postgres.config.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.postgres.config.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.postgres.config.password.matches('^\\.(nan|NaN|NAN)$') && !self.postgres.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                message: >-
+                  The chart writes the database password unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": " or " #" or a tab, end with ":" or a space,
+                  or be a plain number, a date, true, false or null.
+
+  - id: workloads
+    title: Workload names
+    description: >-
+      The names of the four workloads in the GVC this release creates. The webserver's name also names the
+      Airflow home volume set, and the database's name its volume set.
+    fields:
+          - path: airflow.webserverName
+            type: string
+            label: Webserver
+            required: true
+            immutable: >-
+              Renaming creates a new webserver and volume set and deletes the current ones with the DAGs and task logs.
+            description: Also the name of the Airflow home volume set.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.airflow.webserverName != oldSelf.airflow.webserverName
+                rule: "!(self.airflow.webserverName in ['true', 'false', 'null'])"
+                message: The chart writes this name unquoted, so true, false and null are not names it can use.
+              # 07-workload-airflow.yaml and 08-workload-airflow-celery.yaml mount cpln://volumeset/airflow, while
+              # 05-volumeset-airflow.yaml names the volume set after airflow.webserverName.
+              - rule: self.airflow.webserverName == 'airflow'
+                severity: warning
+                message: >-
+                  Keep the name airflow. The chart names the Airflow home volume set after the webserver, but the
+                  webserver and the workers always mount the volume set named airflow, so with any other name
+                  they mount a volume set the chart does not create.
+          - path: airflow.celeryWorkerName
+            type: string
+            label: Celery workers
+            required: true
+            immutable: >-
+              Renaming creates new workers and deletes the current ones.
+            description: Also the name of the worker container.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.airflow.celeryWorkerName != oldSelf.airflow.celeryWorkerName
+                rule: "!(self.airflow.celeryWorkerName in ['true', 'false', 'null'])"
+                message: The chart writes this name unquoted, so true, false and null are not names it can use.
+              # 08-workload-airflow-celery.yaml uses it as the container name; nodelibs/schema/src/workload.ts
+              # refuses container names starting with cpln- or debugger- and a few reserved names.
+              - rule: >-
+                  !self.airflow.celeryWorkerName.startsWith('cpln-') &&
+                  !self.airflow.celeryWorkerName.startsWith('debugger-') &&
+                  !(self.airflow.celeryWorkerName in ['istio-proxy', 'queue-proxy', 'istio-validation'])
+                message: >-
+                  This name is also the worker container's name, and the platform refuses container names that
+                  start with cpln- or debugger- and the names istio-proxy, queue-proxy and istio-validation.
+          - path: postgres.name
+            type: string
+            label: Metadata database
+            required: true
+            immutable: >-
+              Renaming creates a new database on a new, empty volume set and deletes the current one with its data.
+            description: Also the name of the metadata database volume set.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.postgres.name != oldSelf.postgres.name
+                rule: "!(self.postgres.name in ['true', 'false', 'null'])"
+                message: The chart writes this name unquoted, so true, false and null are not names it can use.
+          - path: redis.name
+            type: string
+            label: Celery broker
+            required: true
+            immutable: >-
+              Renaming creates a new broker and deletes the current one with its queue.
+            description: The Redis workload.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.redis.name != oldSelf.redis.name
+                rule: "!(self.redis.name in ['true', 'false', 'null'])"
+                message: The chart writes this name unquoted, so true, false and null are not names it can use.
+    rules:
+      - rule: >-
+          isUnique([self.airflow.webserverName, self.airflow.celeryWorkerName, self.postgres.name, self.redis.name])
+        paths: [postgres.name]
+        message: Give the four workloads four different names; two resources of the same kind cannot share a name.
+
+  - id: webserver
+    title: Webserver
+    description: The one container that runs the Airflow API server, scheduler, dag-processor and triggerer.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              The first upgrade after an install can restart the webserver and the metadata database even
+              when no value changed. Plan for a couple of minutes without the UI and the scheduler.
+          # 07-workload-airflow.yaml: inboundAllowCIDR is hardcoded to 0.0.0.0/0.
+          - type: note
+            severity: warning
+            text: >-
+              This version opens the UI and the REST API to the whole internet on the webserver's canonical
+              endpoint, and has no setting to restrict that; 1.3.0 adds one.
+          - path: airflow.webserver.resources
+            type: resources
+            label: Webserver resources
+            required: true
+            description: >-
+              Runs every Airflow process except the task workers, on `apache/airflow:3.0.3` (this version
+              pins the image).
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              # The chart writes cpu and memory unquoted, so a number of cores or a memory without a unit reaches
+              # the platform as a YAML number; nodelibs/schema/src/workload.ts types both as strings.
+              - rule: >-
+                  type(self.airflow.webserver.resources.cpu) == string && self.airflow.webserver.resources.cpu.matches('^[0-9]+m$') &&
+                  type(self.airflow.webserver.resources.memory) == string &&
+                  self.airflow.webserver.resources.memory.lowerAscii().matches('^[0-9]+(\\.[0-9]+)?(k|m|g|ki|mi|gi)$')
+                message: >-
+                  This version writes the webserver CPU and memory unquoted, so a number of cores or a memory
+                  without a unit reaches the platform as a number, which it refuses. Enter the CPU in
+                  millicores, such as 500m, and the memory with a unit, such as 512Mi.
+          - path: airflow.webPort
+            type: integer
+            label: Web port
+            required: true
+            description: Serves the UI and the REST API; the workers reach the API on it too.
+            docs: "/reference/workload/containers#number"
+            # The platform's container port schema: 80 to 65535, minus the reserved ports below.
+            min: 80
+            max: 65535
+            rules:
+              - rule: >-
+                  !(self.airflow.webPort in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021,
+                  15090, 41000])
+                messageExpression: >-
+                  'Port ' + string(self.airflow.webPort) + ' is reserved by the platform, which refuses a
+                  workload that uses it. Choose another port.'
+                message: >-
+                  The web port is reserved by the platform, which refuses a workload that uses it. Choose
+                  another port.
+      - id: scheduler
+        title: Scheduler
+        fields:
+          - path: airflow.scheduler.dagDirListInterval
+            type: integer
+            absent: true
+            label: DAG folder rescan interval
+            required: true
+            unit: seconds
+            min: 0
+            description: How often Airflow rescans the DAG folder for new files.
+            suggestions: [10, 30, 60]
+          - path: airflow.scheduler.minFileProcessInterval
+            type: integer
+            absent: true
+            label: Minimum DAG file processing interval
+            required: true
+            unit: seconds
+            min: 0
+            description: The shortest time between two parses of the same DAG file.
+            suggestions: [10, 30, 60]
+
+  - id: workers
+    title: Workers
+    description: The Celery workers that run DAG tasks, autoscaled by KEDA or by the platform.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              A wide simultaneous fan-out can lose tasks without an error: on this worker image a measured
+              24-task burst left 7 tasks that never started (no hostname, no start time), from a race in the
+              Celery executor's Redis transport. Nothing in the UI shows an error, so stagger task submission
+              instead of fanning out wide at once.
+          - path: airflow.celeryWorker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            description: Per worker, on `controlplanecorporation/celery:v1` (this version pins the image).
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              # The chart writes cpu and memory unquoted, so a number of cores or a memory without a unit reaches
+              # the platform as a YAML number; nodelibs/schema/src/workload.ts types both as strings.
+              - rule: >-
+                  type(self.airflow.celeryWorker.resources.cpu) == string && self.airflow.celeryWorker.resources.cpu.matches('^[0-9]+m$') &&
+                  type(self.airflow.celeryWorker.resources.memory) == string &&
+                  self.airflow.celeryWorker.resources.memory.lowerAscii().matches('^[0-9]+(\\.[0-9]+)?(k|m|g|ki|mi|gi)$')
+                message: >-
+                  This version writes the worker CPU and memory unquoted, so a number of cores or a memory
+                  without a unit reaches the platform as a number, which it refuses. Enter the CPU in
+                  millicores, such as 500m, and the memory with a unit, such as 512Mi.
+          # 08-workload-airflow-celery.yaml renders AIRFLOW__CELERY__WORKER_CONCURRENCY only inside `if .Values.keda.enabled`.
+          - path: airflow.celery.workerConcurrency
+            type: integer
+            absent: true
+            label: Tasks per worker
+            required: true
+            when: self.keda.enabled
+            min: 1
+            description: How many tasks each worker runs at the same time. This version applies it only with KEDA autoscaling on.
+            suggestions: [1, 2, 4, 8]
+      - id: keda
+        title: Autoscale workers with KEDA
+        toggle: keda.enabled
+        description: >-
+          Scales the workers on the length of the Celery queue in Redis, down to zero when idle with a minimum
+          of 0. The chart turns KEDA on for the GVC it creates. With it off, the workers get no autoscaling
+          settings from the chart and run on the platform's defaults.
+        fields:
+          - path: keda.minScale
+            type: integer
+            label: Minimum workers
+            required: true
+            min: 0
+            description: 0 scales the workers to zero while the queue is empty.
+            suggestions: [0, 1, 2]
+          - path: keda.maxScale
+            type: integer
+            label: Maximum workers
+            required: true
+            min: 1
+            suggestions: [1, 3, 5, 10]
+          - path: keda.listLength
+            type: integer
+            label: Scale-up queue length
+            required: true
+            min: 1
+            description: The Celery queue length in Redis that triggers a scale-up.
+          - path: keda.scaleToZeroDelay
+            type: integer
+            label: Scale-to-zero delay
+            required: true
+            advanced: true
+            unit: seconds
+            min: 30
+            max: 3600
+            description: Idle time before the workers scale to zero.
+          - path: keda.pollingInterval
+            type: integer
+            label: Polling interval
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: How often KEDA reads the queue length.
+            docs: "/reference/workload/autoscaling#polling-and-cooldown"
+          - path: keda.cooldownPeriod
+            type: integer
+            label: Cooldown period
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: The cooldown between scaling events.
+          - path: keda.initialCooldownPeriod
+            type: integer
+            label: Initial cooldown period
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: The cooldown after startup before scaling begins.
+        rules:
+          # nodelibs/schema/src/workloadOptions.ts: minScale is Joi .max(Joi.ref('maxScale')).
+          - rule: self.keda.minScale <= self.keda.maxScale
+            paths: [keda.minScale]
+            messageExpression: >-
+              'The minimum of ' + string(self.keda.minScale) + ' workers is above the maximum of ' +
+              string(self.keda.maxScale) + ', and the platform refuses that.'
+            message: The minimum number of workers is above the maximum, and the platform refuses that.
+
+  - id: storage
+    title: Storage
+    description: The volume sets of the shared Airflow home and the metadata database.
+    fields:
+      - type: note
+        text: >-
+          Uninstalling the release deletes both volume sets and the GVC: the metadata database and the shared
+          Airflow home with the DAGs and task logs. The chart schedules no backups, so export what you need
+          first. The broker has no volume in this version.
+      - path: volumeset.airflow.capacity
+        type: integer
+        label: Airflow home capacity
+        required: true
+        unit: GiB
+        min: 10
+        max: 65536
+        description: >-
+          The shared file system at `/opt/airflow` with the DAGs and task logs, mounted by the webserver and
+          every worker.
+        docs: "/reference/volumeset#shared-file-system"
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+      # 06-volumeset-postgres.yaml sets autoscaling.maxCapacity 1000, and nodelibs/schema/src/volumeset.ts
+      # refuses an initialCapacity above autoscaling.maxCapacity.
+      - path: volumeset.postgres.capacity
+        type: integer
+        label: Metadata database capacity
+        required: true
+        unit: GiB
+        min: 10
+        max: 1000
+        description: The volume set grows by itself up to 1000 GiB.
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+    rules:
+      - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity
+        paths: [volumeset.airflow.capacity]
+        message: Keep the Airflow home capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: oldSelf == null || self.volumeset.postgres.capacity >= oldSelf.volumeset.postgres.capacity
+        paths: [volumeset.postgres.capacity]
+        message: Keep the metadata database capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: advanced
+    title: Advanced
+    description: Resources of the bundled PostgreSQL metadata database and Redis broker.
+    sections:
+      - id: postgres
+        title: Metadata database
+        fields:
+          - path: postgres.resources
+            type: resources
+            label: PostgreSQL resources
+            required: true
+            description: A single stateful replica on `postgres:15` (this version pins the image).
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              # The chart writes cpu and memory unquoted, so a number of cores or a memory without a unit reaches
+              # the platform as a YAML number; nodelibs/schema/src/workload.ts types both as strings.
+              - rule: >-
+                  type(self.postgres.resources.cpu) == string && self.postgres.resources.cpu.matches('^[0-9]+m$') &&
+                  type(self.postgres.resources.memory) == string &&
+                  self.postgres.resources.memory.lowerAscii().matches('^[0-9]+(\\.[0-9]+)?(k|m|g|ki|mi|gi)$')
+                message: >-
+                  This version writes the PostgreSQL CPU and memory unquoted, so a number of cores or a memory
+                  without a unit reaches the platform as a number, which it refuses. Enter the CPU in
+                  millicores, such as 500m, and the memory with a unit, such as 512Mi.
+      - id: redis
+        title: Celery broker
+        fields:
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: The broker workload on `redis:latest` (this version pins the image), without a volume.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              # The chart writes cpu and memory unquoted, so a number of cores or a memory without a unit reaches
+              # the platform as a YAML number; nodelibs/schema/src/workload.ts types both as strings.
+              - rule: >-
+                  type(self.redis.resources.cpu) == string && self.redis.resources.cpu.matches('^[0-9]+m$') &&
+                  type(self.redis.resources.memory) == string &&
+                  self.redis.resources.memory.lowerAscii().matches('^[0-9]+(\\.[0-9]+)?(k|m|g|ki|mi|gi)$')
+                message: >-
+                  This version writes the Redis CPU and memory unquoted, so a number of cores or a memory
+                  without a unit reaches the platform as a number, which it refuses. Enter the CPU in
+                  millicores, such as 500m, and the memory with a unit, such as 512Mi.
+
+yamlOnly:
+  # 1.1.0's values.yaml nests these under volumeset by mistake; no template reads volumeset.auth, volumeset.scheduler
+  # or volumeset.celery (the wizard writes the airflow.* keys the templates do read).
+  - path: volumeset.auth
+    reason: Not read by this version; the JWT secret is airflow.auth.jwtSecret.
+  - path: volumeset.scheduler
+    reason: Not read by this version; the scheduler settings are airflow.scheduler.*.
+  - path: volumeset.celery
+    reason: Not read by this version; the worker concurrency is airflow.celery.workerConcurrency.
+
+migrations:
+  # 1.0.0 had these under airflow.*; 1.1.0's values.yaml lost them (they sit under volumeset there), so a rename
+  # would not carry a 1.0.0 release that kept its defaults. Carry them whatever they are.
+  - { fromVersions: "<1.1.0", from: airflow.auth.jwtSecret, to: airflow.auth.jwtSecret }
+  - { fromVersions: "<1.1.0", from: airflow.scheduler.dagDirListInterval, to: airflow.scheduler.dagDirListInterval }
+  - { fromVersions: "<1.1.0", from: airflow.scheduler.minFileProcessInterval, to: airflow.scheduler.minFileProcessInterval }
+  - { fromVersions: "<1.1.0", from: airflow.celery.workerConcurrency, to: airflow.celery.workerConcurrency }
+  - fromVersions: "<1.1.0"
+    to: airflow.auth.jwtSecret
+    valueExpr: self.airflow.auth.jwtSecret
+    note: The installed JWT secret is kept.
+  - fromVersions: "<1.1.0"
+    to: airflow.scheduler.dagDirListInterval
+    valueExpr: self.airflow.scheduler.dagDirListInterval
+  - fromVersions: "<1.1.0"
+    to: airflow.scheduler.minFileProcessInterval
+    valueExpr: self.airflow.scheduler.minFileProcessInterval
+  - fromVersions: "<1.1.0"
+    to: airflow.celery.workerConcurrency
+    valueExpr: self.airflow.celery.workerConcurrency
+  - fromVersions: "<1.1.0"
+    from: airflow.auth.jwtExpirationDelta
+    note: Airflow 3 never read it.
+  - fromVersions: "<1.1.0"
+    from: airflow.auth.jwtRefreshThreshold
+    note: Airflow 3 never read it.
+  # 1.0.0 hardcoded the volume sets at 10 GiB (Airflow home) and 20 GiB (metadata database).
+  - fromVersions: "<1.1.0"
+    assume: { volumeset.airflow.capacity: 10, volumeset.postgres.capacity: 20 }
+  - fromVersions: "<1.1.0"
+    to: volumeset.postgres.capacity
+    valueExpr: "20"
+    note: 1.0.0 created the metadata database volume set with 20 GiB; the installed size is kept.

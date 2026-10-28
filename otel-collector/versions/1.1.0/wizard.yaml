@@ -1,0 +1,511 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: OpenTelemetry Collector
+# No gvc block: the collector is a stateless standard workload, so every GVC location runs its own
+# replicas behind the same endpoint and nothing is stored.
+
+steps:
+  - id: collector
+    title: Collector
+    description: How the collector config is built, and the collector's replicas and compute.
+    sections:
+      - title: Config source
+        docs: "#collector"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.1.0 made the generated config the default (1.0.x defaulted to your own config). A
+              release that still ran the shipped config moves to the generated one, which does the same work;
+              a release with its own config keeps it. If that config started from the 1.0.x example, change its
+              histogram bucket numbers to duration strings (bare numbers are read as nanoseconds) and give
+              `health_check` the endpoint `0.0.0.0:13133`, or the chart adds no readiness or liveness probes. See
+              [Upgrading from 1.0.x](/template-catalog/templates/otel-collector#upgrading-from-1-0-x).
+          - path: otelCollector.mode
+            type: enum
+            label: Collector config
+            widget: cards
+            required: true
+            options:
+              - value: simple
+                label: Generated config (recommended)
+                description: >-
+                  Built from the next steps: traces to Control Plane tracing, span metrics, and optional
+                  metrics remote write and ingestion auth.
+              - value: advanced
+                label: Your own config
+                description: >-
+                  You write the whole collector config and it runs as written. The metrics remote write
+                  switch does not apply; add the exporter to your config instead.
+      - title: Replicas and compute
+        docs: "#scaling-and-availability"
+        fields:
+          - path: otelCollector.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+            description: >-
+              A fixed count per GVC location; the collector keeps no state and does not autoscale. Two or
+              more keep ingestion running through a rolling restart and the loss of a replica.
+          - path: otelCollector.resources
+            type: resources
+            label: Resources
+            required: true
+            description: The limit of each collector replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: otelCollector.image
+            type: string
+            format: image
+            label: Collector image
+            required: true
+            advanced: true
+            description: An otel/opentelemetry-collector-contrib image; the generated config uses contrib components.
+    rules:
+      - rule: self.otelCollector.mode in ['simple', 'advanced']
+        mirrors: oc.validate
+        paths: [otelCollector.mode]
+        message: Choose the generated config or your own config.
+      - rule: self.otelCollector.replicas == null || self.otelCollector.replicas >= 1
+        mirrors: oc.validate
+        paths: [otelCollector.replicas]
+        message: Run at least one replica.
+
+  - id: pipeline
+    title: Pipeline
+    description: What the collector does with the telemetry it receives.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that changes the pipeline restarts the collector replicas, so the new config is in
+              effect when the upgrade finishes.
+      - title: Span processing
+        when: self.otelCollector.mode == 'simple'
+        description: >-
+          Traces go to Control Plane tracing. Span metrics (request rate, errors and a latency histogram by
+          URL, method and status) are served for scraping on port 8889.
+        docs: "#simple-mode"
+        fields:
+          - path: otelCollector.simple.processors.transform.traceStatements
+            type: list
+            label: URL normalization statements
+            widget: tags
+            description: >-
+              OTTL statements run on every span. Collapse dynamic URL parts into one value so span metrics
+              stay at a manageable number of series; replace PLACEHOLDER with a URL part, for example
+              `user/profile`.
+            item:
+              type: string
+              label: Statement
+          - path: otelCollector.simple.spanmetrics.histogram.buckets
+            type: list
+            label: Histogram buckets
+            widget: tags
+            required: true
+            description: Span duration bucket boundaries; tune them to your latency objectives.
+            item:
+              type: string
+              label: Bucket
+              placeholder: 250ms
+              pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+              patternMessage: Enter a duration such as 250ms or 1s; a bare number is read as nanoseconds.
+          - path: otelCollector.simple.spanmetrics.histogram.unit
+            type: enum
+            label: Histogram unit
+            widget: segmented
+            required: true
+            description: >-
+              The unit the histogram is recorded in: `traces_span_metrics_duration_milliseconds_bucket` with
+              ms, `traces_span_metrics_duration_seconds_bucket` with s.
+            options:
+              - { value: ms, label: Milliseconds }
+              - { value: s, label: Seconds }
+      - title: Your collector config
+        when: self.otelCollector.mode == 'advanced'
+        description: >-
+          Used exactly as written. Keep `health_check` on `0.0.0.0:13133`, or the readiness and liveness
+          probes are left out. The container ports come from the gRPC and HTTP endpoints of `receivers.otlp`.
+        docs: "#advanced-mode"
+        fields:
+          - path: otelCollector.advanced.config
+            type: string
+            multiline: true
+            label: Collector config
+            required: true
+            help: >-
+              With ingestion auth, bind your authenticated receiver to `0.0.0.0:4318` (HTTP) and
+              `0.0.0.0:4319` (gRPC). The token is mounted at `/etc/otel-collector/auth/token`, the
+              certificates at `/etc/otel-collector/tls/server.crt`, `server.key` and `ca.crt`. For metrics
+              remote write, add a `prometheus_remote_write` exporter and a metrics pipeline.
+        rules:
+          # 1.1.0 does not refuse a placeholder (1.2.2 added that check); the collector would drop the data
+          # silently, so warn here.
+          - rule: >-
+              self.otelCollector.advanced.config == null ||
+              !['YOUR_GVC', 'YOUR_WORKLOAD', 'my-gvc.cpln.local'].exists(p, self.otelCollector.advanced.config.contains(p))
+            severity: warning
+            paths: [otelCollector.advanced.config]
+            messageExpression: >-
+              'The config still contains the placeholder text ' +
+              ['YOUR_GVC', 'YOUR_WORKLOAD', 'my-gvc.cpln.local'].filter(p, self.otelCollector.advanced.config.contains(p)).join(' and ') +
+              '. Replace both the workload name and the GVC in the exporter endpoint: a host that does not
+              resolve drops every metric without an error.'
+            message: >-
+              The config still contains a placeholder (YOUR_GVC, YOUR_WORKLOAD or my-gvc.cpln.local). Replace
+              both the workload name and the GVC in the exporter endpoint: a host that does not resolve drops
+              every metric without an error.
+      - id: metrics
+        title: Metrics to remote write
+        toggle: metrics.enabled
+        description: >-
+          Pushes the OTLP metrics that senders send to the collector into a Prometheus remote-write store,
+          such as a Prometheus or Mimir release. Generated config only. One collector writes to one store.
+        fields:
+          - path: metrics.remoteWrite.endpoint
+            type: string
+            label: Remote-write endpoint
+            required: true
+            example: true
+            pattern: '^https?://[^/\s]+'
+            patternMessage: Enter an http:// or https:// URL.
+            description: >-
+              The store's remote-write URL, with both the workload name and the GVC substituted, for example
+              `http://RELEASE-prometheus.GVC.cpln.local:9095/api/v1/write` or
+              `http://RELEASE-mimir.GVC.cpln.local:8080/api/v1/push`.
+            help: >-
+              A store in another GVC is not reachable on its `.cpln.local` name; use its public endpoint.
+              Metric names gain a unit suffix on the way (`my_metric` arrives as `my_metric_seconds`), so query
+              the suffixed name.
+        rules:
+          # 1.1.0 installs with a placeholder endpoint (1.2.2 refuses it); the metrics are then dropped
+          # silently, so warn here.
+          - rule: >-
+              self.otelCollector.mode != 'simple' || self.metrics.remoteWrite.endpoint == null ||
+              !['YOUR_GVC', 'YOUR_WORKLOAD', 'my-gvc.cpln.local'].exists(p, self.metrics.remoteWrite.endpoint.contains(p))
+            severity: warning
+            paths: [metrics.remoteWrite.endpoint]
+            messageExpression: >-
+              'The endpoint still contains the placeholder text ' +
+              ['YOUR_GVC', 'YOUR_WORKLOAD', 'my-gvc.cpln.local'].filter(p, self.metrics.remoteWrite.endpoint.contains(p)).join(' and ') +
+              '. Replace both the workload name and the GVC: a host that does not resolve drops every metric
+              without an error.'
+            message: >-
+              The endpoint still contains a placeholder (YOUR_GVC, YOUR_WORKLOAD or my-gvc.cpln.local). Replace
+              both the workload name and the GVC: a host that does not resolve drops every metric without an
+              error.
+    rules:
+      - rule: self.otelCollector.mode != 'advanced' || !self.metrics.enabled
+        mirrors: oc.validate
+        paths: [metrics.enabled]
+        message: >-
+          Metrics to remote write works only with the generated config. Turn it off and add a
+          prometheus_remote_write exporter and a metrics pipeline to your own config instead.
+
+  - id: auth
+    title: Ingestion auth
+    description: Whether senders must authenticate, and the prerequisite secret that holds the token or certificates.
+    sections:
+      - title: Authentication
+        docs: "#ingestion-auth"
+        description: >-
+          With auth on, a separate receiver on 4318 (HTTP) and 4319 (gRPC) requires it. The plain gRPC
+          receiver on 4317 stays open to the GVC, because the GVC tracing provider sends to it without a
+          token, and it is never published. Public ingestion requires auth.
+        fields:
+          - type: note
+            severity: warning
+            when: self.otelCollector.mode == 'advanced' && self.auth.method != 'none'
+            text: >-
+              With your own config, the chart only mounts the token or certificates. Your config must apply
+              them to its receivers on 0.0.0.0:4318 and 0.0.0.0:4319; otherwise those ports accept OTLP without
+              auth.
+          - path: auth.method
+            type: enum
+            label: Method
+            widget: cards
+            required: true
+            options:
+              - value: none
+                label: None
+                description: For senders inside Control Plane only.
+              - value: bearer
+                label: Bearer token
+                description: Senders present a shared token in the Authorization header. Public ingestion over HTTPS on the canonical endpoint.
+              - value: mtls
+                label: Mutual TLS
+                description: >-
+                  Senders present a client certificate signed by your CA. Public ingestion over a direct load
+                  balancer, for HTTP and gRPC.
+          - type: note
+            severity: warning
+            when: self.auth.method != 'none'
+            text: >-
+              The secret must exist **before** you install or upgrade. If it is missing, the deployment waits
+              and `cpln logs` shows nothing; the reason is in `status.versions[].message` of
+              `cpln workload get-deployments RELEASE_NAME --gvc GVC_NAME -o yaml`. It recovers on its own
+              within about 10 minutes of creating the secret, or at once with `cpln workload force-redeployment`.
+            textExpression: >-
+              'The secret must exist **before** you install or upgrade. If it is missing, the deployment waits
+              and `cpln logs` shows nothing; the reason is in `status.versions[].message` of
+              `cpln workload get-deployments ' + context.releaseName + ' --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. It recovers on its own within
+              about 10 minutes of creating the secret, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + ' --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: auth.bearer.secretName
+            type: ref
+            label: Token secret
+            required: true
+            when: self.auth.method == 'bearer'
+            description: An opaque secret (encoding plain) holding the token your senders present.
+            help: >-
+              Create it with
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name TOKEN_SECRET_NAME --encoding plain -f -`
+              and read the token back with `cpln secret reveal TOKEN_SECRET_NAME -o yaml`. A changed token
+              takes effect only after `cpln workload force-redeployment`.
+            docs: "#rotating-the-bearer-token"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                hint: openssl rand -hex 32
+                suggestName: "context.releaseName + '-otel-ingest-token'"
+          - path: auth.mtls.secretName
+            type: ref
+            label: Certificate secret
+            required: true
+            when: self.auth.method == 'mtls'
+            description: >-
+              A dictionary secret with the keys `cert` (server certificate), `key` (server private key) and
+              `ca` (the CA that signed your client certificates), in PEM.
+            help: >-
+              Senders inside the GVC cannot use the TLS ports in this mode; they send to the plain gRPC
+              receiver on 4317. Changed certificates take effect only after `cpln workload force-redeployment`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [cert, key, ca]
+              create:
+                suggestName: "context.releaseName + '-otel-mtls-certs'"
+    rules:
+      - rule: self.auth.method in ['none', 'bearer', 'mtls']
+        mirrors: oc.validate
+        paths: [auth.method]
+        message: Choose None, Bearer token or Mutual TLS.
+      - rule: self.auth.method != 'bearer' || (self.auth.bearer.secretName != null && self.auth.bearer.secretName != '')
+        mirrors: oc.validate
+        paths: [auth.bearer.secretName]
+        message: Bearer token auth needs the token secret.
+      - rule: self.auth.method != 'mtls' || (self.auth.mtls.secretName != null && self.auth.mtls.secretName != '')
+        mirrors: oc.validate
+        paths: [auth.mtls.secretName]
+        message: Mutual TLS needs the certificate secret.
+
+  - id: network
+    title: Network
+    description: Who can send telemetry to the collector, from the internet and from inside the org.
+    sections:
+      - id: public
+        title: Public ingestion
+        toggle: publicAccess.enabled
+        description: >-
+          Accepts OTLP from senders outside Control Plane, from the address ranges you list. Requires bearer
+          token or mutual TLS auth. Access changes take a few minutes to take effect.
+        docs: "#access"
+        fields:
+          - type: note
+            when: self.auth.method != 'none'
+            text: >-
+              With a bearer token, senders post OTLP over HTTP to the canonical endpoint (`/v1/traces`,
+              `/v1/metrics`). With mutual TLS, they use the direct load balancer on 4318 (HTTP) and 4317 (gRPC),
+              and the canonical endpoint stops accepting traffic.
+            textExpression: >-
+              self.auth.method == 'bearer' ?
+              'Senders post OTLP over HTTP to the canonical endpoint, at /v1/traces and /v1/metrics, with the
+              token as `Authorization: Bearer`; gRPC is not offered there. Read the endpoint from
+              `status.canonicalEndpoint` of `cpln workload get ' + context.releaseName + ' --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.' :
+              'Senders use the direct load balancer on port 4318 (HTTP) and 4317 (gRPC, the authenticated
+              receiver), with a client certificate signed by your CA. The canonical HTTPS endpoint stops
+              accepting traffic in this mode.'
+          - path: publicAccess.allowedCidrs
+            type: list
+            label: Allowed sender CIDRs
+            widget: tags
+            unique: true
+            description: The address ranges your senders connect from. Use `0.0.0.0/0` to allow every address.
+            item: { type: string, format: cidr, placeholder: 203.0.113.0/24 }
+        rules:
+          - rule: self.auth.method != 'none'
+            mirrors: oc.validate
+            paths: [publicAccess.enabled]
+            message: >-
+              Public ingestion without auth would be an open relay that anyone can fill with data. Choose
+              Bearer token or Mutual TLS under Ingestion auth, or turn public ingestion off and send from
+              inside the GVC.
+          - rule: size(self.publicAccess.allowedCidrs) > 0
+            mirrors: oc.validate
+            paths: [publicAccess.allowedCidrs]
+            message: List at least one sender CIDR, or 0.0.0.0/0 to allow every address.
+          # The chart wires the secret mounts and the load balancer in advanced mode, but only the user's
+          # config decides whether the public ports authenticate; the shipped advanced config serves 4318
+          # without auth. Not a chart fail, so this is not mirrored.
+          - when: self.otelCollector.mode == 'advanced' && self.auth.method == 'bearer'
+            rule: self.otelCollector.advanced.config != null && self.otelCollector.advanced.config.contains('/etc/otel-collector/auth/token')
+            severity: warning
+            paths: [publicAccess.enabled]
+            message: >-
+              Your own collector config does not read the token at /etc/otel-collector/auth/token, so the
+              public endpoint would accept OTLP without auth. Add a bearertokenauth extension with that file to
+              the receiver on 0.0.0.0:4318 and 0.0.0.0:4319 (see Advanced mode in the docs).
+          - when: self.otelCollector.mode == 'advanced' && self.auth.method == 'mtls'
+            rule: self.otelCollector.advanced.config != null && self.otelCollector.advanced.config.contains('/etc/otel-collector/tls/')
+            severity: warning
+            paths: [publicAccess.enabled]
+            message: >-
+              Your own collector config does not use the certificates in /etc/otel-collector/tls/, so the
+              public ports would not require a client certificate. Add TLS with client_ca_file to the receiver
+              on 0.0.0.0:4318 and 0.0.0.0:4319 (see Advanced mode in the docs).
+          - rule: "!self.publicAccess.allowedCidrs.exists(c, c == '0.0.0.0/0' || c == '::/0')"
+            severity: info
+            paths: [publicAccess.allowedCidrs]
+            message: Every address on the internet can reach the collector; only the auth keeps senders out.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can send from inside the org
+            widget: cards
+            required: true
+            options:
+              - value: none
+                label: None
+                description: No workload can reach the collector.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+          - type: note
+            text: >-
+              To send traces from the workloads of this GVC, set the GVC's OpenTelemetry tracing provider to
+              `RELEASE_NAME.GVC_NAME.cpln.local:4317` after install. Saving it restarts every workload in the
+              GVC. See [Send Traces From the GVC](/template-catalog/templates/otel-collector#send-traces-from-the-gvc).
+            textExpression: >-
+              'To send traces from the workloads of this GVC, set the OpenTelemetry tracing provider of the GVC
+              to `' + context.releaseName + '.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:4317` after install. Saving it restarts every workload in the GVC. See
+              [Send Traces From the GVC](/template-catalog/templates/otel-collector#send-traces-from-the-gvc).'
+        rules:
+          - when: self.internalAccess.type == 'none'
+            rule: self.publicAccess.enabled
+            severity: info
+            paths: [internalAccess.type]
+            message: >-
+              With None and public ingestion off, nothing can reach the collector, including the GVC tracing
+              provider.
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org']
+        mirrors: oc.validate
+        paths: [internalAccess.type]
+        message: Choose None, Same GVC or Same org.
+
+migrations:
+  # 1.0.0 and 1.0.1 defaulted to mode advanced with the config below; 1.1.0 made simple the default. A
+  # release that changed nothing would move to the new default anyway; one that edited advanced.config
+  # while relying on the old default mode would silently stop using its config, so keep advanced for it.
+  - fromVersions: "<1.1.0"
+    to: otelCollector.mode
+    valueExpr: |-
+      self.otelCollector.mode == 'advanced' && self.otelCollector.advanced.config != null && self.otelCollector.advanced.config.trim() == '''extensions:
+        health_check:
+        pprof:
+          endpoint: 0.0.0.0:8180
+
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+
+      processors:
+        batch:
+        resource:
+          attributes:
+            - key: workload
+              from_attribute: service.name
+              action: insert
+        transform:
+          trace_statements:
+            - context: span
+              statements:
+                - replace_pattern(span.attributes["http.url"], "^.*(PLACEHOLDER).*$", "/PLACEHOLDER")
+
+      connectors:
+        spanmetrics:
+          dimensions:
+            - name: http.url
+            - name: http.method
+            - name: http.status_code
+          histogram:
+            explicit:
+              buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+            unit: ms
+
+      exporters:
+        debug:
+          verbosity: detailed
+        otlp:
+          endpoint: http://tracing.controlplane:80
+          tls:
+            insecure: true
+        prometheus:
+          endpoint: 0.0.0.0:8889
+
+      service:
+        pipelines:
+          traces:
+            receivers: [otlp]
+            processors: [resource, transform, batch]
+            exporters: [otlp, debug, spanmetrics]
+          metrics:
+            receivers: [spanmetrics]
+            processors: [batch]
+            exporters: [prometheus]
+
+        extensions: [pprof, health_check]
+
+        telemetry:
+          logs:
+            level: INFO''' ? 'simple' : self.otelCollector.mode
+    note: >-
+      1.1.0 made the generated config the default. A release that ran the shipped config moves to it; a
+      release with its own config keeps it.
+  # 1.0.x buckets were bare numbers, which the collector reads as nanoseconds, so a custom list never
+  # bucketed as intended. Carry an edited list as duration strings in its unit; an unchanged one takes
+  # the new default.
+  - fromVersions: "<1.1.0"
+    to: otelCollector.simple.spanmetrics.histogram.buckets
+    valueExpr: >-
+      self.otelCollector.simple.spanmetrics.histogram.buckets == [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000] ||
+      !self.otelCollector.simple.spanmetrics.histogram.buckets.exists(b, string(b).matches('^[0-9.]+$')) ? null :
+      dyn(self.otelCollector.simple.spanmetrics.histogram.buckets.map(b, string(b).matches('^[0-9.]+$') ?
+      string(b) + self.otelCollector.simple.spanmetrics.histogram.unit : string(b)))
+    note: >-
+      Histogram buckets must be duration strings; bare numbers were read as nanoseconds. Each number is
+      carried with the histogram unit appended, for example 250 becomes 250ms.

@@ -36,6 +36,10 @@ imports:
           run `ALTER ROLE ... PASSWORD` first, then update the secret and right away force a
           redeployment of ToolJet (not the database). Keep the password URL-safe (letters, digits, `-`, `_`): it is placed in
           a connection URL as-is.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
       internalAccess.type:
         description: >-
           ToolJet connects to its database like any other workload: keep Same GVC, or add the ToolJet
@@ -76,12 +80,12 @@ steps:
             description: >-
               Optional. The URL ToolJet uses in links and redirects, with `https://`. Leave empty to use the
               canonical endpoint.
+          # The ToolJet workload is type standard, so the platform's 4:1 limit for stateful workloads does not apply.
           - path: tooljet.resources
             type: resources
             label: Resources
             required: true
             description: Per replica. Keep 4Gi of memory; first-boot migrations run out of memory below it.
-            maxRatio: 4
             cpu: { min: 100m }
             memory: { min: 256Mi }
       - title: Root keys
@@ -317,9 +321,9 @@ steps:
           redis.redis.auth.password was removed in 1.3.0: the Redis password is now a prerequisite dictionary
           secret (key password) chosen under Redis password. Remove redis.redis.auth.password from the values.
       - rule: >-
-          !has(self.redis.sentinel.auth) ||
-          ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
-          (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))
+          [self.redis.sentinel].all(s, !s.exists(x, x == 'auth' && type(dyn(s[x])) == map &&
+          [dyn(s[x])].all(a, a.exists(k, (k == 'password' || k == 'fromSecret') &&
+          type(dyn(a[k])) == map && [dyn(a[k])].all(b, b.exists(j, j == 'enabled' && dyn(b[j]) == true))))))
         mirrors: tooljet.validate
         paths: [redis.enabled]
         message: >-
@@ -328,6 +332,19 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
+  # The chart itself renders secrets named <release>-tooljet-startup, and with Redis on <release>-redis-config
+  # and <release>-sentinel-config (redis 3.4.3).
+  - rule: >-
+      !([self.secrets.name, self.postgres.config.credentialsSecretName] +
+      (self.smtp.enabled && self.smtp.auth.secretName != '' ? [self.smtp.auth.secretName] : []) +
+      (self.redis.enabled && self.redis.redis.auth.fromSecret.enabled ? [self.redis.redis.auth.fromSecret.name] : [])).exists(n,
+      n == context.releaseName + '-tooljet-startup' ||
+      (self.redis.enabled && (n == context.releaseName + '-redis-config' || n == context.releaseName + '-sentinel-config')))
+    severity: warning
+    paths: [secrets.name]
+    message: >-
+      This release creates its own secret under one of the names you chose for the keys, database, SMTP or Redis
+      secret, and they clash. Use a different name.
   - rule: "!has(self.postgres.credentials)"
     mirrors: tooljet.validateRemovedKeys
     paths: [postgres.config.credentialsSecretName]

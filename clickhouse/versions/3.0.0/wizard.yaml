@@ -589,6 +589,7 @@ steps:
             label: Server volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: >-
               Holds each replica's metadata and the object storage disk metadata; table data lives in object
@@ -712,6 +713,7 @@ steps:
             label: Keeper volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Holds each member's Raft log and snapshots.
             docs: "#volumes"

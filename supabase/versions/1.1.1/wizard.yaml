@@ -13,6 +13,16 @@ steps:
     fields:
       - type: note
         severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.0') < 0
+        text: >-
+          Upgrading from 1.0.0: create these secrets with the release's current values, so the Postgres
+          password and database name match what the database was initialized with. If the JWT values are
+          1.0.0's published demo defaults, mint new ones and follow
+          [Rotating a credential](#rotating-a-credential). See [Upgrading from 1.0.0](#upgrading-from-1-0-0).
+      - type: note
+        severity: warning
         text: >-
           These secrets must exist **before** you install. If one is missing, the deployment waits
           for it and looks broken.
@@ -58,14 +68,14 @@ steps:
             suggestName: "context.releaseName + '-postgres-credentials'"
     rules:
       - rule: >-
-          oldSelf == null ||
+          oldSelf == null || oldSelf.postgres.credentialsSecretName == null ||
           self.postgres.credentialsSecretName == oldSelf.postgres.credentialsSecretName
         severity: info
         paths: [postgres.credentialsSecretName]
         message: >-
           The Postgres password is read only when the data directory is first initialized; pointing at
           another secret does not change the existing password.
-      - rule: oldSelf == null || self.jwt.secretName == oldSelf.jwt.secretName
+      - rule: oldSelf == null || oldSelf.jwt.secretName == null || self.jwt.secretName == oldSelf.jwt.secretName
         severity: info
         paths: [jwt.secretName]
         message: >-
@@ -90,6 +100,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -103,6 +114,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: postgres.volumeset.autoscaling.minFreePercentage
@@ -472,10 +484,22 @@ steps:
               type: string
               format: cidr
             rules:
-              - rule: "!('0.0.0.0/0' in self.studio.allowedCidrs)"
+              - rule: >-
+                  !('0.0.0.0/0' in self.studio.allowedCidrs || '::/0' in self.studio.allowedCidrs) ||
+                  (oldSelf != null && oldSelf.studio.allowedCidrs != null &&
+                  ('0.0.0.0/0' in oldSelf.studio.allowedCidrs || '::/0' in oldSelf.studio.allowedCidrs))
+                severity: warning
                 message: >-
-                  0.0.0.0/0 gives the whole internet an unauthenticated dashboard that holds the
-                  service role key.
+                  This gives the whole internet an unauthenticated dashboard that holds the service role
+                  key.
+              - rule: >-
+                  !('0.0.0.0/0' in self.studio.allowedCidrs || '::/0' in self.studio.allowedCidrs) ||
+                  oldSelf == null || oldSelf.studio.allowedCidrs == null ||
+                  !('0.0.0.0/0' in oldSelf.studio.allowedCidrs || '::/0' in oldSelf.studio.allowedCidrs)
+                severity: info
+                message: >-
+                  The whole internet reaches an unauthenticated dashboard that holds the service role key.
+                  Remove 0.0.0.0/0 and ::/0 and reach the dashboard through Kong's URL.
               - rule: size(self.studio.allowedCidrs) == 0
                 severity: info
                 message: >-
@@ -503,11 +527,20 @@ steps:
                 label: Kong and listed workloads
                 description: Kong plus the workloads listed below.
             rules:
-              - rule: self.studio.internalAccess.type in ['workload-list', 'none']
+              - rule: >-
+                  self.studio.internalAccess.type in ['workload-list', 'none'] ||
+                  (oldSelf != null && self.studio.internalAccess.type == oldSelf.studio.internalAccess.type)
                 severity: warning
                 message: >-
                   Studio holds the service role key and has no login of its own: with this setting any
                   workload in the scope opens the dashboard unauthenticated.
+              - rule: >-
+                  self.studio.internalAccess.type in ['workload-list', 'none'] ||
+                  oldSelf == null || self.studio.internalAccess.type != oldSelf.studio.internalAccess.type
+                severity: info
+                message: >-
+                  Studio has no login of its own: any workload in this scope opens the dashboard
+                  unauthenticated. "Kong and listed workloads" limits it to Kong.
               - rule: self.studio.internalAccess.type != 'none'
                 severity: info
                 message: >-
@@ -625,6 +658,18 @@ steps:
                 message: >-
                   With a local backend Storage is stateful, where the maximum memory can be at most 4
                   times the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  cpuMillicores(self.storage.resources.maxCpu) - cpuMillicores(self.storage.resources.minCpu) <= 4000
+                message: >-
+                  With a local backend Storage is stateful, where the maximum CPU can be at most 4000
+                  millicores above the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  memoryBytes(self.storage.resources.maxMemory) - memoryBytes(self.storage.resources.minMemory) <= 4294967296
+                message: >-
+                  With a local backend Storage is stateful, where the maximum memory can be at most 4096
+                  MiB above the minimum.
           - path: storage.minReplicas
             type: integer
             label: Storage minimum replicas
@@ -781,6 +826,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -795,6 +841,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: storage.volumeset.autoscaling.minFreePercentage
@@ -960,6 +1007,18 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+            rules:
+              # workload-postgres.yaml writes the prefix unquoted into WALG_S3_PREFIX (s3://bucket/prefix).
+              - rule: >-
+                  self.backup.mode != 'walg' ||
+                  (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+                  (!self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') &&
+                  !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+                  !self.backup.aws.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  The chart writes the prefix unquoted into the WAL-G destination, so it cannot contain ": " or
+                  " #", a tab, or end with ":" or a space.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         fields:
@@ -968,6 +1027,8 @@ steps:
             label: Bucket
             required: true
             example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: Lowercase letters, digits, dots, dashes and underscores, starting and ending with a letter or digit.
           - path: backup.gcp.cloudAccountName
             type: ref
             label: Cloud account
@@ -985,6 +1046,18 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+            rules:
+              # workload-postgres.yaml writes the prefix unquoted into WALG_GS_PREFIX (gs://bucket/prefix).
+              - rule: >-
+                  self.backup.mode != 'walg' ||
+                  (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+                  (!self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') &&
+                  !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+                  !self.backup.gcp.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  The chart writes the prefix unquoted into the WAL-G destination, so it cannot contain ": " or
+                  " #", a tab, or end with ":" or a space.
     rules:
       - rule: >-
           oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||
@@ -1104,13 +1177,54 @@ steps:
               - rule: self.auth.minReplicas <= self.auth.maxReplicas
                 message: The maximum replicas must be at least the minimum.
 
+rules:
+  # Chart-made secrets (_helpers.tpl); 1.0.0 also made <release>-supabase-config, which the upgrade deletes.
+  - when: context.releaseName != null
+    rule: >-
+      !([self.jwt.secretName, self.postgres.credentialsSecretName] +
+      (self.studio.enabled ? [self.studio.passwordSecretName] : []) +
+      (self.auth.smtp.enabled ? [self.auth.smtp.passwordSecretName] : []) +
+      (self.storage.enabled && self.storage.backend == 'gcs' ? [self.storage.gcs.credentialsSecretName] : []) +
+      (self.storage.enabled && self.storage.backend == 's3' && self.storage.s3.endpoint != null &&
+      self.storage.s3.endpoint != '' ? [self.storage.s3.credentialsSecretName] : [])).exists(n,
+      n in (['kong-config', 'preinit', 'postinit', 'walg-script'] +
+      (context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0 ?
+      ['config'] : [])).map(x, context.releaseName + '-supabase-' + x))
+    severity: warning
+    messageExpression: >-
+      'One of your secrets is named like a secret this chart creates itself (' + context.releaseName +
+      '-supabase-kong-config, -preinit, -postinit or -walg-script' +
+      (context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0 ?
+      ', or -config from 1.0.0, which this upgrade deletes' : '') +
+      '). Choose another name: the chart would overwrite it or fail to create its own.'
+    message: >-
+      One of your secrets is named like a secret this chart creates itself (RELEASE_NAME-supabase-kong-config,
+      -preinit, -postinit or -walg-script). Choose another name: the chart would overwrite it or fail to
+      create its own.
+
 migrations:
+  # 1.1.0 changed the S3 storage defaults (cpln-backup-bucket, my-backup-policy). A rename moves changed values
+  # only, so carry a 1.0.0 release's bucket and IAM policy even when they are the old defaults.
+  - fromVersions: "<1.1.0"
+    to: storage.s3.bucket
+    valueExpr: "self.storage.enabled && self.storage.backend == 's3' ? self.storage.s3.bucket : 'my-supabase-storage-bucket'"
+    note: Storage keeps the bucket it stores files in.
+  - fromVersions: "<1.1.0"
+    to: storage.s3.policyName
+    valueExpr: "self.storage.enabled && self.storage.backend == 's3' ? self.storage.s3.policyName : 'my-supabase-storage-policy'"
+    note: The identity keeps the IAM policy that grants it the storage bucket.
   - fromVersions: "<1.1.0"
     from: postgres.password
-    note: The Postgres password moved to a dictionary secret (keys password and database); choose it under Credentials.
+    note: >-
+      The Postgres password moved to a dictionary secret (keys password and database); choose it under
+      Credentials. Create it with this release's current password: Postgres keeps the password it was
+      initialized with.
   - fromVersions: "<1.1.0"
     from: postgres.database
-    note: The database name moved to a dictionary secret (keys password and database); choose it under Credentials.
+    note: >-
+      The database name moved to a dictionary secret (keys password and database); choose it under
+      Credentials. Use this release's current database name: another name points the services at a
+      database that does not exist.
   - fromVersions: "<1.1.0"
     from: auth.smtp.password
     note: The SMTP password moved to an opaque secret named by auth.smtp.passwordSecretName.
@@ -1132,23 +1246,27 @@ migrations:
   - fromVersions: "<1.1.0"
     from: jwt.secret
     note: >-
-      The JWT keys moved to a dictionary secret named by jwt.secretName. 1.0.0 shipped public demo
-      keys: mint new ones (README Prerequisites) instead of copying the old values.
+      The JWT keys moved to a dictionary secret named by jwt.secretName: copy your current values. If
+      they are 1.0.0's published demo defaults, mint new ones and follow Rotating a credential in the
+      docs.
   - fromVersions: "<1.1.0"
     from: jwt.secretKeyBase
     note: >-
-      The JWT keys moved to a dictionary secret named by jwt.secretName. 1.0.0 shipped public demo
-      keys: mint new ones (README Prerequisites) instead of copying the old values.
+      The JWT keys moved to a dictionary secret named by jwt.secretName: copy your current values. If
+      they are 1.0.0's published demo defaults, mint new ones and follow Rotating a credential in the
+      docs.
   - fromVersions: "<1.1.0"
     from: jwt.anonKey
     note: >-
-      The JWT keys moved to a dictionary secret named by jwt.secretName. 1.0.0 shipped public demo
-      keys: mint new ones (README Prerequisites) instead of copying the old values.
+      The JWT keys moved to a dictionary secret named by jwt.secretName: copy your current values. If
+      they are 1.0.0's published demo defaults, mint new ones and follow Rotating a credential in the
+      docs.
   - fromVersions: "<1.1.0"
     from: jwt.serviceRoleKey
     note: >-
-      The JWT keys moved to a dictionary secret named by jwt.secretName. 1.0.0 shipped public demo
-      keys: mint new ones (README Prerequisites) instead of copying the old values.
+      The JWT keys moved to a dictionary secret named by jwt.secretName: copy your current values. If
+      they are 1.0.0's published demo defaults, mint new ones and follow Rotating a credential in the
+      docs.
   - fromVersions: "<1.1.0"
     from: auth.providers
     to: auth.providers

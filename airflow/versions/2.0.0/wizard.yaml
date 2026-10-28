@@ -55,17 +55,21 @@ steps:
             required: true
             description: A dictionary secret with the keys `jwtSecret`, `fernetKey` and `adminPassword`.
             help: >-
-              `jwtSecret` signs the API access tokens. `fernetKey` encrypts the Connections and Variables
-              your DAGs use; it must be 32 random bytes in URL-safe base64, and it **cannot be rotated**
-              without making every stored one unreadable, so back it up. `adminPassword` is the UI password
-              of the admin username; record it, it is not shown anywhere. When you move a 1.x release to
-              2.0.0, the `fernetKey` must stay identical: choose the auth secret a 1.5.0 release used, or put
-              the `airflow.auth.fernetKey` of a 1.3.0 or 1.4.0 release into the new secret. A release that kept
-              the shipped `CHANGE_ME` key has its Connections encrypted under a published key: generate a new
-              one, re-enter them and rotate the credentials they held. While the secret is missing, the
-              only diagnostic is `status.versions[].message` from `cpln workload get-deployments`. If the
-              secret appears only after the install, the workload recovers by itself in about 5.5 to 10.5
-              minutes, or at once with a forced redeployment (`cpln workload force-redeployment`).
+              `jwtSecret` signs the API access tokens. `fernetKey` encrypts the Connections and Variables your
+              DAGs use; it must be 32 random bytes in URL-safe base64, so back it up: changing it makes stored
+              Connections and Variables unreadable unless the old key stays after the new one, comma-separated
+              (then run `airflow rotate-fernet-key`). `adminPassword` is the UI password of the admin
+              username; record it, it is not shown anywhere. When you move a 1.x release to 2.0.0, the
+              `fernetKey` must stay identical: choose the auth secret a 1.5.0 release used, or put the
+              `airflow.auth.fernetKey` of a 1.3.0 or 1.4.0 release into the new secret. If a 1.3.0 or 1.4.0
+              release still has `CHANGE_ME`: `CHANGE_ME` is not a valid Fernet key, so Airflow refused to save
+              any Variable or Connection password; nothing was encrypted under it. Generate a new key, unless
+              the release was first installed on 1.2.0 or earlier: then use the `fernet_key` from
+              `/opt/airflow/airflow.cfg`, which encrypted the Connections and Variables saved before 1.3.0.
+              While the secret is missing, the only diagnostic is `status.versions[].message` from `cpln
+              workload get-deployments`. If the secret appears only after the install, the workload recovers
+              by itself in about 5.5 to 10.5 minutes, or at once with a forced redeployment (`cpln workload
+              force-redeployment`).
             ref:
               kind: secret
               format: name
@@ -85,8 +89,9 @@ steps:
               - rule: oldSelf == null || self.airflow.auth.secretName == oldSelf.airflow.auth.secretName
                 severity: info
                 message: >-
-                  Stored Connections and Variables stay readable only under the fernetKey that encrypted
-                  them: the new secret must hold the same fernetKey as the current one.
+                  The new secret must hold the current fernetKey: changing it makes stored Connections and
+                  Variables unreadable unless the old key stays after the new one, comma-separated (then run
+                  airflow rotate-fernet-key).
               - rule: "!has(self.airflow.auth.jwtSecret)"
                 mirrors: airflow.validateRemovedKeys
                 message: >-
@@ -144,10 +149,10 @@ steps:
             required: true
             immutable: PostgreSQL creates this database once, when its data directory is initialized.
             # The chart writes POSTGRES_DB unquoted: 123, true, on or null would not reach PostgreSQL as text.
-            pattern: '^(?!(true|false|yes|no|on|off|y|n|null)$)[a-z_][a-z0-9_]*$'
+            pattern: '^(?!(true|false|null)$)[a-z_][a-z0-9_]*$'
             patternMessage: >-
               Use lowercase letters, digits and _, starting with a letter or _, and not a YAML word such as
-              true, yes or null.
+              true, false or null.
 
   - id: webserver
     title: Webserver
@@ -387,6 +392,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         description: >-
           The shared file system at `/opt/airflow` with the DAGs and task logs, mounted by the webserver and
           every worker.
@@ -398,6 +404,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         suggestions: [10, 20, 50, 100, 250, 500, 1000]
       - path: redis.volumeset.capacity
         type: integer
@@ -405,6 +412,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         suggestions: [10, 20, 50, 100, 250, 500, 1000]
     rules:
       - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity
@@ -684,10 +692,12 @@ migrations:
   - fromVersions: "<1.5.0"
     from: airflow.auth.fernetKey
     note: >-
-      1.5.0 moved it into the auth secret (key fernetKey). Put the same key there, since a different one
-      makes every stored Connection and Variable unreadable; but if it is the shipped CHANGE_ME, that key
-      is published: generate a new one, re-enter the Connections and Variables, and rotate the credentials
-      they held at their source.
+      1.5.0 moved it into the auth secret (key fernetKey). Put the same key there, since a different one makes
+      every stored Connection and Variable unreadable. If the release still has CHANGE_ME: CHANGE_ME is not a
+      valid Fernet key, so Airflow refused to save any Variable or Connection password; nothing was encrypted
+      under it. Generate a new key, unless the release was first installed on 1.2.0 or earlier: then use the
+      fernet_key from /opt/airflow/airflow.cfg, which encrypted the Connections and Variables saved before
+      1.3.0.
   - fromVersions: "<1.5.0"
     from: airflow.admin.password
     note: >-

@@ -1,0 +1,264 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: SearXNG
+
+# SearXNG itself is stateless, but the optional bundled Redis + Sentinel (redis 3.6.0 has no descriptor, so its
+# keys are parent fields below) are single-location stateful workloads with no location handling.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: searxng
+    title: SearXNG
+    description: The SearXNG server and the key that signs its cookies.
+    docs: "#configuration"
+    sections:
+      - title: Server
+        docs: "#searxng-server-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: SearXNG image
+            required: true
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: Stateless replicas behind the load balancer; with 2 or more, the limiter's state is shared through the bundled Redis.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            maxRatio: 4
+            cpu: { min: 50m }
+            memory: { min: 128Mi }
+      - title: Signing key
+        docs: "#signing-key"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secretKey.secretName
+            type: ref
+            label: Signing key secret
+            required: true
+            description: An opaque secret (encoding plain) whose payload signs preference cookies and CSRF tokens.
+            help: >-
+              Every replica reads the same key. Changing it later invalidates every saved preference cookie.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-searxng-secret-key'"
+                hint: "openssl rand -hex 32"
+    rules:
+      - rule: >-
+          self.secretKey.secretName != '' && self.replicas >= 1 &&
+          self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] &&
+          size(self.formats) > 0 && (!self.limiter.enabled || self.redis.enabled)
+        mirrors: searxng.validate
+        paths: [secretKey.secretName]
+        message: >-
+          Name the signing key secret, keep at least one replica and one output format, and turn on the bundled
+          Redis for the limiter; the chart does not render otherwise.
+
+  - id: search
+    title: Search
+    description: What SearXNG returns and how it throttles clients.
+    docs: "#search-behavior"
+    sections:
+      - title: Search behavior
+        docs: "#search-behavior"
+        fields:
+          - path: instanceName
+            type: string
+            label: Instance name
+            required: true
+            description: Shown in the UI and returned by /config.
+          - path: formats
+            type: list
+            label: Output formats
+            required: true
+            unique: true
+            widget: tags
+            description: Keep `json` for the API that AI agents call (`/search?q=...&format=json`).
+            item:
+              type: enum
+              options:
+                - { value: html, label: HTML }
+                - { value: json, label: JSON }
+                - { value: csv, label: CSV }
+                - { value: rss, label: RSS }
+          - path: imageProxy
+            type: boolean
+            label: Proxy result images
+            description: Result images load through this instance instead of from third-party sites.
+          - path: baseUrl
+            type: string
+            format: url
+            label: Base URL
+            placeholder: https://search.example.com
+            description: Optional. Set it only behind a custom domain; empty derives the URL from each request.
+          - path: limiter.enabled
+            type: boolean
+            label: Bot-detection limiter
+            description: >-
+              Rate-limits and blocks clients that do not look like a browser, which includes most JSON API
+              clients. Needs the bundled Redis (Redis step). Turn it on before public access.
+          - path: extraSettings
+            type: yaml
+            yamlType: map
+            label: Extra settings
+            advanced: true
+            description: >-
+              Merged into settings.yml over the settings above, for anything in the upstream settings reference.
+              These values are stored in the release.
+
+  - id: access
+    title: Access
+    description: Who reaches the UI and API, from the internet and from inside the GVC.
+    docs: "#access"
+    sections:
+      - fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI and API on the workload's `*.cpln.app` endpoint. SearXNG has no login, so anyone can use
+              it: turn on the limiter first.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - { value: none, label: None, description: No workload can reach SearXNG internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes this list only when the type is workload-list.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: "!self.publicAccess.enabled || self.limiter.enabled"
+        severity: info
+        paths: [publicAccess.enabled]
+        message: >-
+          A public instance without the limiter is an open, unthrottled search proxy; upstream engines will
+          start blocking it. Turn on the limiter under Search.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: redis
+    title: Redis
+    description: The bundled datastore for the limiter's counters and the state replicas share.
+    docs: "#redis"
+    sections:
+      - id: redis-bundle
+        title: Bundled Redis
+        toggle: redis.enabled
+        description: >-
+          One Redis node and one Sentinel. SearXNG is not Sentinel-aware, so it must always reach the one
+          writable node. Off, the limiter must stay off too.
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            required: true
+            readOnly: true
+            min: 1
+            max: 1
+            advanced: true
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            required: true
+            min: 1
+            advanced: true
+            description: The redis chart needs at least one to discover the master at boot.
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            advanced: true
+            maxRatio: 4
+          - path: redis.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources
+            type: resources
+            label: Sentinel resources
+            required: true
+            advanced: true
+            maxRatio: 4
+        rules:
+          - rule: self.redis.redis.replicas == 1
+            mirrors: searxng.validate
+            paths: [redis.redis.replicas]
+            message: >-
+              Keep one Redis node: SearXNG is not Sentinel-aware, and more nodes would send its connections to
+              read-only replicas and silently break the limiter.
+      - id: redis-auth
+        title: Redis password
+        toggle: redis.redis.auth.password.enabled
+        when: self.redis.enabled
+        docs: "#redis"
+        description: >-
+          Off, Redis accepts connections from the GVC without a password. On, Redis requires the password below
+          and SearXNG puts it in its connection URL.
+        fields:
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Stored in the release values.
+            help: >-
+              Use only letters, digits, `-` and `_`: SearXNG puts the password in its connection URL as-is.
+        rules:
+          - rule: self.redis.redis.auth.password.value != ''
+            mirrors: searxng.validate
+            paths: [redis.redis.auth.password.value]
+            message: Enter the Redis password, or turn the password off.
+    rules:
+      - rule: "!has(self.redis.redis.auth.fromSecret)"
+        mirrors: searxng.validate
+        paths: [redis.enabled]
+        message: >-
+          This version does not support redis.redis.auth.fromSecret; remove it and use the Redis password above.

@@ -60,6 +60,7 @@ steps:
         help: >-
           Postgres reads these values only when its data directory is first initialized. To
           rotate the password later, run `ALTER ROLE ... PASSWORD` and then update the secret.
+          The username and database must not contain spaces, or the readiness probe never passes.
         docs: "#credentials"
         ref:
           kind: secret
@@ -95,6 +96,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
@@ -111,6 +113,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -362,6 +365,8 @@ steps:
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
@@ -388,6 +393,8 @@ steps:
           - path: backup.gcp.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
       - title: MinIO or S3-compatible
@@ -400,7 +407,7 @@ steps:
             label: S3 endpoint
             required: true
             example: true
-            placeholder: http://my-minio-workload:9000
+            placeholder: http://my-minio-workload.GVC_NAME.cpln.local:9000
             description: The URL including the port.
           - path: backup.minio.bucket
             type: string
@@ -423,6 +430,8 @@ steps:
           - path: backup.minio.prefix
             type: string
             label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
         rules:
@@ -432,6 +441,10 @@ steps:
             message: >-
               backup.minio.accessKey and backup.minio.secretKey were removed in 3.4.0. Put them in
               a dictionary secret and remove them from the values.
+          - rule: "!(self.backup.enabled && self.backup.provider == 'minio' && self.backup.image.startsWith('controlplanecorporation/'))"
+            severity: warning
+            paths: [backup.image]
+            message: MinIO needs ghcr.io/controlplane-com/backup-images/postgres-backup; this image has no MinIO support.
     rules:
       - rule: "!self.backup.enabled || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
         severity: warning

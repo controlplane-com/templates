@@ -30,6 +30,10 @@ imports:
           workload under Allowed workloads.
       backup.enabled:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
 
 steps:
   - id: gitea
@@ -88,6 +92,30 @@ steps:
             label: Invite-only registration
             description: On, only an admin creates accounts; off, anyone who reaches the web UI can sign up.
     rules:
+      # Secrets this release creates, or that the upgrade deletes because the installed version created them.
+      - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+        rule: self.gitea.auth.secretName != context.releaseName + '-gitea-env'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-gitea-env was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.'
+        message: >-
+          That secret was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.
+      - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+        rule: self.gitea.auth.secretName != context.releaseName + '-pg-config'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-pg-config was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.'
+        message: >-
+          That secret was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.
+      - rule: self.gitea.auth.secretName != context.releaseName + '-gitea-bootstrap'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-gitea-bootstrap is created by this chart for its start script. Use a different name.'
+        message: >-
+          That secret is created by this chart for its start script. Use a different name.
       - rule: self.gitea.auth.secretName != ''
         mirrors: gitea.validateAuth
         paths: [gitea.auth.secretName]
@@ -109,6 +137,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set with every repository on it.
@@ -122,6 +151,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 200, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -264,12 +294,35 @@ steps:
         required: true
         description: The dictionary secret Gitea creates and PostgreSQL reads. Secret names are org-wide.
     rules:
+      # postgres 3.4.1's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} through sh -c, unquoted.
+      - when: oldSelf == null || self.postgres.credentials.username != oldSelf.postgres.credentials.username
+        rule: self.postgres.credentials.username.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.credentials.username]
+        message: >-
+          Leave out spaces: the database readiness probe passes the user name to pg_isready unquoted, so a
+          name with a space never becomes ready.
+      - when: oldSelf == null || self.postgres.credentials.database != oldSelf.postgres.credentials.database
+        rule: self.postgres.credentials.database.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.credentials.database]
+        message: >-
+          Leave out spaces: the database readiness probe passes the database name to pg_isready unquoted, so
+          a name with a space never becomes ready.
       - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
         severity: info
         paths: [postgres.credentials.password]
         message: >-
           PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Gitea loses its
           database connection after this upgrade.
+      # A secret this chart creates for its start script.
+      - rule: self.postgres.config.credentialsSecretName != context.releaseName + '-gitea-bootstrap'
+        severity: warning
+        paths: [postgres.config.credentialsSecretName]
+        messageExpression: >-
+          context.releaseName + '-gitea-bootstrap is created by this chart for its start script. Use a different name.'
+        message: >-
+          That secret is created by this chart for its start script. Use a different name.
       - rule: self.postgres.config.credentialsSecretName != 'my-gitea-db-credentials'
         severity: info
         paths: [postgres.config.credentialsSecretName]

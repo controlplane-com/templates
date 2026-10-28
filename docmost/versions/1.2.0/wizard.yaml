@@ -35,6 +35,10 @@ imports:
           workload under Allowed workloads.
       backup.enabled:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
 
 steps:
   - id: docmost
@@ -153,6 +157,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             help: Uninstalling the release deletes the volume set, so the files do not survive a reinstall.
@@ -162,7 +167,7 @@ steps:
               oldSelf == null || oldSelf.storage.type != 'local' ||
               self.storage.local.volumeset.capacity >= oldSelf.storage.local.volumeset.capacity
             paths: [storage.local.volumeset.capacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
       - title: S3 bucket
         when: self.storage.type == 's3'
         docs: "#attachment-storage"
@@ -180,9 +185,9 @@ steps:
           - path: storage.s3.endpoint
             type: string
             label: S3-compatible endpoint
-            placeholder: http://my-minio-workload:9000
+            placeholder: http://my-minio.my-gvc.cpln.local:9000
             pattern: '^(https?://.+)?$'
-            patternMessage: Include the scheme and port, for example http://my-minio-workload:9000.
+            patternMessage: Include the scheme and port, for example http://my-minio.my-gvc.cpln.local:9000.
             description: Empty for AWS S3. For MinIO or another S3-compatible server, its S3 API address.
           - path: storage.s3.forcePathStyle
             type: boolean
@@ -384,6 +389,7 @@ steps:
         label: Initial capacity
         unit: GiB
         min: 10
+        max: 65536
         required: true
         suggestions: [10, 20, 50]
         help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
@@ -409,7 +415,7 @@ steps:
           name holding the same password, and name it here.
       - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
         paths: [redis.volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:

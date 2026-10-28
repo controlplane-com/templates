@@ -333,6 +333,7 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
           - path: volumeset.tikv.snapshots.schedule
             type: string
@@ -362,6 +363,7 @@ steps:
             required: true
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.tikv.autoscaling.minFreePercentage
             type: integer
@@ -396,6 +398,7 @@ steps:
             required: true
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100]
           - path: volumeset.pd.snapshots.schedule
             type: string
@@ -705,7 +708,7 @@ steps:
             label: Bucket
             required: true
             example: true
-            pattern: '^(?!(yes|off|true|false|null)$)(?!0x[0-9a-f]+$)(?!0o[0-7]+$)(?!0b[01]+$)(?![0-9][0-9.]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            pattern: '^(?!(true|false|null)$)(?!0x[0-9a-f]+$)(?!0o[0-7]+$)(?!0b[01]+$)(?![0-9][0-9.]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
             patternMessage: >-
               Use 3 to 63 lowercase letters, digits, dots and dashes, including a letter; a name YAML reads as a
               number, boolean or null (such as `1e3` or `true`) breaks the chart.
@@ -754,7 +757,7 @@ steps:
             label: Bucket
             required: true
             example: true
-            pattern: '^(?!(yes|off|true|false|null)$)(?!0x[0-9a-f_]+$)(?!0o[0-7_]+$)(?!0b[01_]+$)(?![0-9][0-9._]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            pattern: '^(?!(true|false|null)$)(?!0x[0-9a-f_]+$)(?!0o[0-7_]+$)(?!0b[01_]+$)(?![0-9][0-9._]*e-?[0-9]+$)(?=.*[a-z])[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
             patternMessage: >-
               Use lowercase letters, digits, dots, dashes and underscores, including a letter; a name YAML reads as
               a number, boolean or null (such as `1e3` or `true`) breaks the chart.

@@ -293,6 +293,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Per member.
@@ -311,6 +312,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -562,22 +564,23 @@ steps:
             severity: info
             paths: [pgbouncer.defaultPoolSize]
             message: The pool is larger than the number of client connections PgBouncer accepts.
-          # README "PgBouncer connection pooler": max_connections is 100, of which 3 are reserved for
-          # superusers; replicas do not coordinate.
+          # PgBouncer logs in as the credentials secret's user, which is the Patroni superuser, for the one
+          # database it pools, so each replica opens at most the smaller of the pool size and the max database
+          # connections; replicas do not coordinate. max_connections is 100 (secret-startup.yaml).
           - rule: >-
-              size(self.global.locations) * self.pgbouncer.maxReplicas * self.pgbouncer.maxDbConnections < 97
+              size(self.global.locations) * self.pgbouncer.maxReplicas * (self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections) <= 100
             severity: info
             paths: [pgbouncer.maxDbConnections]
             message: >-
-              PostgreSQL accepts 100 connections, 3 of them reserved for superusers, and every PgBouncer replica
-              in every location may open up to the max database connections. Under load clients then get
-              "remaining connection slots are reserved" instead of waiting. Lower the max database connections
-              or the maximum replicas.
+              Every PgBouncer replica in every location may open up to the smaller of the pool size and the max
+              database connections, and together they can ask for more than the 100 connections PostgreSQL
+              accepts; past that, PostgreSQL refuses new connections. Lower the pool size, the max database
+              connections or the maximum replicas.
             messageExpression: >-
-              'Up to ' + string(size(self.global.locations) * self.pgbouncer.maxReplicas * self.pgbouncer.maxDbConnections) +
+              'Up to ' + string(size(self.global.locations) * self.pgbouncer.maxReplicas * (self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections)) +
               ' server connections (' + string(size(self.global.locations)) + ' locations × ' +
-              string(self.pgbouncer.maxReplicas) + ' replicas × ' + string(self.pgbouncer.maxDbConnections) +
-              ') against the 97 PostgreSQL accepts from non-superusers. Under load clients then get "remaining connection slots are reserved" instead of waiting. Lower the max database connections or the maximum replicas.'
+              string(self.pgbouncer.maxReplicas) + ' replicas × ' + string((self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections)) +
+              ' per replica) against the 100 connections PostgreSQL accepts; past that, PostgreSQL refuses new connections. Lower the pool size, the max database connections or the maximum replicas.'
     rules:
       - when: "!self.pgbouncer.enabled"
         rule: self.pgbouncer.poolMode in ['session', 'transaction', 'statement']
@@ -603,8 +606,8 @@ steps:
           - type: note
             severity: warning
             when: >-
-              oldSelf != null && oldSelf.backup.enabled == true &&
-              (oldSelf.backup.mode == 'wal-g') != (self.backup.mode == 'wal-g')
+              oldSelf != null &&
+              (oldSelf.backup.enabled == true && oldSelf.backup.mode == 'wal-g') != (self.backup.mode == 'wal-g')
             text: >-
               Switching to or from WAL-G changes `archive_mode`, so this upgrade restarts PostgreSQL in every
               location. Turning WAL-G on can take about 10 minutes to settle in a location; check that
@@ -762,6 +765,20 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.aws.prefix == self.backup.aws.prefix) ||
+                  (!self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') &&
+                  !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+                  !self.backup.aws.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -789,6 +806,20 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix) ||
+                  (!self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') &&
+                  !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+                  !self.backup.gcp.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
       - title: MinIO or S3-compatible
         when: self.backup.enabled && self.backup.provider == 'minio'
         docs: "#minio"
@@ -816,6 +847,16 @@ steps:
             label: Bucket
             required: true
             example: true
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX unquoted into the members' env.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.minio.bucket == self.backup.minio.bucket) ||
+                  (!self.backup.minio.bucket.contains(': ') && !self.backup.minio.bucket.contains(' #') &&
+                  !self.backup.minio.bucket.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the bucket is written unquoted into the members' settings: leave out ": ", " #" and tabs.
           - path: backup.minio.credentialsSecretName
             type: ref
             label: MinIO credentials secret
@@ -839,6 +880,20 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.minio.prefix == self.backup.minio.prefix) ||
+                  (!self.backup.minio.prefix.contains(': ') && !self.backup.minio.prefix.contains(' #') &&
+                  !self.backup.minio.prefix.endsWith(':') && !self.backup.minio.prefix.endsWith(' ') &&
+                  !self.backup.minio.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
 
   - id: etcd
     title: Consensus (etcd)

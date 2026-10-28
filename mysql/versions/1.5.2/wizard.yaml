@@ -158,6 +158,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
@@ -181,6 +182,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -479,6 +481,15 @@ steps:
             help: >-
               The policy needs all ten S3 actions listed under
               [AWS S3](/template-catalog/templates/mysql#aws-s3), on the bucket and on its objects.
+            rules:
+              # The platform's identity PolicyRef pattern (nodelibs identity.ts:12); templates/identity.yaml:12
+              # writes the name inside double quotes.
+              - rule: >-
+                  (oldSelf != null && self.backup.aws.policyName == oldSelf.backup.aws.policyName) ||
+                  self.backup.aws.policyName.matches('^(aws::)?[A-Za-z0-9/+=,.@_-]+$')
+                severity: warning
+                message: >-
+                  Use letters, digits and / + = , . @ _ -, optionally after aws:: for an AWS managed policy.
           - path: backup.aws.prefix
             type: string
             label: Folder prefix
@@ -498,6 +509,15 @@ steps:
             label: Bucket
             required: true
             example: true
+            rules:
+              # Written unquoted into the identity's GCP binding (templates/identity.yaml:17).
+              - rule: >-
+                  (oldSelf != null && self.backup.gcp.bucket == oldSelf.backup.gcp.bucket) ||
+                  self.backup.gcp.bucket.matches('^(?:[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]|(?=.{3,222}$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9_.-]*\\.[a-z0-9_.-]*[a-z0-9])$')
+                severity: warning
+                message: >-
+                  Use 3 to 63 lowercase letters, digits, hyphens and underscores, starting and ending with a
+                  letter or digit; a name with dots can have up to 222 characters, with at most 63 between dots.
           - path: backup.gcp.cloudAccountName
             type: ref
             label: Cloud account

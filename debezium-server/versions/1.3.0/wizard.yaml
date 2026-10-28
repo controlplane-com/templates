@@ -719,6 +719,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -731,6 +732,14 @@ steps:
               - { value: general-purpose-ssd, label: General purpose SSD }
               - { value: high-throughput-ssd, label: High throughput SSD }
         rules:
+          # Platform minimum of high-throughput-ssd (nodelibs volumeset.ts:84-85).
+          - rule: >-
+              (oldSelf != null && self.volumeset.capacity == oldSelf.volumeset.capacity &&
+              self.volumeset.performanceClass == oldSelf.volumeset.performanceClass) ||
+              self.volumeset.performanceClass != 'high-throughput-ssd' || self.volumeset.capacity == null ||
+              self.volumeset.capacity >= 200
+            paths: [volumeset.capacity]
+            message: A high throughput SSD needs an initial capacity of at least 200 GiB.
           - rule: >-
               oldSelf == null || !(oldSelf.source.offset.storage == 'file' ||
               (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ||

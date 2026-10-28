@@ -1,0 +1,581 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: pgEdge
+# The chart lists its locations and runs nothing in the GVC's other locations (defaultOptions scale 0).
+gvc:
+  minLocations: 1
+
+steps:
+  - id: nodes
+    title: Nodes
+    description: Where the pgEdge nodes run, how many run in each location, and their image and compute.
+    sections:
+      - fields:
+          # pgcat sends every write to node 0 of the first location and has no write failover.
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that restarts the pgEdge nodes stops writes while node 0 of the first location
+              restarts (about a minute, plus up to 60 s while pgcat admits it again), whatever the node
+              count.
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+            text: GVC locations that are not listed here run nothing.
+            textExpression: >-
+              'GVC locations not listed here run nothing: ' +
+              context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+          - path: locations
+            type: list
+            label: Locations
+            docs: "#locations-and-replicas"
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 3 }
+            itemLabel: "item.replicas == null ? item.name : item.name + ' × ' + string(item.replicas)"
+            description: >-
+              One entry per location, with the number of pgEdge nodes it runs. The optional backup job
+              runs only in the first location.
+            help: >-
+              Use 1 node per location for development and testing, and 3 in production, to survive a
+              node loss within a location. Nodes added to a cluster that already holds data start
+              without its tables and rows, so settle the locations and node counts before you load
+              data.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Nodes
+                  required: true
+                  min: 1
+                  suggestions:
+                    - { value: 1, label: "1 (development)" }
+                    - { value: 2, label: "2" }
+                    - { value: 3, label: "3 (production)" }
+              rules:
+                - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not on the target GVC. The nodes refuse to initialize while a
+                    listed location is missing: add it to the GVC or remove it here.
+          - path: multiZone
+            type: boolean
+            label: Spread replicas across zones
+            description: Applies to the pgEdge nodes and pgcat in every listed location.
+      - title: Image and resources
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: pgEdge image
+            required: true
+            rules:
+              - rule: imageMajor(self.image) < 0 || imageMajor(self.image) == 17
+                message: >-
+                  The node start script runs PostgreSQL from `/usr/pgsql-17/bin`, so the image must be a
+                  PostgreSQL 17 pgEdge image.
+          - path: resources
+            type: resources
+            label: Resources per node
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+    rules:
+      - rule: size(self.locations) > 0
+        mirrors: pgedge.validateLocations
+        paths: [locations]
+        message: List at least one location.
+      - rule: self.locations.all(l, l.replicas == null || l.replicas >= 1)
+        mirrors: pgedge.validateReplicas
+        paths: [locations]
+        message: Every location needs at least 1 node; to stop running in a location, remove it.
+      - rule: isUnique(self.locations.filter(l, l.name != null && l.name != '').map(l, l.name))
+        mirrors: pgedge.validateUniqueLocations
+        paths: [locations]
+        message: >-
+          List each location once. A duplicate gives two nodes the same Spock node and subscription
+          names.
+      - rule: size(self.locations) != 1
+        severity: info
+        paths: [locations]
+        message: >-
+          With a single location, losing that location stops the database. Surviving a location loss needs
+          at least 2 locations, with your application running in at least 2 of them.
+      - rule: >-
+          oldSelf == null || self.locations.all(l, l.name == null || l.name == '' || l.replicas == null ||
+          oldSelf.locations.exists(o, o.name == l.name && o.replicas >= l.replicas))
+        severity: info
+        paths: [locations]
+        message: >-
+          New nodes join without the cluster's existing tables and rows: the chart subscribes them
+          without an initial copy, so they receive only later changes, and changes to tables they lack
+          cannot be applied. Add nodes before you load data, or move to a new release and load the data
+          there.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all.
+      - path: postgres.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. Secret names are
+          org-wide, so give each release its own.
+        help: >-
+          The nodes create this user and database when they first initialize, and keep the password in
+          their Spock replication settings. pgcat and the optional backup job read the secret too, and
+          pgcat also uses the password for its admin console (user `pgcat_admin`). Use a user name,
+          password and database name without spaces, quotes or backslashes, since the nodes and pgcat
+          write them unquoted or in double quotes into their connection settings, and a
+          database name of letters, digits, `_` or `-` only: pgcat's configuration uses it as a TOML key,
+          where a dot splits it.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-pgedge-credentials'"
+    rules:
+      - rule: "!has(self.postgres.username) && !has(self.postgres.password) && !has(self.postgres.database)"
+        mirrors: pgedge.validateCredentials
+        paths: [postgres.credentialsSecretName]
+        message: >-
+          `postgres.username`, `postgres.password` and `postgres.database` were removed in 1.1.0. Put them
+          in the dictionary secret and remove them from the values.
+      - rule: oldSelf == null || self.postgres.credentialsSecretName == oldSelf.postgres.credentialsSecretName
+        severity: info
+        paths: [postgres.credentialsSecretName]
+        message: >-
+          The cluster keeps the user, password and database it was initialized with. Point at another
+          secret only if it holds the same values: the pgEdge nodes, pgcat and the optional backup job
+          log in with it.
+
+  - id: storage
+    title: Storage
+    description: The volume of each pgEdge node and its growth.
+    sections:
+      - fields:
+          # volumeset.yaml: a snapshots block with no schedule (createFinalSnapshot, retentionDuration 7d).
+          - type: note
+            severity: warning
+            text: >-
+              This version schedules no volume snapshots: a node's volume gets only a final snapshot, kept
+              for 7 days, when the volume set is deleted. 3.0.0 takes daily snapshots.
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network and pooling
+    description: >-
+      Who can connect, and the pgcat pooler that applications use.
+    sections:
+      - id: access
+        title: Network access
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to the pgEdge nodes and pgcat. Nothing in this template is public.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload-pgedge.yaml and workload-pgcat.yaml write any non-empty list into
+          # inboundAllowWorkload under every type, unchanged: 2.0.0 adds none of its own workloads.
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            description: >-
+              Your client workloads, for example from another GVC. With Specific workloads, this version
+              also needs this release's own workloads in the list.
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                # off: with Specific workloads, this version needs the release's own workloads in the list,
+                # and they do not exist before the install, so a not-found warning would block it.
+                mustExist: "off"
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+        rules:
+          - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: >-
+              Same GVC already allows every workload in this GVC, so those entries can be removed from the
+              list.
+          - when: self.internal_access.type == 'same-org'
+            rule: size(self.internal_access.workloads) == 0
+            severity: info
+            paths: [internal_access.workloads]
+            message: Same org already lets every workload of the org connect, so these entries add nothing.
+          - when: self.internal_access.type == 'workload-list'
+            rule: size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+          # workload-pgedge.yaml writes the list as-is; 2.0.1 adds the release's own workloads (CHANGELOG 2.0.1).
+          - when: self.internal_access.type == 'workload-list' && context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgedge') in self.internal_access.workloads &&
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgcat') in self.internal_access.workloads &&
+              (!self.backup.enabled ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgedge-backup') in self.internal_access.workloads)
+            severity: warning
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'This version applies the list to the traffic between the workloads of this release too and adds nothing to it, so a list of only clients blocks replication between the nodes, pgcat and the backup job. Add ' +
+              context.releaseName + '-pgedge and ' + context.releaseName + '-pgcat' +
+              (self.backup.enabled ? ' and ' + context.releaseName + '-pgedge-backup' : '') +
+              ' from this GVC to the list, or install 2.0.1 or later, which adds them itself.'
+            message: >-
+              This version applies the list to the release's own traffic too and adds nothing to it, so a
+              list of only clients blocks replication between the nodes, pgcat and the backup job. Add this
+              release's pgedge and pgcat workloads (and pgedge-backup with backups on) to the list, or install
+              2.0.1 or later, which adds them itself.
+      - id: pgcat
+        title: pgcat connection pooler
+        description: >-
+          The endpoint applications connect to, on port 5432. It runs in every listed location and pools
+          every pgEdge node of every location: writes go to the first node of the first location, reads
+          to the other nodes. Writes stop while that location is down, and reads cross locations.
+        fields:
+          - type: note
+            text: Applications connect to `RELEASE_NAME-pgcat.GVC_NAME.cpln.local:5432`.
+            textExpression: >-
+              context.gvc == null ? 'Applications connect to `' + context.releaseName +
+              '-pgcat.GVC_NAME.cpln.local:5432`.' : 'Applications connect to `' + context.releaseName +
+              '-pgcat.' + context.gvc + '.cpln.local:5432`.'
+          - path: pgcat.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a server connection for one transaction: best for most web and API
+              workloads, but session-level `SET`, temporary tables and advisory locks do not work.
+              **Session** holds it for the whole client session: compatible with every PostgreSQL
+              feature, with less reuse.
+              **Statement** returns it after every statement and does not support transactions.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgcat.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            description: Real PostgreSQL connections each pgcat replica keeps to each server in its pool.
+            suggestions:
+              - { value: 10, label: "10" }
+              - { value: 20, label: "20" }
+              - { value: 25, label: "25 (default)" }
+          - path: pgcat.minReplicas
+            type: integer
+            label: Minimum pgcat replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 4]
+          - path: pgcat.maxReplicas
+            type: integer
+            label: Maximum pgcat replicas per location
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 4]
+            description: pgcat scales between the minimum and the maximum on requests per second.
+          - path: pgcat.image
+            type: string
+            format: image
+            label: pgcat image
+            required: true
+            advanced: true
+            description: >-
+              The chart's start script was run with the default image; another tag is unproven, so check
+              that it starts and serves before relying on it.
+          - path: pgcat.resources
+            type: resources
+            label: pgcat resources
+            required: true
+            advanced: true
+        rules:
+          # Platform schema (workloadOptions.ts): minScale has max(Joi.ref('maxScale')).
+          - rule: self.pgcat.minReplicas <= self.pgcat.maxReplicas
+            paths: [pgcat.minReplicas]
+            message: >-
+              The minimum pgcat replicas must not be greater than the maximum; the platform refuses the
+              workload otherwise.
+          - rule: self.pgcat.minReplicas >= 2
+            severity: info
+            paths: [pgcat.minReplicas]
+            message: >-
+              With 1 pgcat replica, a replica failure drops every connection of its location until it is
+              replaced. 2 replicas per location (the default) keep the endpoint up.
+          # The node start script does not set max_connections, so PostgreSQL's default of 100 applies.
+          - rule: self.pgcat.defaultPoolSize * self.pgcat.maxReplicas * size(self.locations) <= 90
+            severity: info
+            paths: [pgcat.defaultPoolSize, pgcat.maxReplicas]
+            messageExpression: >-
+              'The pgcat replicas of every location pool every node: up to ' +
+              string(self.pgcat.defaultPoolSize * self.pgcat.maxReplicas * size(self.locations)) +
+              ' connections to a node, and this version leaves PostgreSQL at its default of 100 connections per node, which Spock replication also uses. Lower server connections per pool or maximum replicas if clients see connection errors; 3.0.0 raises the limit to 300.'
+            message: >-
+              The pgcat replicas of every location pool every node and can open more connections to a node
+              than it accepts
+              (PostgreSQL's default of 100, which Spock replication also uses). Lower server connections per
+              pool or maximum replicas if clients see connection errors; 3.0.0 raises the limit to 300.
+
+  - id: backup
+    title: Backups
+    description: Scheduled dumps of the whole server to S3 or GCS.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron job dumps the whole server with `pg_dumpall` (every database and the roles), compressed
+          with gzip, to S3 or GCS on a schedule. It reads the first node of the first listed location and
+          runs only in that location, so backups pause while that location is down.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The restore commands in this version's README do not work: pgcat refuses the dump's `\connect`
+              lines, so the replay stops before it writes a row, and its ALTER ROLE first replaces the user's
+              password on the node it reaches with the old cluster's, so do not run them. Restore by hand
+              instead, with the schema created on every node and the data loaded into one node. 3.0.0 adds a
+              restore job, with a different backup format.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Backup schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          # 3.0.0 test round 1 (this image's pg_dumpall): the GCS backup failed 2 of 2 at 128Mi and succeeded at 256Mi.
+          - when: self.backup.provider == 'gcp'
+            rule: memoryBytes(self.backup.resources.memory) > memoryBytes('128Mi')
+            severity: warning
+            paths: [backup.resources.memory]
+            message: >-
+              With 128Mi of memory or less, the GCS backup was measured failing during the upload; 256Mi
+              succeeded. Give the backup job more memory.
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: pgedge.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the backup destination.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3-prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and the AWS IAM policy in your AWS account **before** you install, and
+              have an AWS cloud account in Control Plane.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: >-
+              Use 3 to 63 lowercase letters, digits, dots or dashes, starting and ending with a letter or
+              digit.
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`,
+              `s3:GetObjectVersion`, `s3:DeleteObjectVersion`, `s3:GetBucketLocation`,
+              `s3:AbortMultipartUpload`, `s3:ListBucketMultipartUploads` and `s3:ListMultipartUploadParts`
+              on the bucket and its objects. Since 1.1.1 the backup identity no longer carries
+              `aws::ReadOnlyAccess`, so a policy that relied on it for reads needs the full list.
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            pattern: '^(?!/).*$'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs-prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket **before** you install, and have a GCP cloud account in Control Plane whose
+              service account has the Storage Admin role.
+          # identity.yaml interpolates the bucket unquoted: a value with " #" is cut short there.
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits, dots, dashes or underscores, starting and ending with a letter
+              or digit.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage
+              Admin role. Control Plane uses it to give the backup job `roles/storage.objectAdmin` on this
+              one bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            pattern: '^(?!/).*$'
+            patternMessage: Leave out the leading /.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade a 1.x release in place: 1.x created its own GVC, and the upgrade deletes that GVC
+      with every workload, volume set and identity in it, including your data. Back up the old cluster,
+      install this version as a new release with another name in an existing GVC, load the data there,
+      then uninstall the old release against the GVC you originally installed it into.
+  - rule: "!has(self.gvc)"
+    mirrors: pgedge.validateNoLegacyGvc
+    message: >-
+      The `gvc` key was removed in 2.0.0: the chart deploys into the GVC you install into, and
+      `gvc.locations` moved to `locations`. Remove `gvc` from the values.
+
+migrations:
+  # 1.x releases cannot upgrade in place (root rule above); these say where each 1.x key went.
+  - fromVersions: "<2.0.0"
+    from: gvc.locations
+    to: locations
+  - fromVersions: "<2.0.0"
+    from: gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.
+  - fromVersions: "<2.0.0"
+    from: pgcat.maxClientConn
+    note: pgcat.maxClientConn was removed in 2.0.0; pgcat never applied it.

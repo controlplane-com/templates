@@ -154,14 +154,30 @@ steps:
         message: >-
           The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
           install is refused; check your org's current limit with cpln quota get (it may already be raised).
-      - rule: >-
+      # MinIO's own images are no longer served to anonymous pulls: minio/minio on Docker Hub (withdrawn
+      # in 2025; every fresh install of 1.3.0 failed to pull it, CHANGELOG minio 1.3.1) and, since then,
+      # quay.io/minio/minio (registry API: 401 to an anonymous pull token, measured 2026-10-28). This is
+      # the registries' behaviour, not a platform rule.
+      - when: oldSelf == null || context.fromVersion != context.version || self.image != oldSelf.image
+        rule: >-
           !self.image.startsWith('minio/minio') && !self.image.startsWith('docker.io/minio/minio') &&
-          !self.image.startsWith('index.docker.io/minio/minio')
+          !self.image.startsWith('index.docker.io/minio/minio') && !self.image.startsWith('quay.io/minio/minio')
+        severity: warning
+        paths: [image]
+        message: >-
+          Neither Docker Hub nor quay.io serves MinIO's images to anonymous pulls any more (a registry
+          change, not a platform rule), so the nodes cannot pull this image and the pool never starts. Set
+          an image your org can pull, for example a copy in your org's registry.
+      - when: oldSelf != null && context.fromVersion == context.version && self.image == oldSelf.image
+        rule: >-
+          !self.image.startsWith('minio/minio') && !self.image.startsWith('docker.io/minio/minio') &&
+          !self.image.startsWith('index.docker.io/minio/minio') && !self.image.startsWith('quay.io/minio/minio')
         severity: info
         paths: [image]
         message: >-
-          MinIO withdrew minio/minio from Docker Hub in 2025, so nodes that restart cannot pull this image.
-          Use an image from a registry that still serves it.
+          Neither Docker Hub nor quay.io serves MinIO's images to anonymous pulls any more (a registry
+          change, not a platform rule), so nodes that restart cannot pull this image. Set an image your org
+          can pull, for example a copy in your org's registry.
 
   - id: storage
     title: Storage

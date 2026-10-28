@@ -254,6 +254,7 @@ steps:
             label: Offsets volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             help: Holds the connector's offsets; deleting it makes the connector snapshot every table again.

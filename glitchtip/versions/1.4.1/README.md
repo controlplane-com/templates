@@ -179,7 +179,7 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 1.4.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
 the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a
-brief interruption of writes while the leader changes. GlitchTip itself restarts as on any upgrade; with a single GlitchTip web replica (the default) that is the longer interruption. Upgrade in a quiet window. If you pinned
+brief interruption of writes while the leader changes. GlitchTip itself restarts without a gap: the new replica serves before the old one stops. Upgrade in a quiet window. If you pinned
 `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. GlitchTip itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
 Single-instance mode (`postgres`) is unchanged.
 

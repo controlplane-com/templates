@@ -87,24 +87,28 @@ steps:
           - path: redis.redis.resources.minCpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis minimum CPU
             required: true
             advanced: true
           - path: redis.redis.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis maximum CPU
             required: true
             advanced: true
           - path: redis.redis.resources.minMemory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis minimum memory
             required: true
             advanced: true
           - path: redis.redis.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis maximum memory
             required: true
             advanced: true
@@ -117,28 +121,94 @@ steps:
           - path: redis.sentinel.resources.minCpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel minimum CPU
             required: true
             advanced: true
           - path: redis.sentinel.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel maximum CPU
             required: true
             advanced: true
           - path: redis.sentinel.resources.minMemory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel minimum memory
             required: true
             advanced: true
           - path: redis.sentinel.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel maximum memory
             required: true
             advanced: true
         rules:
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              (oldSelf != null && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu) &&
+              string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu) &&
+              string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory) &&
+              string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              (cpuMillicores(self.redis.redis.resources.cpu) - cpuMillicores(self.redis.redis.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.redis.resources.memory) - memoryBytes(self.redis.redis.resources.minMemory) <= 4096 * 1048576)
+            paths: [redis.redis.resources.cpu, redis.redis.resources.memory]
+            message: The Redis CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.cpu) && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu)) ||
+              string(self.redis.redis.resources.cpu).endsWith('m')
+            paths: [redis.redis.resources.cpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minCpu) && string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu)) ||
+              string(self.redis.redis.resources.minCpu).endsWith('m')
+            paths: [redis.redis.resources.minCpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.memory) && string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory)) ||
+              string(self.redis.redis.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.memory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minMemory) && string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              string(self.redis.redis.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.minMemory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              (oldSelf != null && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu) &&
+              string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu) &&
+              string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory) &&
+              string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              (cpuMillicores(self.redis.sentinel.resources.cpu) - cpuMillicores(self.redis.sentinel.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.sentinel.resources.memory) - memoryBytes(self.redis.sentinel.resources.minMemory) <= 4096 * 1048576)
+            paths: [redis.sentinel.resources.cpu, redis.sentinel.resources.memory]
+            message: The Sentinel CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.cpu) && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu)) ||
+              string(self.redis.sentinel.resources.cpu).endsWith('m')
+            paths: [redis.sentinel.resources.cpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minCpu) && string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu)) ||
+              string(self.redis.sentinel.resources.minCpu).endsWith('m')
+            paths: [redis.sentinel.resources.minCpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.memory) && string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory)) ||
+              string(self.redis.sentinel.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.memory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minMemory) && string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              string(self.redis.sentinel.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.minMemory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
           # Redis and Sentinel are stateful workloads: the platform rejects a max:min ratio above 4:1.
           - rule: >-
               cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu) &&
@@ -580,6 +650,7 @@ steps:
             label: Initial capacity per replica
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
@@ -672,6 +743,18 @@ steps:
             label: Backup resources
             required: true
             advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
       - title: AWS S3
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"

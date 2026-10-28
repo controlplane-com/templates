@@ -266,7 +266,7 @@ steps:
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`, all URL-safe (letters,
-              digits, `-`, `_`).
+              digits, `-`, `_`), and no `"` or `\` in the user or password.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Umami connects with
               them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret and

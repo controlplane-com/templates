@@ -12,7 +12,7 @@ database.
 
 | Component | Source | Role |
 |---|---|---|
-| `postgres-highly-available` | dependency, pinned **2.8.0** | the CDC source (`walLevel: logical`), with automatic failover |
+| `postgres-highly-available` | dependency, pinned **2.8.0** (image overridden to `patroni-postgres:0.8` since 1.1.2) | the CDC source (`walLevel: logical`), with automatic failover |
 | `kafka` | dependency, pinned **4.3.0** | the transport; `User:debezium` is a super user; SASL passwords from the credentials secret; health sidecar and Kafka exporter off |
 | `debezium-server` | dependency, pinned **1.3.0** | reads the replication stream through HAProxy, writes to Kafka; creates its slot as a PG 17 failover slot |
 | `validation.yaml` | this chart | cross-component checks at render |
@@ -96,6 +96,21 @@ database.
 - **A 1.1.0 release with connectors cannot upgrade** until they are removed: carry keeps the list (reported
   `unverified`) and the wizard rule blocks Install, rather than a silent drop deleting the Connect workloads.
 - Default render identical to 1.1.0 apart from chart-version tags; no deployed behaviour changes.
+
+## What 1.1.2 changed (work item 5376, 2026-10-27)
+
+- **Database image `patroni-postgres:0.7` → `0.8`** (pgvector 0.8.0 → 0.8.7, CVE-2026-103484) by bumping the
+  `postgres-highly-available.image` pin this chart already carried; the vendored pg-ha stays **2.8.0** because
+  2.8.1 was not published yet. `cdc.validatePostgresHAImage` (in `validation.yaml`) refuses `patroni-postgres`
+  tags 0.1–0.7 with pg-ha 2.8.1's matching, and an empty value (which would fall back to the subchart's 0.7);
+  a top-level wizard rule mirrors it (the image field comes from the pg-ha import, with an override help line).
+  The pipeline does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout),
+  giving a brief write interruption while the leader changes; the HAProxy proxy workload does not restart (helm may print `Updated` for it from a tag bump, but its replicas keep running). The upgrade does not redeploy Debezium; it restarts once at the leader change and resumes from its failover slot (at-least-once, as above; the measured round delivered 0 duplicates).
+  Drop the pin, or keep it equal to pg-ha's default, once the chart vendors pg-ha 2.8.1+.
+- **E2E onboarded** (`cdc-pipeline/tests/`): a row written through HAProxy must arrive as a change event on
+  `dbserver1.public.e2e` (consumed from the kafka chart's `-client` workload), plus wrong-password, upgrade
+  persistence and the pgvector 0.8.7 check. The baseline points the four `kafka.kafka.env` references at
+  CI's secret.
 
 ## Troubleshooting traps
 

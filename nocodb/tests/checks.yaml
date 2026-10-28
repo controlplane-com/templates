@@ -68,7 +68,8 @@ checks:
         echo "BASES $N $(found)"
     expect:
       stdout: "^SIGNIN ok$[\\s\\S]*^BASES e2e-\\S+ [1-9][0-9]*$"
-    retries: 6
+    # NocoDB and its Redis restart on every chart upgrade (~2 min measured); 16 x 15 s outlasts it.
+    retries: 16
     retryDelaySeconds: 15
 
   - id: rejects-bad-password

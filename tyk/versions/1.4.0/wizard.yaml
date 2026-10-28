@@ -371,12 +371,14 @@ steps:
           - path: redis.redis.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis CPU limit
             required: true
             advanced: true
           - path: redis.redis.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis memory limit
             required: true
             advanced: true
@@ -439,13 +441,13 @@ steps:
               'Redis is a stateful workload that reserves ' + string((has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi of memory, and Control ' +
               'Plane allows a limit of at most 4 times the reservation: set the Redis memory limit to ' +
               string(4 * (has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi or less.'
-          - rule: memoryBytes(self.redis.redis.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
             paths: [redis.redis.resources.memory]
             message: >-
-              The Redis memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              The Redis memory limit in Mi must be at most 8 times its CPU limit in millicores: raise the CPU
               limit or lower the memory limit.
             messageExpression: >-
-              'The Redis memory limit must be under ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
+              'The Redis memory limit must be at most ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
               'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.redis.resources.cpu)) +
               'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
           - rule: "!string(self.redis.redis.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
@@ -476,12 +478,14 @@ steps:
           - path: redis.sentinel.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel CPU limit
             required: true
             advanced: true
           - path: redis.sentinel.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel memory limit
             required: true
             advanced: true
@@ -544,13 +548,13 @@ steps:
               'Sentinel is a stateful workload that reserves ' + string((has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi of memory, and Control ' +
               'Plane allows a limit of at most 4 times the reservation: set the Sentinel memory limit to ' +
               string(4 * (has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi or less.'
-          - rule: memoryBytes(self.redis.sentinel.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
             paths: [redis.sentinel.resources.memory]
             message: >-
-              The Sentinel memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              The Sentinel memory limit in Mi must be at most 8 times its CPU limit in millicores: raise the CPU
               limit or lower the memory limit.
             messageExpression: >-
-              'The Sentinel memory limit must be under ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'The Sentinel memory limit must be at most ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
               'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.sentinel.resources.cpu)) +
               'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
           - rule: "!string(self.redis.sentinel.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"

@@ -357,6 +357,48 @@ steps:
               - { value: same-gvc, label: Same GVC }
               - { value: same-org, label: Same org }
         rules:
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.cpu) && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu)) ||
+              string(self.redis.redis.resources.cpu).endsWith('m')
+            paths: [redis.redis.resources.cpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minCpu) && string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu)) ||
+              string(self.redis.redis.resources.minCpu).endsWith('m')
+            paths: [redis.redis.resources.minCpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.memory) && string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory)) ||
+              string(self.redis.redis.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.memory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minMemory) && string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              string(self.redis.redis.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.minMemory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.cpu) && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu)) ||
+              string(self.redis.sentinel.resources.cpu).endsWith('m')
+            paths: [redis.sentinel.resources.cpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minCpu) && string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu)) ||
+              string(self.redis.sentinel.resources.minCpu).endsWith('m')
+            paths: [redis.sentinel.resources.minCpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.memory) && string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory)) ||
+              string(self.redis.sentinel.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.memory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minMemory) && string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              string(self.redis.sentinel.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.minMemory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
           # Redis is a stateful workload: the API refuses a reservation above the limit, a limit above 4 times the
           # reservation or more than 4000m / 4096Mi above it, and memory (MiB) at 8 times the CPU (millicores) or more.
           - rule: cpuMillicores(self.redis.redis.resources.minCpu) <= cpuMillicores(self.redis.redis.resources.cpu)

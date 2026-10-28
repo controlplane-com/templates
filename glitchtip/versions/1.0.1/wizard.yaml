@@ -1,0 +1,979 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: GlitchTip
+
+# GlitchTip's web tier and worker are stateless, but both bundled databases and the Redis + Sentinel tier are
+# single-location stateful workloads with no location handling: postgres brings this limit with its import,
+# and postgres-highly-available and redis 3.4.3 (their keys are parent fields below) need the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.3.0
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # The database user, password and name are bound in the Database step, next to the HA mode's, because
+      # GlitchTip reads them too.
+      - config
+      # GlitchTip connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      # postgres 3.3.0 templates/identity.yaml attaches aws::ReadOnlyAccess to the backup identity.
+      backup.aws.cloudAccountName:
+        help: >-
+          An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket. In this version the
+          backup identity also carries the AWS managed policy ReadOnlyAccess, which can read every bucket in the
+          AWS account, not only this one; GlitchTip 1.2.0 removes it.
+      internalAccess.type:
+        description: >-
+          GlitchTip connects to its database like any other workload: keep Same GVC, or add the GlitchTip web
+          and worker workloads under Allowed workloads.
+
+steps:
+  - id: glitchtip
+    title: GlitchTip
+    description: The GlitchTip image, the web tier and the background worker, the signing key and the first superuser.
+    sections:
+      - title: Web tier
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: GlitchTip image
+            required: true
+            description: Used by both the web tier and the worker.
+          - path: replicas
+            type: integer
+            label: Web replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: The web tier is stateless; every replica serves the UI, the API and SDK event ingest.
+          - path: resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Web minimum CPU
+            description: Per web replica.
+            required: true
+            min: 25m
+          - path: resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Web maximum CPU
+            required: true
+            min: 25m
+          - path: resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Web minimum memory
+            required: true
+            min: 32Mi
+          - path: resources.memory
+            type: quantity
+            quantity: memory
+            label: Web maximum memory
+            required: true
+            min: 32Mi
+        rules:
+          # Platform limits (nodelibs schema workload.ts): a minimum above its maximum is refused, and so is more
+          # than 8 MiB of memory per millicore of CPU.
+          - rule: >-
+              cpuMillicores(self.resources.cpu) >= cpuMillicores(self.resources.minCpu) &&
+              memoryBytes(self.resources.memory) >= memoryBytes(self.resources.minMemory)
+            paths: [resources.minCpu, resources.minMemory]
+            message: The minimum CPU and memory cannot exceed their maximum.
+          - rule: memoryBytes(self.resources.memory) <= 8 * 1048576 * cpuMillicores(self.resources.cpu)
+            paths: [resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the web maximum CPU or lower its memory.
+      - title: Background worker
+        description: >-
+          One replica that processes events, alerts, emails and scheduled jobs, and runs database migrations at
+          boot. It is a fixed singleton.
+        fields:
+          - path: worker.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Worker minimum CPU
+            required: true
+            min: 25m
+          - path: worker.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Worker maximum CPU
+            required: true
+            min: 25m
+          - path: worker.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Worker minimum memory
+            required: true
+            min: 32Mi
+          - path: worker.resources.memory
+            type: quantity
+            quantity: memory
+            label: Worker maximum memory
+            required: true
+            min: 32Mi
+          - path: worker.concurrency
+            type: integer
+            label: Concurrent tasks
+            required: true
+            min: 1
+            suggestions: [10, 20, 40]
+            description: Async tasks the worker processes in parallel.
+        rules:
+          # Platform limits (nodelibs schema workload.ts): a minimum above its maximum is refused, and so is more
+          # than 8 MiB of memory per millicore of CPU.
+          - rule: >-
+              cpuMillicores(self.worker.resources.cpu) >= cpuMillicores(self.worker.resources.minCpu) &&
+              memoryBytes(self.worker.resources.memory) >= memoryBytes(self.worker.resources.minMemory)
+            paths: [worker.resources.minCpu, worker.resources.minMemory]
+            message: The minimum CPU and memory cannot exceed their maximum.
+          - rule: memoryBytes(self.worker.resources.memory) <= 8 * 1048576 * cpuMillicores(self.worker.resources.cpu)
+            paths: [worker.resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the worker maximum CPU or lower its memory.
+      - title: Signing key and superuser
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version takes the signing key and the superuser login as values: they are stored in the Helm
+              release in plain text and in secrets the chart creates. Version 1.1.0 reads them from a secret you
+              create instead.
+          - path: django.secretKey
+            type: string
+            label: Signing key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Django's SECRET_KEY, which signs sessions and tokens. Used as typed, so replace the published default.
+            help: Generate one with `openssl rand -hex 32`. Changing it later logs every user out.
+          - path: admin.email
+            type: string
+            format: email
+            label: Superuser email
+            required: true
+            description: The first login, created on first boot only.
+          - path: admin.password
+            type: string
+            label: Superuser password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Used as typed, so replace the published default. The login form is on the public endpoint by
+              default.
+            help: >-
+              The superuser is created on first boot only; afterwards change the password in GlitchTip, not
+              here.
+          - path: registration.enabled
+            type: boolean
+            label: Open self-signup
+            description: >-
+              Anyone who can reach the endpoint can create an account. Users created by an admin and invites work
+              either way.
+        rules:
+          - rule: >-
+              self.django.secretKey != null && self.django.secretKey != '' &&
+              self.admin.email != null && self.admin.email != '' &&
+              self.admin.password != null && self.admin.password != ''
+            mirrors: glitchtip.validate
+            paths: [django.secretKey, admin.email, admin.password]
+            message: The signing key, the superuser email and the superuser password are required.
+          - rule: oldSelf == null || self.django.secretKey == oldSelf.django.secretKey
+            severity: info
+            paths: [django.secretKey]
+            message: A new signing key logs every user out and breaks password-reset links already sent.
+          # The worker seeds the superuser with createsuperuser --noinput, which does nothing once it exists.
+          - rule: >-
+              oldSelf == null ||
+              (self.admin.email == oldSelf.admin.email && self.admin.password == oldSelf.admin.password)
+            severity: info
+            paths: [admin.email, admin.password]
+            message: >-
+              The superuser is created on first boot only, so this does not change the existing login. Change it
+              in GlitchTip instead.
+      - id: email
+        title: Outbound email
+        docs: "#email"
+        description: Invites, alerts and password resets.
+        fields:
+          - path: email.secretName
+            type: ref
+            label: Email secret
+            description: >-
+              Optional. An opaque secret whose payload is an email URL such as
+              `smtp://user:password@smtp.example.com:587`. Leave empty to run without email.
+            help: >-
+              The payload is a URL, so `@ : / ? # %` in the user or password must be percent-encoded: an email
+              address as the user is written with `%40`, such as `smtp://alerts%40example.com:PASSWORD@smtp.example.com:587`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-glitchtip-email'"
+          - path: email.fromAddress
+            type: string
+            label: From address
+            format: email
+            when: self.email.secretName != null && self.email.secretName != ''
+            required: true
+
+  - id: access
+    title: Access
+    description: The public endpoint, the URL in DSNs, and which workloads can reach GlitchTip inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The UI and SDK event ingest on the canonical endpoint. Browser SDKs and apps outside the GVC report
+          through it.
+      - path: domain
+        type: string
+        format: url
+        label: Custom URL
+        placeholder: https://errors.example.com
+        description: >-
+          Optional. The full URL used in DSNs and email links; leave empty to use the canonical endpoint. Changing
+          it later changes every DSN.
+        help: >-
+          Left empty, each workload uses its own endpoint. The worker, which sends alert and invite emails, has
+          no public endpoint of its own, so with email on set this to the address users open: the canonical
+          endpoint of the RELEASE_NAME-glitchtip workload, or your custom domain.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: >-
+          self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] && self.replicas >= 1 &&
+          self.worker.concurrency >= 1
+        mirrors: glitchtip.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect internally.
+      # The worker's start script sets GLITCHTIP_DOMAIN from its own CPLN_GLOBAL_ENDPOINT (public access on) or
+      # the web tier's in-GVC address (off) when domain is empty (templates/secret-worker-start.yaml).
+      - when: self.email.secretName != null && self.email.secretName != ''
+        rule: self.domain != null && self.domain != ''
+        severity: info
+        paths: [domain]
+        message: >-
+          The worker builds the links in alert and invite emails from this URL. Left empty, they point at the
+          worker's own endpoint, which takes no traffic, or with public access off at the in-GVC address, which
+          browsers outside the GVC cannot open. Set it to the address users open.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: redis
+    title: Redis
+    description: The task queue, cache and sessions. Turned off, PostgreSQL carries them instead.
+    sections:
+      - id: redis
+        title: Redis with Sentinel
+        toggle: redis.enabled
+        description: >-
+          A Redis master with replicas, watched by Sentinels; GlitchTip connects through Sentinel. Turn it off for a
+          lighter shape with lower throughput.
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the Redis password as a value: it is stored in the Helm release in plain text and
+              in the secret ' + (context.releaseName != null && context.releaseName != '' ? context.releaseName :
+              'RELEASE_NAME') + '-redis-auth-password, which the bundled Redis chart creates. Version 1.4.0 reads it
+              from a secret you create instead.'
+            text: >-
+              This version takes the Redis password as a value: it is stored in the Helm release in plain text and
+              in the secret RELEASE_NAME-redis-auth-password, which the bundled Redis chart creates. Version 1.4.0
+              reads it from a secret you create instead.
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Redis, Sentinel and GlitchTip all use it. No spaces, backslashes, or single or double quotes. Used as
+              typed, so replace the published default.
+            help: >-
+              Redis writes the password unquoted into its config file and does not start on a space, `\`, `'` or
+              `"`.
+              Changing it later takes more than a new value here, because the Sentinels keep the password they
+              started with on their volume.
+          - path: redis.redis.auth.password.enabled
+            type: boolean
+            label: Redis password on
+            readOnly: true
+            advanced: true
+            description: GlitchTip's Sentinel URL carries this password, so it stays on.
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinels
+            min: 1
+            required: true
+            suggestions: [1, 3, 5]
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Redis persistence
+            advanced: true
+            description: Keep Redis data on a volume set across restarts.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Sentinel persistence
+            advanced: true
+            description: Keep the Sentinel state, including the current master, across restarts.
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Redis
+            advanced: true
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+          - path: redis.sentinel.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect to Sentinel
+            advanced: true
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC }
+              - { value: same-org, label: Same org }
+        rules:
+          - rule: >-
+              self.redis.redis.auth.password.enabled == true &&
+              self.redis.redis.auth.password.value != null && self.redis.redis.auth.password.value != '' &&
+              (!has(self.redis.redis.auth.fromSecret) || !has(self.redis.redis.auth.fromSecret.enabled) ||
+              dyn(self.redis.redis)['auth']['fromSecret']['enabled'] != true) &&
+              (!has(self.redis.sentinel.auth) ||
+              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled) ||
+              dyn(self.redis.sentinel)['auth']['password']['enabled'] != true) &&
+              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled) ||
+              dyn(self.redis.sentinel)['auth']['fromSecret']['enabled'] != true)))
+            mirrors: glitchtip.validate
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              The Redis password is required, redis.redis.auth.fromSecret must stay off (the bundled Redis chart
+              takes one authentication method), and Sentinel authentication must stay off (remove
+              redis.sentinel.auth from the values): GlitchTip sends the Redis password in its Sentinel URL and does
+              not send a Sentinel password.
+          # redis 3.4.3 appends "requirepass $CUSTOM_REDIS_PASSWORD" to redis.conf and "sentinel auth-pass mymaster
+          # ..." to sentinel.conf with sh echo, unquoted (templates/workload-redis.yaml, workload-sentinel.yaml).
+          - rule: >-
+              (oldSelf != null && self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value) ||
+              !self.redis.redis.auth.password.value.matches("[\\s'\"\\\\]")
+            severity: warning
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              Leave out spaces, backslashes, and single or double quotes. Redis writes the password unquoted into
+              its config file and does not start on them.
+          # With Sentinel persistence on, sentinel.conf keeps the auth-pass it was bootstrapped with (redis 3.4.3
+          # workload-sentinel.yaml, bootstrap_sentinel_conf).
+          - when: oldSelf != null && self.redis.sentinel.persistence.enabled
+            rule: self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value
+            severity: info
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              The Sentinels keep the Redis password they started with on their volume, so a new password here
+              leaves them unable to reach Redis. Apply it live on every Redis node and Sentinel first (ACL SETUSER,
+              CONFIG SET masterauth, SENTINEL SET mymaster auth-pass), then change it here.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds GlitchTip's issues and events, and the credentials it is created with.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: >-
+                  One PostgreSQL replica; lighter, without failover. Its server, storage, network and backups
+                  follow in the next steps.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+      - id: credentials
+        title: Database credentials
+        description: >-
+          The login of whichever PostgreSQL is chosen above. Each creates its secret from these values
+          (<release>-pg-config for the single-instance one, <release>-postgres-config for the highly available
+          one), and GlitchTip reads it. There is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 1.4.0 takes them from a secret
+              you create instead.
+          - path: postgresHA.postgres.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgresHA.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgresHA.postgres.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgresHA.enabled
+            description: Used as typed, so replace the published default.
+            help: >-
+              PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you
+              change it here. The replication user `repl` uses the same password, so change that role too.
+          - path: postgresHA.postgres.database
+            type: string
+            label: Database name
+            required: true
+            when: self.postgresHA.enabled
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+          - path: postgres.config.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgres.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.config.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgres.enabled
+            description: Used as typed, so replace the published default.
+            help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+          - path: postgres.config.database
+            type: string
+            label: Database name
+            required: true
+            when: self.postgres.enabled
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+        rules:
+          # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes (postgres 3.3.0 templates/workload-postgres.yaml).
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.config.username == oldSelf.postgres.config.username &&
+              self.postgres.config.database == oldSelf.postgres.config.database) ||
+              (!self.postgres.config.username.matches('\\s') && !self.postgres.config.database.matches('\\s'))
+            severity: warning
+            paths: [postgres.config.username, postgres.config.database]
+            message: >-
+              Leave out spaces: the database's readiness check passes the user and the database name to pg_isready
+              unquoted, so it never becomes ready.
+          # The HA database (postgres-highly-available 2.4.2) writes the user and password unquoted into an
+          # unquoted shell heredoc that becomes Patroni's YAML config (loaded as YAML 1.1), and the user and
+          # database name into an unquoted psql command and CREATE DATABASE (templates/secret-startup.yaml).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password) ||
+              [self.postgresHA.postgres.password].all(x,
+              !x.matches('[$`]') && !x.matches('\\\\([$`\\\\]|$)') &&
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']) && !(x in ['~', '=', '<<']) &&
+              !x.matches('^[-+]?([0-9][0-9_]*|0b[01_]+|0x[0-9a-fA-F_]+)$') &&
+              !x.matches('^[-+]?([0-9][0-9_]*)?\\.[0-9_]*([eE][-+][0-9]+)?$') &&
+              !x.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.postgres.password]
+            message: >-
+              The highly available database writes the password unquoted into a shell script and its YAML config.
+              Leave out $ and `, a \ before $, ` or \ or at the end, a leading space or YAML symbol, ": " and " #", and
+              values that read as a number, a date, yes/no, on/off, true/false, null or <<.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.username == oldSelf.postgresHA.postgres.username) ||
+              (self.postgresHA.postgres.username.matches('^[A-Za-z_][A-Za-z0-9_.-]*$') &&
+              !(self.postgresHA.postgres.username.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']))
+            severity: warning
+            paths: [postgresHA.postgres.username]
+            message: >-
+              Use letters, digits, _ . and -, starting with a letter or underscore, and not yes/no, on/off,
+              true/false or null. The highly available database writes the user unquoted into its YAML config and
+              a psql command.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.database == oldSelf.postgresHA.postgres.database) ||
+              (self.postgresHA.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgresHA.postgres.database) <= 63 &&
+              !(self.postgresHA.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+            severity: warning
+            paths: [postgresHA.postgres.database]
+            message: >-
+              Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+              not postgres, template0, template1 or an SQL reserved word such as user or order. The highly
+              available database runs an unquoted CREATE DATABASE when it is first created: it folds other names
+              to lowercase or fails, and a failure stops the cluster from being created.
+          - when: self.postgresHA.enabled
+            rule: oldSelf == null || self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password
+            severity: info
+            paths: [postgresHA.postgres.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with, and the replication user repl shares it.
+              Run ALTER ROLE for the user and for repl first, or GlitchTip loses its database connection after this
+              upgrade.
+          - when: self.postgres.enabled
+            rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+            severity: info
+            paths: [postgres.config.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or GlitchTip loses its
+              database connection after this upgrade.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that GlitchTip connects through.
+          Recommended for production.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The highly available database creates the cluster with consensus timeouts that Patroni silently
+              tightens, so a leader that cannot reach etcd for about 14 seconds is demoted. The fix is in
+              postgres-highly-available 2.6.0, which no GlitchTip version bundles yet.
+          - type: note
+            severity: warning
+            text: >-
+              The highly available database also writes the database password into Patroni's shared configuration,
+              which anything that can reach port 8008 of the members can read without authentication at `/config`.
+              The fix is in postgres-highly-available 2.8.0, which no GlitchTip version bundles yet.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0
+            textExpression: >-
+              'Before upgrading from 1.0.0, check the etcd of the database: run etcdctl endpoint status --cluster and
+              etcdctl alarm list on ' + (context.releaseName != null && context.releaseName != '' ?
+              context.releaseName : 'RELEASE_NAME') + '-etcd. From this version etcd compacts its history, but
+              compaction does not shrink a backend that has already grown toward its quota.'
+            text: >-
+              Before upgrading from 1.0.0, check the etcd of the database: run etcdctl endpoint status --cluster and
+              etcdctl alarm list on RELEASE_NAME-etcd. From this version etcd compacts its history, but compaction
+              does not shrink a backend that has already grown toward its quota.
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The WAL-G sidecar waits a full interval before its first base backup, so a new cluster archives WAL
+              with nothing to restore it from for up to that long, and turning WAL-G on for a cluster that already
+              exists does not start WAL archiving. The fix is in postgres-highly-available 2.6.0, which no GlitchTip
+              version bundles yet.
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+        rules:
+          # The WAL-G sidecar uses these resources; at 128Mi it was OOM-killed before finishing a base backup
+          # (measured on the bundled HA chart; postgres-highly-available 2.6.0 raises its memory).
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.mode]
+            message: >-
+              Give the backup at least 512Mi of memory for WAL-G (Backup resources): its sidecar is killed for
+              running out of memory below that, before it finishes a base backup.
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The backup identity also carries the AWS managed policy ReadOnlyAccess, which can read every bucket
+              in the AWS account, not only this one. postgres-highly-available 2.5.1 removes it; no GlitchTip
+              version bundles that yet.
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The access key and secret key are values stored in the Helm release and in a secret the database
+              chart creates. Version 1.3.1 takes them from a secret you create instead.
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: glitchtip.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: glitchtip.validate
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is GlitchTip's database endpoint.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of GlitchTip's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
+
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks GlitchTip, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip') in self.postgres.internalAccess.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip-worker') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-glitchtip and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-glitchtip-worker, or GlitchTip cannot reach its database.'
+    message: Add the GlitchTip web and worker workloads to the list, or GlitchTip cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: GlitchTip connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.

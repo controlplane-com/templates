@@ -140,6 +140,9 @@ steps:
             description: >-
               Optional. An opaque secret whose payload is an email URL such as
               `smtp://user:password@smtp.example.com:587`. Leave empty to run without email.
+            help: >-
+              The payload is a URL, so `@ : / ? # %` in the user or password must be percent-encoded: an email
+              address as the user is written with `%40`, such as `smtp://alerts%40example.com:PASSWORD@smtp.example.com:587`.
             ref:
               kind: secret
               format: name
@@ -174,6 +177,10 @@ steps:
         description: >-
           Optional. The full URL used in DSNs and email links; leave empty to use the canonical endpoint. Changing
           it later changes every DSN.
+        help: >-
+          Left empty, each workload uses its own endpoint. The worker, which sends alert and invite emails, has
+          no public endpoint of its own, so with email on set this to the address users open: the canonical
+          endpoint of the RELEASE_NAME-glitchtip workload, or your custom domain.
       - path: internalAccess.type
         type: enum
         label: Who can connect internally
@@ -212,6 +219,16 @@ steps:
         mirrors: glitchtip.validate
         paths: [internalAccess.type]
         message: Choose who can connect internally.
+      # The worker's start script sets GLITCHTIP_DOMAIN from its own CPLN_GLOBAL_ENDPOINT (public access on) or
+      # the web tier's in-GVC address (off) when domain is empty (templates/secret-worker-start.yaml).
+      - when: self.email.secretName != null && self.email.secretName != ''
+        rule: self.domain != null && self.domain != ''
+        severity: info
+        paths: [domain]
+        message: >-
+          The worker builds the links in alert and invite emails from this URL. Left empty, they point at the
+          worker's own endpoint, which takes no traffic, or with public access off at the in-GVC address, which
+          browsers outside the GVC cannot open. Set it to the address users open.
       - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
         severity: info
         paths: [internalAccess.workloads]
@@ -233,7 +250,10 @@ steps:
             type: ref
             label: Redis password secret
             required: true
-            description: A dictionary secret with the key `password`. Redis, Sentinel and GlitchTip all read it.
+            description: >-
+              A dictionary secret with the key `password`. Redis, Sentinel and GlitchTip all read it. No spaces,
+              backslashes, or single or double quotes: Redis writes it unquoted into its config file and does not
+              start on them.
             help: >-
               Create it before you install; if it is missing, the deployment waits and `cpln logs` shows nothing.
               Changing the password later takes more than a secret edit, because the Sentinels keep the old one:
@@ -297,15 +317,23 @@ steps:
               self.redis.redis.auth.fromSecret.enabled == true &&
               self.redis.redis.auth.fromSecret.name != null && self.redis.redis.auth.fromSecret.name != '' &&
               (!has(self.redis.sentinel.auth) ||
-              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
-              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
+              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled) ||
+              dyn(self.redis.sentinel)['auth']['password']['enabled'] != true) &&
+              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled) ||
+              dyn(self.redis.sentinel)['auth']['fromSecret']['enabled'] != true)))
             mirrors: glitchtip.validate
             paths: [redis.redis.auth.fromSecret.name]
             message: >-
               The Redis password secret is required, and Sentinel authentication must stay off (remove
               redis.sentinel.auth from the values): GlitchTip sends the Redis password in its Sentinel URL and does
               not send a Sentinel password.
-          - rule: "!has(self.redis.redis.auth.password)"
+          # The chart fails only on password.enabled true or a value other than "" and the subchart default.
+          - rule: >-
+              !has(self.redis.redis.auth.password) ||
+              ((!has(self.redis.redis.auth.password.enabled) ||
+              dyn(self.redis.redis)['auth']['password']['enabled'] != true) &&
+              (!has(self.redis.redis.auth.password.value) ||
+              dyn(self.redis.redis)['auth']['password']['value'] in ['', 'your-password']))
             mirrors: glitchtip.validateRedisSecret
             paths: [redis.redis.auth.fromSecret.enabled]
             message: >-
@@ -380,6 +408,32 @@ steps:
         fields:
           - type: note
             severity: warning
+            text: >-
+              The highly available database creates the cluster with consensus timeouts that Patroni silently
+              tightens, so a leader that cannot reach etcd for about 14 seconds is demoted. The fix is in
+              postgres-highly-available 2.6.0, which no GlitchTip version bundles yet.
+          - type: note
+            severity: warning
+            text: >-
+              The highly available database also writes the database password into Patroni's shared configuration,
+              which anything that can reach port 8008 of the members can read without authentication at `/config`.
+              The fix is in postgres-highly-available 2.8.0, which no GlitchTip version bundles yet.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0
+            textExpression: >-
+              'Before upgrading from 1.0.0, check the etcd of the database: run etcdctl endpoint status --cluster and
+              etcdctl alarm list on ' + (context.releaseName != null && context.releaseName != '' ?
+              context.releaseName : 'RELEASE_NAME') + '-etcd. From this version etcd compacts its history, but
+              compaction does not shrink a backend that has already grown toward its quota.'
+            text: >-
+              Before upgrading from 1.0.0, check the etcd of the database: run etcdctl endpoint status --cluster and
+              etcdctl alarm list on RELEASE_NAME-etcd. From this version etcd compacts its history, but compaction
+              does not shrink a backend that has already grown toward its quota.
+          - type: note
+            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.3.0') < 0
@@ -392,9 +446,14 @@ steps:
             label: Database credentials secret
             required: true
             description: >-
-              A dictionary secret with the keys `username`, `password` and `database`, and no `"` or `\` in the
-              user or password.
+              A dictionary secret with the keys `username`, `password` and `database`. Use up to 63 lowercase
+              letters, digits and `_` for the database name, starting with a letter or `_`, and not postgres,
+              template0, template1 or an SQL reserved word such as user or order; letters, digits, `_`, `.` and
+              `-` for the user; and no `"` or `\` in the password.
             help: >-
+              The highly available database writes the user and password inside double quotes in its config, runs
+              psql with the user unquoted, and creates the database with an unquoted CREATE DATABASE, which folds
+              the name to lowercase while GlitchTip connects with it as typed.
               PostgreSQL reads these values only when its data is first initialized, and GlitchTip connects with
               them. To change the password later, change it in the database first, then update the secret and
               force a redeployment.
@@ -408,7 +467,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-glitchtip-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0 ? context.releaseName + '-glitchtip-db-credentials-secret' : context.releaseName + '-glitchtip-db-credentials'"
           - path: postgresHA.replicas
             type: integer
             label: PostgreSQL replicas
@@ -455,11 +514,14 @@ steps:
             type: ref
             label: Database credentials secret
             required: true
-            description: A dictionary secret with the keys `username`, `password` and `database`.
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, with no spaces in the user
+              or the database name.
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and GlitchTip
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
-              update the secret and force a redeployment.
+              update the secret and force a redeployment. The database's readiness check passes the user and the
+              database name to pg_isready unquoted, so a space keeps it from ever becoming ready.
             docs: "#prerequisites"
             ref:
               kind: secret
@@ -469,7 +531,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-glitchtip-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0 ? context.releaseName + '-glitchtip-db-credentials-secret' : context.releaseName + '-glitchtip-db-credentials'"
       - id: ha-backup
         title: Database backups
         toggle: postgresHA.backup.enabled
@@ -477,6 +539,14 @@ steps:
         description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The WAL-G sidecar waits a full interval before its first base backup, so a new cluster archives WAL
+              with nothing to restore it from for up to that long, and turning WAL-G on for a cluster that already
+              exists does not start WAL archiving. The fix is in postgres-highly-available 2.6.0, which no GlitchTip
+              version bundles yet.
           - path: postgresHA.backup.mode
             type: enum
             label: Backup mode
@@ -521,10 +591,26 @@ steps:
             label: Backup resources
             required: true
             advanced: true
+        rules:
+          # The WAL-G sidecar uses these resources; at 128Mi it was OOM-killed before finishing a base backup
+          # (measured on the bundled HA chart; postgres-highly-available 2.6.0 raises its memory).
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.mode]
+            message: >-
+              Give the backup at least 512Mi of memory for WAL-G (Backup resources): its sidecar is killed for
+              running out of memory below that, before it finishes a base backup.
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The backup identity also carries the AWS managed policy ReadOnlyAccess, which can read every bucket
+              in the AWS account, not only this one. postgres-highly-available 2.5.1 removes it; no GlitchTip
+              version bundles that yet.
           - path: postgresHA.backup.aws.bucket
             type: string
             label: Bucket
@@ -855,6 +941,33 @@ migrations:
   - fromVersions: "<1.2.0"
     from: postgres.backup.minio.secretKey
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  # 1.1.0 renamed the backup bucket and IAM policy placeholders (glitchtip-pg-backup-bucket and
+  # glitchtip-pg-backup-policy became my-glitchtip-backup-bucket and my-glitchtip-backup-policy). A rename keeps
+  # changed values only; carry the old names when backups were on, and any customised value either way.
+  - fromVersions: "<1.1.0"
+    to: postgresHA.backup.aws.bucket
+    valueExpr: "self.postgresHA.backup.enabled || self.postgresHA.backup.aws.bucket != 'glitchtip-pg-backup-bucket' ? self.postgresHA.backup.aws.bucket : 'my-glitchtip-backup-bucket'"
+  - fromVersions: "<1.1.0"
+    to: postgresHA.backup.aws.policyName
+    valueExpr: "self.postgresHA.backup.enabled || self.postgresHA.backup.aws.policyName != 'glitchtip-pg-backup-policy' ? self.postgresHA.backup.aws.policyName : 'my-glitchtip-backup-policy'"
+  - fromVersions: "<1.1.0"
+    to: postgresHA.backup.gcp.bucket
+    valueExpr: "self.postgresHA.backup.enabled || self.postgresHA.backup.gcp.bucket != 'glitchtip-pg-backup-bucket' ? self.postgresHA.backup.gcp.bucket : 'my-glitchtip-backup-bucket'"
+  - fromVersions: "<1.1.0"
+    to: postgresHA.backup.minio.bucket
+    valueExpr: "self.postgresHA.backup.enabled || self.postgresHA.backup.minio.bucket != 'glitchtip-pg-backup-bucket' ? self.postgresHA.backup.minio.bucket : 'my-glitchtip-backup-bucket'"
+  - fromVersions: "<1.1.0"
+    to: postgres.backup.aws.bucket
+    valueExpr: "self.postgres.backup.enabled || self.postgres.backup.aws.bucket != 'glitchtip-pg-backup-bucket' ? self.postgres.backup.aws.bucket : 'my-glitchtip-backup-bucket'"
+  - fromVersions: "<1.1.0"
+    to: postgres.backup.aws.policyName
+    valueExpr: "self.postgres.backup.enabled || self.postgres.backup.aws.policyName != 'glitchtip-pg-backup-policy' ? self.postgres.backup.aws.policyName : 'my-glitchtip-backup-policy'"
+  - fromVersions: "<1.1.0"
+    to: postgres.backup.gcp.bucket
+    valueExpr: "self.postgres.backup.enabled || self.postgres.backup.gcp.bucket != 'glitchtip-pg-backup-bucket' ? self.postgres.backup.gcp.bucket : 'my-glitchtip-backup-bucket'"
+  - fromVersions: "<1.1.0"
+    to: postgres.backup.minio.bucket
+    valueExpr: "self.postgres.backup.enabled || self.postgres.backup.minio.bucket != 'glitchtip-pg-backup-bucket' ? self.postgres.backup.minio.bucket : 'my-glitchtip-backup-bucket'"
   - fromVersions: "<1.1.0"
     from: resources.cpu
     to: resources.maxCpu

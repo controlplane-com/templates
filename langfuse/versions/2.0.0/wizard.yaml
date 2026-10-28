@@ -89,8 +89,9 @@ steps:
             severity: info
             paths: [langfuse.migration.writeMode]
             message: >-
-              Langfuse 4 mode needs every producer on Python SDK v3 or newer, JS/TS SDK v4 or newer, or
-              OpenTelemetry, and nothing using the legacy read APIs or trace-level evaluators. Otherwise choose
+              Langfuse 4 mode rejects Python SDK v2 and older and JS/TS SDK v3 and older. Python SDK 4.7+,
+              JS/TS SDK 5.4+ and OpenTelemetry write directly (Python 4.0-4.6 and JS/TS 5.0-5.3 still ingest, with
+              a delay); nothing may use the legacy read APIs or trace-level evaluators. Otherwise choose
               Dual write now and cut over later.
           - when: >-
               oldSelf != null && has(oldSelf.langfuse.migration) && has(oldSelf.langfuse.migration.writeMode) &&
@@ -557,8 +558,8 @@ rules:
     severity: info
     message: >-
       One-way upgrade: back up PostgreSQL while still on 1.3.0 and confirm the Langfuse 3 background migrations
-      finished before you click Upgrade. Check the write mode under Langfuse (Python SDK v3+ and JS/TS SDK v4+
-      only for Langfuse 4 mode).
+      finished before you click Upgrade. Check the write mode under Langfuse (Langfuse 4 mode rejects Python SDK v2 and
+      JS/TS SDK v3 and older; Python 4.7+ and JS/TS 5.4+ write directly).
   # Kept outside the upgrade-only section so values set from YAML on an install are still checked.
   - rule: self.langfuse.migration.writeMode in ['events_only', 'dual', 'legacy']
     mirrors: langfuse.validateMigration

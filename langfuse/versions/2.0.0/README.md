@@ -290,7 +290,7 @@ cpln workload exec RELEASE_NAME-postgres --gvc GVC_NAME --container postgresql -
 
 | `langfuse.migration.writeMode` | Choose it when |
 |---|---|
-| `events_only` (default) | Every producer runs Python SDK v3 or newer, JS/TS SDK v4 or newer, or plain OpenTelemetry, and nothing uses the legacy APIs or trace-level evaluators. Writes only the new tables. |
+| `events_only` (default) | No producer runs Python SDK v2 / JS/TS SDK v3 or older (rejected); Python SDK 4.7+, JS/TS SDK 5.4+ or plain OpenTelemetry write directly (Python 4.0-4.6 and JS/TS 5.0-5.3 ingest with a delay); nothing uses the legacy APIs or trace-level evaluators. Writes only the new tables. |
 | `dual` | Some producers still run older SDKs, or you want the old tables kept as a safety net. Writes the old and the new tables; data from older SDKs shows up after about 15 minutes. |
 | `legacy` | You want Langfuse 4 with Langfuse 3 behaviour for now. Writes only the old tables. Set `historicBackfill: false`. |
 

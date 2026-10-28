@@ -290,11 +290,11 @@ cpln workload exec RELEASE_NAME-postgres --gvc GVC_NAME --container postgresql -
 
 | `langfuse.migration.writeMode` | Choose it when |
 |---|---|
-| `events_only` (default) | Every producer runs Python SDK v4 or newer, JS/TS SDK v5 or newer, or plain OpenTelemetry, and nothing uses the legacy APIs or trace-level evaluators. Writes only the new tables. |
+| `events_only` (default) | No producer runs Python SDK v2 / JS/TS SDK v3 or older (rejected); Python SDK 4.7+, JS/TS SDK 5.4+ or plain OpenTelemetry write directly (Python 4.0-4.6 and JS/TS 5.0-5.3 ingest with a delay); nothing uses the legacy APIs or trace-level evaluators. Writes only the new tables. |
 | `dual` | Some producers still run older SDKs, or you want the old tables kept as a safety net. Writes the old and the new tables; data from older SDKs shows up after about 15 minutes. |
 | `legacy` | You want Langfuse 4 with Langfuse 3 behaviour for now. Writes only the old tables. Set `historicBackfill: false`. |
 
-With `events_only`, the following stop working: Python SDK v2 and JS/TS SDK v3 (rejected at ingestion), the legacy read endpoints such as `GET /api/public/traces` and `GET /api/public/observations` (404), every `POST /api/public/ingestion` event except scores, trace-level LLM-as-a-judge evaluators, and the "Traces and observations (legacy)" export source.
+With `events_only`, the following stop working: Python SDK v2 and older and JS/TS SDK v3 and older (rejected at ingestion), the legacy read endpoints such as `GET /api/public/traces` and `GET /api/public/observations` (404), every `POST /api/public/ingestion` event except scores, trace-level LLM-as-a-judge evaluators, and the "Traces and observations (legacy)" export source.
 
 `historicBackfill: true` copies the traces stored before the upgrade into the new tables, once, in the worker, newest first: older traces appear gradually, and the progress is under **Background Migrations**. While it runs the bucket holds up to about three times the current ClickHouse data. A scratch copy of the old observations stays in the bucket afterwards: the last step, which drops it, is off by default upstream, so **Background Migrations** keeps showing one unfinished row. After a backfill on top of `dual`, a trace can appear twice in the UI until ClickHouse merges the two copies in the background; the data is not damaged. With `dual`, Langfuse suggests leaving it off until the dual write is confirmed working, then turning it on in a later `helm upgrade`. With `legacy` it must be off.
 

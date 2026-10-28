@@ -422,6 +422,16 @@ steps:
         fields:
           - type: note
             severity: warning
+            text: >-
+              The bundled highly available database creates the cluster with consensus timeouts that Patroni
+              silently tightens, so a leader that cannot reach etcd for about 14 seconds is demoted.
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database writes the password into Patroni's shared configuration,
+              which anything that can reach port 8008 of the members can read without authentication at `/config`.
+          - type: note
+            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.2.0') < 0
@@ -435,7 +445,10 @@ steps:
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`, and no `"` or `\` in the
-              user or password.
+              user or password. Keep the user to letters, digits, `_`, `.` and `-`, and the database name to up to
+              63 lowercase letters, digits and `_`, starting with a letter or `_` and not an SQL reserved word: the
+              highly available database passes the user unquoted to psql and creates the database with an unquoted
+              CREATE DATABASE.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Chatwoot connects with
               them. To change the password later, change it in the database first, then update the secret and
@@ -450,7 +463,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-chatwoot-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 ? context.releaseName + '-chatwoot-db-credentials-secret' : context.releaseName + '-chatwoot-db-credentials'"
           - path: postgresHA.replicas
             type: integer
             label: PostgreSQL replicas
@@ -505,7 +518,10 @@ steps:
             type: ref
             label: Database credentials secret
             required: true
-            description: A dictionary secret with the keys `username`, `password` and `database`.
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Leave spaces out of the
+              user and the database name: the database's readiness check passes them to pg_isready unquoted, so it
+              never becomes ready.
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Chatwoot
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
@@ -519,7 +535,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-chatwoot-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 ? context.releaseName + '-chatwoot-db-credentials-secret' : context.releaseName + '-chatwoot-db-credentials'"
       - id: ha-backup
         title: Database backups
         toggle: postgresHA.backup.enabled
@@ -527,6 +543,13 @@ steps:
         description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The bundled database's WAL-G sidecar waits a full interval before its first base backup, so a new
+              cluster archives WAL with nothing to restore it from for up to that long, and turning WAL-G on for a
+              cluster that already exists does not start WAL archiving.
           - path: postgresHA.backup.mode
             type: enum
             label: Backup mode
@@ -566,10 +589,49 @@ steps:
             advanced: true
             when: self.postgresHA.backup.mode == 'logical'
             description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources.memory
+            type: quantity
+            quantity: memory
+            absent: true
+            label: Backup memory
+            advanced: true
+            placeholder: 512Mi
+            suggestions: [512Mi, 768Mi]
+            description: >-
+              Memory for the WAL-G sidecar or the logical backup job. Empty keeps the bundled database's default
+              of 128Mi.
+        rules:
+          # Platform schema (nodelibs workload.ts): at most 8 MiB of memory per millicore of CPU.
+          - rule: >-
+              !has(self.postgresHA.backup.resources) || !has(self.postgresHA.backup.resources.memory) ||
+              self.postgresHA.backup.resources.memory == '' ||
+              (self.postgresHA.backup.resources.memory != null &&
+              memoryBytes(self.postgresHA.backup.resources.memory) <= (dyn(self.postgresHA.backup.resources).exists(k, k == 'cpu') ?
+              cpuMillicores(dyn(self.postgresHA.backup.resources)['cpu']) : 100) * 8 * 1048576)
+            paths: [postgresHA.backup.resources.memory]
+            message: >-
+              The platform allows at most 8 MiB of memory per millicore of CPU, and the backup CPU is 100m, so use
+              at most 800Mi.
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              has(self.postgresHA.backup.resources) && has(self.postgresHA.backup.resources.memory) &&
+              self.postgresHA.backup.resources.memory != null && self.postgresHA.backup.resources.memory != '' ?
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi') : false
+            severity: warning
+            paths: [postgresHA.backup.resources.memory]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory (the bundled database's default is 128Mi). With less
+              it is killed for running out of memory during the base backup and no backup is written. Raising it
+              restarts the database members.
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bundled database's backup identity also carries the AWS managed policy ReadOnlyAccess, which can
+              read every bucket in the AWS account, not only this one.
           - path: postgresHA.backup.aws.bucket
             type: string
             label: Bucket
@@ -784,12 +846,14 @@ steps:
         mirrors: chatwoot.validate
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
-      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
         mirrors: chatwoot.validate
         paths: [postgresHA.enabled]
         message: >-
-          The HAProxy leader endpoint is how Chatwoot reaches the HA database, so it stays on: remove
-          postgresHA.proxy.enabled from the values.
+          The HAProxy leader endpoint is how Chatwoot reaches the HA database, so postgresHA.proxy.enabled must
+          stay true.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
@@ -845,6 +909,18 @@ steps:
     description: The bundled single-node Redis for Sidekiq queues, live updates and the cache.
     docs: "#redis"
     fields:
+      - type: note
+        severity: info
+        when: oldSelf != null
+        textExpression: >-
+          "An upgrade usually restarts Redis, and Chatwoot's live updates do not reconnect on their own afterwards:
+          when it is done, run cpln workload force-redeployment " + (context.releaseName != null &&
+          context.releaseName != '' ? context.releaseName : 'RELEASE_NAME') + '-chatwoot --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '. Expect a few minutes of errors while Redis restarts.'
+        text: >-
+          An upgrade usually restarts Redis, and Chatwoot's live updates do not reconnect on their own afterwards:
+          when it is done, force a redeployment of the RELEASE_NAME-chatwoot workload. Expect a few minutes of
+          errors while Redis restarts.
       - path: redis.image
         type: string
         format: image

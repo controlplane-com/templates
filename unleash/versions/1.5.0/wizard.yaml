@@ -224,6 +224,15 @@ steps:
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Unleash connects through.
           Recommended for production.
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              From 1.3.0 the highly available database writes the password inside double quotes in its config on
+              every start, so a password with a `"` or `\` breaks it. If yours has one, change it with ALTER ROLE
+              for the user and for repl before upgrading, and put the new one in the secret.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -453,8 +462,8 @@ steps:
         severity: warning
         message: >-
           Switching the database on an installed release deletes the current one, with all of Unleash's flags,
-          users and tokens, and starts an empty one. Keep the current database, or install a new release and move
-          the data.
+          users and tokens, and starts an empty one. Keep the current database, or install a new release with the other database
+          and move the data.
       # postgres-highly-available writes backup.<provider>.prefix unquoted: as the logical backup job's
       # BACKUP_PREFIX env value (templates/workload-logical-backup.yaml), and after s3://bucket/ or gs://bucket/
       # in the WAL-G prefix (templates/workload-patroni-postgres.yaml).
@@ -480,12 +489,12 @@ steps:
       - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
         rule: >-
           (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
-          [self.postgresHA.backup.aws.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+          [self.postgresHA.backup.aws.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
         severity: warning
         paths: [postgresHA.backup.aws.prefix]
         message: >-
-          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
-          trailing ":" or space.
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": ", " #", tabs,
+          and a trailing ":" or space.
       - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical'
         rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
         severity: warning
@@ -508,12 +517,12 @@ steps:
       - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
         rule: >-
           (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
-          [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+          [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
         severity: warning
         paths: [postgresHA.backup.gcp.prefix]
         message: >-
-          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
-          trailing ":" or space.
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": ", " #", tabs,
+          and a trailing ":" or space.
       - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical'
         rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
         severity: warning
@@ -536,12 +545,12 @@ steps:
       - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
         rule: >-
           (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
-          [self.postgresHA.backup.minio.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+          [self.postgresHA.backup.minio.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
         severity: warning
         paths: [postgresHA.backup.minio.prefix]
         message: >-
-          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
-          trailing ":" or space.
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": ", " #", tabs,
+          and a trailing ":" or space.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: unleash.validate
         paths: [postgresHA.enabled, postgres.enabled]
@@ -586,17 +595,21 @@ steps:
         message: >-
           The previous version created the database secret itself, and this upgrade deletes it. Create a secret
           under a NEW name holding the same username, password and database, and name it here.
-      # Before 1.3.0 the HA database kept its credentials in its own secret <release>-postgres-config, which the
-      # upgrade prunes or rewrites (pg-ha 2.5.0 reuses the name for its backup settings).
-      - when: >-
-          oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 &&
-          self.postgresHA.enabled
-        rule: self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+      # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+      # and 2.4.x (unleash 1.2.x and earlier) kept the database credentials in a chart secret of that name,
+      # which the upgrade prunes or rewrites.
+      - rule: >-
+          !self.postgresHA.enabled ||
+          (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') >= 0 &&
+          self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+          !self.postgresHA.backup.enabled) ||
+          self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+        severity: warning
         paths: [postgresHA.config.credentialsSecretName]
         message: >-
-          That secret belongs to the previous version's highly available database, and this upgrade deletes or
-          rewrites it. Create a new dictionary secret with the same username, password and database and choose
-          it here.
+          Choose another name. The highly available database renders its own secret under this name when backups
+          are on, and on an upgrade from unleash 1.2.x or earlier this is the old chart's secret, which the
+          upgrade removes or rewrites.
       - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.5.0') >= 0)
         rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
@@ -662,4 +675,6 @@ migrations:
     note: The admin login moved into the admin secret (keys username and password); choose it under Unleash.
   - fromVersions: "<1.1.0"
     from: admin.password
-    note: The admin login moved into the admin secret (keys username and password); choose it under Unleash.
+    note: >-
+      The admin login moved into the admin secret (keys username and password); choose it under Unleash. The admin
+      password does not change on upgrade; if it is still change-me-unleash-admin, change it in Unleash now.

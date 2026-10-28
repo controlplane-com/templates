@@ -53,8 +53,8 @@ steps:
               A dictionary secret with `nextAuthSecret`, `encryptionKey`, `salt`, `adminEmail` and
               `adminPassword`.
             help: >-
-              `encryptionKey` must be exactly 64 hex characters and can never change: it encrypts the LLM
-              provider keys users store in Langfuse. Use three different random values for the key material.
+              `encryptionKey` must be exactly 64 hex characters and can never change: it encrypts the LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+              users store in Langfuse. Use three different random values for the key material.
             ref:
               kind: secret
               format: name
@@ -86,7 +86,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-langfuse-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 ? context.releaseName + '-langfuse-db-credentials-secret' : context.releaseName + '-langfuse-db-credentials'"
                 hint: "username and database: langfuse. password: openssl rand -hex 24."
           - path: redis.credentialsSecretName
             type: ref
@@ -129,12 +129,14 @@ steps:
                 suggestName: "context.releaseName + '-langfuse-clickhouse-credentials'"
                 hint: "username: default. password: openssl rand -hex 24."
         rules:
-          - rule: oldSelf == null || self.langfuse.auth.secretName == oldSelf.langfuse.auth.secretName
+          # From 1.0.x there was no auth secret.
+          - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0)
+            rule: self.langfuse.auth.secretName == oldSelf.langfuse.auth.secretName
             severity: info
             paths: [langfuse.auth.secretName]
             message: >-
-              The new secret must hold the same encryptionKey and salt as the installed one, or stored LLM
-              provider keys and existing Langfuse API keys stop working.
+              The new secret must hold the same encryptionKey and salt as the installed one, or the stored LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+              become unreadable and existing Langfuse API keys stop working; set those up again too.
           - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') >= 0)
             rule: self.postgres.config.credentialsSecretName == oldSelf.postgres.config.credentialsSecretName
             severity: info
@@ -181,6 +183,13 @@ steps:
             message: Include the scheme, for example https://langfuse.example.com.
       - title: Web
         fields:
+          - type: note
+            severity: info
+            when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.0.x ran the moving tags langfuse/langfuse:3 and langfuse/langfuse-worker:3, so the release may
+              already run a Langfuse newer than this version's 3.225.2. If it does, set both images to that version
+              rather than going back to an older one.
           - path: langfuse.web.image
             type: string
             format: image
@@ -330,8 +339,9 @@ steps:
             type: boolean
             label: Public HTTPS endpoint
             description: >-
-              The UI and public API on the workload's `*.cpln.app` endpoint. Off, they are reachable only from
-              inside the GVC or through `cpln port-forward`.
+              The UI and public API on the workload's `*.cpln.app` endpoint. Off, only workloads inside Control
+              Plane reach them: `cpln port-forward` does not reach the Langfuse web server, so keep this on if you
+              need to sign in.
       - title: Internal access
         docs: /reference/workload/firewall
         fields:
@@ -449,11 +459,15 @@ rules:
   # Upgrading from 1.2.x or earlier, the chart-created secret is deleted by the upgrade itself, so the new
   # prerequisite secret must have a different name (holding the same username, password and database).
   - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
-    rule: self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName
+    rule: >-
+      self.postgres.config.credentialsSecretName != oldSelf.postgres.config.credentialsSecretName &&
+      !(self.postgres.config.credentialsSecretName in [context.releaseName + '-pg-config',
+      context.releaseName + '-langfuse-config'])
     paths: [postgres.config.credentialsSecretName]
     message: >-
-      The previous version created the database secret itself, and this upgrade deletes it. Create a secret
-      under a NEW name holding the same username, password and database, and name it here.
+      The previous version created the database secret itself, and this upgrade deletes it (and the
+      <release>-pg-config and <release>-langfuse-config secrets of older versions). Create a secret under a NEW
+      name holding the same username, password and database, and name it here.
   - rule: "!has(self.redis.auth)"
     mirrors: langfuse.validateRemovedKeys
     paths: [redis.credentialsSecretName]
@@ -542,3 +556,58 @@ migrations:
     note: >-
       Removed: Langfuse always kept its data in the ClickHouse database default, whatever this was set to, so nothing
       moves. The empty database it created can be left alone.
+  # From 1.0.x and 1.1.0 the bundled postgres child drops these with its own note; this one says where the
+  # secret is chosen here.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.username
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      with the values the database was initialized with, and choose it under Langfuse.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.password
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      with the values the database was initialized with, and choose it under Langfuse.
+  - fromVersions: "<1.2.0"
+    from: postgres.config.database
+    note: >-
+      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
+      with the values the database was initialized with, and choose it under Langfuse.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.nextAuthSecret
+    note: >-
+      Moved into the auth secret (key nextAuthSecret). 1.0.x shipped a published default: generate a new value
+      unless you had replaced it.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.encryptionKey
+    note: >-
+      Moved into the auth secret (key encryptionKey). Keep the installed value to keep the stored LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+      readable; a new one (the 1.0.x default was published) makes them unreadable, so set those up again too.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.salt
+    note: >-
+      Moved into the auth secret (key salt). Keep the installed value, or existing Langfuse API keys stop working.
+  - fromVersions: "<1.1.0"
+    from: objectStore.gcp.accessKeyId
+    note: Moved into the HMAC key secret (key accessKeyId); choose it under Object store.
+  - fromVersions: "<1.1.0"
+    from: objectStore.gcp.secretAccessKey
+    note: Moved into the HMAC key secret (key secretAccessKey); choose it under Object store.
+  - fromVersions: "<1.1.0"
+    from: langfuse.firewall
+    note: >-
+      Replaced by the public access switch and the internal access choice under Access. There is no address
+      allow-list any more: the public endpoint is open to everyone or off.
+  # A 1.0.x release with an empty allow-list was not reachable from the internet; keep it that way.
+  - fromVersions: "<1.1.0"
+    to: publicAccess.enabled
+    valueExpr: >-
+      has(self.langfuse.firewall) && has(self.langfuse.firewall.inboundAllowCIDR) &&
+      self.langfuse.firewall.inboundAllowCIDR != null &&
+      self.langfuse.firewall.inboundAllowCIDR.exists(c, c in ['0.0.0.0/0', '::/0'])
+    note: >-
+      A 1.0.x allow-list limited to some addresses starts with the public endpoint off; this version cannot limit
+      it to those addresses, so turning it on opens it to everyone.
+  # 1.0.x created the Redis volume set with a fixed 10 GiB and had no key for it.
+  - fromVersions: "<1.1.0"
+    assume: { redis.volumeset.capacity: 10 }

@@ -67,6 +67,7 @@ steps:
             label: Cache volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             description: >-
@@ -161,6 +162,7 @@ steps:
             label: Workspace volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [20, 50, 100, 250]
             description: Scratch space for compaction; size it at about twice two weeks of raw blocks. You can raise it later, never lower it.

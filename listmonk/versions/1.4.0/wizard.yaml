@@ -1,0 +1,715 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: listmonk
+
+# listmonk is a single stateful replica, and both bundled databases are single-location stateful workloads
+# with no location handling: postgres brings this limit with its import, and postgres-highly-available (no
+# descriptor of its own, so its keys are parent fields below) needs the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # listmonk creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+      # listmonk connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          listmonk connects to its database like any other workload: keep Same GVC, or add the listmonk
+          workload under Allowed workloads.
+
+steps:
+  - id: listmonk
+    title: listmonk
+    description: The listmonk image, its compute and media storage, and the prerequisite Super Admin secret.
+    sections:
+      - title: Server
+        docs: "#application"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: listmonk image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: listmonk is a single Go binary with a light footprint.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: volumeset.capacity
+            type: integer
+            label: Media storage capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            description: Images uploaded on the Media page, kept at /listmonk/uploads.
+            help: Uninstalling the release deletes the volume set, so uploaded media does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: timezone
+            type: string
+            label: Time zone
+            required: true
+            placeholder: Etc/UTC
+            description: The container's time zone, which campaign scheduling times follow.
+          - type: note
+            severity: warning
+            text: >-
+              This version leaves listmonk's Root URL at the installer's `http://localhost:9000`, so subscription,
+              unsubscribe and tracking links and the links in sent email point there until you set the Root URL in
+              Settings, General after install. Version 1.5.0 sets it at startup.
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: listmonk.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.4.0. Remove the old keys from the values.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - title: Super Admin
+        docs: "#admin-bootstrap"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The admin secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: admin.secretName
+            type: ref
+            label: Super Admin secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username` (at least 3 characters) and `password` (at least 8).
+            help: >-
+              Used on the first install only: the account then lives in the database, so change the password in
+              Admin, Users, not in the secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-listmonk-admin-credentials'"
+        rules:
+          # 1.0.x rendered its own admin secret named <release>-listmonk-admin; upgrading to 1.1.0 or later
+          # prunes it, so a release pointed at that name would reference a secret the upgrade deletes.
+          - rule: >-
+              context.mode != 'upgrade' || context.fromVersion == null ||
+              semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.admin.secretName != context.releaseName + '-listmonk-admin'
+            paths: [admin.secretName]
+            message: >-
+              That secret belongs to the 1.0.x release, and this upgrade deletes it. Create a new dictionary
+              secret with the keys username and password and choose it here.
+          - rule: "!has(self.admin.username) && !has(self.admin.password)"
+            mirrors: listmonk.validateAdmin
+            paths: [admin.secretName]
+            message: >-
+              admin.username and admin.password were removed in 1.1.0. Put them in the admin secret and remove
+              them from the values.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach listmonk inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The admin UI and the subscriber-facing pages on the canonical endpoint. Subscription forms,
+          unsubscribe links and tracking pixels must be reachable from the internet.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.publicAccess.enabled
+        severity: warning
+        paths: [publicAccess.enabled]
+        message: >-
+          Without public access, subscription forms, unsubscribe links and tracking pixels cannot be reached by
+          subscribers.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds listmonk's data, and the credentials listmonk creates its database secret from.
+    docs: "#configuration"
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica on a persistent volume; the default.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+      - id: credentials
+        title: Database credentials
+        description: >-
+          Used by whichever PostgreSQL is chosen above. listmonk creates the dictionary secret named below from
+          these three values, and both PostgreSQL and listmonk read it; there is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 1.6.0 takes them from a secret
+              you create instead.
+          - path: postgres.credentials.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.credentials.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Used as typed, so replace the published default.
+          - path: postgres.credentials.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+        rules:
+          # listmonk writes the database name into a single-quoted YAML string (LISTMONK_db__database), and the
+          # single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes. (The highly available rules below are stricter still.)
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              !self.postgres.credentials.database.matches("[\\s']")
+            severity: warning
+            paths: [postgres.credentials.database]
+            message: >-
+              Leave out spaces and single quotes: listmonk writes the name into a single-quoted string, and the
+              database's readiness probe passes it to pg_isready unquoted.
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              !self.postgres.credentials.username.matches('\\s')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Leave out spaces: the database's readiness probe passes the user name to pg_isready unquoted, so
+              it never becomes ready.
+          # The HA database (postgres-highly-available 2.5.0) writes the user and password into double-quoted
+          # YAML through an unquoted heredoc and runs an unquoted CREATE DATABASE (templates/secret-startup.yaml).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              self.postgres.credentials.database.matches('^[a-z_][a-z0-9_]*$')
+            severity: warning
+            paths: [postgres.credentials.database]
+            message: >-
+              Use lowercase letters, digits and underscores, starting with a letter or underscore. The highly
+              available database creates it with an unquoted CREATE DATABASE, which folds the name to lowercase,
+              while listmonk connects with the name as typed.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              self.postgres.credentials.username.matches('^[A-Za-z0-9_.-]+$')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Use letters, digits, _ . and - only. The highly available database writes the user into an unquoted
+              psql command.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.password == oldSelf.postgres.credentials.password) ||
+              !self.postgres.credentials.password.matches('["\\\\]')
+            severity: warning
+            paths: [postgres.credentials.password]
+            message: >-
+              Leave out double quotes and backslashes. The highly available database writes the password inside
+              double quotes in its config, where they break the configuration or change the password.
+          - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or listmonk loses its
+              database connection after this upgrade.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica. Its server, storage, network and backups follow in the next steps.
+        docs: "#single-instance-postgresql"
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret listmonk creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+        rules:
+          - rule: self.postgres.config.credentialsSecretName != 'my-listmonk-db-credentials'
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each listmonk release its own name, for example ' + context.releaseName +
+              '-listmonk-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each listmonk release its own name.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that listmonk connects through.
+        docs: "#highly-available-postgresql"
+        fields:
+          - path: postgresHA.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret listmonk creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          - rule: self.postgresHA.config.credentialsSecretName != 'my-listmonk-db-credentials'
+            severity: info
+            paths: [postgresHA.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each listmonk release its own name, for example ' + context.releaseName +
+              '-listmonk-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each listmonk release its own name.
+          # postgres-highly-available 2.5.0 renders its backup settings into a secret named <release>-postgres-config.
+          - rule: >-
+              !self.postgresHA.backup.enabled ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              With backups on, the highly available database renders its own secret under this name for its
+              backup settings. Choose another name.
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Object
+              Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+            paths: [postgresHA.backup.minio.credentialsSecretName]
+            message: >-
+              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
+              credentials secret and remove them from the values.
+    rules:
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database deletes the existing database workload and its volume set, with all of listmonk's
+          data. Dump the data first and restore it into the new database after the upgrade.
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: listmonk.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: listmonk.validate
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is listmonk's database endpoint.
+      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.postgres)"
+        paths: [postgres.credentials.username]
+        message: >-
+          postgresHA.postgres was removed in 1.3.0: move its username, password and database to the database
+          credentials (postgres.credentials) and remove the block from the values.
+      - rule: >-
+          !self.postgres.enabled || (!has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database))
+        paths: [postgres.credentials.username]
+        message: >-
+          postgres.config.username, password and database were removed in 1.2.0: move them to the database
+          credentials (postgres.credentials) and remove them from postgres.config.
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks listmonk, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-listmonk') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-listmonk, or listmonk cannot reach its database.'"
+    message: Add the listmonk workload to the list, or listmonk cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: listmonk connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.4.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<1.4.0"
+    from: resources.memory
+    to: resources.maxMemory
+  - fromVersions: "<1.3.1"
+    from: postgresHA.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.1"
+    from: postgresHA.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.3.0"
+    from: postgresHA.postgres
+    note: >-
+      The HA database's username, password and database moved to the database credentials (postgres.credentials),
+      from which listmonk creates the secret; a release on the HA database keeps the values it was initialized with.
+  # The HA database read postgresHA.postgres.* before 1.3.0; from 1.3.0 both modes read postgres.credentials.*.
+  # Carry the values of the mode the release runs, whatever they are, so the database keeps its login.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.credentials.username"
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.credentials.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.credentials.database"
+  - fromVersions: "<1.2.0"
+    from: postgres.config.username
+    to: postgres.credentials.username
+  - fromVersions: "<1.2.0"
+    from: postgres.config.password
+    to: postgres.credentials.password
+  - fromVersions: "<1.2.0"
+    from: postgres.config.database
+    to: postgres.credentials.database
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.config.username"
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.config.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.config.database"
+  - fromVersions: "<1.1.0"
+    from: admin.username
+    note: The Super Admin login moved into the admin secret (keys username and password); choose it under listmonk.
+  - fromVersions: "<1.1.0"
+    from: admin.password
+    note: The Super Admin login moved into the admin secret (keys username and password); choose it under listmonk.

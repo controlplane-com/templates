@@ -50,6 +50,7 @@ steps:
             label: Resources
             required: true
             description: listmonk is a single Go binary with a light footprint.
+            maxRatio: 4
             cpu: { min: 25m }
             memory: { min: 32Mi }
           - path: volumeset.capacity
@@ -86,6 +87,12 @@ steps:
           - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
             paths: [volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          # The boot script writes the URL as ROOT_URL='<value>' (templates/workload.yaml:45); a single quote ends
+          # the string and the script stops with a syntax error (reproduced with sh -n on the rendered script).
+          - rule: self.rootUrl == null || !self.rootUrl.contains("'")
+            severity: warning
+            paths: [rootUrl]
+            message: Leave out single quotes. The startup script writes the URL inside single quotes, so one stops listmonk from starting.
       - title: Super Admin
         docs: "#admin-bootstrap"
         fields:
@@ -111,8 +118,18 @@ steps:
               allowCreate: true
               requiredKeys: [username, password]
               create:
-                suggestName: "context.releaseName + '-listmonk-admin'"
+                suggestName: "context.releaseName + '-listmonk-admin-credentials'"
         rules:
+          # 1.0.x rendered its own admin secret named <release>-listmonk-admin; upgrading to 1.1.0 or later
+          # prunes it, so a release pointed at that name would reference a secret the upgrade deletes.
+          - rule: >-
+              context.mode != 'upgrade' || context.fromVersion == null ||
+              semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.admin.secretName != context.releaseName + '-listmonk-admin'
+            paths: [admin.secretName]
+            message: >-
+              That secret belongs to the 1.0.x release, and this upgrade deletes it. Create a new dictionary
+              secret with the keys username and password and choose it here.
           - rule: "!has(self.admin.username) && !has(self.admin.password)"
             mirrors: listmonk.validateAdmin
             paths: [admin.secretName]
@@ -286,6 +303,17 @@ steps:
           - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
             paths: [postgresHA.volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+          # and 2.4.x (listmonk 1.2.0 and earlier) kept the database credentials in a chart secret of that name.
+          - rule: >-
+              !self.postgresHA.enabled ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name. The highly available database renders its own secret under this name when backups
+              are on, and on an upgrade from listmonk 1.2.x or earlier this is the old chart's secret, which the
+              upgrade removes or rewrites.
       - id: ha-backup
         title: Database backups
         toggle: postgresHA.backup.enabled
@@ -374,6 +402,31 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
       - title: Google Cloud Storage
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
         docs: "#backing-up"
@@ -400,6 +453,31 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
       - title: MinIO or S3-compatible
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
         docs: "#backing-up"
@@ -435,12 +513,41 @@ steps:
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
         rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
           - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
             paths: [postgresHA.backup.minio.credentialsSecretName]
             message: >-
-              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.0. Put them in the MinIO
+              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
               credentials secret and remove them from the values.
     rules:
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database deletes the existing database workload and its volume set, with all of listmonk's
+          data. Dump the data first and restore it into the new database after the upgrade.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: listmonk.validate
         paths: [postgresHA.enabled, postgres.enabled]
@@ -525,10 +632,10 @@ migrations:
   - fromVersions: "<1.4.0"
     from: resources.memory
     to: resources.maxMemory
-  - fromVersions: "<1.3.0"
+  - fromVersions: "<1.3.1"
     from: postgresHA.backup.minio.accessKey
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
-  - fromVersions: "<1.3.0"
+  - fromVersions: "<1.3.1"
     from: postgresHA.backup.minio.secretKey
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
   - fromVersions: "<1.3.0"

@@ -1,0 +1,635 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Airflow
+# createsGvc: true. The chart creates its own GVC from gvc.name and gvc.locations (templates/gvc.yaml), so there is
+# no target GVC to limit and no gvc block (guide 14.2); the location rules work on gvc.locations instead.
+
+steps:
+  - id: setup
+    title: GVC and credentials
+    description: The GVC this release creates, its locations, Airflow's keys and admin login, and the metadata database login.
+    sections:
+      - id: gvc
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below and puts every workload in it. Use a name no
+              GVC in the org has: the release takes over an existing GVC of that name, and uninstalling the
+              release then deletes that GVC with every workload in it. A GVC that another release created is
+              refused. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          # gvc.yaml and every resource: the name is written unquoted. The name pattern already rules out numbers
+          # and dates; true, false and null are the names YAML would read as another type.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this
+              one with everything in it.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.gvc.name != oldSelf.gvc.name
+                rule: "!(self.gvc.name in ['true', 'false', 'null'])"
+                message: The chart writes the GVC name unquoted, so true, false and null are not names it can use.
+              - when: context.mode == 'install'
+                rule: self.gvc.name != 'airflow'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own, for example ' + context.releaseName + '-airflow.'
+                message: >-
+                  GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own.
+          - path: gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "" }
+            itemLabel: item.name
+            description: The locations of the GVC this release creates.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+            rules:
+              # No workload has localOptions or placement of its own, so every workload runs in every location
+              # of the GVC; CHANGELOG 2.0.0 calls this the placement bug it fixes.
+              # Warn on install, and on upgrade only when the list grows: an existing multi-location release
+              # can only shrink by deleting a location's data, so a blocking warning would trap it.
+              - when: oldSelf == null || size(self.gvc.locations) > size(oldSelf.gvc.locations)
+                rule: size(self.gvc.locations) <= 1
+                severity: warning
+                message: >-
+                  This version runs every workload in every location of its GVC, so each location gets its own
+                  webserver and scheduler, metadata database, broker and Airflow home on its own volumes. Use
+                  one location; 2.0.0 runs in exactly one.
+              - when: oldSelf != null && size(self.gvc.locations) <= size(oldSelf.gvc.locations)
+                rule: size(self.gvc.locations) <= 1
+                severity: info
+                message: >-
+                  This version runs every workload in every location of its GVC, so each location gets its own
+                  webserver and scheduler, metadata database, broker and Airflow home on its own volumes. Use
+                  one location; 2.0.0 runs in exactly one.
+              - rule: >-
+                  oldSelf == null || self.gvc.locations.all(l, oldSelf.gvc.locations.exists(o, o.name == l.name))
+                severity: info
+                message: >-
+                  A location added to the list starts its own Airflow on new, empty volumes; nothing is copied
+                  from the existing location.
+      - id: auth
+        title: Airflow keys and login
+        description: >-
+          The chart writes these into a secret of its own (RELEASE-airflow-config) that the webserver and the
+          workers read.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These keys and the admin password are stored in the Helm release values in this version, and the
+              shipped `CHANGE_ME` values are published. 1.5.0 takes all three from a secret you create instead.
+          - path: airflow.auth.jwtSecret
+            type: string
+            label: JWT secret
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Signs the API access tokens. Generate it with `openssl rand -base64 48`.
+          # Airflow 3.0.3 models/crypto.py get_fernet: MultiFernet over the comma-separated keys, each passed to
+          # cryptography's Fernet, which refuses anything but 32 bytes of URL-safe base64 (raised as an
+          # AirflowException whenever a Variable or a Connection password is saved).
+          # 1.0.0-1.2.0 set no AIRFLOW__CORE__FERNET_KEY; Airflow 3.0.3 configuration.py
+          # write_default_airflow_configuration_if_needed generates one into AIRFLOW_HOME/airflow.cfg (/opt/airflow,
+          # the shared volume) the first time it starts.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              Versions before 1.3.0 set no fernet key, so Airflow generated one into `/opt/airflow/airflow.cfg`
+              on the shared volume (the `fernet_key` line, readable in the webserver container) and encrypted the
+              stored Connections and Variables with it. Enter that key here unchanged, or every stored Connection
+              and Variable becomes unreadable.
+          - path: airflow.auth.fernetKey
+            type: string
+            label: Fernet key
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: Encrypts the Connections and Variables your DAGs use. Back it up.
+            help: >-
+              32 random bytes in URL-safe base64: generate it with `openssl rand -base64 32 | tr '+/' '-_'`.
+              Airflow refuses to save a Variable or a Connection password under anything else, including the
+              shipped `CHANGE_ME`. Changing the key later makes every stored Connection and Variable
+              unreadable, unless the old key stays in the value after the new one, separated by a comma (then
+              run `airflow rotate-fernet-key`). A release first installed before 1.3.0 keeps its earlier
+              Connections and Variables under the `fernet_key` in `/opt/airflow/airflow.cfg`: enter that key.
+            rules:
+              - rule: >-
+                  oldSelf != null && self.airflow.auth.fernetKey == oldSelf.airflow.auth.fernetKey ||
+                  self.airflow.auth.fernetKey.matches('^[A-Za-z0-9_-]{43}=(,[A-Za-z0-9_-]{43}=)*$')
+                severity: warning
+                message: >-
+                  Enter 32 random bytes in URL-safe base64 (44 characters ending in =), for example from
+                  openssl rand -base64 32 | tr '+/' '-_'. Airflow cannot encrypt anything with another value.
+              - rule: >-
+                  oldSelf == null || oldSelf.airflow.auth.fernetKey == null ||
+                  oldSelf.airflow.auth.fernetKey == 'CHANGE_ME' ||
+                  self.airflow.auth.fernetKey == oldSelf.airflow.auth.fernetKey ||
+                  self.airflow.auth.fernetKey.endsWith(',' + oldSelf.airflow.auth.fernetKey)
+                severity: info
+                message: >-
+                  Stored Connections and Variables stay readable only under the key that encrypted them. Keep
+                  the current key after the new one, separated by a comma, then run airflow rotate-fernet-key.
+          - path: airflow.admin.username
+            type: string
+            label: Admin username
+            required: true
+            description: The UI and API login.
+            pattern: '^[^,:]+$'
+            patternMessage: 'Leave out commas and colons: Airflow reads the login list as user:role pairs.'
+          - path: airflow.admin.password
+            type: string
+            label: Admin password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            description: >-
+              The webserver writes it into Airflow's password file at every start, so a change here changes
+              the login.
+      - id: metadata-db
+        title: Metadata database
+        description: >-
+          The login of the bundled PostgreSQL. The chart writes it into a secret of its own, and PostgreSQL
+          reads it only when its data directory is first initialized.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The database password is stored in the Helm release values in this version. 2.1.0 takes the
+              database login from a secret you create instead.
+          - path: postgres.config.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data directory is initialized.
+            pattern: '^[A-Za-z_][A-Za-z0-9_.-]*$'
+            patternMessage: >-
+              Use letters, digits, _, . and -, starting with a letter or _: the name goes into the database
+              connection URL and the readiness check.
+          - path: postgres.config.password
+            type: string
+            label: Database password
+            widget: password
+            required: true
+            immutable: PostgreSQL keeps the password its data directory was initialized with.
+            example: true
+            sensitive: true
+            description: Set a random value now; it cannot be changed after the first install.
+            pattern: '^[^@%]*$'
+            patternMessage: 'Leave out @ and %: the password is written into the database connection URL as it is.'
+          - path: postgres.config.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data directory is initialized.
+            # The chart writes POSTGRES_DB unquoted, and the install parses the manifest as YAML 1.2: true, false
+            # and null would not reach PostgreSQL as text (the pattern already rules out numbers).
+            pattern: '^(?!(true|false|null)$)[a-z_][a-z0-9_]*$'
+            patternMessage: >-
+              Use lowercase letters, digits and _, starting with a letter or _, and not true, false or null.
+
+  - id: webserver
+    title: Webserver
+    description: The one replica that runs the Airflow API server, scheduler, dag-processor and triggerer.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              The first upgrade after an install can restart the webserver and the metadata database even
+              when no value changed. Plan for a couple of minutes without the UI and the scheduler.
+          - path: airflow.webserver.image
+            type: string
+            format: image
+            label: Airflow image
+            required: true
+            help: >-
+              This version ships `apache/airflow:3.0.3`. Another tag is unproven here: check that the
+              webserver becomes ready and that a DAG run completes before relying on it.
+            rules:
+              - rule: >-
+                  imageMajor(self.airflow.webserver.image) < 0 || imageMajor(self.airflow.webserver.image) >= 3
+                severity: warning
+                message: >-
+                  This chart is built for Airflow 3: its startup command runs `airflow api-server` and
+                  `airflow dag-processor`. Use an Airflow 3 image.
+          - path: airflow.webserver.resources
+            type: resources
+            label: Webserver resources
+            required: true
+            description: One replica running every Airflow process except the task workers.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: airflow.webPort
+            type: integer
+            label: Web port
+            required: true
+            description: Serves the UI and the REST API; the workers reach the API on it too.
+            docs: "/reference/workload/containers#number"
+            # The platform's container port schema: 80 to 65535, minus the reserved ports below.
+            min: 80
+            max: 65535
+            rules:
+              - rule: >-
+                  !(self.airflow.webPort in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021,
+                  15090, 41000])
+                messageExpression: >-
+                  'Port ' + string(self.airflow.webPort) + ' is reserved by the platform, which refuses a
+                  workload that uses it. Choose another port.'
+                message: >-
+                  The web port is reserved by the platform, which refuses a workload that uses it. Choose
+                  another port.
+      - id: scheduler
+        title: Scheduler
+        fields:
+          - path: airflow.scheduler.dagDirListInterval
+            type: integer
+            label: DAG folder rescan interval
+            required: true
+            unit: seconds
+            min: 0
+            description: How often Airflow rescans the DAG folder for new files.
+          - path: airflow.scheduler.minFileProcessInterval
+            type: integer
+            label: Minimum DAG file processing interval
+            required: true
+            unit: seconds
+            min: 0
+            description: The shortest time between two parses of the same DAG file.
+
+  - id: workers
+    title: Workers
+    description: The Celery workers that run DAG tasks, autoscaled by KEDA or by the platform.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              A wide simultaneous fan-out can lose tasks without an error: on this worker image a measured
+              24-task burst left 7 tasks that never started (no hostname, no start time), from a race in the
+              Celery executor's Redis transport. Nothing in the UI shows an error, so stagger task submission
+              instead of fanning out wide at once.
+          - path: airflow.celeryWorker.image
+            type: string
+            format: image
+            label: Worker image
+            required: true
+          - path: airflow.celeryWorker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            description: Per worker.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          # workload-celery.yaml renders AIRFLOW__CELERY__WORKER_CONCURRENCY only inside `if .Values.keda.enabled`.
+          - path: airflow.celery.workerConcurrency
+            type: integer
+            label: Tasks per worker
+            required: true
+            when: self.keda.enabled
+            min: 1
+            description: How many tasks each worker runs at the same time. This version applies it only with KEDA autoscaling on.
+            suggestions: [1, 2, 4, 8]
+      - id: keda
+        title: Autoscale workers with KEDA
+        toggle: keda.enabled
+        description: >-
+          Scales the workers on the length of the Celery queue in Redis, down to zero when idle with a minimum
+          of 0. The chart turns KEDA on for the GVC it creates. With it off, the workers get no autoscaling
+          settings from the chart and run on the platform's defaults.
+        fields:
+          - path: keda.minScale
+            type: integer
+            label: Minimum workers
+            required: true
+            min: 0
+            description: 0 scales the workers to zero while the queue is empty.
+            suggestions: [0, 1, 2]
+          - path: keda.maxScale
+            type: integer
+            label: Maximum workers
+            required: true
+            min: 1
+            suggestions: [1, 3, 5, 10]
+          - path: keda.listLength
+            type: integer
+            label: Scale-up queue length
+            required: true
+            min: 1
+            description: The Celery queue length in Redis that triggers a scale-up.
+          - path: keda.scaleToZeroDelay
+            type: integer
+            label: Scale-to-zero delay
+            required: true
+            advanced: true
+            unit: seconds
+            min: 30
+            max: 3600
+            description: Idle time before the workers scale to zero.
+          - path: keda.pollingInterval
+            type: integer
+            label: Polling interval
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: How often KEDA reads the queue length.
+            docs: "/reference/workload/autoscaling#polling-and-cooldown"
+          - path: keda.cooldownPeriod
+            type: integer
+            label: Cooldown period
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: The cooldown between scaling events.
+          - path: keda.initialCooldownPeriod
+            type: integer
+            label: Initial cooldown period
+            required: true
+            advanced: true
+            unit: seconds
+            min: 1
+            description: The cooldown after startup before scaling begins.
+        rules:
+          # nodelibs/schema/src/workloadOptions.ts: minScale is Joi .max(Joi.ref('maxScale')).
+          - rule: self.keda.minScale <= self.keda.maxScale
+            paths: [keda.minScale]
+            messageExpression: >-
+              'The minimum of ' + string(self.keda.minScale) + ' workers is above the maximum of ' +
+              string(self.keda.maxScale) + ', and the platform refuses that.'
+            message: The minimum number of workers is above the maximum, and the platform refuses that.
+
+  - id: storage
+    title: Storage
+    description: The volume sets of the shared Airflow home, the metadata database and the broker.
+    fields:
+      - type: note
+        text: >-
+          Uninstalling the release deletes all three volume sets and the GVC: the metadata database, the broker
+          and the shared Airflow home with the DAGs and task logs. The chart schedules no backups, so export
+          what you need first.
+      - path: volumeset.airflow.capacity
+        type: integer
+        label: Airflow home capacity
+        required: true
+        unit: GiB
+        min: 10
+        description: >-
+          The shared file system at `/opt/airflow` with the DAGs and task logs, mounted by the webserver and
+          every worker.
+        docs: "/reference/volumeset#shared-file-system"
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+      - path: postgres.volumeset.capacity
+        type: integer
+        label: Metadata database capacity
+        required: true
+        unit: GiB
+        min: 10
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+      - path: redis.volumeset.capacity
+        type: integer
+        label: Broker capacity
+        required: true
+        unit: GiB
+        min: 10
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+    rules:
+      - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity
+        paths: [volumeset.airflow.capacity]
+        message: Keep the Airflow home capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+        paths: [postgres.volumeset.capacity]
+        message: Keep the metadata database capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: >-
+          oldSelf == null || oldSelf.redis.volumeset.capacity == null ||
+          self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+        paths: [redis.volumeset.capacity]
+        message: Keep the broker capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Who can reach the Airflow UI from the internet.
+    sections:
+      - id: public
+        title: Public access
+        fields:
+          - path: firewallConfig.inboundAllowCIDR
+            type: list
+            label: Public inbound CIDRs
+            widget: tags
+            unique: true
+            description: >-
+              This version ships `0.0.0.0/0`, which opens the UI to the whole internet. Empty closes it; reach
+              it with `cpln port-forward` instead. A change takes 30 seconds to a few minutes to take effect.
+            help: >-
+              Without a CIDR, the canonical endpoint answers 403. Reach the UI over a tunnel with
+              `cpln port-forward RELEASE-airflow-webserver 8080:WEB_PORT --gvc GVC_NAME` (GVC_NAME is the GVC
+              this release creates, WEB_PORT the web port under Webserver, 8080 by default), then open
+              `http://localhost:8080`.
+            item: { type: string, format: cidr, placeholder: 203.0.113.0/24 }
+            rules:
+              - rule: "!self.firewallConfig.inboundAllowCIDR.exists(c, c == '0.0.0.0/0' || c == '::/0')"
+                severity: info
+                message: >-
+                  A CIDR of `0.0.0.0/0` or `::/0` opens the Airflow UI to the whole internet. The UI can
+                  trigger arbitrary code and decrypt every stored Connection, so allow only the address ranges
+                  that need it.
+
+  - id: dags
+    title: DAGs
+    description: >-
+      Where Airflow reads DAG files from: the shared volume, or a Git repository synced onto it.
+    sections:
+      - id: git-sync
+        title: Sync DAGs from Git
+        toggle: gitSync.enabled
+        description: >-
+          A git-sync sidecar next to the webserver clones the repository onto the shared volume and keeps it
+          in sync, and Airflow reads its DAGs from there. With it off, put DAG files in `/opt/airflow/dags`
+          on the shared volume.
+        fields:
+          - path: gitSync.repo
+            type: string
+            format: url
+            label: Repository URL
+            required: true
+            placeholder: https://github.com/my-org/dags
+            description: The repository's HTTPS URL; a private repository also needs the access token below.
+          - path: gitSync.branch
+            type: string
+            label: Branch
+            required: true
+            placeholder: main
+          - path: gitSync.period
+            type: string
+            label: Sync interval
+            required: true
+            pattern: '^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$'
+            patternMessage: Enter a duration such as 60s, 5m or 1h30m.
+            suggestions: ["30s", "60s", "5m"]
+          - path: gitSync.subPath
+            type: string
+            label: DAG folder in the repository
+            placeholder: dags
+            description: Empty reads the DAGs from the repository root.
+            # The chart writes the DAG folder unquoted: ": " breaks the render and " #" cuts the path.
+            pattern: '^[A-Za-z0-9._/-]+$'
+            patternMessage: Use only letters, digits, ., _, - and /.
+          - path: gitSync.auth.token
+            type: string
+            label: Access token
+            widget: password
+            sensitive: true
+            description: >-
+              Private repositories only: a personal access token, which the sidecar sends as the Git password.
+              Leave it empty for a public repository.
+            help: >-
+              The chart writes it into its own secret (RELEASE-airflow-config), and the value is stored in the
+              Helm release values. 1.5.0 takes it from a secret you create instead.
+
+  - id: advanced
+    title: Advanced
+    description: Images and resources of the bundled PostgreSQL metadata database and Redis broker.
+    sections:
+      - id: postgres
+        title: Metadata database
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: PostgreSQL image
+            required: true
+          - path: postgres.resources
+            type: resources
+            label: PostgreSQL resources
+            required: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: redis
+        title: Celery broker
+        docs: "#redis-broker"
+        fields:
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+
+rules:
+  # 1.2.0 renamed every workload and volume set after the release (RELEASE-airflow-*); 1.0.0 and 1.1.0 named them
+  # from values (airflow, postgres, redis, airflow-celery-worker), so Helm deletes the old ones on the upgrade.
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.0 or 1.1.0 release to this version: 1.2.0 names every workload and volume set after
+      the release, so the upgrade deletes the old ones with the metadata database, the broker and the Airflow
+      home (DAGs and task logs), and starts empty ones. Install this version as a new release with its own GVC
+      name, move the metadata database across with pg_dump, then uninstall the old release.
+
+migrations:
+  # 1.0.0 and 1.1.0 listed locations as links; carry them so the GVC keeps its locations.
+  - fromVersions: "<1.2.0"
+    from: gvc.locationLinks
+    note: 1.2.0 lists the GVC's locations by name under gvc.locations; the links are carried there.
+  - fromVersions: "<1.2.0"
+    to: gvc.locations
+    valueExpr: >-
+      self.gvc.locationLinks.map(l, {'name': l.startsWith('//location/') ? l.substring(11) : l})
+    note: The location links became location names in 1.2.0.
+  - fromVersions: "<1.2.0"
+    from: postgres.name
+    note: The workload names follow the release name since 1.2.0 (RELEASE-airflow-postgres).
+  - fromVersions: "<1.2.0"
+    from: redis.name
+    note: The workload names follow the release name since 1.2.0 (RELEASE-airflow-redis).
+  - fromVersions: "<1.2.0"
+    from: airflow.webserverName
+    note: The workload names follow the release name since 1.2.0 (RELEASE-airflow-webserver).
+  - fromVersions: "<1.2.0"
+    from: airflow.celeryWorkerName
+    note: The workload names follow the release name since 1.2.0 (RELEASE-airflow-celery-worker).
+  - fromVersions: "<1.2.0"
+    from: volumeset.auth
+    note: >-
+      These keys sat under volumeset in 1.1.0 and were never read there. The JWT secret is
+      airflow.auth.jwtSecret, under GVC and credentials.
+  # 1.1.0 shipped these under volumeset, where its templates never read them (they read airflow.*).
+  - fromVersions: "<1.2.0"
+    from: volumeset.scheduler.dagDirListInterval
+    to: airflow.scheduler.dagDirListInterval
+    note: 1.1.0 kept this under volumeset, where the chart never read it; this version applies the value.
+  - fromVersions: "<1.2.0"
+    from: volumeset.scheduler.minFileProcessInterval
+    to: airflow.scheduler.minFileProcessInterval
+    note: 1.1.0 kept this under volumeset, where the chart never read it; this version applies the value.
+  - fromVersions: "<1.2.0"
+    from: volumeset.celery.workerConcurrency
+    to: airflow.celery.workerConcurrency
+    note: 1.1.0 kept this under volumeset, where the chart never read it; this version applies the value.
+  # Before 1.3.0 the chart created the metadata database as `test` (POSTGRES_DB was hardcoded).
+  - fromVersions: "<1.3.0"
+    assume: { postgres.config.database: test }
+  - { fromVersions: "<1.3.0", from: postgres.resources.cpu, to: postgres.resources.maxCpu }
+  - { fromVersions: "<1.3.0", from: postgres.resources.memory, to: postgres.resources.maxMemory }
+  # Before 1.3.0 PostgreSQL had only a limit; 1.3.0 added a reservation (250m / 512Mi by default). Derive one the
+  # platform accepts for a stateful workload (at most 4:1 and at most 4000m / 4096Mi below the limit), so a
+  # release with a raised limit is not refused on the first upgrade.
+  - fromVersions: "<1.3.0"
+    to: postgres.resources.minCpu
+    valueExpr: >-
+      string((((cpuMillicores(self.postgres.resources.cpu) + 3) / 4 > cpuMillicores(self.postgres.resources.cpu) - 4000 ? (cpuMillicores(self.postgres.resources.cpu) + 3) / 4 : cpuMillicores(self.postgres.resources.cpu) - 4000) > 250 ? ((cpuMillicores(self.postgres.resources.cpu) + 3) / 4 > cpuMillicores(self.postgres.resources.cpu) - 4000 ? (cpuMillicores(self.postgres.resources.cpu) + 3) / 4 : cpuMillicores(self.postgres.resources.cpu) - 4000) : 250) > cpuMillicores(self.postgres.resources.cpu) ? cpuMillicores(self.postgres.resources.cpu) : (((cpuMillicores(self.postgres.resources.cpu) + 3) / 4 > cpuMillicores(self.postgres.resources.cpu) - 4000 ? (cpuMillicores(self.postgres.resources.cpu) + 3) / 4 : cpuMillicores(self.postgres.resources.cpu) - 4000) > 250 ? ((cpuMillicores(self.postgres.resources.cpu) + 3) / 4 > cpuMillicores(self.postgres.resources.cpu) - 4000 ? (cpuMillicores(self.postgres.resources.cpu) + 3) / 4 : cpuMillicores(self.postgres.resources.cpu) - 4000) : 250)) + 'm'
+    note: Set from the installed CPU limit (never above it), which this version pairs with a reservation.
+  - fromVersions: "<1.3.0"
+    to: postgres.resources.minMemory
+    valueExpr: >-
+      string(((((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 > (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096 ? ((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 : (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096) > 512 ? (((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 > (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096 ? ((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 : (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096) : 512) > (memoryBytes(self.postgres.resources.memory) / 1048576) ? (memoryBytes(self.postgres.resources.memory) / 1048576) : ((((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 > (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096 ? ((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 : (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096) > 512 ? (((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 > (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096 ? ((memoryBytes(self.postgres.resources.memory) / 1048576) + 3) / 4 : (memoryBytes(self.postgres.resources.memory) / 1048576) - 4096) : 512)) + 'Mi'
+    note: Set from the installed memory limit (never above it), which this version pairs with a reservation.
+  - { fromVersions: "<1.3.0", from: volumeset.postgres.capacity, to: postgres.volumeset.capacity }
+
+yamlOnly:
+  # Rendered as AIRFLOW__API_AUTH__JWT_EXPIRATION_DELTA / _JWT_REFRESH_THRESHOLD; Airflow 3.0.3's configuration.py
+  # maps neither, and 1.5.0 removed both (README "Upgrading from 1.4.x", CHANGELOG 1.5.0).
+  - path: airflow.auth.jwtExpirationDelta
+    reason: Not read by Airflow 3; 1.5.0 removed it and added airflow.auth.jwtExpirationTime.
+  - path: airflow.auth.jwtRefreshThreshold
+    reason: Not read by Airflow 3, which has no equivalent; 1.5.0 removed it.

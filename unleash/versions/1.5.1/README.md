@@ -141,7 +141,7 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 ## Upgrading from 1.5.0 or earlier
 
-1.5.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Unleash itself restarts as on any upgrade; with a single Unleash replica (the default) that is the longer interruption. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Unleash does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
+1.5.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Unleash itself restarts without a gap: the new replica serves before the old one stops. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Unleash does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
 
 ## Upgrading from 1.4.0
 

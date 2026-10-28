@@ -67,3 +67,7 @@ ready but every login 500s (`column … organization_id does not exist`); re-upg
 values from the 1.5.0 wizard pin `image: …26.6.3`, so `keycloak.validateImage` refuses official tags
 below 26.7.2. Known drift (same as 1.5.0, deferred): `livenessProbe.successThreshold`,
 `readinessProbe.httpGet.scheme` on keycloak, six probe fields in postgres-highly-available 2.5.0.
+**1.5.1, HA database image (2026-10-27, CVE-2026-103484):** `postgresHA.image` is set to
+`controlplanecorporation/patroni-postgres:0.8` (pgvector 0.8.7), overriding the vendored
+postgres-highly-available 2.5.0 default of 0.7; `keycloak.validatePostgresHAImage` refuses tags 0.1-0.7, and an empty value (which would fall back to the subchart's 0.7), when HA
+is on (mirrored in the wizard). Keycloak does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout); the HAProxy proxy workload does not restart (helm may print `Updated` for it from a tag bump, but its replicas keep running). Measured: ~5 s of write interruption at the leader change; 2+ Keycloak replicas otherwise keep serving, and `replicas: 1` is down for its own restart as above. Moving to postgres-highly-available 2.8.1 is a later batch.

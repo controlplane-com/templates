@@ -83,6 +83,7 @@ postgresHA:          # default: highly available PostgreSQL
   config:
     credentialsSecretName: my-keycloak-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10     # GiB per replica
   backup:
@@ -132,7 +133,9 @@ Public access is **on** by default: browsers must reach Keycloak's login and OID
 
 The first 26.8.1 server to start migrates the database schema, and Keycloak cannot run an older version against a migrated database, so this upgrade cannot be rolled back to 1.5.0: a rolled-back release reports healthy, but every login page fails with HTTP 500. Take a database backup before upgrading (`postgresHA.backup` or `postgres.backup`, see [Configuration](#configuration)); to recover from a rollback, upgrade to 1.5.1 again or restore the backup.
 
-With 2 or more replicas the upgrade serves requests throughout. With `replicas: 1`, Keycloak is unavailable while its single server restarts.
+With 2 or more replicas Keycloak keeps serving throughout the upgrade, apart from the brief interruption of database writes in HA mode described below. With `replicas: 1`, Keycloak is unavailable while its single server restarts.
+
+In HA mode, 1.5.1 also moves the database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief interruption of writes while the leader changes, even with 2 or more Keycloak replicas. Upgrade in a quiet window. Keycloak does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there after the upgrade. If your values set `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render.
 
 ## Upgrading from 1.4.0
 

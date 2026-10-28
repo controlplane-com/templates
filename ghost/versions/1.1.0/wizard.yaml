@@ -156,6 +156,7 @@ steps:
             label: Content volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250]
             description: Uploaded images, themes, logs and adapters.
@@ -363,6 +364,7 @@ steps:
             label: Database volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250]
             help: Uninstalling the release deletes the volume set and the database on it.

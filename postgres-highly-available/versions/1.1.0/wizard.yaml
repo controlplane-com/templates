@@ -1,0 +1,325 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL (highly available)
+# Patroni, etcd and their volume sets are stateful with no location handling: every extra GVC
+# location would run an unrelated cluster with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Patroni-managed PostgreSQL members and their compute.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the members restarts them, and nothing limits the rollout of a
+          stateful workload, so plan for a short write outage.
+      - path: replicas
+        type: integer
+        label: PostgreSQL members
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: One is the leader; the others stream from it and take over if it fails.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: self.replicas >= 3
+        severity: info
+        paths: [replicas]
+        message: With fewer than 3 members there is no standby to take over when the leader fails.
+      - rule: string(self.resources.memory).lowerAscii().matches('^[0-9]+(\\.[0-9]{1,3})?(g|m|k|gi|mi|ki)$')
+        paths: [resources]
+        message: >-
+          Give the memory with a unit (for example 2Gi). The chart writes it unquoted, so a plain number
+          reaches the API as a number, which it refuses.
+
+  - id: credentials
+    title: Credentials
+    description: The database user, password and name that the cluster is created with.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These credentials are values: the chart stores them in the Helm release and in a secret it
+          creates. 2.5.0 takes them from a secret you create instead.
+      - type: note
+        severity: warning
+        text: >-
+          This version also writes the password into Patroni's shared configuration, which anything that
+          can reach port 8008 of the members can read without authentication at `/config`. 2.8.0 stops
+          writing it there.
+      - path: postgres.username
+        type: string
+        label: Database user
+        required: true
+        description: The superuser the cluster is created with.
+      - path: postgres.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: Used as typed, so replace the published default.
+        help: >-
+          Shared with the replication user `repl`. PostgreSQL sets it only when the cluster is first
+          created.
+      - path: postgres.database
+        type: string
+        label: Database name
+        required: true
+        description: Created when the cluster is first created.
+    rules:
+      # The startup script writes user and password unquoted into an unquoted bash heredoc that becomes
+      # Patroni's YAML config (PyYAML, YAML 1.1), and user and database into the post_init psql command
+      # (CREATE DATABASE unquoted). Measured by running the rendered script and parsing its output.
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          [self.postgres.password].all(x,
+          !x.matches('[$`]') && !x.contains('\\\\') && !x.endsWith('\\') &&
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','~','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\\.[0-9]*)?([ \\t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?$'))
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          The startup script writes the password unquoted into a shell script and Patroni's YAML
+          configuration. Leave out $, backticks and double backslashes, do not start with a space or one
+          of ! & * % @ ' " [ ] { } | > , # (or "- ", "? ", ": "), avoid ": " and " #", do not end with a
+          colon, space or backslash, and do not use a value that YAML reads as a number, date, true/false,
+          yes/no, on/off or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.username == oldSelf.postgres.username) ||
+          [self.postgres.username].all(x,
+          !x.matches('[\\s$`\'"\\\\]') &&
+          !x.matches('^[%@,#!{}\\[\\]&*|>]') && !x.matches('^[-?:]$') && !x.endsWith(':') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          The user is written unquoted into Patroni's YAML configuration and a psql command. Leave out
+          spaces and the characters $ ` ' " \, do not start with % @ , # ! { } [ ] & * | or > or end with
+          a colon, and do not use a value that YAML reads as a number, date, true/false, yes/no, on/off or
+          null.
+      - rule: >-
+          (oldSelf != null && self.postgres.database == oldSelf.postgres.database) ||
+          (self.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgres.database) <= 63 &&
+          !(self.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+        severity: warning
+        paths: [postgres.database]
+        message: >-
+          Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+          not postgres, template0, template1 or an SQL reserved word such as user or order. The cluster runs
+          an unquoted CREATE DATABASE when it is first created: it folds other names to lowercase or fails,
+          and a failure stops the cluster from being created.
+      # The chart also writes user, password and database unquoted into the dictionary secret it creates,
+      # which the CLI parses as YAML 1.2.
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          [self.postgres.password].all(x,
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          The chart also writes the password unquoted into the secret it creates, so it must not be a value
+          YAML reads as a number (including forms such as 1e5, 0o17 or 0x1F), a date, true, false or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.username == oldSelf.postgres.username) ||
+          [self.postgres.username].all(x,
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          The chart also writes the user unquoted into the secret it creates, so it must not be a value YAML
+          reads as a number (including forms such as 1e5, 0o17 or 0x1F), a date, true, false or null.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgres.username == oldSelf.postgres.username &&
+          self.postgres.password == oldSelf.postgres.password &&
+          self.postgres.database == oldSelf.postgres.database)
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          PostgreSQL keeps the user, password and database it was created with: changing them here does
+          not change the cluster, and the members then use credentials that no longer
+          match. Change them in the database first.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.0.0 set the volume set to grow automatically up to 1000 GiB; this version no longer sets
+              that. Check the volume set's autoscaling and the members' free space after the upgrade.
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The etcd cluster Patroni uses for leader election and its shared configuration.
+    sections:
+      - title: etcd cluster
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The etcd in this version never compacts its history. Patroni renews its leader lease every few
+              seconds, so the backend grows with time alone until it reaches its 2 GiB quota and etcd goes
+              read-only, after which the members restart in a loop. 2.4.2 turns compaction on.
+          - path: etcd.replicas
+            type: integer
+            label: etcd members
+            required: true
+            min: 1
+            suggestions: [3, 5, 7]
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per member.
+        rules:
+          - rule: self.etcd.replicas >= 3 && self.etcd.replicas % 2 == 1
+            severity: info
+            paths: [etcd.replicas]
+            message: >-
+              Use an odd number of at least 3 etcd members (3, 5 or 7): fewer cannot survive the loss of one,
+              and an even count adds nothing to fault tolerance.
+          - rule: >-
+              string(self.etcd.resources.cpu).matches('^[0-9]+m$') &&
+              string(self.etcd.resources.memory).lowerAscii().matches('^[0-9]+(\\.[0-9]{1,3})?(g|m|k|gi|mi|ki)$')
+            paths: [etcd.resources]
+            message: >-
+              Give the etcd CPU in millicores (for example 1000m) and the memory with a unit (for example
+              512Mi). This version's etcd writes both unquoted, so a plain number reaches the API as a number,
+              which it refuses.
+          - rule: oldSelf == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internal_access.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: etcd.internal_access.workloads
+            type: list
+            label: Allowed etcd clients
+            when: self.etcd.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - when: self.etcd.internal_access.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-patroni-postgres') in self.etcd.internal_access.workloads
+            severity: warning
+            paths: [etcd.internal_access.workloads]
+            messageExpression: >-
+              'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-patroni-postgres, or Patroni
+              cannot reach etcd and no member becomes leader.'
+            message: Add the PostgreSQL workload to the list, or Patroni cannot reach etcd and no member becomes leader.
+
+  - id: network
+    title: Network
+    description: Who can connect to the PostgreSQL members.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version has no leader endpoint: the PostgreSQL workload's address reaches any member, and
+          only the leader accepts writes. 2.0.0 adds an HAProxy endpoint that always routes to the leader.
+      - path: internal_access.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        options:
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: internal_access.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internal_access.type in ['same-gvc', 'workload-list']
+        widget: tags
+        item:
+          type: ref
+          ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+    rules:
+      # The workload template writes inboundAllowWorkload twice when the list is not empty; the CLI's YAML
+      # parser refuses the duplicated key, so the install fails (measured with js-yaml 4.2.0).
+      - rule: size(self.internal_access.workloads) == 0
+        paths: [internal_access.workloads]
+        message: >-
+          Leave this list empty. This version writes the allowed-workloads key twice when the list has
+          entries, and the install fails on the duplicated key.
+      - rule: >-
+          self.internal_access.type != 'workload-list' ||
+          (oldSelf != null && oldSelf.internal_access.type == 'workload-list')
+        severity: warning
+        paths: [internal_access.type]
+        message: >-
+          Specific workloads cannot work in this version: the list must stay empty, so no client could
+          connect. Choose Same GVC or Same org.

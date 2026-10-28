@@ -1,0 +1,722 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL (highly available)
+# Patroni, etcd and their volume sets are stateful with no location handling: every extra GVC
+# location would run an unrelated cluster with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Patroni-managed PostgreSQL members, their image and compute.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the members restarts them, and nothing limits the rollout of a
+          stateful workload, so plan for a short write outage.
+      - path: replicas
+        type: integer
+        label: PostgreSQL members
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: One is the leader; the others stream from it and take over if it fails.
+        docs: "#cluster-and-resources"
+      - path: image
+        type: string
+        format: image
+        label: Patroni PostgreSQL image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: multiZone
+        type: boolean
+        label: Spread across zones
+        description: >-
+          Applies to the PostgreSQL members and their HAProxy and PgBouncer workloads. Confirm that
+          your location supports multiple zones.
+    rules:
+      - rule: self.replicas >= 3
+        severity: info
+        paths: [replicas]
+        message: With fewer than 3 members there is no standby to take over when the leader fails.
+
+  - id: credentials
+    title: Credentials
+    description: The database user, password and name that the cluster is created with.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These credentials are values: the chart stores them in the Helm release and in a secret it
+          creates. 2.5.0 takes them from a secret you create instead.
+      - type: note
+        severity: warning
+        text: >-
+          This version also writes the password into Patroni's shared configuration, which anything that
+          can reach port 8008 of the members can read without authentication at `/config`. 2.8.0 stops
+          writing it there.
+      - path: postgres.username
+        type: string
+        label: Database user
+        required: true
+        description: The superuser the cluster is created with.
+      - path: postgres.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: Used as typed, so replace the published default.
+        help: >-
+          Shared with the replication user `repl`. PostgreSQL sets it only when the cluster is first
+          created.
+      - path: postgres.database
+        type: string
+        label: Database name
+        required: true
+        description: Created when the cluster is first created.
+    rules:
+      # The startup script writes user and password unquoted into an unquoted bash heredoc that becomes
+      # Patroni's YAML config (PyYAML, YAML 1.1), and user and database into the post_init psql command
+      # (CREATE DATABASE unquoted). Measured by running the rendered script and parsing its output.
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          [self.postgres.password].all(x,
+          !x.matches('[$`]') && !x.contains('\\\\') && !x.endsWith('\\') &&
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','~','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\\.[0-9]*)?([ \\t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?$'))
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          The startup script writes the password unquoted into a shell script and Patroni's YAML
+          configuration. Leave out $, backticks and double backslashes, do not start with a space or one
+          of ! & * % @ ' " [ ] { } | > , # (or "- ", "? ", ": "), avoid ": " and " #", do not end with a
+          colon, space or backslash, and do not use a value that YAML reads as a number, date, true/false,
+          yes/no, on/off or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.username == oldSelf.postgres.username) ||
+          [self.postgres.username].all(x,
+          !x.matches('[\\s$`\'"\\\\;&|<>()*?\\[]') &&
+          !x.matches('^[%@,#!{}\\]~]') && !x.matches('^[-?:]$') && !x.endsWith(':') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          The user is written unquoted into Patroni's YAML configuration and a shell command. Leave out
+          spaces and the characters $ ` ' " \ ; & | < > ( ) * ? [, do not start with % @ , # ! { } ] or ~
+          or end with a colon, and do not use a value that YAML reads as a number, date, true/false, yes/no,
+          on/off or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.database == oldSelf.postgres.database) ||
+          (self.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgres.database) <= 63 &&
+          !(self.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+        severity: warning
+        paths: [postgres.database]
+        message: >-
+          Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+          not postgres, template0, template1 or an SQL reserved word such as user or order. The cluster runs
+          an unquoted CREATE DATABASE when it is first created: it folds other names to lowercase or fails,
+          and a failure stops the cluster from being created.
+      - when: self.pgbouncer.enabled
+        rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          !self.postgres.password.contains('"')
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          PgBouncer in this version writes the password into its user list without escaping, so a double
+          quote fails every login through PgBouncer. 2.6.0 fixes this.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgres.username == oldSelf.postgres.username &&
+          self.postgres.password == oldSelf.postgres.password &&
+          self.postgres.database == oldSelf.postgres.database)
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          PostgreSQL keeps the user, password and database it was created with: changing them here does
+          not change the cluster, and the members, PgBouncer and backups then use credentials that no longer
+          match. Change them in the database first.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The etcd cluster Patroni uses for leader election and its shared configuration.
+    sections:
+      - title: etcd cluster
+        docs: "#etcd-cluster"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The etcd in this version never compacts its history. Patroni renews its leader lease every few
+              seconds, so the backend grows with time alone until it reaches its 2 GiB quota and etcd goes
+              read-only, after which the members restart in a loop. 2.4.2 turns compaction on.
+          - path: etcd.replicas
+            type: integer
+            label: etcd members
+            required: true
+            min: 3
+            suggestions: [3, 5, 7]
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: etcd.multiZone
+            type: boolean
+            label: Spread etcd across zones
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per member.
+        rules:
+          - rule: self.etcd.replicas % 2 == 1
+            paths: [etcd.replicas]
+            message: etcd needs an odd number of members (3, 5 or 7) to keep a quorum.
+          - rule: oldSelf == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internal_access.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: etcd.internal_access.workloads
+            type: list
+            label: Allowed etcd clients
+            when: self.etcd.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - when: self.etcd.internal_access.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha') in self.etcd.internal_access.workloads
+            severity: warning
+            paths: [etcd.internal_access.workloads]
+            messageExpression: >-
+              'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha, or Patroni
+              cannot reach etcd and no member becomes leader.'
+            message: Add the PostgreSQL workload to the list, or Patroni cannot reach etcd and no member becomes leader.
+
+  - id: network
+    title: Network and pooling
+    description: Who can connect, the leader endpoint and an optional connection pooler.
+    sections:
+      - title: Network access
+        docs: "#internal-access"
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to the PostgreSQL members and their HAProxy and PgBouncer workloads.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+          - when: self.internal_access.type == 'workload-list' && context.gvc != null
+            rule: >-
+              (!(self.proxy.enabled || self.pgbouncer.enabled) ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-proxy') in self.internal_access.workloads) &&
+              (!self.pgbouncer.enabled ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internal_access.workloads) &&
+              (!(self.backup.enabled && self.backup.mode == 'logical') ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-backup') in self.internal_access.workloads)
+            severity: warning
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add ' +
+              ((self.proxy.enabled || self.pgbouncer.enabled ? ['-postgres-ha-proxy'] : []) +
+              (self.pgbouncer.enabled ? ['-pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['-postgres-ha-backup'] : []))
+              .map(s, '//gvc/' + context.gvc + '/workload/' + context.releaseName + s).join(', ') +
+              ', or they cannot connect.'
+            message: >-
+              The chart does not add its own workloads to the list: add the HAProxy workload, and the
+              PgBouncer and logical backup workloads when they are on, or they cannot connect.
+      - id: proxy
+        title: HAProxy leader endpoint
+        toggle: proxy.enabled
+        description: >-
+          An endpoint that always routes to the current leader. Applications, PgBouncer and logical
+          backups connect through it.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version HAProxy resolves the members' addresses once, when it starts, without waiting for
+              them to exist, so on a new install it can keep addresses that never answer. 2.4.1 waits for the
+              members first. If clients cannot connect through HAProxy after an install, force a redeployment
+              of the HAProxy workload.
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.maxReplicas >= self.proxy.minReplicas
+            paths: [proxy.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: When on, PgBouncer in front of HAProxy becomes the endpoint your applications connect to.
+        fields:
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API
+              workloads, but not compatible with `SET` variables, temporary tables or advisory
+              locks. **Session** holds it for the whole client session: compatible with
+              everything, less reuse. **Statement** returns it after every statement:
+              transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxDbConnections
+            type: integer
+            label: Max database connections
+            min: 1
+            required: true
+            suggestions: [25, 50, 100]
+            description: >-
+              Per PgBouncer replica: replicas do not coordinate, so the cluster can see up to this times
+              the maximum replicas.
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.enabled
+            severity: warning
+            paths: [pgbouncer.enabled]
+            message: >-
+              Turn the HAProxy leader endpoint on too. PgBouncer connects through it, and with the switch
+              off the HAProxy workload is created without access to its startup secret and never starts.
+          - rule: self.pgbouncer.maxReplicas >= self.pgbouncer.minReplicas
+            paths: [pgbouncer.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+    rules:
+      # HAProxy renders whenever proxy or PgBouncer is on, also while the HAProxy section (and its
+      # resources field) is hidden, so this rule lives on the step with no paths.
+      - when: self.proxy.enabled || self.pgbouncer.enabled
+        rule: >-
+          string(self.proxy.resources.cpu).matches('^[0-9]+m$') &&
+          string(self.proxy.resources.memory).lowerAscii().matches('^[0-9]+(\\.[0-9]{1,3})?(g|m|k|gi|mi|ki)$')
+        message: >-
+          Give the HAProxy CPU in millicores (for example 1000m) and the memory with a unit (for example
+          256Mi), under HAProxy resources. The chart writes both unquoted, so a plain number reaches the API
+          as a number, which it refuses.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical dumps to object storage.
+    sections:
+      - id: backup
+        title: Backups
+        toggle: backup.enabled
+        docs: "#backup"
+        fields:
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            options:
+              - { value: logical, label: Logical dumps, description: Portable SQL dumps on a schedule. }
+              - { value: wal-g, label: WAL-G, description: Does not work in this version. }
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.backup.mode == 'logical'
+          - path: backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: seconds
+            min: 60
+            required: true
+            when: self.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.mode == 'logical'
+            description: The default tag, 17.1.0, is for PostgreSQL 17.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: The logical backup job, or the WAL-G sidecar next to each member.
+        rules:
+          - rule: self.backup.mode in ['logical', 'wal-g']
+            mirrors: pg-ha.validateBackupMode
+            paths: [backup.mode]
+            message: Choose logical or wal-g as the backup mode.
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: pg-ha.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose aws or gcp as the backup destination.
+          - when: self.backup.mode == 'logical'
+            rule: self.proxy.enabled || self.pgbouncer.enabled
+            severity: warning
+            paths: [backup.mode]
+            message: Logical backups connect through the HAProxy leader endpoint; turn it on under Network and pooling.
+          - rule: >-
+              self.backup.mode != 'wal-g' ||
+              (oldSelf != null && oldSelf.backup.enabled && oldSelf.backup.mode == 'wal-g' &&
+              context.fromVersion != null && semverCompare(context.fromVersion, '2.1.0') >= 0)
+            severity: warning
+            paths: [backup.mode]
+            messageExpression: >-
+              oldSelf != null && oldSelf.backup.enabled && oldSelf.backup.mode == 'wal-g' ?
+              'Upgrading a WAL-G release to this version stops WAL archiving; upgrade to 2.4.0 or later.' :
+              'WAL-G does not work in this version: the chart reads the bucket from settings that no longer exist, so the WAL-G containers get no destination and every archive attempt fails, and PostgreSQL keeps the WAL it cannot archive. Use logical dumps here, or install 2.4.0 or later for WAL-G.'
+            message: >-
+              WAL-G does not work in this version: the chart reads the bucket from settings that no longer
+              exist, so the WAL-G containers get no destination and every archive attempt fails, and
+              PostgreSQL keeps the WAL it cannot archive. Use logical dumps here, or install 2.4.0 or later
+              for WAL-G.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the backup identity also carries the AWS managed policy ReadOnlyAccess, which
+              can read every bucket in the AWS account, not only this one. 2.5.1 removes it.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion != '2.2.0' ||
+      context.gvcLocations == null || size(context.gvcLocations) <= 1
+    message: >-
+      This release runs 2.2.0's multi-location mode, which 2.3.0 removed: this version would run an
+      unrelated cluster in each location. Install this version as a new release and move the data with
+      pg_dump instead.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      2.0.0 renamed the PostgreSQL workload and its volume set, so upgrading a 1.x release deletes the old
+      workload and its volume set with the data. Install this version as a new release and move the data
+      with pg_dump instead.
+
+migrations:
+  - fromVersions: "<2.3.0"
+    from: postgres.walLevel
+    note: >-
+      2.3.0 removed the WAL level setting and writes wal_level replica. A cluster that already exists keeps
+      the WAL level stored in its shared configuration.
+  - fromVersions: "<2.3.0"
+    from: global.locations
+    note: >-
+      2.3.0 removed multi-location mode and runs in a single location. Do not upgrade a release that set
+      global.locations to this version.
+  - fromVersions: "<2.1.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<2.1.0"
+    from: resources.memory
+    to: resources.maxMemory
+  # The new minimums (500m, 1Gi) would leave a carried maximum above 4 times the minimum, which a
+  # stateful workload refuses, or above the maximum itself: raise the minimum to a quarter of the
+  # maximum when needed, and lower it to the maximum when the maximum is below the new minimum.
+  - fromVersions: "<2.1.0"
+    to: resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.resources.cpu) < 500 ? string(cpuMillicores(self.resources.cpu)) + 'm' :
+      cpuMillicores(self.resources.cpu) > 2000 ?
+      string((cpuMillicores(self.resources.cpu) + 3) / 4 > cpuMillicores(self.resources.cpu) - 4000 ?
+      (cpuMillicores(self.resources.cpu) + 3) / 4 : cpuMillicores(self.resources.cpu) - 4000) + 'm' : '500m'
+    note: The single CPU value is now the maximum; the minimum is set so the maximum stays within 4 times it and within the platform's range.
+  - fromVersions: "<2.1.0"
+    to: resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.resources.memory) < 1073741824 ? string(memoryBytes(self.resources.memory)) :
+      memoryBytes(self.resources.memory) > 4294967296 ?
+      string((memoryBytes(self.resources.memory) + 4194303) / 4194304 > (memoryBytes(self.resources.memory) + 1048575) / 1048576 - 4096 ?
+      (memoryBytes(self.resources.memory) + 4194303) / 4194304 : (memoryBytes(self.resources.memory) + 1048575) / 1048576 - 4096) + 'Mi' : '1Gi'
+    note: The single memory value is now the maximum; the minimum is set so the maximum stays within 4 times it and within the platform's range.
+  - fromVersions: "<2.1.0"
+    to: backup.provider
+    valueExpr: "self.backup.gcp.enabled && !self.backup.aws.enabled ? 'gcp' : 'aws'"
+    note: The destination is now chosen with Destination under Backups.
+  - fromVersions: "<2.1.0"
+    from: backup.aws.enabled
+    note: Replaced by Destination under Backups.
+  - fromVersions: "<2.1.0"
+    from: backup.gcp.enabled
+    note: Replaced by Destination under Backups.
+  - fromVersions: "<2.1.0"
+    from: backup.aws.s3.bucket
+    to: backup.aws.bucket
+  - fromVersions: "<2.1.0"
+    from: backup.aws.s3.region
+    to: backup.aws.region
+  - fromVersions: "<2.1.0"
+    from: backup.aws.s3.cloudAccountName
+    to: backup.aws.cloudAccountName
+  - fromVersions: "<2.1.0"
+    from: backup.aws.s3.policyName
+    to: backup.aws.policyName
+  - fromVersions: "<2.1.0"
+    from: backup.gcp.gcs.bucket
+    to: backup.gcp.bucket
+  - fromVersions: "<2.1.0"
+    from: backup.gcp.gcs.cloudAccountName
+    to: backup.gcp.cloudAccountName
+  # The default folder changed from postgres/my-cluster to postgres/backups; keep the installed one so
+  # existing backups stay in the same place.
+  - fromVersions: "<2.1.0"
+    from: backup.aws.s3.prefix
+    to: backup.aws.prefix
+  - fromVersions: "<2.1.0"
+    to: backup.aws.prefix
+    valueExpr: self.backup.aws.s3.prefix
+    note: The folder prefix is kept as installed.
+  - fromVersions: "<2.1.0"
+    from: backup.gcp.gcs.prefix
+    to: backup.gcp.prefix
+  - fromVersions: "<2.1.0"
+    to: backup.gcp.prefix
+    valueExpr: self.backup.gcp.gcs.prefix
+    note: The folder prefix is kept as installed.

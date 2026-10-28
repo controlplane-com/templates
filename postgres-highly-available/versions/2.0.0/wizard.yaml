@@ -1,0 +1,577 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL (highly available)
+# Patroni, etcd and their volume sets are stateful with no location handling: every extra GVC
+# location would run an unrelated cluster with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Patroni-managed PostgreSQL members, their image and compute.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the members restarts them, and nothing limits the rollout of a
+          stateful workload, so plan for a short write outage.
+      - path: replicas
+        type: integer
+        label: PostgreSQL members
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: One is the leader; the others stream from it and take over if it fails.
+      - path: image
+        type: string
+        format: image
+        label: Patroni PostgreSQL image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: multiZone
+        type: boolean
+        label: Spread across zones
+        description: >-
+          Applies to the PostgreSQL members and their HAProxy workload. Confirm your location
+          supports multiple zones.
+    rules:
+      - rule: self.replicas >= 3
+        severity: info
+        paths: [replicas]
+        message: With fewer than 3 members there is no standby to take over when the leader fails.
+
+  - id: credentials
+    title: Credentials
+    description: The database user, password and name that the cluster is created with.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These credentials are values: the chart stores them in the Helm release and in a secret it
+          creates. 2.5.0 takes them from a secret you create instead.
+      - type: note
+        severity: warning
+        text: >-
+          This version also writes the password into Patroni's shared configuration, which anything that
+          can reach port 8008 of the members can read without authentication at `/config`. 2.8.0 stops
+          writing it there.
+      - path: postgres.username
+        type: string
+        label: Database user
+        required: true
+        description: The superuser the cluster is created with.
+      - path: postgres.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: Used as typed, so replace the published default.
+        help: >-
+          Shared with the replication user `repl`. PostgreSQL sets it only when the cluster is first
+          created.
+      - path: postgres.database
+        type: string
+        label: Database name
+        required: true
+        description: Created when the cluster is first created.
+    rules:
+      # The startup script writes user and password unquoted into an unquoted bash heredoc that becomes
+      # Patroni's YAML config (PyYAML, YAML 1.1), and user and database into the post_init psql command
+      # (CREATE DATABASE unquoted). Measured by running the rendered script and parsing its output.
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          [self.postgres.password].all(x,
+          !x.matches('[$`]') && !x.contains('\\\\') && !x.endsWith('\\') &&
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','~','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\\.[0-9]*)?([ \\t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?$'))
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          The startup script writes the password unquoted into a shell script and Patroni's YAML
+          configuration. Leave out $, backticks and double backslashes, do not start with a space or one
+          of ! & * % @ ' " [ ] { } | > , # (or "- ", "? ", ": "), avoid ": " and " #", do not end with a
+          colon, space or backslash, and do not use a value that YAML reads as a number, date, true/false,
+          yes/no, on/off or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.username == oldSelf.postgres.username) ||
+          [self.postgres.username].all(x,
+          !x.matches('[\\s$`\'"\\\\;&|<>()*?\\[]') &&
+          !x.matches('^[%@,#!{}\\]~]') && !x.matches('^[-?:]$') && !x.endsWith(':') &&
+          !(x in ['yes','Yes','YES','no','No','NO','true','True','TRUE','false','False','FALSE','on','On','ON','off','Off','OFF','null','Null','NULL','=','<<']) &&
+          !x.matches('^[-+]?(0b[0-1_]+|0[0-7_]+|(0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !x.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !x.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          The user is written unquoted into Patroni's YAML configuration and a shell command. Leave out
+          spaces and the characters $ ` ' " \ ; & | < > ( ) * ? [, do not start with % @ , # ! { } ] or ~
+          or end with a colon, and do not use a value that YAML reads as a number, date, true/false, yes/no,
+          on/off or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.database == oldSelf.postgres.database) ||
+          (self.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgres.database) <= 63 &&
+          !(self.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+        severity: warning
+        paths: [postgres.database]
+        message: >-
+          Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+          not postgres, template0, template1 or an SQL reserved word such as user or order. The cluster runs
+          an unquoted CREATE DATABASE when it is first created: it folds other names to lowercase or fails,
+          and a failure stops the cluster from being created.
+      # The chart also writes user, password and database unquoted into the dictionary secret it creates,
+      # which the CLI parses as YAML 1.2.
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          [self.postgres.password].all(x,
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          The chart also writes the password unquoted into the secret it creates, so it must not be a value
+          YAML reads as a number (including forms such as 1e5, 0o17 or 0x1F), a date, true, false or null.
+      - rule: >-
+          (oldSelf != null && self.postgres.username == oldSelf.postgres.username) ||
+          [self.postgres.username].all(x,
+          !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+          !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+          !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          The chart also writes the user unquoted into the secret it creates, so it must not be a value YAML
+          reads as a number (including forms such as 1e5, 0o17 or 0x1F), a date, true, false or null.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgres.username == oldSelf.postgres.username &&
+          self.postgres.password == oldSelf.postgres.password &&
+          self.postgres.database == oldSelf.postgres.database)
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          PostgreSQL keeps the user, password and database it was created with: changing them here does
+          not change the cluster, and the members and backups then use credentials that no longer
+          match. Change them in the database first.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a
+              reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The etcd cluster Patroni uses for leader election and its shared configuration.
+    sections:
+      - title: etcd cluster
+        docs: "#etcd-cluster"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The etcd in this version never compacts its history. Patroni renews its leader lease every few
+              seconds, so the backend grows with time alone until it reaches its 2 GiB quota and etcd goes
+              read-only, after which the members restart in a loop. 2.4.2 turns compaction on.
+          - path: etcd.replicas
+            type: integer
+            label: etcd members
+            required: true
+            min: 3
+            suggestions: [3, 5, 7]
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: etcd.multiZone
+            type: boolean
+            label: Spread etcd across zones
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per member.
+        rules:
+          - rule: self.etcd.replicas % 2 == 1
+            paths: [etcd.replicas]
+            message: etcd needs an odd number of members (3, 5 or 7) to keep a quorum.
+          - rule: oldSelf == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internal_access.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: etcd.internal_access.workloads
+            type: list
+            label: Allowed etcd clients
+            when: self.etcd.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - when: self.etcd.internal_access.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha') in self.etcd.internal_access.workloads
+            severity: warning
+            paths: [etcd.internal_access.workloads]
+            messageExpression: >-
+              'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha, or Patroni
+              cannot reach etcd and no member becomes leader.'
+            message: Add the PostgreSQL workload to the list, or Patroni cannot reach etcd and no member becomes leader.
+
+  - id: network
+    title: Network
+    description: Who can connect, and the leader endpoint.
+    sections:
+      - title: Network access
+        docs: "#internal-access"
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to the PostgreSQL members and their HAProxy workload.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+            severity: warning
+            paths: [internal_access.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+          - when: self.internal_access.type == 'workload-list' && context.gvc != null
+            rule: >-
+              (!self.proxy.enabled ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-proxy') in self.internal_access.workloads) &&
+              (!(self.backup.enabled && self.backup.mode == 'logical') ||
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-ha-backup') in self.internal_access.workloads)
+            severity: warning
+            paths: [internal_access.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add ' +
+              ((self.proxy.enabled ? ['-postgres-ha-proxy'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['-postgres-ha-backup'] : []))
+              .map(s, '//gvc/' + context.gvc + '/workload/' + context.releaseName + s).join(', ') +
+              ', or they cannot connect.'
+            message: >-
+              The chart does not add its own workloads to the list: add the HAProxy workload, and the
+              logical backup workload when it is on, or they cannot connect.
+      - id: proxy
+        title: HAProxy leader endpoint
+        toggle: proxy.enabled
+        description: >-
+          An endpoint that always routes to the current leader. Applications and logical backups connect
+          through it.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version HAProxy resolves the members' addresses once, when it starts, without waiting for
+              them to exist, so on a new install it can keep addresses that never answer. 2.4.1 waits for the
+              members first. If clients cannot connect through HAProxy after an install, force a redeployment
+              of the HAProxy workload.
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.proxy.maxReplicas >= self.proxy.minReplicas
+            paths: [proxy.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+          - rule: >-
+              string(self.proxy.resources.cpu).matches('^[0-9]+m$') &&
+              string(self.proxy.resources.memory).lowerAscii().matches('^[0-9]+(\\.[0-9]{1,3})?(g|m|k|gi|mi|ki)$')
+            paths: [proxy.resources]
+            message: >-
+              Give the HAProxy CPU in millicores (for example 1000m) and the memory with a unit (for example
+              256Mi). The chart writes both unquoted, so a plain number reaches the API as a number, which it
+              refuses.
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical dumps, or continuous WAL-G archiving, to object storage.
+    sections:
+      - id: backup
+        title: Backups
+        docs: "#backup"
+        fields:
+          - id: backupDestination
+            virtual: true
+            type: enum
+            label: Backups
+            widget: cards
+            required: true
+            init: >-
+              !self.backup.enabled ? 'off' :
+              (self.backup.gcp.enabled && !self.backup.aws.enabled ? 'gcp' : 'aws')
+            options:
+              - value: "off"
+                label: "Off"
+                set: { backup.enabled: false, backup.aws.enabled: false, backup.gcp.enabled: false }
+              - value: aws
+                label: AWS S3
+                set: { backup.enabled: true, backup.aws.enabled: true, backup.gcp.enabled: false }
+              - value: gcp
+                label: Google Cloud Storage
+                set: { backup.enabled: true, backup.aws.enabled: false, backup.gcp.enabled: true }
+          - type: note
+            severity: warning
+            when: self.backup.enabled && self.backup.mode == 'wal-g'
+            text: >-
+              In this version the WAL-G sidecar waits a full interval before its first base backup, so a
+              new cluster archives WAL with nothing to restore it from for up to that long, and turning
+              WAL-G on for a cluster that already exists does not start WAL archiving. 2.6.0 fixes both.
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            when: self.backup.enabled
+            options:
+              - { value: logical, label: Logical dumps, description: Portable SQL dumps on a schedule. }
+              - { value: wal-g, label: WAL-G, description: Continuous archiving with point-in-time recovery. }
+          - path: backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.backup.enabled && self.backup.mode == 'logical'
+          - path: backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: seconds
+            min: 60
+            required: true
+            when: self.backup.enabled && self.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.enabled && self.backup.mode == 'logical'
+            description: The default tag, 17.1.0, is for PostgreSQL 17.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            when: self.backup.enabled
+            description: The logical backup job, or the WAL-G sidecar next to each member.
+        rules:
+          - rule: "!self.backup.enabled || self.backup.mode in ['logical', 'wal-g']"
+            mirrors: pg-ha.validateBackupMode
+            paths: [backup.mode]
+            message: Choose logical or wal-g as the backup mode.
+          - rule: "!(self.backup.enabled && self.backup.aws.enabled && self.backup.gcp.enabled)"
+            mirrors: pg-ha.validateBackupConfig
+            paths: [backup.enabled]
+            message: Turn on only one destination, AWS S3 or Google Cloud Storage.
+          - rule: "!self.backup.enabled || self.backup.aws.enabled || self.backup.gcp.enabled"
+            mirrors: pg-ha.validateBackupConfig
+            paths: [backup.enabled]
+            message: Backups are on but no destination is; choose AWS S3 or Google Cloud Storage.
+          - rule: self.backup.enabled || (!self.backup.aws.enabled && !self.backup.gcp.enabled)
+            mirrors: pg-ha.validateBackupConfig
+            paths: [backup.enabled]
+            message: A destination is on while backups are off; turn backups on or the destination off.
+          - when: self.backup.enabled && self.backup.mode == 'logical'
+            rule: self.proxy.enabled
+            severity: warning
+            paths: [backup.mode]
+            message: Logical backups connect through the HAProxy leader endpoint; turn it on under Network.
+          - when: self.backup.enabled && self.backup.mode == 'wal-g'
+            rule: memoryBytes(self.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory. With less it is killed for running out of
+              memory during the base backup and no backup is written; 2.6.0 raised the default to 512Mi.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.aws.enabled
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the backup identity also carries the AWS managed policy ReadOnlyAccess, which
+              can read every bucket in the AWS account, not only this one. 2.5.1 removes it.
+          - path: backup.aws.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.s3.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              (oldSelf != null && self.backup.aws.s3.bucket == oldSelf.backup.aws.s3.bucket) ||
+              [self.backup.aws.s3.bucket].all(x,
+              !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+              !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.aws.s3.bucket]
+            message: >-
+              The chart writes the bucket unquoted into a secret, so a name that YAML reads as a number or a
+              date, or that starts with a YAML indicator, is stored as something else. Use a plain name.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.gcp.enabled
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.gcs.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.gcp.gcs.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.gcs.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              (oldSelf != null && self.backup.gcp.gcs.bucket == oldSelf.backup.gcp.gcs.bucket) ||
+              [self.backup.gcp.gcs.bucket].all(x,
+              !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+              !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.gcp.gcs.bucket]
+            message: >-
+              The chart writes the bucket unquoted into a secret, so a name that YAML reads as a number or a
+              date, or that starts with a YAML indicator, is stored as something else. Use a plain name.
+
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      2.0.0 renamed the PostgreSQL workload and its volume set, so upgrading a 1.x release deletes the old
+      workload and its volume set with the data. Install this version as a new release and move the data
+      with pg_dump instead.

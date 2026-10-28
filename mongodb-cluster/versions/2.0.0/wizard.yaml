@@ -114,7 +114,11 @@ steps:
         description: >-
           A dictionary secret with the keys `username` and `password`. The chart does not read a
           `database` key; add one only for your own connection strings.
-        help: The root user is created from it once, when the cluster is first initialized.
+        help: >-
+          The root user is created from it once, when the cluster is first initialized. The startup script
+          and the backup job put the username and password into connection strings and a script unescaped,
+          so leave out : / ? # [ ] @ % ' and \ in both; with them the root user is not created or the other
+          members cannot sign in to join the replica set.
         ref:
           kind: secret
           format: name

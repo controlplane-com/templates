@@ -54,6 +54,7 @@ postgresHA:
     # connects with the same keys. See README Prerequisites for the command.
     credentialsSecretName: my-n8n-db-credentials
   replicas: 3
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
 

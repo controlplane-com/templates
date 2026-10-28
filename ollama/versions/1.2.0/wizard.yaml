@@ -77,9 +77,17 @@ steps:
             severity: warning
             when: context.mode == 'install'
             text: >-
-              The default asks for one NVIDIA T4, 6 CPU and 8Gi of memory for Ollama, plus 500m and 2Gi for Open
-              WebUI. GPU access must be enabled for your org by Control Plane support, and the CPU and memory must
-              fit your org quota, or the workload never starts. Turn the GPU off below to run on CPU alone.
+              Ollama and the Open WebUI sidecar each reserve the CPU and memory set in this wizard. GPU access must
+              be enabled for your org by Control Plane support, and the total of both containers must fit your org
+              quota, or the workload never starts. Turn the GPU off below to run on CPU alone.
+            textExpression: >-
+              'This asks for ' + (self.workload.containers.api.gpu != null && self.workload.containers.api.gpu.nvidia != null ?
+              string(self.workload.containers.api.gpu.nvidia.quantity) + ' NVIDIA ' + self.workload.containers.api.gpu.nvidia.model :
+              'no GPU') + ', ' + string(self.workload.containers.api.resources.cpu) + ' CPU and ' +
+              string(self.workload.containers.api.resources.memory) + ' of memory for Ollama, plus ' +
+              string(self.workload.containers.ui.resources.cpu) + ' and ' + string(self.workload.containers.ui.resources.memory) +
+              ' for Open WebUI. GPU access must be enabled for your org by Control Plane support, and the total of both ' +
+              'containers must fit your org quota, or the workload never starts. Turn the GPU off below to run on CPU alone.'
           - path: workload.containers.api.gpu
             type: object
             optional: true
@@ -200,7 +208,7 @@ steps:
               rolling back to 1.1.2 is not supported, so take a volume set snapshot first. Tool servers users saved
               under Settings › Integrations stop being used in chats until an admin turns on Direct Integrations
               (Admin Settings › Integrations), and custom functions that install pip packages need versions that
-              support Python 3.12. See
+              support Python 3.12. Every user is signed out once and signs in again. See
               [Upgrading from 1.1.2](/template-catalog/templates/ollama#upgrading-from-1-1-2).
             textExpression: >-
               'This upgrade moves Open WebUI from v0.11.0 to v0.12.4, which migrates its database on the first start: ' +
@@ -208,7 +216,7 @@ steps:
               context.releaseName + '-ollama-vs --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
               ' --snapshot-name before-upgrade`). Tool servers users saved under Settings › Integrations stop being used ' +
               'in chats until an admin turns on Direct Integrations (Admin Settings › Integrations), and custom functions ' +
-              'that install pip packages need versions that support Python 3.12.'
+              'that install pip packages need versions that support Python 3.12. Every user is signed out once and signs in again.'
           - path: workload.containers.ui.resources
             type: resources
             label: Open WebUI resources
@@ -224,6 +232,11 @@ steps:
             advanced: true
             description: Pin a release tag, v0.12.4 or newer; `main` is a moving branch build.
         rules:
+          - when: context.mode == 'upgrade'
+            rule: memoryBytes(self.workload.containers.ui.resources.memory) >= memoryBytes('2Gi')
+            severity: info
+            paths: [workload.containers.ui.resources]
+            message: Open WebUI v0.12.4 needs at least 2Gi; at 1Gi it is OOM-killed or its API calls fail. Raise the memory to 2Gi.
           - rule: >-
               self.workload.containers.ui.image.contains('@') ||
               !(self.workload.containers.ui.image.split(':')[0] in
@@ -386,19 +399,6 @@ steps:
       - title: Internal access
         docs: "#internal-access"
         fields:
-          - type: note
-            severity: warning
-            when: self.internal_access.type != 'none'
-            text: >-
-              The Ollama API on port 11434 has no authentication: every workload allowed here can run, pull and
-              delete models. Open WebUI on port 8080 is reachable to the same workloads.
-          - type: note
-            when: self.internal_access.type != 'none'
-            text: >-
-              Allowed workloads reach the API at `http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434`.
-            textExpression: >-
-              'Allowed workloads reach the API at `http://' + context.releaseName + '-ollama.' +
-              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:11434`.'
           - path: internal_access.type
             type: enum
             label: Who can connect
@@ -418,6 +418,19 @@ steps:
               - value: workload-list
                 label: Specific workloads
                 description: Only the workloads listed below.
+          - type: note
+            severity: warning
+            when: self.internal_access.type != 'none'
+            text: >-
+              The Ollama API on port 11434 has no authentication: every workload allowed here can run, pull and
+              delete models. Open WebUI on port 8080 is reachable to the same workloads.
+          - type: note
+            when: self.internal_access.type != 'none'
+            text: >-
+              Allowed workloads reach the API at `http://RELEASE_NAME-ollama.GVC_NAME.cpln.local:11434`.
+            textExpression: >-
+              'Allowed workloads reach the API at `http://' + context.releaseName + '-ollama.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:11434`.'
           # Shown for every type when non-empty: workload.yaml writes any non-empty list into
           # inboundAllowWorkload, and the platform applies it with same-gvc and workload-list.
           - path: internal_access.workloads

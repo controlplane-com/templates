@@ -32,10 +32,13 @@ checks:
       shell: bash
       script: |
         export PGPASSWORD='{pg_password}'
-        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
-          -c "select 'SUPERUSER ' || email from users_user where is_superuser" 2>&1
+        out=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'SUPERUSER ' || email from users_user where is_superuser" 2>&1)
+        echo "$out"
+        # expect patterns are not templated, so the comparison with the baseline's admin_email happens here
+        printf '%s\n' "$out" | grep -qxF 'SUPERUSER {admin_email}' && echo SEEDED_FROM_AUTH_SECRET
     expect:
-      stdout: "^SUPERUSER {admin_email}$"
+      stdout: "^SEEDED_FROM_AUTH_SECRET$"
     retries: 8
     retryDelaySeconds: 15
 

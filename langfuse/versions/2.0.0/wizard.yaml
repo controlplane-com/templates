@@ -37,13 +37,95 @@ steps:
     title: Langfuse
     description: The prerequisite secrets, sign-in, and the web and worker workloads.
     sections:
+      - title: Langfuse 4 data model
+        docs: "#upgrading-from-130"
+        # Upgrade only: a fresh install is always Langfuse 4 with nothing to copy (the defaults stay events_only).
+        when: context.mode == 'upgrade'
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              This upgrade moves Langfuse 3 to 4, and its database migrations are one-way: rolling back to 1.3.0
+              means restoring a backup. Before you click Upgrade, back up PostgreSQL while the release is still on
+              1.3.0 (turning on Database backups in this same upgrade is too late: the migrations run first) and
+              confirm that every Langfuse 3 background migration has finished: `SELECT name FROM
+              background_migrations WHERE finished_at IS NULL AND name NOT LIKE '20260701_v4_step_%';` returns no
+              rows (the README has the full command). Producers on Python SDK v2 and older or JS/TS SDK v3 and
+              older, the legacy read APIs and trace-level evaluators keep working only with the dual or legacy write
+              mode below. See "Upgrading from 1.3.0" in the README.
+          - path: langfuse.migration.writeMode
+            type: enum
+            label: Write mode
+            widget: cards
+            required: true
+            options:
+              - value: events_only
+                label: Langfuse 4
+                description: >-
+                  The v4 default. Writes only the new tables; Python SDK v2 and older, JS/TS SDK v3 and older and the
+                  legacy APIs are rejected.
+              - value: dual
+                label: Dual write
+                description: >-
+                  Temporary (upstream removes it in an upcoming major). Writes the old and the new tables, so old
+                  SDKs and legacy APIs keep working while you migrate.
+              - value: legacy
+                label: Langfuse 3 behaviour
+                description: >-
+                  Temporary (upstream removes it in an upcoming major). Writes only the old tables and keeps the v3
+                  UI and APIs. Turn the backfill off.
+          - path: langfuse.migration.historicBackfill
+            type: boolean
+            label: Copy existing traces into the new tables
+            description: >-
+              Runs once in the worker, newest data first. While it runs, the bucket holds up to about three times
+              the current ClickHouse data, and a scratch copy of the old observations stays in the bucket
+              afterwards. With dual write, a trace can show up twice until ClickHouse merges the copies.
+        rules:
+          - when: context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0
+            rule: self.langfuse.migration.writeMode != 'events_only'
+            severity: info
+            paths: [langfuse.migration.writeMode]
+            message: >-
+              Langfuse 4 mode needs every producer on Python SDK v3 or newer, JS/TS SDK v4 or newer, or
+              OpenTelemetry, and nothing using the legacy read APIs or trace-level evaluators. Otherwise choose
+              Dual write now and cut over later.
+          - when: >-
+              oldSelf != null && has(oldSelf.langfuse.migration) && has(oldSelf.langfuse.migration.writeMode) &&
+              oldSelf.langfuse.migration.writeMode in ['dual', 'legacy']
+            rule: self.langfuse.migration.writeMode != 'events_only'
+            severity: info
+            paths: [langfuse.migration.writeMode]
+            message: >-
+              Cut-over to Langfuse 4: from now on new data lands only in the new tables, so this is the point of
+              no return upstream. Move every producer and consumer first, and turn the backfill on if it has not
+              run.
+          - when: >-
+              oldSelf != null && has(oldSelf.langfuse.migration) && has(oldSelf.langfuse.migration.writeMode) &&
+              oldSelf.langfuse.migration.writeMode == 'legacy'
+            rule: self.langfuse.migration.writeMode == 'legacy' || self.langfuse.migration.historicBackfill
+            severity: info
+            paths: [langfuse.migration.historicBackfill]
+            message: Turn the backfill on when you leave the Langfuse 3 write mode, or older traces stay out of the new tables.
+          - rule: self.langfuse.migration.writeMode != 'dual' || !self.langfuse.migration.historicBackfill
+            severity: info
+            paths: [langfuse.migration.historicBackfill]
+            message: >-
+              Upstream suggests leaving the backfill off until the dual write is confirmed working, then turning it
+              on in a later upgrade.
+          - rule: self.langfuse.migration.writeMode != 'events_only' || self.langfuse.migration.historicBackfill
+            severity: info
+            paths: [langfuse.migration.historicBackfill]
+            message: Traces stored before the upgrade then stay out of the Langfuse 4 views and APIs.
       - title: Prerequisite secrets
         docs: "#prerequisites"
         fields:
           - type: note
             severity: warning
             text: >-
-              All four secrets must exist **before** you install. If one is missing, the deployment waits and
+              These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits and
               `cpln logs` shows nothing at all.
           - path: langfuse.auth.secretName
             type: ref
@@ -248,67 +330,6 @@ steps:
               'Langfuse before 4.70.1 carries Critical CVEs (Next.js CVE-2026-75604 and others). Use ' +
               self.langfuse.worker.image.split(':')[0] + ':4.70.1 or newer.'
             message: Langfuse before 4.70.1 carries Critical CVEs (Next.js CVE-2026-75604 and others). Use 4.70.1 or newer.
-      - title: Langfuse 4 data model
-        docs: "#upgrading-from-130"
-        when: >-
-          context.mode == 'upgrade' || self.langfuse.migration.writeMode != 'events_only' ||
-          !self.langfuse.migration.historicBackfill
-        fields:
-          - type: note
-            severity: warning
-            when: >-
-              context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '2.0.0') < 0
-            text: >-
-              This upgrade moves Langfuse 3 to 4, and its database migrations are one-way: rolling back to 1.3.0
-              means restoring a backup. Before you upgrade, back up PostgreSQL and confirm that every Langfuse 3
-              background migration has finished: `SELECT name FROM background_migrations WHERE finished_at IS NULL
-              AND name NOT LIKE '20260701_v4_step_%';` returns no rows (the README has the full command). Producers on Python SDK v2 or JS/TS SDK v3, the legacy read APIs and trace-level evaluators
-              keep working only with the dual or legacy write mode below. See "Upgrading from 1.3.0" in the README.
-          - path: langfuse.migration.writeMode
-            type: enum
-            label: Write mode
-            widget: cards
-            required: true
-            options:
-              - value: events_only
-                label: Langfuse 4
-                description: >-
-                  The v4 default. Writes only the new tables; old SDKs and the legacy APIs are rejected.
-              - value: dual
-                label: Dual write
-                description: >-
-                  Writes the old and the new tables, so old SDKs and legacy APIs keep working while you migrate.
-              - value: legacy
-                label: Langfuse 3 behaviour
-                description: Writes only the old tables and keeps the v3 UI and APIs. Turn the backfill off.
-          - path: langfuse.migration.historicBackfill
-            type: boolean
-            label: Copy existing traces into the new tables
-            description: >-
-              Runs once in the worker, newest data first. While it runs, the bucket holds up to about three times
-              the current ClickHouse data.
-        rules:
-          - rule: self.langfuse.migration.writeMode in ['events_only', 'dual', 'legacy']
-            mirrors: langfuse.validateMigration
-            paths: [langfuse.migration.writeMode]
-            message: The write mode must be events_only, dual or legacy.
-          - rule: self.langfuse.migration.writeMode != 'legacy' || !self.langfuse.migration.historicBackfill
-            mirrors: langfuse.validateMigration
-            paths: [langfuse.migration.historicBackfill]
-            message: >-
-              Turn the backfill off with the Langfuse 3 write mode. It runs only once, so traces that arrive before
-              you switch to dual write would never reach the new tables. Turn it on when you switch.
-          - rule: self.langfuse.migration.writeMode != 'dual' || !self.langfuse.migration.historicBackfill
-            severity: info
-            paths: [langfuse.migration.historicBackfill]
-            message: >-
-              Upstream suggests leaving the backfill off until the dual write is confirmed working, then turning it
-              on in a later upgrade.
-          - rule: self.langfuse.migration.writeMode != 'events_only' || self.langfuse.migration.historicBackfill
-            severity: info
-            paths: [langfuse.migration.historicBackfill]
-            message: Traces stored before the upgrade then stay out of the Langfuse 4 views and APIs.
 
   - id: object-store
     title: Object store
@@ -332,6 +353,11 @@ steps:
         when: self.objectStore.provider == 'aws'
         docs: "#object-store"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket and the IAM policy **before** you install or upgrade; the README has the steps and
+              the policy JSON.
           - path: objectStore.aws.bucket
             type: string
             label: Bucket
@@ -525,6 +551,25 @@ steps:
 
 # Rules over the imported values and removed keys.
 rules:
+  # Shown on Review next to Upgrade; the same text is the first note of the Langfuse step.
+  - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0
+    rule: "false"
+    severity: info
+    message: >-
+      One-way upgrade: back up PostgreSQL while still on 1.3.0 and confirm the Langfuse 3 background migrations
+      finished before you click Upgrade. Check the write mode under Langfuse (Python SDK v3+ and JS/TS SDK v4+
+      only for Langfuse 4 mode).
+  # Kept outside the upgrade-only section so values set from YAML on an install are still checked.
+  - rule: self.langfuse.migration.writeMode in ['events_only', 'dual', 'legacy']
+    mirrors: langfuse.validateMigration
+    paths: [langfuse.migration.writeMode]
+    message: The write mode must be events_only, dual or legacy.
+  - rule: self.langfuse.migration.writeMode != 'legacy' || !self.langfuse.migration.historicBackfill
+    mirrors: langfuse.validateMigration
+    paths: [langfuse.migration.historicBackfill]
+    message: >-
+      Turn the backfill off with the Langfuse 3 write mode. It runs only once, so traces that arrive before
+      you switch to dual write would never reach the new tables. Turn it on when you switch.
   # Langfuse 4 needs every Langfuse 3 background migration finished and the 1.3.0 secret layout, so a release
   # older than 1.3.0 goes to 1.3.0 first.
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') >= 0
@@ -600,25 +645,3 @@ rules:
 yamlOnly:
   - path: postgres.pgbouncer
     reason: Langfuse connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
-
-migrations:
-  - fromVersions: "<1.3.0"
-    from: postgres.credentials
-    note: >-
-      The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
-      under a NEW name with the values the database was initialized with, and choose it under Langfuse.
-  - fromVersions: "<1.3.0"
-    from: redis.auth
-    note: >-
-      The Redis password is now a prerequisite dictionary secret (key password). Create it under a new name holding
-      the current password, and choose it under Langfuse.
-  - fromVersions: "<1.3.0"
-    from: clickhouse.config.password
-    note: >-
-      The ClickHouse credentials are now a prerequisite dictionary secret (keys username, password). Create it under
-      a new name holding username default and the current password, and choose it under Langfuse.
-  - fromVersions: "<1.3.0"
-    from: clickhouse.config.database
-    note: >-
-      Removed: Langfuse always kept its data in the ClickHouse database default, whatever this was set to, so nothing
-      moves. The empty database it created can be left alone.

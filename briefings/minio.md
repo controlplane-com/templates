@@ -32,7 +32,7 @@ No probes, and no cloud bindings on the identity — there is no `aws::ReadOnlyA
 | Knob | Default | Meaning |
 |---|---|---|
 | `image` | `pgsty/silo:RELEASE.2026-10-18T00-00-00Z` | Silo fork on Docker Hub — see the image trap below |
-| `replicas` | `6` | Must be **even and ≥ 4**; above the default org replica quota |
+| `replicas` | `6` | Must be **even and ≥ 4**; fits the default `replicas-per-replica-direct-workload` quota of 6 (more needs an increase) |
 | `admin.credentialsSecretName` | `my-minio-credentials` | **REQUIRED prerequisite `dictionary` secret** with `username`, `password` |
 | `resources.minCpu`/`maxCpu` | `1` / `2` | Block exposes both, so min/max naming is correct here |
 | `resources.minMemory`/`maxMemory` | `2Gi` / `4Gi` | |

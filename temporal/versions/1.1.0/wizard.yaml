@@ -1,0 +1,760 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Temporal
+
+# One server per release against one database: a second location would run another server against a
+# separate, independent bundled database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the single-instance PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Temporal creates this secret itself (templates/secret-db.yaml) and names it in the Database step.
+      - config.credentialsSecretName
+      # Temporal connects to <release>-postgres directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Temporal connects to its database like any other workload: keep Same GVC, or add the Temporal
+          server workload under Allowed workloads.
+
+steps:
+  - id: server
+    title: Temporal server
+    description: The server image, its compute and the cluster settings.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version leaves Temporal's database connection pools at their upstream sizes, which under load
+              can open more connections than the bundled PostgreSQL's limit of 100. Version 2.0.0 sizes the pools
+              to fit.
+          - path: image
+            type: string
+            format: image
+            label: Temporal server image
+            required: true
+            description: >-
+              The auto-setup image creates the databases and applies schema migrations at boot, then starts the
+              server. This version was released with temporalio/auto-setup:1.29.7.
+            help: >-
+              Another tag is unproven with this chart. Temporal upgrades one minor version at a time, so move at
+              most one minor version per upgrade and check that the server becomes ready.
+          # This version names the limit resources.cpu / resources.memory next to the minimums, so the block is
+          # four plain fields (the resources field type writes maxCpu/maxMemory, which this chart does not read).
+          - path: resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Maximum CPU
+            required: true
+            min: 25m
+          - path: resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Minimum CPU
+            required: true
+            min: 25m
+          - path: resources.memory
+            type: quantity
+            quantity: memory
+            label: Maximum memory
+            required: true
+            min: 32Mi
+          - path: resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Minimum memory
+            required: true
+            min: 32Mi
+          - path: historyShards
+            type: integer
+            label: History shards
+            required: true
+            immutable: The shard count is fixed when the cluster is first created and can never change.
+            min: 1
+            suggestions: [512, 1024, 2048, 4096]
+            rules:
+              - rule: self.historyShards > 0
+                mirrors: temporal.validate
+                message: The history shard count must be a positive number.
+          - path: namespaceRetention
+            type: string
+            label: Default namespace retention
+            required: true
+            pattern: '^[0-9]+h$'
+            patternMessage: Enter a number of hours, such as 72h.
+            description: How long closed workflow histories are kept in the `default` namespace.
+            help: >-
+              Applied only when the namespace is first created. Change it later with
+              `temporal operator namespace update -n default --retention <hours>h` in the server's `temporal`
+              container.
+            suggestions: [24h, 72h, 168h, 720h]
+    rules:
+      # Platform workload schema: a minimum above its maximum is refused, and so is more than 8 MiB of
+      # memory per millicore of CPU.
+      - rule: >-
+          cpuMillicores(self.resources.cpu) >= cpuMillicores(self.resources.minCpu) &&
+          memoryBytes(self.resources.memory) >= memoryBytes(self.resources.minMemory)
+        paths: [resources.minCpu, resources.minMemory]
+        message: The minimum CPU and memory cannot exceed their maximum.
+      - rule: memoryBytes(self.resources.memory) <= 8 * 1048576 * cpuMillicores(self.resources.cpu)
+        paths: [resources.memory]
+        message: Control Plane allows at most 8 MiB of memory per millicore of CPU; raise the CPU or lower the memory.
+      - when: oldSelf != null && oldSelf.image != self.image
+        rule: "false"
+        severity: info
+        paths: [image]
+        message: >-
+          The new server version migrates the database schema when it starts. Back up the database first: a
+          migrated schema cannot be rolled back.
+
+  - id: ui
+    title: Web UI
+    description: The Temporal Web UI.
+    sections:
+      - id: ui
+        title: Temporal Web UI
+        toggle: ui.enabled
+        description: >-
+          The UI has no login of its own, so this version keeps it internal-only: reach it from workloads in the
+          access scope, or put your own authenticating proxy in front of it.
+        fields:
+          - path: ui.image
+            type: string
+            format: image
+            label: Web UI image
+            required: true
+            advanced: true
+          - path: ui.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Web UI maximum CPU
+            required: true
+            advanced: true
+            min: 25m
+          - path: ui.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Web UI minimum CPU
+            required: true
+            advanced: true
+            min: 25m
+          - path: ui.resources.memory
+            type: quantity
+            quantity: memory
+            label: Web UI maximum memory
+            required: true
+            advanced: true
+            min: 32Mi
+          - path: ui.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Web UI minimum memory
+            required: true
+            advanced: true
+            min: 32Mi
+        rules:
+          - rule: >-
+              cpuMillicores(self.ui.resources.cpu) >= cpuMillicores(self.ui.resources.minCpu) &&
+              memoryBytes(self.ui.resources.memory) >= memoryBytes(self.ui.resources.minMemory)
+            paths: [ui.resources.minCpu, ui.resources.minMemory]
+            message: The minimum CPU and memory cannot exceed their maximum.
+          - rule: memoryBytes(self.ui.resources.memory) <= 8 * 1048576 * cpuMillicores(self.ui.resources.cpu)
+            paths: [ui.resources.memory]
+            message: Control Plane allows at most 8 MiB of memory per millicore of CPU; raise the CPU or lower the memory.
+
+  - id: access
+    title: Access
+    description: Which workloads reach the Temporal server and the Web UI inside Control Plane.
+    fields:
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          Applies to the gRPC frontend (7233) and the Web UI (8080). Changes take from 30 seconds to a few
+          minutes to take effect.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: temporal.validate
+            message: The internal access must be none, same-gvc, same-org or workload-list.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        description: Your workers and clients, and the Web UI workload when the UI is on.
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - when: self.ui.enabled
+        rule: self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: '"None" also blocks the Web UI, which reaches the server like any other workload.'
+      # This version does not add its own UI workload to the server's list (2.0.0 does).
+      - when: self.ui.enabled && self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal-ui') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal-ui, or the Web UI cannot reach the server.'"
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal-ui']"
+        message: Add the Web UI workload to the list, or the Web UI cannot reach the server.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can reach the server or the Web UI.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Temporal's data, and its login.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+            rules:
+              - rule: self.postgresHA.enabled != self.postgres.enabled
+                mirrors: temporal.validate
+                message: Enable exactly one database, highly available or single-instance.
+          # Declared so the postgres import's condition is a field; the chooser above writes them.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+      - id: credentials
+        title: Database credentials
+        description: >-
+          The login of whichever PostgreSQL is chosen above. The highly available database creates its own secret
+          (<release>-postgres-config) from its values; for the single-instance database Temporal creates the
+          dictionary secret named below. There is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 2.1.0 takes them from a secret
+              you create instead.
+          - path: postgresHA.postgres.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgresHA.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgresHA.postgres.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgresHA.enabled
+            description: Used as typed, so replace the published default.
+            help: >-
+              PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you
+              change it here. The replication user `repl` uses the same password, so change that role too.
+          - path: postgresHA.postgres.database
+            type: string
+            label: Database name
+            required: true
+            readOnly: true
+            when: self.postgresHA.enabled
+            description: Temporal's main store is always the `temporal` database.
+            rules:
+              # The chart does not check this in HA mode, but the server reads the literal `temporal` database.
+              - rule: self.postgresHA.postgres.database == 'temporal'
+                severity: warning
+                message: The database name must be temporal; the server reads its main store from that database.
+          - path: postgres.credentials.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgres.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.credentials.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgres.enabled
+            description: Used as typed, so replace the published default.
+            help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+          - path: postgres.credentials.database
+            type: string
+            label: Database name
+            required: true
+            readOnly: true
+            when: self.postgres.enabled
+            description: Temporal's main store is always the `temporal` database.
+            rules:
+              - rule: self.postgres.credentials.database == 'temporal'
+                mirrors: temporal.validate
+                message: The database name must be temporal; the server reads its main store from that database.
+        rules:
+          # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes (postgres 3.4.1 templates/workload-postgres.yaml).
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              !self.postgres.credentials.username.matches('\\s')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Leave out spaces: the database's readiness probe passes the user name to pg_isready unquoted, so
+              it never becomes ready.
+          # The HA database (postgres-highly-available 2.4.2) writes the user and password unquoted into an
+          # unquoted shell heredoc that becomes Patroni's YAML config (loaded as YAML 1.1), and the user into an
+          # unquoted psql command (templates/secret-startup.yaml).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password) ||
+              [self.postgresHA.postgres.password].all(x,
+              !x.matches('[$`]') && !x.matches('\\\\([$`\\\\]|$)') &&
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']) && !(x in ['~', '=', '<<']) &&
+              !x.matches('^[-+]?([0-9][0-9_]*|0b[01_]+|0x[0-9a-fA-F_]+)$') &&
+              !x.matches('^[-+]?([0-9][0-9_]*)?\\.[0-9_]*([eE][-+][0-9]+)?$') &&
+              !x.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.postgres.password]
+            message: >-
+              The highly available database writes the password unquoted into a shell script and its YAML config.
+              Leave out $ and `, a \ before $, ` or \ or at the end, a leading space or YAML symbol, ": " and " #", and
+              values that read as a number, a date, yes/no, on/off, true/false, null or <<.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.username == oldSelf.postgresHA.postgres.username) ||
+              (self.postgresHA.postgres.username.matches('^[A-Za-z_][A-Za-z0-9_.-]*$') &&
+              !(self.postgresHA.postgres.username.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']))
+            severity: warning
+            paths: [postgresHA.postgres.username]
+            message: >-
+              Use letters, digits, _ . and -, starting with a letter or underscore, and not yes/no, on/off,
+              true/false or null. The highly available database writes the user unquoted into its YAML config and
+              a psql command.
+          - when: self.postgresHA.enabled
+            rule: oldSelf == null || self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password
+            severity: info
+            paths: [postgresHA.postgres.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Temporal loses its
+              database connection after this upgrade.
+          - when: self.postgres.enabled
+            rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Temporal loses its
+              database connection after this upgrade.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Temporal connects through.
+        fields:
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            description: Per replica.
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+          - rule: self.postgresHA.replicas >= 3
+            severity: info
+            paths: [postgresHA.replicas]
+            message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups
+          follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret Temporal creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+        rules:
+          - rule: self.postgres.config.credentialsSecretName != 'my-temporal-db-credentials'
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Temporal release its own name, for example ' + context.releaseName +
+              '-temporal-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Temporal release its own name.
+    rules:
+      # Changing the database mode on an installed release swaps one subchart for the other, so Helm deletes the
+      # current database workloads and volume sets and the new one starts empty.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with every workflow history,
+          and starts an empty one. Keep the current database, or install a new release and move the data.
+      - rule: >-
+          !self.postgres.enabled || (!has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database))
+        paths: [postgres.credentials.username]
+        message: >-
+          postgres.config.username, password and database were removed in 1.1.0. Move them to the database
+          credentials (postgres.credentials), from which Temporal creates the secret, and remove them from the
+          values.
+
+  - id: backups
+    title: Database backups
+    description: Optional backups of the highly available PostgreSQL to object storage.
+    when: self.postgresHA.enabled
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: postgresHA.backup.enabled
+        description: >-
+          Logical dumps on a schedule, or continuous WAL-G archiving with periodic base backups. Uninstalling
+          the release deletes the database volumes, so turn this on if the workflow history matters.
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps, description: A scheduled pg_dump of every database. }
+              - { value: wal-g, label: WAL-G, description: Continuous WAL archiving plus periodic base backups. }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Base backup interval
+            unit: s
+            required: true
+            min: 1
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions:
+              - { value: 3600, label: "3600 (hourly)" }
+              - { value: 21600, label: "21600 (6 hours, default)" }
+              - { value: 86400, label: "86400 (daily)" }
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Logical backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: Used by whichever mode is on. WAL-G needs about 512Mi of memory.
+        rules:
+          # This version defaults to 128Mi; 2.0.0 raised it to 512Mi because wal-g was OOMKilled mid-backup.
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= 536870912
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              WAL-G needs about 512Mi of memory: with this version's default of 128Mi it is killed for running out
+              of memory in the middle of a backup. Version 2.0.0 raises the default to 512Mi.
+      - title: AWS S3
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        fields:
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Use lowercase letters, digits, dots and hyphens (3 to 63 characters).
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Use an AWS region name, such as us-east-1.
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The access and secret keys are stored in the Helm release in plain text. Version 1.2.1 takes them
+              from a secret you create instead.
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+    rules:
+      # postgres-highly-available writes backup.<provider>.prefix unquoted: as the logical backup job's
+      # BACKUP_PREFIX env value (templates/workload-logical-backup.yaml), and after s3://bucket/ or gs://bucket/
+      # in the WAL-G prefix (templates/workload-patroni-postgres.yaml).
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+
+# Rules over values outside the steps: their issues show on the fields named in paths.
+rules:
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: temporal.validate
+    paths: [postgresHA.enabled]
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Temporal's database endpoint.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Temporal, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal, or Temporal cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal']"
+    message: Add the Temporal server workload to the list, or Temporal cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Temporal connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  # 1.1.0 moved the single-instance credentials from postgres.config to postgres.credentials.
+  - { fromVersions: "<1.1.0", from: postgres.config.username, to: postgres.credentials.username }
+  - { fromVersions: "<1.1.0", from: postgres.config.password, to: postgres.credentials.password }
+  - { fromVersions: "<1.1.0", from: postgres.config.database, to: postgres.credentials.database }

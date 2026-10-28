@@ -63,7 +63,8 @@ steps:
             patternMessage: Include the scheme, for example https://crm.example.com.
             description: >-
               Must match the URL browsers use, or sign-in and CORS fail. Leave empty to use the canonical
-              endpoint; set it only when a custom domain fronts the workload.
+              endpoint (or the in-GVC address when public access is off). Set it, with the scheme, whenever
+              browsers use another address: a custom domain, or http://localhost:PORT through a port-forward.
           - path: twenty.dbPoolMaxConnections
             type: integer
             label: Database connections per process
@@ -105,7 +106,6 @@ steps:
             type: resources
             label: Worker resources
             required: true
-            maxRatio: 4
             cpu: { min: 25m }
             memory: { min: 32Mi }
       - title: App key
@@ -357,7 +357,7 @@ steps:
             options:
               - value: single
                 label: Single-instance PostgreSQL
-                description: One PostgreSQL 18 replica on a volume with snapshots; lighter, without failover.
+                description: One PostgreSQL 18 replica on a persistent volume; lighter, without failover.
                 set: { postgresHA.enabled: false, postgres.enabled: true }
               - value: ha
                 label: Highly available PostgreSQL
@@ -413,7 +413,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-twenty-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0 ? context.releaseName + '-twenty-db-credentials-secret' : context.releaseName + '-twenty-db-credentials'"
       - id: ha
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
@@ -423,20 +423,32 @@ steps:
         fields:
           - type: note
             severity: warning
+            text: >-
+              The bundled highly available database creates its cluster with consensus timeouts that Patroni
+              silently tightens, so a leader that cannot reach etcd for about 14 seconds is demoted.
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database also writes the database password into Patroni's shared
+              configuration, which anything that can reach port 8008 of its members can read without
+              authentication at `/config`.
+          - type: note
+            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '1.2.0') < 0
+              semverCompare(context.fromVersion, '1.0.1') < 0
             text: >-
-              From 1.2.0 the highly available database writes the password inside double quotes in its config on
-              every start, so a password with a `"` or `\` breaks it. If yours has one, change it with ALTER ROLE
-              for the user and for repl before upgrading, and put the new one in the secret.
+              The installed version does not compact etcd. This upgrade turns compaction on but cannot shrink a
+              backend that has already grown; check it first
+              ([Upgrading From a Version Before 2.4.2](/template-catalog/templates/postgres-highly-available#upgrading-from-a-version-before-2-4-2)).
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`, and no `"` or `\` in the
-              user or password.
+              user or password. The database name must be up to 63 lowercase letters, digits and underscores,
+              and not postgres, template0, template1 or an SQL reserved word such as user or order.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Twenty connects with
               them. To change the password later, change it in the database first, then update the secret and
@@ -451,7 +463,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-twenty-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0 ? context.releaseName + '-twenty-db-credentials-secret' : context.releaseName + '-twenty-db-credentials'"
           - path: postgresHA.replicas
             type: integer
             label: PostgreSQL replicas
@@ -502,6 +514,13 @@ steps:
         description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The WAL-G sidecar waits a full interval before its first base backup, so a new cluster archives WAL
+              with nothing to restore it from for up to that long, and turning WAL-G on for a cluster that
+              already exists does not start WAL archiving.
           - path: postgresHA.backup.mode
             type: enum
             label: Backup mode
@@ -546,10 +565,23 @@ steps:
             label: Backup job resources
             required: true
             advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory. With less it is killed for running out of memory
+              during the base backup and no backup is written.
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The backup identity of the bundled highly available database also carries the AWS managed policy
+              ReadOnlyAccess, which can read every bucket in the AWS account, not only this one.
           - path: postgresHA.backup.aws.bucket
             type: string
             label: Bucket
@@ -764,7 +796,9 @@ steps:
         mirrors: twenty.validate
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
-      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
         mirrors: twenty.validate
         paths: [postgresHA.enabled]
         message: >-

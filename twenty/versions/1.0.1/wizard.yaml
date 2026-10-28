@@ -176,6 +176,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             help: Uninstalling the release deletes the volume set, so the files do not survive a reinstall.
@@ -557,6 +558,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
@@ -761,6 +763,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Per replica.
@@ -1057,7 +1060,7 @@ steps:
         message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
       - rule: >-
           !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-          dyn(self.postgresHA)['proxy']['enabled'] == true
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
         mirrors: twenty.validate
         paths: [postgresHA.enabled]
         message: >-
@@ -1109,6 +1112,7 @@ steps:
         label: Initial capacity
         unit: GiB
         min: 10
+        max: 65536
         required: true
         suggestions: [10, 20, 50]
         help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.

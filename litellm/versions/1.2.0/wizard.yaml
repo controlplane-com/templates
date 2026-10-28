@@ -31,6 +31,10 @@ imports:
           workload under Allowed workloads.
       backup.enabled:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
 
 steps:
   - id: secrets
@@ -50,10 +54,12 @@ steps:
         description: >-
           Environment variable names the proxy reads from the keys secret (for example `OPENAI_API_KEY`), so
           the secret below must hold each one. Reference them in the model list as `os.environ/NAME`.
+        unique: true
         item:
           type: string
           pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
           patternMessage: Letters, digits and underscores, not starting with a digit.
+          maxLength: 120
       - path: secrets.name
         type: ref
         label: Keys secret
@@ -93,6 +99,18 @@ steps:
           create:
             suggestName: "context.releaseName + '-litellm-db-credentials'"
     rules:
+      # Platform schema (nodelibs env.ts): names starting with CPLN_, the K_ names, and a name the container
+      # already has (the proxy's own variables, templates/workload.yaml) are refused at apply.
+      - rule: >-
+          self.litellm.providerEnv.all(n, !n.startsWith('CPLN_') &&
+          !(n in ['K_SERVICE', 'K_CONFIGURATION', 'K_REVISION', 'LITELLM_MASTER_KEY', 'LITELLM_SALT_KEY', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB', 'DATABASE_URL', 'STORE_MODEL_IN_DB']) &&
+          !(n == 'LITELLM_REDIS_PASSWORD' && self.redis.enabled && self.redis.redis.auth.fromSecret.enabled) &&
+          !(n in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL']))
+        paths: [litellm.providerEnv]
+        message: >-
+          The platform refuses names starting with CPLN_, K_SERVICE, K_CONFIGURATION and K_REVISION, and the
+          names the proxy already sets (LITELLM_MASTER_KEY, LITELLM_SALT_KEY, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DATABASE_URL, STORE_MODEL_IN_DB, and LITELLM_REDIS_PASSWORD with the Redis password on). The chart also writes the
+          names unquoted, so true, false and null are refused.
       - rule: self.secrets.name != ''
         mirrors: litellm.validate
         paths: [secrets.name]
@@ -274,7 +292,9 @@ steps:
             label: Redis password secret
             required: true
             when: self.redis.redis.auth.fromSecret.enabled
-            description: A dictionary secret with the key `password`. It must exist before you install.
+            description: >-
+              A dictionary secret with the key `password`. It must exist before you install. Leave out spaces,
+              quotes and backslashes: the Redis nodes write the password into their config files.
             help: >-
               Changing the password later takes more than a secret edit, because a running Sentinel keeps the
               old one: follow "Rotating the Redis password" in the README.
@@ -297,24 +317,28 @@ steps:
             type: quantity
             quantity: cpu
             label: Redis CPU limit
+            min: 25m
             required: true
             advanced: true
           - path: redis.redis.resources.minCpu
             type: quantity
             quantity: cpu
             label: Redis CPU reservation
+            min: 25m
             required: true
             advanced: true
           - path: redis.redis.resources.memory
             type: quantity
             quantity: memory
             label: Redis memory limit
+            min: 32Mi
             required: true
             advanced: true
           - path: redis.redis.resources.minMemory
             type: quantity
             quantity: memory
             label: Redis memory reservation
+            min: 32Mi
             required: true
             advanced: true
           - path: redis.sentinel.image
@@ -327,24 +351,28 @@ steps:
             type: quantity
             quantity: cpu
             label: Sentinel CPU limit
+            min: 25m
             required: true
             advanced: true
           - path: redis.sentinel.resources.minCpu
             type: quantity
             quantity: cpu
             label: Sentinel CPU reservation
+            min: 25m
             required: true
             advanced: true
           - path: redis.sentinel.resources.memory
             type: quantity
             quantity: memory
             label: Sentinel memory limit
+            min: 32Mi
             required: true
             advanced: true
           - path: redis.sentinel.resources.minMemory
             type: quantity
             quantity: memory
             label: Sentinel memory reservation
+            min: 32Mi
             required: true
             advanced: true
         rules:
@@ -363,19 +391,157 @@ steps:
             message: >-
               The previous version created this secret itself, and this upgrade deletes it. Create a secret under
               a NEW name holding your current Redis password, and name it here.
-          # The chart fails only when sentinel auth is switched on; any redis.sentinel.auth block is YAML-only here.
+          # 1.2.0 litellm.validate refuses Sentinel auth (an enabled flag) only with the Redis password on; any
+          # redis.sentinel.auth block is YAML-only here.
           - when: self.redis.redis.auth.fromSecret.enabled
-            rule: "!has(self.redis.sentinel.auth)"
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
             mirrors: litellm.validate
             paths: [redis.redis.auth.fromSecret.enabled]
             message: >-
               Keep Sentinel authentication off: LiteLLM sends only the Redis password, not a Sentinel password.
               Remove redis.sentinel.auth from the values.
+          # Without the Redis password the chart renders Sentinel auth, which LiteLLM cannot pass; 1.2.1 refuses it.
+          # Warning on install or when Sentinel auth is new; info for a release that already runs with it.
+          - when: >-
+              !self.redis.redis.auth.fromSecret.enabled && (oldSelf == null || !has(oldSelf.redis.sentinel) ||
+              [oldSelf.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true)))))))
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            severity: warning
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends no
+              Sentinel password, so it cannot reach Redis, and a plain-text password would sit in the release.
+              Version 1.2.1 refuses it.
+          - when: >-
+              !self.redis.redis.auth.fromSecret.enabled && oldSelf != null && has(oldSelf.redis.sentinel) &&
+              !([oldSelf.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true)))))))
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            severity: info
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends no
+              Sentinel password, so it cannot reach Redis, and a plain-text password would sit in the release.
+              Version 1.2.1 refuses it.
+          # redis 3.4.3 templates/workload-sentinel.yaml: bootstrap_sentinel_conf keeps an existing sentinel.conf, which
+          # survives a restart only with sentinel.persistence on (off by default).
+          - when: >-
+              oldSelf != null && self.redis.redis.auth.fromSecret.enabled &&
+              (!has(oldSelf.redis.redis.auth.fromSecret.enabled) || oldSelf.redis.redis.auth.fromSecret.enabled != true) &&
+              [self.redis.sentinel].exists(s, s.exists(k, k == 'persistence' && s[k] != null && [s[k]].exists(p, p.exists(e, e == 'enabled' && p[e] == true))))
+            rule: "false"
+            severity: info
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The Sentinels were first started without a Redis password and keep that config on their volume, so
+              they cannot authenticate to the Redis nodes after this change. Run SENTINEL SET mymaster auth-pass
+              with the password on every Sentinel once the Redis nodes have restarted.
+          # Redis and Sentinel are stateful workloads (redis 3.4.3): the platform rejects a max:min ratio above 4:1,
+          # a minimum above its maximum, and more than 8 MiB of memory per millicore of CPU (nodelibs workload.ts).
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) >= cpuMillicores(self.redis.redis.resources.minCpu) &&
+              memoryBytes(self.redis.redis.resources.memory) >= memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minCpu, redis.redis.resources.minMemory]
+            message: The Redis CPU and memory reservations cannot exceed their limits.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu) &&
+              memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minCpu, redis.redis.resources.minMemory]
+            message: The Redis CPU and memory limits can each be at most 4 times their reservation on a stateful workload.
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+            paths: [redis.redis.resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the Redis CPU limit or lower its memory.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) >= cpuMillicores(self.redis.sentinel.resources.minCpu) &&
+              memoryBytes(self.redis.sentinel.resources.memory) >= memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
+            message: The Sentinel CPU and memory reservations cannot exceed their limits.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) <= 4 * cpuMillicores(self.redis.sentinel.resources.minCpu) &&
+              memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
+            message: The Sentinel CPU and memory limits can each be at most 4 times their reservation on a stateful workload.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+            paths: [redis.sentinel.resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the Sentinel CPU limit or lower its memory.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) - cpuMillicores(self.redis.redis.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.redis.resources.memory) - memoryBytes(self.redis.redis.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.redis.resources.cpu, redis.redis.resources.memory]
+            message: The Redis CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.cpu) && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu)) ||
+              string(self.redis.redis.resources.cpu).endsWith('m')
+            paths: [redis.redis.resources.cpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minCpu) && string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu)) ||
+              string(self.redis.redis.resources.minCpu).endsWith('m')
+            paths: [redis.redis.resources.minCpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.memory) && string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory)) ||
+              string(self.redis.redis.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.memory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minMemory) && string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              string(self.redis.redis.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.minMemory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) - cpuMillicores(self.redis.sentinel.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.sentinel.resources.memory) - memoryBytes(self.redis.sentinel.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.sentinel.resources.cpu, redis.sentinel.resources.memory]
+            message: The Sentinel CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.cpu) && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu)) ||
+              string(self.redis.sentinel.resources.cpu).endsWith('m')
+            paths: [redis.sentinel.resources.cpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minCpu) && string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu)) ||
+              string(self.redis.sentinel.resources.minCpu).endsWith('m')
+            paths: [redis.sentinel.resources.minCpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.memory) && string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory)) ||
+              string(self.redis.sentinel.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.memory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minMemory) && string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              string(self.redis.sentinel.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.minMemory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
   # Top level, not in the Redis section: the chart refuses the removed key even with Redis off.
-  - rule: "!has(self.redis.redis.auth.password)"
+  # The chart refuses it only when enabled is true or the value differs from the subchart default your-password.
+  - rule: >-
+      [self.redis.redis].all(r, !r.exists(k, k == 'auth' && r[k] != null && [r[k]].exists(a,
+      a.exists(j, j == 'password' && a[j] != null && [a[j]].exists(p,
+      p.exists(e, e == 'enabled' && p[e] == true) ||
+      p.exists(e, e == 'value' && p[e] != null && string(p[e]) != 'your-password'))))))
     mirrors: litellm.validateRedisPassword
     paths: [redis.enabled]
     message: >-
@@ -393,6 +559,20 @@ rules:
       path: postgres.internalAccess.workloads
       items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-litellm']"
     message: Add the LiteLLM workload to the list, or the proxy cannot reach its database.
+  # Secrets the chart creates itself: <release>-litellm-config, and with Redis on the redis subchart's
+  # <release>-redis-config and <release>-sentinel-config. A secret you name must not share one of those names.
+  - rule: >-
+      !(([self.secrets.name, self.postgres.config.credentialsSecretName] +
+      (self.redis.enabled && self.redis.redis.auth.fromSecret.enabled ? [self.redis.redis.auth.fromSecret.name] : []) +
+      (self.postgres.backup.enabled && self.postgres.backup.provider == 'minio' ? [self.postgres.backup.minio.credentialsSecretName] : [])).exists(n,
+      n == context.releaseName + '-litellm-config' ||
+      (self.redis.enabled && n in [context.releaseName + '-redis-config', context.releaseName + '-sentinel-config'])))
+    severity: warning
+    paths: [secrets.name]
+    message: >-
+      This release creates secrets named <release>-litellm-config and, with Redis on, <release>-redis-config and
+      <release>-sentinel-config. A secret you name here (keys, database credentials, Redis password or backup
+      keys) must use another name.
 
 yamlOnly:
   - path: postgres.pgbouncer

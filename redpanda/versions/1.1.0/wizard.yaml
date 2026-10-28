@@ -1,0 +1,955 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redpanda
+# Stateful brokers with no location handling: peers address each other as <workload>-N.<workload>, so
+# every extra GVC location would run its own unrelated cluster on its own volumes.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: authentication
+    title: Authentication
+    description: The SASL users, each from a prerequisite secret, and how unmatched clients are treated.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              Every secret listed below must exist **before** you install or upgrade. If one is missing, the
+              brokers wait silently and `cpln logs` shows nothing; the reason is only in `status.versions[].message`
+              of `cpln workload get-deployments RELEASE_NAME-cluster --gvc GVC_NAME -o yaml`. Once the secret
+              exists the deployment recovers on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment RELEASE_NAME-cluster --gvc GVC_NAME`.
+            textExpression: >-
+              'Every secret listed below must exist **before** you install or upgrade. If one is missing, the
+              brokers wait silently and `cpln logs` shows nothing; the reason is only in `status.versions[].message`
+              of `cpln workload get-deployments ' + context.releaseName + '-' + self.redpanda.name +
+              ' --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. Once the secret
+              exists the deployment recovers on its own within about 10 minutes, or at once with
+              `cpln workload force-redeployment ' + context.releaseName + '-' + self.redpanda.name +
+              ' --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.1.0 moved each SASL user's username and password out of the values and into a dictionary
+              secret per user. Before you upgrade, read the passwords the cluster uses, because the upgrade deletes
+              the secret that holds them: `cpln secret reveal RELEASE_NAME-secrets -o yaml` (one `<username>-password`
+              key per user; the usernames are in your current release values). Create one secret per user with
+              those same `username` and `password` values and choose them below in the same order, the superuser
+              first: the users live in the cluster's metadata, so a secret with other values does not change them,
+              it only stops the console and the internal clients from logging in. 1.0.x shipped the published
+              default `admin` / `your-admin-password`: if the reveal shows it, change it after the upgrade as in
+              [Rotating SASL Credentials](/template-catalog/templates/redpanda#rotating-sasl-credentials). See
+              [Upgrading from 1.0.x](/template-catalog/templates/redpanda#upgrading-from-1-0-x).
+            textExpression: >-
+              'Version 1.1.0 moved each SASL user' + "'" + 's username and password out of the values and into a
+              dictionary secret per user. Before you upgrade, read the passwords the cluster uses, because the
+              upgrade deletes the secret that holds them: `cpln secret reveal ' + context.releaseName +
+              '-secrets -o yaml` (one `<username>-password` key per user; the usernames are in your current release
+              values). Create one secret per user with those same `username` and `password` values and choose them
+              below in the same order, the superuser first: the users live in the cluster' + "'" + 's metadata, so a
+              secret with other values does not change them, it only stops the console and the internal clients
+              from logging in. 1.0.x shipped the published default `admin` / `your-admin-password`: if the reveal
+              shows it, change it after the upgrade as in
+              [Rotating SASL Credentials](/template-catalog/templates/redpanda#rotating-sasl-credentials). See
+              [Upgrading from 1.0.x](/template-catalog/templates/redpanda#upgrading-from-1-0-x).'
+          - path: redpanda.auth.users
+            type: list
+            label: SASL users
+            required: true
+            widget: table
+            newItem: { credentialsSecretName: "" }
+            itemLabel: "(index == 0 ? 'Superuser: ' : 'User: ') + item.credentialsSecretName"
+            description: >-
+              One dictionary secret per user, with the keys `username` and `password`. The first user is the
+              cluster superuser: the console, the Schema Registry client and the optional HTTP Proxy log in to the
+              brokers as it.
+            help: >-
+              Broker 0 creates every listed user that does not exist yet each time it starts; an existing user keeps
+              the password it has. To change a password later, run `rpk security user update` inside a broker, set
+              the secret to match, then force a redeployment of the brokers and the console. Create a secret with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry username=admin --entry password='YOUR-STRONG-PASSWORD'`
+              (use `printf`, not `echo`, if you pipe a generated password in: a trailing newline stops the brokers).
+            docs: "#authentication"
+            item:
+              type: object
+              label: User
+              fields:
+                - path: credentialsSecretName
+                  type: ref
+                  label: Credentials secret
+                  required: true
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [dictionary] }
+                    mustExist: error
+                    allowCreate: true
+                    requiredKeys: [username, password]
+                    create:
+                      suggestName: "context.releaseName + '-redpanda-credentials'"
+              rules:
+                - rule: item.credentialsSecretName != null && item.credentialsSecretName != ''
+                  mirrors: redpanda.validateAuth
+                  paths: [credentialsSecretName]
+                  message: Every SASL user needs its credentials secret.
+                - rule: "!('username' in item) && !('password' in item)"
+                  mirrors: redpanda.validateAuth
+                  paths: [credentialsSecretName]
+                  message: >-
+                    A SASL user still carries a username or password in the values; both were removed in 1.1.0. Put
+                    them in the user's dictionary secret (keys username and password) and remove them from the values.
+            rules:
+              - rule: size(self.redpanda.auth.users) > 0
+                mirrors: redpanda.validateAuth
+                message: At least one SASL user is required; the first is the cluster superuser.
+              - when: >-
+                  oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') >= 0 &&
+                  size(oldSelf.redpanda.auth.users) > 0 && size(self.redpanda.auth.users) > 0
+                rule: >-
+                  self.redpanda.auth.users[0].credentialsSecretName == oldSelf.redpanda.auth.users[0].credentialsSecretName
+                severity: info
+                message: >-
+                  The first secret is the superuser the console and the internal clients log in as. Its user must
+                  already exist in the cluster with the password in the secret (or be created by broker 0 on its next
+                  start), or they can no longer log in.
+          - path: redpanda.auth.saslMechanism
+            type: enum
+            label: SASL mechanism
+            widget: segmented
+            required: true
+            options:
+              - { value: SCRAM-SHA-256, label: SCRAM-SHA-256 }
+              - { value: SCRAM-SHA-512, label: SCRAM-SHA-512 }
+            rules:
+              - rule: oldSelf == null || self.redpanda.auth.saslMechanism == oldSelf.redpanda.auth.saslMechanism
+                severity: info
+                message: >-
+                  The SASL users keep the mechanism they were created with. After this change the console and the
+                  internal clients log in with the new one, so update the existing users with rpk to the new mechanism
+                  first.
+      - title: Access control
+        docs: "#acls"
+        fields:
+          - path: redpanda.auth.superusers
+            type: list
+            label: Extra superusers
+            widget: tags
+            unique: true
+            description: >-
+              Usernames of users you create yourself with rpk that also get superuser rights. The first SASL user
+              above is always a superuser.
+            item: { type: string, label: Username }
+            rules:
+              # secret-init.yaml writes each name inside an unquoted shell here-document, where $ and backticks
+              # expand and a backslash ends up as an invalid escape in the double-quoted YAML string.
+              - when: oldSelf == null || self.redpanda.auth.superusers != oldSelf.redpanda.auth.superusers
+                rule: >-
+                  self.redpanda.auth.superusers.all(u, !u.contains('$') && !u.contains('`') && !u.contains('\\'))
+                severity: warning
+                message: >-
+                  The broker start script writes these names through the shell, which expands $ and backticks and
+                  breaks on a backslash. Leave those characters out.
+          - path: redpanda.acl.allowEveryoneIfNoAclFound
+            type: boolean
+            label: Allow everyone on resources without ACLs
+            description: >-
+              Off, a user with no matching ACL is denied: it can log in but sees no topics until you grant it ACLs
+              with `rpk security acl create`.
+
+  - id: cluster
+    title: Cluster
+    description: The number of brokers, their image and the compute of each one.
+    sections:
+      - title: Brokers
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade that changes the brokers restarts them, and nothing serializes the rollout of a stateful
+              workload, so brokers may restart together. Configure producers and consumers to retry.
+          - path: redpanda.replicas
+            type: enum
+            label: Brokers
+            widget: cards
+            required: true
+            description: >-
+              Each broker gets its own volume. New topics default to a replication factor of 3, or of the broker
+              count when it is lower.
+            docs: "#scaling-and-availability"
+            options:
+              - value: 1
+                label: One broker
+                description: Topics keep one copy, and the cluster is down while the broker restarts.
+              - value: 3
+                label: Three brokers
+                description: Topics keep three copies; the cluster stays up with one broker down.
+              - value: 5
+                label: Five brokers
+                description: The quorum stays up with two brokers down; topics keep three copies by default.
+            rules:
+              - rule: self.redpanda.replicas in [1, 3, 5]
+                mirrors: redpanda.validateReplicas
+                message: Redpanda needs 1, 3 or 5 brokers; Raft consensus requires an odd number for quorum.
+              - rule: oldSelf == null || self.redpanda.replicas == oldSelf.redpanda.replicas
+                severity: info
+                message: >-
+                  Changing the broker count of a running cluster changes its membership. Treat it as a deliberate
+                  cluster operation, not a routine scale.
+          - path: redpanda.image
+            type: string
+            format: image
+            label: Redpanda image
+            required: true
+          - path: redpanda.name
+            type: string
+            label: Broker workload name
+            required: true
+            advanced: true
+            immutable: The brokers find each other by this name, so it cannot change on a running cluster.
+            pattern: '^[a-z][a-z0-9-]*$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+            description: The broker workload is named `<release>-<name>`. Fixed once the cluster is created.
+          - path: redpanda.multiZone
+            type: boolean
+            label: Spread brokers across zones
+            description: Spreads the brokers across the availability zones of the location.
+      - title: Resources
+        description: Per broker.
+        fields:
+          - path: redpanda.cpu
+            type: quantity
+            quantity: cpu
+            label: Broker CPU limit
+            required: true
+            min: 25m
+            suggestions: ["1000m", "1500m", "2000m", "4000m"]
+          - path: redpanda.minCpu
+            type: quantity
+            quantity: cpu
+            label: Broker CPU reservation
+            required: true
+            min: 25m
+          - path: redpanda.memory
+            type: quantity
+            quantity: memory
+            label: Broker memory limit
+            required: true
+            min: 512Mi
+            suggestions: [3Gi, 4Gi, 8Gi, 16Gi]
+            description: >-
+              Redpanda uses this limit minus the memory reserved for the OS, and needs a little over 1 GiB of that
+              per reactor thread: with the default 1G reserve and one thread, 3Gi is the smallest limit that boots.
+          - path: redpanda.minMemory
+            type: quantity
+            quantity: memory
+            label: Broker memory reservation
+            required: true
+            min: 128Mi
+          - path: redpanda.smp
+            type: integer
+            label: Reactor threads (smp)
+            required: true
+            min: 1
+            advanced: true
+            description: Seastar reactor threads; match the whole cores of the CPU limit.
+          - path: redpanda.reserveMemory
+            type: string
+            label: Memory reserved for the OS
+            required: true
+            advanced: true
+            placeholder: 1G
+            description: Redpanda uses the memory limit minus this amount, written like `1G` or `512M`.
+        rules:
+          - rule: cpuMillicores(self.redpanda.minCpu) <= cpuMillicores(self.redpanda.cpu)
+            paths: [redpanda.minCpu]
+            message: The broker CPU reservation must not exceed the CPU limit.
+          - rule: memoryBytes(self.redpanda.minMemory) <= memoryBytes(self.redpanda.memory)
+            paths: [redpanda.minMemory]
+            message: The broker memory reservation must not exceed the memory limit.
+          - rule: cpuMillicores(self.redpanda.cpu) <= 4 * cpuMillicores(self.redpanda.minCpu)
+            paths: [redpanda.minCpu]
+            message: The brokers are stateful, so the CPU limit can be at most 4 times the CPU reservation.
+          - rule: memoryBytes(self.redpanda.memory) <= 4 * memoryBytes(self.redpanda.minMemory)
+            paths: [redpanda.minMemory]
+            message: The brokers are stateful, so the memory limit can be at most 4 times the memory reservation.
+          # Platform limits (nodelibs/schema/src/workload.ts: MAX_CPU_RANGE 4000, MAX_MEMORY_RANGE 4096 on a
+          # stateful workload without Capacity AI; at most 8 MiB of memory per millicore of the CPU limit).
+          - rule: cpuMillicores(self.redpanda.cpu) - cpuMillicores(self.redpanda.minCpu) <= 4000
+            paths: [redpanda.minCpu]
+            message: The brokers are stateful, so the CPU limit can be at most 4000m above the CPU reservation.
+          - rule: memoryBytes(self.redpanda.memory) - memoryBytes(self.redpanda.minMemory) <= 4096 * 1048576
+            paths: [redpanda.minMemory]
+            message: The brokers are stateful, so the memory limit can be at most 4096Mi above the memory reservation.
+          - rule: memoryBytes(self.redpanda.memory) <= cpuMillicores(self.redpanda.cpu) * 8388608
+            paths: [redpanda.memory]
+            message: The memory limit can be at most 8 MiB per millicore of the CPU limit. Raise the CPU or lower the memory.
+          # workload-redpanda-cluster.yaml writes memory and minMemory unquoted; a number reaches the API as a
+          # number, and the platform takes memory only as a string.
+          - rule: string(self.redpanda.memory).matches('[A-Za-z]$') && string(self.redpanda.minMemory).matches('[A-Za-z]$')
+            paths: [redpanda.memory]
+            message: Enter the broker memory with a unit, such as 4Gi or 2048Mi.
+          - rule: >-
+              self.redpanda.smp == (cpuMillicores(self.redpanda.cpu) < 1000 ? 1 :
+              cpuMillicores(self.redpanda.cpu) / 1000)
+            severity: info
+            paths: [redpanda.smp]
+            messageExpression: >-
+              'The broker CPU limit holds ' + string(cpuMillicores(self.redpanda.cpu) < 1000 ? 1 :
+              cpuMillicores(self.redpanda.cpu) / 1000) + ' whole cores; set the reactor threads to match, or each
+              thread gets less CPU or memory than it expects.'
+            message: >-
+              Set the reactor threads to the whole cores of the broker CPU limit, or each thread gets less CPU or
+              memory than it expects.
+          # secret-init.yaml writes it unquoted into the broker's start command.
+          - rule: self.redpanda.reserveMemory.matches('^[0-9A-Za-z.]+$')
+            severity: warning
+            paths: [redpanda.reserveMemory]
+            message: Write the reserve as a number with an optional unit, such as 1G or 512M; it goes into the start command as typed.
+          - rule: >-
+              !self.redpanda.reserveMemory.matches('^[0-9]+[KMG]?$') ||
+              memoryBytes(self.redpanda.reserveMemory) < memoryBytes(self.redpanda.memory)
+            severity: info
+            paths: [redpanda.reserveMemory]
+            message: The memory reserved for the OS leaves Redpanda nothing of the broker memory limit.
+          # Measured 2026-10-23 (wizard round): 2Gi with reserveMemory 1G and smp 1 refused to boot
+          # ("Memory: '1004535808' below recommended: '1073741824'") and after 6 failed starts Redpanda's
+          # crash-loop guard kept the broker down even after an upgrade to 3Gi; 3Gi booted.
+          - when: self.redpanda.reserveMemory.matches('^[0-9]+[KMG]?$') && self.redpanda.smp != null
+            rule: >-
+              memoryBytes(self.redpanda.memory) - memoryBytes(self.redpanda.reserveMemory) >=
+              self.redpanda.smp * 1181116006
+            paths: [redpanda.memory]
+            messageExpression: >-
+              'Redpanda needs about 1.1 GiB per reactor thread after the OS reserve, so with ' +
+              string(self.redpanda.smp) + ' thread(s) and a ' + self.redpanda.reserveMemory +
+              ' reserve this limit will not boot, and repeated failed starts lock the broker until it is reinstalled. Raise the memory limit or lower the reserve.'
+            message: >-
+              Redpanda needs about 1.1 GiB per reactor thread after the OS reserve, so this limit will not boot.
+              Raise the memory limit or lower the reserve.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each broker's topic data, and its snapshots.
+    sections:
+      - title: Broker volumes
+        docs: "#storage"
+        description: One volume per broker. Uninstalling the release deletes the volume set.
+        fields:
+          - path: redpanda.volume.performanceClass
+            type: enum
+            label: Disk class
+            widget: segmented
+            required: true
+            immutable: The disk class is chosen when the volume set is created.
+            description: Fixed once the volume set is created.
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+          - path: redpanda.volume.initialCapacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: redpanda.volume.fileSystemType
+            type: enum
+            label: File system
+            widget: segmented
+            required: true
+            advanced: true
+            immutable: The file system is chosen when the volume set is created.
+            description: Fixed once the volume set is created.
+            options:
+              - { value: xfs, label: xfs }
+              - { value: ext4, label: ext4 }
+        rules:
+          - rule: >-
+              self.redpanda.volume.performanceClass != 'high-throughput-ssd' ||
+              self.redpanda.volume.initialCapacity >= 200
+            paths: [redpanda.volume.initialCapacity]
+            message: A high throughput SSD needs an initial capacity of at least 200 GiB.
+          - rule: >-
+              oldSelf == null || oldSelf.redpanda.volume.initialCapacity == null ||
+              self.redpanda.volume.initialCapacity >= oldSelf.redpanda.volume.initialCapacity
+            paths: [redpanda.volume.initialCapacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: Snapshots
+        docs: "#backing-up"
+        description: >-
+          Platform-managed snapshots of every broker volume, kept beside the volumes. They are the only backup
+          this template provides.
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              Version 1.1.0 added these snapshots. Unless you change them here, the upgrade turns on a daily
+              snapshot of every broker volume at 00:00 UTC, kept for 7 days, and a final snapshot when the volume
+              set is deleted.
+          - path: redpanda.volume.snapshots.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            description: Leave it empty to take no scheduled snapshots, only the final one.
+            pattern: '^[0-5]?[0-9] [^ #]+ [^ #]+ [^ #]+ [^ #]+$'
+            patternMessage: >-
+              Start with one fixed minute, such as `0 0 * * *`. A snapshot can run at most once an hour, and the
+              chart writes the schedule unquoted, so one that starts with `*` stops the install.
+          - path: redpanda.volume.snapshots.retentionDuration
+            type: string
+            format: duration
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+          - path: redpanda.volume.snapshots.createFinalSnapshot
+            type: boolean
+            label: Snapshot when the volume set is deleted
+      - title: Custom encryption
+        advanced: true
+        docs: "/reference/volumeset#custom-encryption-aws"
+        fields:
+          - path: redpanda.volume.customEncryption
+            type: object
+            optional: true
+            absent: true
+            label: Encrypt with your own AWS KMS key
+            immutable: Encryption is chosen when the volume set is created.
+            description: >-
+              Applies only when a volume is created, and the key policy must grant Control Plane access before
+              that. After install, open each volume in the console, click `spec` and follow the AWS custom
+              encryption instructions there.
+            newValue: { enabled: true, region: "", keyId: "" }
+            fields:
+              - path: enabled
+                type: boolean
+                label: Use the KMS key
+              - path: region
+                type: ref
+                label: Location
+                required: true
+                help: An AWS location of this GVC, in the region of the key.
+                ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              - path: keyId
+                type: string
+                label: KMS key ARN
+                required: true
+                placeholder: arn:aws:kms:us-east-1:123456789012:key/…
+
+  - id: console
+    title: Console
+    description: The optional web console for topics, messages, consumer groups and ACLs.
+    sections:
+      - id: console
+        title: Redpanda Console
+        toggle: redpanda_console.enabled
+        description: >-
+          A web UI for topics, messages, consumer groups and ACLs. It has no login of its own (that is a Redpanda
+          Enterprise feature): whoever reaches it acts as the cluster superuser, the first SASL user. It is closed
+          to the internet unless you publish it below.
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.0.x published the console to the whole internet (`0.0.0.0/0`). Since 1.1.0 it is closed unless you
+              list public inbound CIDRs below, so a release that kept the old default loses its public console URL
+              (it returns 403). Reach the console with `cpln port-forward` instead.
+          - type: note
+            text: >-
+              Open the console from your machine with `cpln port-forward RELEASE_NAME-console 8080:8080 --gvc GVC_NAME`,
+              then http://localhost:8080. See [Redpanda Console](/template-catalog/templates/redpanda#redpanda-console).
+            textExpression: >-
+              'Open the console from your machine with `cpln port-forward ' + context.releaseName + '-' +
+              self.redpanda_console.name + ' 8080:8080 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, then http://localhost:8080. See [Redpanda Console](/template-catalog/templates/redpanda#redpanda-console).'
+          - path: redpanda_console.firewall.external_inboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: >-
+              Publishes the console to these addresses on the internet, with no login in front of it. List only
+              your own range, or the address of your own authenticating proxy.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-console --gvc GVC_NAME -o yaml`. Firewall changes take up to a few
+              minutes to take effect.
+            item: { type: string, format: cidr }
+          - path: redpanda_console.domain
+            type: string
+            format: hostname
+            absent: true
+            label: Custom domain
+            placeholder: console.example.com
+            description: >-
+              The chart creates this domain and routes it to the console over TLS. It serves only the addresses
+              listed in Public inbound CIDRs.
+            help: >-
+              Add the DNS records for the domain before you install; see
+              [Configure Domain](/guides/configure-domain).
+          - path: redpanda_console.firewall.internal_inboundAllowType
+            type: enum
+            absent: true
+            label: Who can reach the console inside Control Plane
+            description: Left empty, no workload can; `cpln port-forward` reaches the console either way.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+          - path: redpanda_console.firewall.external_outboundAllowCIDR
+            type: list
+            serialize: csv
+            label: Console outbound CIDRs
+            advanced: true
+            item: { type: string, format: cidr }
+          - path: redpanda_console.name
+            type: string
+            label: Console workload name
+            required: true
+            advanced: true
+            pattern: '^[a-z][a-z0-9-]*$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+            description: The console workload is named `<release>-<name>`.
+          - path: redpanda_console.image
+            type: string
+            format: image
+            label: Console image
+            required: true
+            advanced: true
+          - path: redpanda_console.cpu
+            type: quantity
+            quantity: cpu
+            label: Console CPU limit
+            required: true
+            advanced: true
+            min: 25m
+          - path: redpanda_console.minCpu
+            type: quantity
+            quantity: cpu
+            label: Console CPU reservation
+            advanced: true
+            min: 25m
+          - path: redpanda_console.memory
+            type: quantity
+            quantity: memory
+            label: Console memory limit
+            required: true
+            advanced: true
+            min: 64Mi
+          - path: redpanda_console.minMemory
+            type: quantity
+            quantity: memory
+            label: Console memory reservation
+            advanced: true
+            min: 32Mi
+          - path: redpanda_console.replicas
+            type: integer
+            label: Console replicas
+            required: true
+            min: 1
+            advanced: true
+            suggestions: [1, 2, 3]
+          # The console is a standard workload: the platform accepts 1 to 3600 seconds.
+          - path: redpanda_console.timeoutSeconds
+            type: integer
+            label: Console request timeout
+            unit: seconds
+            required: true
+            min: 1
+            max: 3600
+            advanced: true
+            docs: "/reference/workload/general#timeout-seconds"
+        rules:
+          - rule: >-
+              !self.redpanda_console.firewall.external_inboundAllowCIDR.exists(c, c in ['0.0.0.0/0', '::/0'])
+            severity: info
+            paths: [redpanda_console.firewall.external_inboundAllowCIDR]
+            message: >-
+              This publishes the console to the whole internet, and anyone who opens it acts as the cluster
+              superuser. List only your own range, or the address of your own authenticating proxy.
+          - when: self.redpanda_console.domain != null && self.redpanda_console.domain != ''
+            rule: size(self.redpanda_console.firewall.external_inboundAllowCIDR) > 0
+            severity: info
+            paths: [redpanda_console.domain]
+            message: >-
+              The custom domain serves nothing until Public inbound CIDRs lists the addresses allowed to reach the
+              console.
+          - rule: >-
+              self.redpanda_console.minCpu == null || self.redpanda_console.minCpu == '' ||
+              cpuMillicores(self.redpanda_console.minCpu) <= cpuMillicores(self.redpanda_console.cpu)
+            paths: [redpanda_console.minCpu]
+            message: The console CPU reservation must not exceed the CPU limit.
+          - rule: >-
+              self.redpanda_console.minMemory == null || self.redpanda_console.minMemory == '' ||
+              memoryBytes(self.redpanda_console.minMemory) <= memoryBytes(self.redpanda_console.memory)
+            paths: [redpanda_console.minMemory]
+            message: The console memory reservation must not exceed the memory limit.
+          - rule: memoryBytes(self.redpanda_console.memory) <= cpuMillicores(self.redpanda_console.cpu) * 8388608
+            paths: [redpanda_console.memory]
+            message: The console memory limit can be at most 8 MiB per millicore of its CPU limit. Raise the CPU or lower the memory.
+          # workload-redpanda-console.yaml writes cpu unquoted: whole cores would reach the API as a number.
+          - rule: string(self.redpanda_console.cpu).matches('^[0-9]+m$')
+            paths: [redpanda_console.cpu]
+            message: Enter the console CPU limit in millicores, such as 200m or 1000m.
+          # workload-redpanda-console.yaml writes memory and minMemory unquoted.
+          - rule: >-
+              string(self.redpanda_console.memory).matches('[A-Za-z]$') &&
+              (self.redpanda_console.minMemory == null || self.redpanda_console.minMemory == '' ||
+              string(self.redpanda_console.minMemory).matches('[A-Za-z]$'))
+            paths: [redpanda_console.memory]
+            message: Enter the console memory with a unit, such as 256Mi.
+
+  - id: network
+    title: Network
+    description: Who can reach the brokers, their listeners and optional external Kafka access.
+    sections:
+      - title: Broker access
+        docs: "#firewall"
+        fields:
+          - path: redpanda.firewall.internal_inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              This also governs the Admin API on port 9644, which has **no authentication** for reads and writes:
+              under Same GVC every workload in the GVC can administer the cluster. See
+              [Admin API Access](/template-catalog/templates/redpanda#admin-api-access). Firewall changes take up to
+              a few minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+              - { value: none, label: Nobody, description: No workload can connect. }
+          # Shown for every type once it has entries: workload-redpanda-cluster.yaml writes any non-empty list,
+          # and the platform applies it with same-gvc and workload-list.
+          - path: redpanda.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            when: >-
+              self.redpanda.firewall.internal_inboundAllowType in ['same-gvc', 'workload-list'] ||
+              size(self.redpanda.firewall.inboundAllowWorkload) > 0
+            description: >-
+              With Specific workloads, the only workloads that can connect, including the optional console. With
+              Same GVC, extra workloads from other GVCs; it does not narrow Same GVC.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.redpanda.firewall.internal_inboundAllowType == 'same-gvc'
+          - path: redpanda.firewall.external_outboundAllowCIDR
+            type: list
+            absent: true
+            serialize: csv
+            label: Broker outbound CIDRs
+            advanced: true
+            item: { type: string, format: cidr }
+        rules:
+          - when: self.redpanda.firewall.internal_inboundAllowType == 'workload-list' && !self.redpanda_console.enabled
+            rule: size(self.redpanda.firewall.inboundAllowWorkload) > 0
+            severity: warning
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            message: List at least one workload when the brokers are open to specific workloads; otherwise no client can connect.
+          - when: >-
+              self.redpanda.firewall.internal_inboundAllowType == 'workload-list' && self.redpanda_console.enabled &&
+              context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda_console.name) in
+              self.redpanda.firewall.inboundAllowWorkload
+            severity: warning
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'The chart does not add its own console to the list. Add //gvc/' + context.gvc + '/workload/' +
+              context.releaseName + '-' + self.redpanda_console.name + ', or the console cannot reach the brokers.'
+            message: The chart does not add its own console to the list; add the console workload, or it cannot reach the brokers.
+            fix:
+              path: redpanda.firewall.inboundAllowWorkload
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda_console.name]"
+          - when: >-
+              self.redpanda.firewall.internal_inboundAllowType == 'workload-list' && self.redpanda.replicas > 1 &&
+              context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name) in
+              self.redpanda.firewall.inboundAllowWorkload
+            severity: warning
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'The brokers reach each other through their own workload, and the chart does not add it to the list. Add //gvc/' +
+              context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name + ', or the cluster can split.'
+            message: >-
+              The brokers reach each other through their own workload, and the chart does not add it to the list.
+              Add the broker workload, or the cluster can split.
+            fix:
+              path: redpanda.firewall.inboundAllowWorkload
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + self.redpanda.name]"
+          - when: self.redpanda.firewall.internal_inboundAllowType == 'none'
+            rule: "!self.redpanda_console.enabled"
+            severity: warning
+            paths: [redpanda.firewall.internal_inboundAllowType]
+            message: '"Nobody" also blocks the console, which connects to the brokers like any other workload.'
+          - when: self.redpanda.firewall.internal_inboundAllowType == 'none'
+            rule: size(self.redpanda.firewall.inboundAllowWorkload) == 0
+            severity: warning
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            message: >-
+              The chart still writes the listed workloads into the brokers' firewall, where the platform checks every
+              entry, but "Nobody" lets none of them connect. Remove them.
+          - when: self.redpanda.firewall.internal_inboundAllowType == 'same-org'
+            rule: size(self.redpanda.firewall.inboundAllowWorkload) == 0
+            severity: info
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            message: Same org already lets every workload of the org connect, so the listed workloads add nothing.
+          - when: self.redpanda.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null
+            rule: "!self.redpanda.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [redpanda.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.redpanda.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list. To narrow access, choose Specific workloads.'
+            message: >-
+              Same GVC already allows every workload in this GVC, so those entries can be removed from the list. To
+              narrow access, choose Specific workloads.
+      - title: Listeners
+        docs: "#listeners"
+        description: >-
+          Kafka requires a SASL login; Schema Registry and the optional HTTP Proxy require HTTP basic with the same
+          credentials; the Admin API requires nothing.
+        fields:
+          - path: redpanda.listeners.kafka.internal.port
+            type: integer
+            label: Kafka port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: redpanda.listeners.adminApi.port
+            type: integer
+            label: Admin API port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: redpanda.listeners.schemaRegistry.port
+            type: integer
+            label: Schema Registry port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+      - id: pandaproxy
+        title: HTTP Proxy
+        toggle: redpanda.listeners.pandaproxy.enabled
+        description: >-
+          Produce and consume over REST, for clients without a Kafka driver. Clients log in with HTTP basic using
+          a SASL user's credentials; the proxy reaches the brokers as the superuser.
+        fields:
+          - path: redpanda.listeners.pandaproxy.port
+            type: integer
+            label: HTTP Proxy port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+      - title: External Kafka access
+        docs: "#external-kafka-access"
+        description: >-
+          Lets clients outside Control Plane reach each broker over TLS through a domain you control. It takes a
+          dedicated load balancer on the GVC, DNS records you add before install, and your clients' addresses in
+          Public inbound CIDRs.
+        fields:
+          - path: redpanda.listeners.kafka.external
+            type: object
+            optional: true
+            absent: true
+            label: External Kafka access
+            newValue: { directReplicaRouting: { containerPort: 9094, publicAddress: "" } }
+            fields:
+              - path: directReplicaRouting.publicAddress
+                type: string
+                format: hostname
+                label: Domain
+                required: true
+                placeholder: redpanda.example.com
+                description: The chart creates this domain; each broker is reached at a subdomain of it.
+              - path: directReplicaRouting.containerPort
+                type: integer
+                label: External Kafka port
+                required: true
+                min: 1
+                max: 65535
+          - type: note
+            severity: warning
+            when: self.redpanda.listeners.kafka.external != null
+            text: >-
+              Add these DNS records before you install, with proxying off (TCP must pass through directly): TXT
+              `_cpln.DOMAIN` with your org name or ID, CNAME `@` to `GVC_ALIAS.cpln.app`, CNAME `_acme-challenge` to
+              `_acme-challenge.cpln.app`, and one CNAME per broker, `RELEASE_NAME-cluster-N-LOCATION`, to
+              `GVC_ALIAS.cpln.app`. The GVC alias is in the GVC's settings. Clients connect with SASL_SSL to each of
+              these names under your domain, on the external Kafka port.
+            textExpression: >-
+              'Add these DNS records before you install, with proxying off (TCP must pass through directly): TXT `_cpln.' +
+              (self.redpanda.listeners.kafka.external.directReplicaRouting.publicAddress != null &&
+              self.redpanda.listeners.kafka.external.directReplicaRouting.publicAddress != '' ?
+              self.redpanda.listeners.kafka.external.directReplicaRouting.publicAddress : 'DOMAIN') +
+              '` with your org name or ID, CNAME `@` to `GVC_ALIAS.cpln.app`, CNAME `_acme-challenge` to
+              `_acme-challenge.cpln.app`, and one CNAME per broker to `GVC_ALIAS.cpln.app`: ' +
+              (self.redpanda.replicas == 1 ? ['0'] : self.redpanda.replicas == 3 ? ['0', '1', '2'] :
+              ['0', '1', '2', '3', '4']).map(n, '`' + context.releaseName + '-' + self.redpanda.name + '-' + n + '-' +
+              (context.gvcLocations != null && size(context.gvcLocations) > 0 ? context.gvcLocations[0] : 'LOCATION') +
+              '`').join(', ') + '. The GVC alias is in the GVC' + "'" + 's settings. Clients connect with SASL_SSL to each
+              of these names under your domain, on the external Kafka port.'
+          - path: redpanda.firewall.external_inboundAllowCIDR
+            when: self.redpanda.listeners.kafka.external != null || size(self.redpanda.firewall.external_inboundAllowCIDR) > 0
+            type: list
+            absent: true
+            serialize: csv
+            label: Public inbound CIDRs
+            description: >-
+              Addresses on the internet allowed through the brokers' firewall, such as your external Kafka clients.
+              Kafka there requires a SASL login over TLS.
+            item: { type: string, format: cidr }
+        rules:
+          - when: self.redpanda.listeners.kafka.external != null
+            rule: >-
+              context.gvcSpec == null || (has(context.gvcSpec.loadBalancer) &&
+              has(context.gvcSpec.loadBalancer.dedicated) && context.gvcSpec.loadBalancer.dedicated)
+            paths: [redpanda.listeners.kafka.external]
+            message: External Kafka access needs a dedicated load balancer on the GVC. Enable it in the GVC settings first.
+          - when: self.redpanda.listeners.kafka.external != null
+            rule: size(self.redpanda.firewall.external_inboundAllowCIDR) > 0
+            severity: info
+            paths: [redpanda.firewall.external_inboundAllowCIDR]
+            message: >-
+              External Kafka clients pass the brokers' firewall only from the addresses listed in Public inbound CIDRs.
+          # Each broker advertises <release>-<name>-<n>-<location>.<domain>, and a DNS label has at most 63 characters.
+          - when: self.redpanda.listeners.kafka.external != null && context.gvcLocations != null
+            rule: >-
+              context.gvcLocations.all(l, size(context.releaseName + '-' + self.redpanda.name + '-' +
+              string(self.redpanda.replicas - 1) + '-' + l) <= 63)
+            severity: warning
+            paths: [redpanda.listeners.kafka.external]
+            message: >-
+              With external Kafka access each broker's host name starts with <release>-<name>-<n>-<location>, which
+              is longer than the 63 characters a DNS label allows. Use a shorter release or broker workload name.
+    rules:
+      # The listener ports share one container with the broker RPC port 33145, and the platform reserves some ports.
+      - rule: >-
+          isUnique([self.redpanda.listeners.kafka.internal.port, self.redpanda.listeners.adminApi.port,
+          self.redpanda.listeners.schemaRegistry.port, 33145] +
+          (self.redpanda.listeners.pandaproxy.enabled ? [self.redpanda.listeners.pandaproxy.port] : []) +
+          (self.redpanda.listeners.kafka.external != null ?
+          [self.redpanda.listeners.kafka.external.directReplicaRouting.containerPort] : []))
+        paths: [redpanda.listeners.kafka.internal.port]
+        message: Give every listener its own port; 33145 is taken by the brokers' internal RPC.
+      - rule: >-
+          !([self.redpanda.listeners.kafka.internal.port, self.redpanda.listeners.adminApi.port,
+          self.redpanda.listeners.schemaRegistry.port] +
+          (self.redpanda.listeners.pandaproxy.enabled ? [self.redpanda.listeners.pandaproxy.port] : []) +
+          (self.redpanda.listeners.kafka.external != null ?
+          [self.redpanda.listeners.kafka.external.directReplicaRouting.containerPort] : [])).exists(p,
+          p in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])
+        paths: [redpanda.listeners.kafka.internal.port]
+        message: >-
+          The platform reserves ports 8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and 41000;
+          choose other listener ports.
+      - rule: >-
+          oldSelf == null || self.redpanda.listeners.kafka.internal.port == oldSelf.redpanda.listeners.kafka.internal.port
+        severity: info
+        paths: [redpanda.listeners.kafka.internal.port]
+        message: The brokers advertise the new Kafka port after the upgrade; update the bootstrap address of every client.
+
+  - id: advanced
+    title: Advanced
+    description: Extra environment and extra broker configuration.
+    sections:
+      - fields:
+          - path: redpanda.env
+            type: yaml
+            yamlType: list
+            label: Extra environment variables
+            description: Added to the broker container, as `name` and `value` entries.
+      - title: Cluster identity and broker configuration
+        docs: "#cluster-identity-and-extra-broker-configuration"
+        fields:
+          - path: redpanda.secrets.cluster_id
+            type: string
+            label: Cluster ID
+            description: Leave it empty to generate one on first boot; set it to keep the cluster identity across reinstalls.
+            rules:
+              - when: oldSelf == null || self.redpanda.secrets.cluster_id != oldSelf.redpanda.secrets.cluster_id
+                rule: >-
+                  !self.redpanda.secrets.cluster_id.contains('$') && !self.redpanda.secrets.cluster_id.contains('`') &&
+                  !self.redpanda.secrets.cluster_id.contains('\\')
+                severity: warning
+                message: >-
+                  The broker start script writes the cluster ID through the shell, which expands $ and backticks and
+                  breaks on a backslash. Leave those characters out.
+          - path: redpanda.extra_configurations
+            type: yaml
+            yamlType: map
+            label: Extra broker properties
+            description: Written into the `redpanda` section of every broker's `redpanda.yaml` at start.
+            help: >-
+              Each value is written as typed, one `key: value` line per property: use single values, not lists or
+              maps. Quote a whole number of a million or more (`'604800000'`), or the chart writes it in exponent
+              form (6.048e+08).
+            rules:
+              # secret-init.yaml writes `key: value` unquoted inside a shell here-document (measured with helm
+              # template + bash: 604800000 -> 6.048e+08, {x: 1} -> map[x:1], $VAR and backticks expand).
+              - when: oldSelf == null || self.redpanda.extra_configurations != oldSelf.redpanda.extra_configurations
+                rule: >-
+                  self.redpanda.extra_configurations.all(k,
+                  type(self.redpanda.extra_configurations[k]) == bool ||
+                  (type(self.redpanda.extra_configurations[k]) == int && self.redpanda.extra_configurations[k] < 1000000 && self.redpanda.extra_configurations[k] > -1000000) ||
+                  (type(self.redpanda.extra_configurations[k]) == double && self.redpanda.extra_configurations[k] < 1000000.0 && self.redpanda.extra_configurations[k] > -1000000.0) ||
+                  (type(self.redpanda.extra_configurations[k]) == string &&
+                  !string(self.redpanda.extra_configurations[k]).matches('[$`\\\\\\t\\n]') &&
+                  !string(self.redpanda.extra_configurations[k]).contains(': ') &&
+                  !string(self.redpanda.extra_configurations[k]).contains(' #') && string(self.redpanda.extra_configurations[k]) != '' &&
+                  !string(self.redpanda.extra_configurations[k]).matches('^\\s') && !string(self.redpanda.extra_configurations[k]).matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+                  !string(self.redpanda.extra_configurations[k]).matches('^[-?:](\\s|$)') && !string(self.redpanda.extra_configurations[k]).endsWith(':') && !string(self.redpanda.extra_configurations[k]).endsWith(' ')))
+                severity: warning
+                message: >-
+                  Each value goes into the broker configuration as typed, through the shell. Use a true/false, a
+                  number below a million (quote larger ones), or non-empty text without $, backticks, backslashes,
+                  ': ' or ' #' that does not start with a space, a quote, a YAML symbol such as ! & * % @ [ ] { } | > , #
+                  (or with - ? : and a space) and does not end with ':' or a space; lists and maps are written
+                  unreadably.
+
+migrations:
+  # 1.1.0 moved each SASL user's username and password into a dictionary secret named per user; the plaintext
+  # values cannot follow, so keep one entry per user with an empty secret for the user to choose.
+  - fromVersions: "<1.1.0"
+    to: redpanda.auth.users
+    valueExpr: "self.redpanda.auth.users.map(u, {'credentialsSecretName': ''})"
+    note: >-
+      Each SASL user's username and password moved to a dictionary secret with the keys username and password.
+      Choose one secret per user under Authentication, in the same order, holding the credentials the cluster
+      already uses.
+  # 1.1.0 commented out the console's 0.0.0.0/0 default (closed by default). A rename moves changed values
+  # only, so CIDRs a release set itself are kept, and a release on the old default comes out closed.
+  - fromVersions: "<1.1.0"
+    from: redpanda_console.firewall.external_inboundAllowCIDR
+    to: redpanda_console.firewall.external_inboundAllowCIDR
+    note: >-
+      The console has no login, and since 1.1.0 it is closed to the internet by default. The CIDRs this release
+      set are kept and still publish it; remove them under Console unless they cover only your own range.

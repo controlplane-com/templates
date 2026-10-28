@@ -127,3 +127,35 @@ checks:
     # last (~4 min in); 20 x 30 s covers the rollout.
     retries: 20
     retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
+      without this a member that never comes back (seen once in testing: the old leader stuck initializing for
+      17 min) goes unseen.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

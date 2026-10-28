@@ -107,6 +107,17 @@ steps:
         message: >-
           PostgreSQL reads the credentials only when the cluster is first created; pointing at another
           secret does not change the existing user or password.
+      # postgres-highly-available 2.5.0+ renders its backup settings into a secret named <release>-postgres-config
+      # (templates/secret-config.yaml, only with backups on); 2.4.x kept the credentials in a chart secret of that name.
+      - rule: >-
+          (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '2.5.0') >= 0 &&
+          self.config.credentialsSecretName == oldSelf.config.credentialsSecretName && !self.backup.enabled) ||
+          self.config.credentialsSecretName != context.releaseName + '-postgres-config'
+        severity: warning
+        paths: [config.credentialsSecretName]
+        message: >-
+          Choose another name. This chart renders its own secret under this name when backups are on, and on an
+          upgrade from 2.4.x or earlier this is the old chart's secret, which the upgrade removes or rewrites.
 
   - id: storage
     title: Storage
@@ -582,6 +593,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (templates/workload-logical-backup.yaml) writes the prefix unquoted as its
+          # BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.backup.mode == 'logical'
+            rule: self.backup.aws.prefix != null && self.backup.aws.prefix != ''
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.backup.mode == 'logical' && self.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+              [self.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> or gs://<bucket>/<prefix>, so ' #'
+          # starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.backup.mode == 'wal-g' && self.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+              [self.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -608,6 +656,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (templates/workload-logical-backup.yaml) writes the prefix unquoted as its
+          # BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.backup.mode == 'logical'
+            rule: self.backup.gcp.prefix != null && self.backup.gcp.prefix != ''
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.backup.mode == 'logical' && self.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+              [self.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> or gs://<bucket>/<prefix>, so ' #'
+          # starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.backup.mode == 'wal-g' && self.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+              [self.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: MinIO or S3-compatible
         when: self.backup.enabled && self.backup.provider == 'minio'
         docs: "#minio"
@@ -649,6 +734,42 @@ steps:
             message: >-
               backup.minio.accessKey and backup.minio.secretKey were removed in 2.5.0. Put them in the
               MinIO credentials secret and remove them from the values.
+          # The logical backup job (templates/workload-logical-backup.yaml) writes the prefix unquoted as its
+          # BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.backup.mode == 'logical'
+            rule: self.backup.minio.prefix != null && self.backup.minio.prefix != ''
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.backup.mode == 'logical' && self.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.minio.prefix == oldSelf.backup.minio.prefix) ||
+              [self.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> or gs://<bucket>/<prefix>, so ' #'
+          # starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.backup.mode == 'wal-g' && self.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.minio.prefix == oldSelf.backup.minio.prefix) ||
+              [self.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
 
 rules:
   - rule: >-

@@ -673,6 +673,31 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (templates/workload-logical-backup.yaml) writes the prefix unquoted as its
+          # BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.backup.mode == 'logical'
+            rule: self.backup.aws.prefix != null && self.backup.aws.prefix != ''
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.backup.mode == 'logical' && self.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+              [self.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -699,6 +724,31 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (templates/workload-logical-backup.yaml) writes the prefix unquoted as its
+          # BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.backup.mode == 'logical'
+            rule: self.backup.gcp.prefix != null && self.backup.gcp.prefix != ''
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.backup.mode == 'logical' && self.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+              [self.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
 
 rules:
   - rule: >-

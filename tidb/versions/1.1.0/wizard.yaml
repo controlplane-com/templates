@@ -328,6 +328,7 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
       - id: pd-storage
         title: PD volumes
@@ -339,6 +340,7 @@ steps:
             required: true
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100]
     rules:
       - rule: oldSelf == null || self.volumeset.tikv.capacity >= oldSelf.volumeset.tikv.capacity

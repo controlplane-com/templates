@@ -169,12 +169,14 @@ steps:
             required: true
             unit: GiB
             min: 10
+            max: 65536
           - path: volumeset.pd.capacity
             type: integer
             label: PD volume
             required: true
             unit: GiB
             min: 10
+            max: 65536
 
   - id: access
     title: Access

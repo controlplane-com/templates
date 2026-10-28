@@ -45,10 +45,10 @@ password are a secret you create yourself.
    6–8.5 minutes, or clear it immediately with
    `cpln workload force-redeployment {release}-minio --gvc {gvc}` (~90 s).
 
-2. **Replica quota** — the default `replicas-per-workload` quota is **5**, and this template's
-   default is `replicas: 6`. **Request a quota increase before installing.** Check your org's current
-   limit with `cpln quota get` and look at `replicas-per-workload`; note the value shown is your
-   org's, which may already have been raised.
+2. **Replica quota (only above 6 replicas)** — the workload uses per-replica addressing, so the
+   quota that applies is `replicas-per-replica-direct-workload`, **6** by default. The default
+   `replicas: 6` fits it. For more replicas, check your org's limit with
+   `cpln quota get --max 0 | grep replicas-per-replica-direct-workload` and request an increase first.
 
 ## Configuration
 

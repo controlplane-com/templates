@@ -161,8 +161,12 @@ steps:
                 # another type, cuts them at " #", or fails to parse the workload.
                 - rule: >-
                     item.value == '' ||
-                    !item.value.matches('^(true|false|True|False|TRUE|FALSE|yes|no|Yes|No|YES|NO|on|off|On|Off|ON|OFF|y|n|Y|N|null|Null|NULL|~|[-+]?[0-9][0-9_]*|[-+]?([0-9_]*\\.[0-9_]+|[0-9_]+\\.[0-9_]*)([eE][-+]?[0-9]+)?|[-+]?[0-9]+(:[0-5]?[0-9])+|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN)|0x[0-9a-fA-F_]+|0o[0-7]+|0b[01_]+)$') &&
-                    !item.value.matches('(: |:$| #|^[\\[\\]{}&*!|>\\x27\\x22%@`,?#]|^- |^-$|^\\s|\\s$)')
+                    [item.value].all(x,
+                      !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                      !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                      !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                      !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                      !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
                   paths: [value]
                   message: >-
                     This chart version writes the value without quotes, so YAML would read it as a number, a

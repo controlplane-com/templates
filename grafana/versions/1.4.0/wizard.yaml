@@ -488,6 +488,34 @@ steps:
             when: self.postgres.enabled
             description: The dictionary secret Grafana creates and the single-instance PostgreSQL reads. Secret names are org-wide.
         rules:
+          # postgres-highly-available 2.5.0 writes the password inside double quotes in Patroni's config on every
+          # start (templates/secret-startup.yaml). 2.4.x (grafana 1.3.x and earlier) allowed " and \, so an
+          # unchanged password is exempt only when it comes from a version that already ran 2.5.0.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0) &&
+              self.postgres.credentials.password == oldSelf.postgres.credentials.password) ||
+              !self.postgres.credentials.password.matches('["\\\\]')
+            severity: warning
+            paths: [postgres.credentials.password]
+            message: >-
+              Leave out double quotes and backslashes. The highly available database writes the password inside
+              double quotes in its config on every start, where they break the configuration or change the
+              password. To change an existing password, run ALTER ROLE for the user and for repl first.
+          # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+          # and 2.4.x (grafana 1.3.x and earlier) kept the database credentials in a chart secret of that name.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') >= 0 &&
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+              !self.postgresHA.backup.enabled) ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name. The highly available database renders its own secret under this name when backups
+              are on, and on an upgrade from grafana 1.3.x or earlier this is the old chart's secret, which the
+              upgrade removes or rewrites.
           - rule: >-
               oldSelf == null || !has(oldSelf.postgres.credentials) ||
               (self.postgres.credentials.username == oldSelf.postgres.credentials.username &&
@@ -576,6 +604,12 @@ steps:
             paths: [postgresHA.volumeset.capacity]
             message: A volume set cannot shrink. Keep the capacity at or above the installed size.
     rules:
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of Grafana's
+          dashboards, users and alert rules, and starts an empty one. Keep the current database, or install a new
+          release with the other database and move the data.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: grafana.validate
         paths: [postgresHA.enabled]
@@ -675,6 +709,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX / WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: Google Cloud Storage
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
         docs: "#backing-up"
@@ -701,6 +772,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX / WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
 
 rules:
   # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
@@ -768,7 +876,8 @@ migrations:
     from: admin.password
     note: >-
       The admin account already exists, so a new password secret changes nothing: turn off Apply the admin
-      password secret, or name any opaque secret.
+      password secret, or name any opaque secret. The admin password does not change on upgrade; if it is still
+      change-me-grafana-1, change it in Grafana now.
   - fromVersions: "<1.2.0"
     from: admin.secretKey
     note: >-

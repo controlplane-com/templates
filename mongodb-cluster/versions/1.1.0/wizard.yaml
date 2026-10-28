@@ -15,7 +15,7 @@ steps:
         when: context.mode == 'install'
         text: >-
           This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
-          adopts an existing GVC of that name, and uninstalling the release then deletes that GVC with every
+          adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
           workload in it.
       - path: gvc.name
         type: string
@@ -268,6 +268,7 @@ steps:
             label: Initial capacity per member
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set; a final snapshot is kept for 7 days.
@@ -282,6 +283,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage

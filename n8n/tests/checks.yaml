@@ -88,5 +88,7 @@ checks:
       stdout: "^AVAIL 0\\.8\\.7$"
     # After an upgrade the HAProxy endpoint can briefly route to a member still on the old image while the
     # Patroni members restart one at a time; this runs long enough to reach the new leader.
-    retries: 12
-    retryDelaySeconds: 15
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30

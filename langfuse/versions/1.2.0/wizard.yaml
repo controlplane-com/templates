@@ -491,6 +491,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -515,6 +516,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             description: Local metadata only; the trace data lives in the bucket.

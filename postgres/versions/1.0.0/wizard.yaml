@@ -62,40 +62,32 @@ steps:
     rules:
       - when: oldSelf == null || self.config.username != oldSelf.config.username
         rule: >-
-          !self.config.username.matches('^\\s') && !self.config.username.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.username.startsWith("'") &&
-          !self.config.username.matches('^[-?:](\\s|$)') && !self.config.username.matches('\\t') && !self.config.username.contains(': ') && !self.config.username.contains(' #') &&
-          !self.config.username.endsWith(':') && !self.config.username.endsWith(' ') &&
-          !(self.config.username in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-          !self.config.username.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-          !self.config.username.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-          !self.config.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.username.matches('^\\.(nan|NaN|NAN)$') &&
-          !self.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+          [self.config.username].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.username]
         message: >-
-          This version writes the user name into its secret unquoted, so some values break the install or
-          are stored as a number, date, true/false or nothing. Do not start it with a space, a
-          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-          false or null. 3.1.0 and later quote it.
+          This version writes the user name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - when: oldSelf == null || self.config.password != oldSelf.config.password
         rule: >-
-          !self.config.password.matches('^\\s') && !self.config.password.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.password.startsWith("'") &&
-          !self.config.password.matches('^[-?:](\\s|$)') && !self.config.password.matches('\\t') && !self.config.password.contains(': ') && !self.config.password.contains(' #') &&
-          !self.config.password.endsWith(':') && !self.config.password.endsWith(' ') &&
-          !(self.config.password in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-          !self.config.password.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-          !self.config.password.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-          !self.config.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.password.matches('^\\.(nan|NaN|NAN)$') &&
-          !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+          [self.config.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.password]
         message: >-
-          This version writes the password into its secret unquoted, so some values break the install or
-          are stored as a number, date, true/false or nothing. Do not start it with a space, a
-          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-          false or null. 3.1.0 and later quote it.
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - rule: oldSelf == null || self.config.password == oldSelf.config.password
         severity: info
         paths: [config.password]

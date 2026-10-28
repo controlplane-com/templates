@@ -67,58 +67,46 @@ steps:
     rules:
       - when: oldSelf == null || self.config.username != oldSelf.config.username
         rule: >-
-          !self.config.username.matches('^\\s') && !self.config.username.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.username.startsWith("'") &&
-          !self.config.username.matches('^[-?:](\\s|$)') && !self.config.username.matches('\\t') && !self.config.username.contains(': ') && !self.config.username.contains(' #') &&
-          !self.config.username.endsWith(':') && !self.config.username.endsWith(' ') &&
-          !(self.config.username in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-          !self.config.username.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-          !self.config.username.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-          !self.config.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.username.matches('^\\.(nan|NaN|NAN)$') &&
-          !self.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+          [self.config.username].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.username]
         message: >-
-          This version writes the user name into its secret unquoted, so some values break the install or
-          are stored as a number, date, true/false or nothing. Do not start it with a space, a
-          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-          false or null. 3.1.0 and later quote it.
+          This version writes the user name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - when: oldSelf == null || self.config.password != oldSelf.config.password
         rule: >-
-          !self.config.password.matches('^\\s') && !self.config.password.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.password.startsWith("'") &&
-          !self.config.password.matches('^[-?:](\\s|$)') && !self.config.password.matches('\\t') && !self.config.password.contains(': ') && !self.config.password.contains(' #') &&
-          !self.config.password.endsWith(':') && !self.config.password.endsWith(' ') &&
-          !(self.config.password in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-          !self.config.password.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-          !self.config.password.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-          !self.config.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.password.matches('^\\.(nan|NaN|NAN)$') &&
-          !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+          [self.config.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.password]
         message: >-
-          This version writes the password into its secret unquoted, so some values break the install or
-          are stored as a number, date, true/false or nothing. Do not start it with a space, a
-          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-          false or null. 3.1.0 and later quote it.
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - when: oldSelf == null || self.config.database != oldSelf.config.database
         rule: >-
-          !self.config.database.matches('^\\s') && !self.config.database.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.config.database.startsWith("'") &&
-          !self.config.database.matches('^[-?:](\\s|$)') && !self.config.database.matches('\\t') && !self.config.database.contains(': ') && !self.config.database.contains(' #') &&
-          !self.config.database.endsWith(':') && !self.config.database.endsWith(' ') &&
-          !(self.config.database in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-          !self.config.database.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-          !self.config.database.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-          !self.config.database.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.config.database.matches('^\\.(nan|NaN|NAN)$') &&
-          !self.config.database.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+          [self.config.database].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.database]
         message: >-
-          This version writes the database name into the Postgres workload unquoted, so some values break the install or
-          are stored as a number, date, true/false or nothing. Do not start it with a space, a
-          quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-          ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-          false or null. 3.1.0 and later quote it.
+          This version writes the database name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - rule: oldSelf == null || self.config.password == oldSelf.config.password
         severity: info
         paths: [config.password]
@@ -152,6 +140,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
@@ -245,40 +234,32 @@ steps:
         rules:
           - when: oldSelf == null || self.backup.aws.s3.bucket != oldSelf.backup.aws.s3.bucket
             rule: >-
-              !self.backup.aws.s3.bucket.matches('^\\s') && !self.backup.aws.s3.bucket.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.aws.s3.bucket.startsWith("'") &&
-              !self.backup.aws.s3.bucket.matches('^[-?:](\\s|$)') && !self.backup.aws.s3.bucket.matches('\\t') && !self.backup.aws.s3.bucket.contains(': ') && !self.backup.aws.s3.bucket.contains(' #') &&
-              !self.backup.aws.s3.bucket.endsWith(':') && !self.backup.aws.s3.bucket.endsWith(' ') &&
-              !(self.backup.aws.s3.bucket in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-              !self.backup.aws.s3.bucket.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-              !self.backup.aws.s3.bucket.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-              !self.backup.aws.s3.bucket.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.aws.s3.bucket.matches('^\\.(nan|NaN|NAN)$') &&
-              !self.backup.aws.s3.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+              [self.backup.aws.s3.bucket].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.aws.s3.bucket]
             message: >-
-              This version writes the bucket name into its secret unquoted, so some values break the install or
-              are stored as a number, date, true/false or nothing. Do not start it with a space, a
-              quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-              ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-              false or null. 3.1.0 and later quote it.
+              This version writes the bucket name unquoted into YAML, so some values break the install or are stored
+              as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
           - when: oldSelf == null || self.backup.aws.s3.prefix != oldSelf.backup.aws.s3.prefix
             rule: >-
-              !self.backup.aws.s3.prefix.matches('^\\s') && !self.backup.aws.s3.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.aws.s3.prefix.startsWith("'") &&
-              !self.backup.aws.s3.prefix.matches('^[-?:](\\s|$)') && !self.backup.aws.s3.prefix.matches('\\t') && !self.backup.aws.s3.prefix.contains(': ') && !self.backup.aws.s3.prefix.contains(' #') &&
-              !self.backup.aws.s3.prefix.endsWith(':') && !self.backup.aws.s3.prefix.endsWith(' ') &&
-              !(self.backup.aws.s3.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-              !self.backup.aws.s3.prefix.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-              !self.backup.aws.s3.prefix.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-              !self.backup.aws.s3.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.aws.s3.prefix.matches('^\\.(nan|NaN|NAN)$') &&
-              !self.backup.aws.s3.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+              [self.backup.aws.s3.prefix].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.aws.s3.prefix]
             message: >-
-              This version writes the prefix into the backup workload unquoted, so some values break the install or
-              are stored as a number, date, true/false or nothing. Do not start it with a space, a
-              quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-              ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-              false or null. 3.1.0 and later quote it.
+              This version writes the prefix unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.gcp.enabled
         fields:
@@ -311,40 +292,32 @@ steps:
         rules:
           - when: oldSelf == null || self.backup.gcp.gcs.bucket != oldSelf.backup.gcp.gcs.bucket
             rule: >-
-              !self.backup.gcp.gcs.bucket.matches('^\\s') && !self.backup.gcp.gcs.bucket.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.gcp.gcs.bucket.startsWith("'") &&
-              !self.backup.gcp.gcs.bucket.matches('^[-?:](\\s|$)') && !self.backup.gcp.gcs.bucket.matches('\\t') && !self.backup.gcp.gcs.bucket.contains(': ') && !self.backup.gcp.gcs.bucket.contains(' #') &&
-              !self.backup.gcp.gcs.bucket.endsWith(':') && !self.backup.gcp.gcs.bucket.endsWith(' ') &&
-              !(self.backup.gcp.gcs.bucket in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-              !self.backup.gcp.gcs.bucket.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-              !self.backup.gcp.gcs.bucket.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-              !self.backup.gcp.gcs.bucket.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.gcp.gcs.bucket.matches('^\\.(nan|NaN|NAN)$') &&
-              !self.backup.gcp.gcs.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+              [self.backup.gcp.gcs.bucket].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.gcp.gcs.bucket]
             message: >-
-              This version writes the bucket name into its secret unquoted, so some values break the install or
-              are stored as a number, date, true/false or nothing. Do not start it with a space, a
-              quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-              ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-              false or null. 3.1.0 and later quote it.
+              This version writes the bucket name unquoted into YAML, so some values break the install or are stored
+              as something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
           - when: oldSelf == null || self.backup.gcp.gcs.prefix != oldSelf.backup.gcp.gcs.prefix
             rule: >-
-              !self.backup.gcp.gcs.prefix.matches('^\\s') && !self.backup.gcp.gcs.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.gcp.gcs.prefix.startsWith("'") &&
-              !self.backup.gcp.gcs.prefix.matches('^[-?:](\\s|$)') && !self.backup.gcp.gcs.prefix.matches('\\t') && !self.backup.gcp.gcs.prefix.contains(': ') && !self.backup.gcp.gcs.prefix.contains(' #') &&
-              !self.backup.gcp.gcs.prefix.endsWith(':') && !self.backup.gcp.gcs.prefix.endsWith(' ') &&
-              !(self.backup.gcp.gcs.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
-              !self.backup.gcp.gcs.prefix.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?|\\.[0-9][0-9_]*)([eE][-+]?[0-9]+)?$') &&
-              !self.backup.gcp.gcs.prefix.matches('^[-+]?0(x[0-9a-fA-F_]+|o[0-7_]+|b[01_]+)$') &&
-              !self.backup.gcp.gcs.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.gcp.gcs.prefix.matches('^\\.(nan|NaN|NAN)$') &&
-              !self.backup.gcp.gcs.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+              [self.backup.gcp.gcs.prefix].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.gcp.gcs.prefix]
             message: >-
-              This version writes the prefix into the backup workload unquoted, so some values break the install or
-              are stored as a number, date, true/false or nothing. Do not start it with a space, a
-              quote or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out
-              ': ', ' #', tabs and a trailing ':' or space, and do not use a plain number, a date, true,
-              false or null. 3.1.0 and later quote it.
+              This version writes the prefix unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null. 3.1.0 and later quote it.
     rules:
       - rule: >-
           self.backup.enabled ? self.backup.aws.enabled != self.backup.gcp.enabled :

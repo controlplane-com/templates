@@ -1,0 +1,38 @@
+# grafana 1.5.0 — the default install: one Grafana replica on highly available PostgreSQL (3 Patroni
+# members, 3 etcd, HAProxy), Redis off, at the chart's default sizes. The three prerequisite secrets are
+# generated per run.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+  adminpw: hex
+  secretkey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: grafana
+      password: "{gen.pgpw}"
+      database: grafana
+  admin:
+    type: opaque
+    payload: "{gen.adminpw}"
+  key:
+    type: opaque
+    payload: "{gen.secretkey}"
+
+vars:
+  pg_user: grafana
+  pg_password: "{gen.pgpw}"
+  pg_db: grafana
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    passwordSecretName: "{secrets.admin.name}"
+    secretKeySecretName: "{secrets.key.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"

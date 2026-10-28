@@ -290,8 +290,9 @@ steps:
             label: Metastore credentials secret
             required: true
             description: >-
-              A dictionary secret with the keys `username`, `password` and `database`; the database name must be
-              URL-safe.
+              A dictionary secret with the keys `username`, `password` and `database`. The database name goes
+              into Polaris's JDBC URL, so leave out spaces and the characters / ? # % : and +, and no spaces in
+              the user.
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Polaris
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
@@ -305,7 +306,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-polaris-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 ? context.releaseName + '-polaris-db-credentials-secret' : context.releaseName + '-polaris-db-credentials'"
       - id: ha
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
@@ -313,6 +314,26 @@ steps:
         description: >-
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Polaris connects through.
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database creates its cluster with consensus timeouts that Patroni
+              silently tightens, so a leader that cannot reach etcd for about 14 seconds is demoted.
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database also writes the database password into Patroni's shared
+              configuration, which anything that can reach port 8008 of its members can read without
+              authentication at `/config`.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0
+            text: >-
+              The installed version does not compact etcd. This upgrade turns compaction on but cannot shrink a
+              backend that has already grown; check it first
+              ([Upgrading From a Version Before 2.4.2](/template-catalog/templates/postgres-highly-available#upgrading-from-a-version-before-2-4-2)).
           - type: note
             severity: warning
             when: >-
@@ -327,8 +348,9 @@ steps:
             label: Metastore credentials secret
             required: true
             description: >-
-              A dictionary secret with the keys `username`, `password` and `database`; the database name must be
-              URL-safe, and no `"` or `\` in the user or password.
+              A dictionary secret with the keys `username`, `password` and `database`, and no `"` or `\` in the
+              user or password. The database name must be up to 63 lowercase letters, digits and underscores,
+              and not postgres, template0, template1 or an SQL reserved word such as user or order.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Polaris connects with
               them. To change the password later, change it in the database first, then update the secret and
@@ -343,7 +365,7 @@ steps:
               allowCreate: true
               requiredKeys: [username, password, database]
               create:
-                suggestName: "context.releaseName + '-polaris-db-credentials'"
+                suggestName: "context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 ? context.releaseName + '-polaris-db-credentials-secret' : context.releaseName + '-polaris-db-credentials'"
           - path: postgresHA.replicas
             type: integer
             label: PostgreSQL replicas
@@ -386,6 +408,13 @@ steps:
         description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The WAL-G sidecar waits a full interval before its first base backup, so a new cluster archives WAL
+              with nothing to restore it from for up to that long, and turning WAL-G on for a cluster that
+              already exists does not start WAL archiving.
           - path: postgresHA.backup.mode
             type: enum
             label: Backup mode
@@ -430,10 +459,23 @@ steps:
             label: Backup resources
             required: true
             advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory. With less it is killed for running out of memory
+              during the base backup and no backup is written.
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              The backup identity of the bundled highly available database also carries the AWS managed policy
+              ReadOnlyAccess, which can read every bucket in the AWS account, not only this one.
           - path: postgresHA.backup.aws.bucket
             type: string
             label: Bucket
@@ -648,12 +690,14 @@ steps:
         mirrors: polaris.validate
         paths: [postgresHA.enabled, postgres.enabled]
         message: Enable exactly one metastore, either the single-instance or the highly available PostgreSQL.
-      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
         mirrors: polaris.validate
         paths: [postgresHA.enabled]
         message: >-
           postgresHA.proxy.enabled must remain true: the HAProxy leader endpoint is Polaris's database endpoint.
-          Remove it from the values.
+          Remove it from the values, or set it to true.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
@@ -782,3 +826,9 @@ migrations:
   - fromVersions: "<1.1.0"
     from: postgres.config.database
     note: Put it in the metastore credentials secret (key database); choose the secret under Metastore.
+  - fromVersions: "<1.1.0"
+    from: postgres.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Metastore backups.
+  - fromVersions: "<1.1.0"
+    from: postgres.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Metastore backups.

@@ -149,10 +149,10 @@ steps:
             required: true
             immutable: PostgreSQL creates this database once, when its data directory is initialized.
             # The chart writes POSTGRES_DB unquoted: 123, true, on or null would not reach PostgreSQL as text.
-            pattern: '^(?!(true|false|yes|no|on|off|y|n|null)$)[a-z_][a-z0-9_]*$'
+            pattern: '^(?!(true|false|null)$)[a-z_][a-z0-9_]*$'
             patternMessage: >-
               Use lowercase letters, digits and _, starting with a letter or _, and not a YAML word such as
-              true, yes or null.
+              true, false or null.
 
   - id: webserver
     title: Webserver
@@ -392,6 +392,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         description: >-
           The shared file system at `/opt/airflow` with the DAGs and task logs, mounted by the webserver and
           every worker.
@@ -403,6 +404,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         suggestions: [10, 20, 50, 100, 250, 500, 1000]
       - path: redis.volumeset.capacity
         type: integer
@@ -410,6 +412,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         suggestions: [10, 20, 50, 100, 250, 500, 1000]
     rules:
       - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity

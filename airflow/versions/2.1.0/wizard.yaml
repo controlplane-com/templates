@@ -333,6 +333,7 @@ steps:
             label: Airflow home capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             description: DAGs and task logs, shared by the webserver and every worker.
@@ -342,6 +343,7 @@ steps:
             label: Metadata database capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
           - path: redis.volumeset.capacity
@@ -349,6 +351,7 @@ steps:
             label: Broker capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
           - type: note

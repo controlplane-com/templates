@@ -482,6 +482,7 @@ steps:
         required: true
         unit: GiB
         min: 10
+        max: 65536
         description: >-
           The shared file system at `/opt/airflow` with the DAGs and task logs, mounted by the webserver and
           every worker.

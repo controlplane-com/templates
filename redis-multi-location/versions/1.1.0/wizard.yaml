@@ -259,6 +259,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Per Redis instance; each instance has its own volume.
@@ -288,6 +289,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: redis.volumeset.autoscaling.minFreePercentage
@@ -468,7 +470,7 @@ steps:
             label: Bucket
             required: true
             example: true
-            pattern: '^(?!(y|n|yes|no|on|off|true|false|null)$)(?![0-9.-]+$)(?![0-9.]+e-?[0-9]+$)(?!0[xob][0-9a-f.]*(p-?[0-9]+)?$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            pattern: '^(?!(true|false|null)$)(?![0-9.-]+$)(?![0-9.]+e-?[0-9]+$)(?!0[xob][0-9a-f.]*(p-?[0-9]+)?$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
             patternMessage: >-
               Use 3 to 63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or
               digit. The chart writes the name unquoted, so it cannot be a number, a date or a word such as
@@ -514,7 +516,7 @@ steps:
             label: Bucket
             required: true
             example: true
-            pattern: '^(?!(y|n|yes|no|on|off|true|false|null)$)(?![0-9._-]+$)(?![0-9._]+e-?[0-9_]+$)(?!0_*[xob][0-9a-f._]*(p-?[0-9_]+)?$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            pattern: '^(?!(true|false|null)$)(?![0-9._-]+$)(?![0-9._]+e-?[0-9_]+$)(?!0_*[xob][0-9a-f._]*(p-?[0-9_]+)?$)(?!.*[a-z0-9_-]{64})[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
             patternMessage: >-
               Use 3 to 222 lowercase letters, digits, dots, hyphens and underscores, starting and ending with
               a letter or digit, with at most 63 between dots. The chart writes the name unquoted, so it cannot

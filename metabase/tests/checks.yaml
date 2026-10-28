@@ -62,10 +62,12 @@ checks:
       shell: bash
       script: |
         export PGPASSWORD='{pg_password}'
-        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
-          -c "select 'ADMIN ' || email from core_user where is_superuser" 2>&1
+        out=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select email from core_user where is_superuser" 2>&1)
+        # expect patterns are not placeholder-filled, so the comparison happens here
+        printf '%s\n' "$out" | grep -qxF '{admin_email}' && echo ADMIN_IS_SUPERUSER || echo "NO ADMIN MATCH: $out"
     expect:
-      stdout: "^ADMIN {admin_email}$"
+      stdout: "^ADMIN_IS_SUPERUSER$"
     retries: 6
     retryDelaySeconds: 15
 
@@ -136,6 +138,7 @@ checks:
     expect:
       stdout: "^AVAIL 0\\.8\\.7$"
     # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
-    # old image; this runs long enough for the rollout to finish.
-    retries: 12
-    retryDelaySeconds: 15
+    # old image, and helm returns while the old leader (restarted last, ~4 min in) is still on 0.7; this
+    # runs long enough for the whole rollout to finish.
+    retries: 20
+    retryDelaySeconds: 30

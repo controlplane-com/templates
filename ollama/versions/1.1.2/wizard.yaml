@@ -75,14 +75,18 @@ steps:
           # defaultModel=123 renders an integer env value).
           - when: oldSelf == null || self.defaultModel != oldSelf.defaultModel
             rule: >-
-              !self.defaultModel.matches('^[0-9][0-9._]*$') && !self.defaultModel.matches('^0[xXoO]') &&
-              !(self.defaultModel.lowerAscii() in ['true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n', 'null'])
+              [self.defaultModel].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [defaultModel]
             message: >-
-              The chart writes the model name into the workload unquoted, so a name that is only a number or a
-              word such as true, yes or null reaches Open WebUI as a number, a boolean or nothing. Use a library
-              model name such as llama3.
+              This version writes the model name unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null.
       - title: Ollama server
         docs: "#containers"
         fields:
@@ -246,6 +250,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: >-
@@ -287,6 +292,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage

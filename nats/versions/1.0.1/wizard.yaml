@@ -20,7 +20,7 @@ steps:
             when: context.mode == 'install'
             text: >-
               This version creates one GVC per entry below, named by the entry. Use names no GVC in the org has:
-              the release adopts an existing GVC of that name, and uninstalling the release then deletes that GVC
+              the release adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC
               with every workload in it. The default entries are named after locations (aws-us-west-2,
               aws-us-east-2, gcp-us-central1, gcp-me-west1), names an org may already use for its own GVCs.
           - type: note

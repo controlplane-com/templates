@@ -136,6 +136,20 @@ steps:
             message: >-
               admin.username and admin.password were removed in 1.1.0. Put them in the admin secret and remove
               them from the values.
+          # <release>-postgres-config is a chart secret of the highly available database: in 2.4.x (listmonk 1.2.0
+          # and earlier) it held username and password, so the picker's requiredKeys accept it, and the upgrade
+          # removes or rewrites it; from 2.5.0 the database renders it for its backup settings when backups are on.
+          - rule: >-
+              self.admin.secretName != context.releaseName + '-postgres-config' ||
+              (!(self.postgresHA.enabled && self.postgresHA.backup.enabled) &&
+              !(oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0 &&
+              oldSelf.postgresHA.enabled))
+            severity: warning
+            paths: [admin.secretName]
+            message: >-
+              Choose another secret. The highly available database renders its own secret under this name when
+              backups are on, and on an upgrade from listmonk 1.2.x or earlier this is the old chart's secret, which
+              the upgrade removes or rewrites.
 
   - id: access
     title: Access
@@ -263,6 +277,15 @@ steps:
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that listmonk connects through.
         docs: "#highly-available-postgresql"
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              From this version the highly available database writes the password inside double quotes in its
+              config on every start, so a password with a `"` or `\` breaks it. If yours has one, change it with
+              ALTER ROLE for the user and for repl before upgrading, and put the new one in the secret.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -307,6 +330,9 @@ steps:
           # and 2.4.x (listmonk 1.2.0 and earlier) kept the database credentials in a chart secret of that name.
           - rule: >-
               !self.postgresHA.enabled ||
+              (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') >= 0 &&
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+              !self.postgresHA.backup.enabled) ||
               self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
             severity: warning
             paths: [postgresHA.config.credentialsSecretName]
@@ -427,6 +453,18 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: Google Cloud Storage
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
         docs: "#backing-up"
@@ -478,6 +516,18 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix> (WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: MinIO or S3-compatible
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
         docs: "#backing-up"
@@ -537,6 +587,18 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
           - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
             paths: [postgresHA.backup.minio.credentialsSecretName]
             message: >-
@@ -546,8 +608,9 @@ steps:
       - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
         severity: warning
         message: >-
-          Switching the database deletes the existing database workload and its volume set, with all of listmonk's
-          data. Dump the data first and restore it into the new database after the upgrade.
+          Switching the database on an installed release deletes the current one, with all of listmonk's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: listmonk.validate
         paths: [postgresHA.enabled, postgres.enabled]
@@ -657,4 +720,7 @@ migrations:
     note: The Super Admin login moved into the admin secret (keys username and password); choose it under listmonk.
   - fromVersions: "<1.1.0"
     from: admin.password
-    note: The Super Admin login moved into the admin secret (keys username and password); choose it under listmonk.
+    note: >-
+      The Super Admin login moved into the admin secret (keys username and password); choose it under listmonk.
+      The admin password does not change on upgrade; if it is still change-me-listmonk-admin, change it in
+      listmonk now.

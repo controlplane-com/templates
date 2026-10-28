@@ -700,6 +700,18 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: Google Cloud Storage
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
         docs: "#backing-up"
@@ -751,6 +763,18 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix> (WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: MinIO or S3-compatible
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
         fields:
@@ -814,12 +838,25 @@ steps:
               The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
               space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
               true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
     rules:
       - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
         severity: warning
         message: >-
-          Switching the database deletes the existing database workload and its volume set, with all of listmonk's
-          data. Dump the data first and restore it into the new database after the upgrade.
+          Switching the database on an installed release deletes the current one, with all of listmonk's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: listmonk.validate
         paths: [postgresHA.enabled, postgres.enabled]

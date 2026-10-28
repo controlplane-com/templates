@@ -16,7 +16,7 @@ steps:
         when: context.mode == 'install'
         text: >-
           This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
-          adopts an existing GVC of that name, and uninstalling the release then deletes that GVC with every
+          adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
           workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
       - path: gvc.name
         type: string
@@ -30,13 +30,21 @@ steps:
         patternMessage: >-
           Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
         rules:
+          # The chart writes the GVC name unquoted (name: {{ .Values.gvc.name }}).
+          - rule: >-
+              (oldSelf != null && self.gvc.name == oldSelf.gvc.name) ||
+              !(self.gvc.name in ['true', 'false', 'null'])
+            severity: warning
+            message: >-
+              This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+              null and the GVC cannot be created. Choose another name.
           - rule: self.gvc.name != 'clickhouse-gvc'
             severity: info
             messageExpression: >-
-              'GVC names are org-wide, so a second release on the default name would adopt the GVC of the first.
+              'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
               Give each release its own, for example ' + context.releaseName + '-clickhouse.'
             message: >-
-              GVC names are org-wide, so a second release on the default name would adopt the first release's
+              GVC names are org-wide: a release on this name is refused while another release manages that
               GVC. Give each release its own.
       - path: gvc.locations
         type: list
@@ -359,6 +367,7 @@ steps:
             label: Server volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: >-
               Holds each replica's metadata and the object storage disk metadata; table data lives in object
@@ -421,6 +430,7 @@ steps:
             label: Keeper volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Holds each member's Raft log and snapshots.
             docs: "#volumes"

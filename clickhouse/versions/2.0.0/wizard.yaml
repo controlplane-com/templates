@@ -16,7 +16,7 @@ steps:
         when: context.mode == 'install'
         text: >-
           This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
-          adopts an existing GVC of that name, and uninstalling the release then deletes that GVC with every
+          adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
           workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
       - path: gvc.name
         type: string
@@ -30,13 +30,21 @@ steps:
         patternMessage: >-
           Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
         rules:
+          # The chart writes the GVC name unquoted (name: {{ .Values.gvc.name }}).
+          - rule: >-
+              (oldSelf != null && self.gvc.name == oldSelf.gvc.name) ||
+              !(self.gvc.name in ['true', 'false', 'null'])
+            severity: warning
+            message: >-
+              This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+              null and the GVC cannot be created. Choose another name.
           - rule: self.gvc.name != 'clickhouse-gvc'
             severity: info
             messageExpression: >-
-              'GVC names are org-wide, so a second release on the default name would adopt the GVC of the first.
+              'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
               Give each release its own, for example ' + context.releaseName + '-clickhouse.'
             message: >-
-              GVC names are org-wide, so a second release on the default name would adopt the first release's
+              GVC names are org-wide: a release on this name is refused while another release manages that
               GVC. Give each release its own.
       - path: gvc.locations
         type: list
@@ -154,16 +162,17 @@ steps:
           # secret-database-config.yaml:8 writes the password unquoted into YAML (quoted from 2.3.0).
           - rule: >-
               (oldSelf != null && self.database.password == oldSelf.database.password) ||
-              (self.database.password.matches('^[A-Za-z0-9_]') &&
-              !self.database.password.contains(': ') && !self.database.password.contains(' #') &&
-              !self.database.password.endsWith(':') &&
-              !(self.database.password.lowerAscii() in ['true','false','yes','no','on','off','y','n','null','~']) &&
-              !self.database.password.matches('^[-+]?([0-9][0-9_]*(\\.[0-9_]*)?([eE][-+]?[0-9]+)?|0x[0-9a-fA-F_]+|0o?[0-7_]+|0b[01_]+)$'))
+              [self.database.password].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             message: >-
-              This version writes the password unquoted into YAML, so it must read as plain text: start with a
-              letter, digit or underscore, no ": " or " #", no trailing ":", and not a number, true, false, yes,
-              no, on, off or null. 2.3.0 and later quote it.
+              This version writes the password unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null. 2.3.0 and later quote it.
           # The defaults published in the template repository: mypw (1.0.0) and mypassword (2.0.0 to 2.5.0).
           # On install, example: true already refuses the default.
           - when: oldSelf != null
@@ -185,11 +194,11 @@ steps:
           - rule: >-
               (oldSelf != null && self.database.name == oldSelf.database.name) ||
               (self.database.name.matches('^[A-Za-z_][A-Za-z0-9_]*$') &&
-              !(self.database.name.lowerAscii() in ['true','false','yes','no','on','off','y','n','null','~']))
+              !(self.database.name in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']))
             severity: warning
             message: >-
-              Use letters, digits and underscores only, not starting with a digit and not true, false, yes, no,
-              on, off or null, such as mydatabase: the chart writes the name unquoted into YAML and the startup
+              Use letters, digits and underscores only, not starting with a digit and not true, false
+              or null, such as mydatabase: the chart writes the name unquoted into YAML and the startup
               script puts it unquoted into SQL.
           - rule: oldSelf == null || self.database.name == oldSelf.database.name
             severity: info

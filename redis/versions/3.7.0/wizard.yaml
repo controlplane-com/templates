@@ -281,6 +281,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -305,6 +306,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
@@ -421,6 +423,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
           - path: sentinel.persistence.volumes.data.performanceClass
@@ -443,6 +446,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage

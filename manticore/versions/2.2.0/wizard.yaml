@@ -260,7 +260,7 @@ steps:
             label: Maximum replicas
             required: true
             min: 1
-            description: A restore adds one replica while it runs.
+            description: Imports, repairs and restores scale the cluster up to this many replicas while they run.
             suggestions: [2, 4, 6]
           - path: manticore.autoscaling.metric
             type: enum
@@ -281,12 +281,6 @@ steps:
           - rule: self.manticore.autoscaling.maxScale >= self.manticore.autoscaling.minScale
             paths: [manticore.autoscaling.maxScale]
             message: The maximum replicas must be at least the minimum replicas.
-          - rule: self.manticore.autoscaling.maxScale > self.manticore.autoscaling.minScale
-            severity: info
-            paths: [manticore.autoscaling.maxScale]
-            message: >-
-              A restore adds one replica while it runs; with the maximum equal to the minimum there is no room
-              for it.
           - rule: >-
               oldSelf == null || oldSelf.manticore.autoscaling.minScale == null ||
               self.manticore.autoscaling.minScale == oldSelf.manticore.autoscaling.minScale
@@ -336,15 +330,15 @@ steps:
         description: >-
           The job runs one action per run: init bootstraps the Galera cluster, import loads the CSV files of a
           table into a fresh slot and swaps it in, health reports the cluster state, and repair recovers from a
-          split. The UI can run every action on demand.
+          split. The UI runs imports, backups, restores and repairs on demand.
         docs: "#running-cluster-actions"
         fields:
           - type: note
             when: context.mode == 'install'
             text: >-
-              An install indexes nothing. Run Init once, from the UI or by starting the job with Action set to
-              Init; then run Import the same way. Starting the job with the default Action (Import) before Init
-              does not bootstrap the cluster. See [First run](/template-catalog/templates/manticore#first-run).
+              An install indexes nothing. Run Init once by starting the job with Action set to Init; then run
+              Import from the UI or by starting the job with Action set to Import. Starting the job with the
+              default Action (Import) before Init does not bootstrap the cluster.
           - path: orchestrator.action
             type: enum
             label: Action
@@ -735,6 +729,7 @@ steps:
           - path: orchestrator.backup.prefix
             type: string
             label: Folder prefix
+            required: true
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
           - path: orchestrator.backup.dataSet
@@ -807,6 +802,36 @@ steps:
             severity: warning
             paths: [orchestrator.backup.s3Policy]
             message: Still has the example policy name my-manticore-backup-policy; replace it with your own IAM policy.
+          - when: oldSelf == null || self.orchestrator.backup.prefix != oldSelf.orchestrator.backup.prefix
+            rule: >-
+              !self.orchestrator.backup.prefix.matches('^\\s') && !self.orchestrator.backup.prefix.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+              !self.orchestrator.backup.prefix.matches('^[-?:](\\s|$)') && !self.orchestrator.backup.prefix.matches('\\t') &&
+              !self.orchestrator.backup.prefix.contains(': ') && !self.orchestrator.backup.prefix.contains(' #') && !self.orchestrator.backup.prefix.endsWith(':') && !self.orchestrator.backup.prefix.endsWith(' ') &&
+              !(self.orchestrator.backup.prefix in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.orchestrator.backup.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.orchestrator.backup.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [orchestrator.backup.prefix]
+            message: >-
+              The chart writes the prefix into the backup environment without quotes, so this value would be read
+              as another YAML type or break the manifest. Use a plain folder name such as manticore-backups.
+          - when: oldSelf == null || self.orchestrator.backup.s3Bucket != oldSelf.orchestrator.backup.s3Bucket
+            rule: >-
+              !self.orchestrator.backup.s3Bucket.matches('^\\s') && !self.orchestrator.backup.s3Bucket.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-?:](\\s|$)') && !self.orchestrator.backup.s3Bucket.matches('\\t') &&
+              !self.orchestrator.backup.s3Bucket.contains(': ') && !self.orchestrator.backup.s3Bucket.contains(' #') && !self.orchestrator.backup.s3Bucket.endsWith(':') && !self.orchestrator.backup.s3Bucket.endsWith(' ') &&
+              !(self.orchestrator.backup.s3Bucket in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.orchestrator.backup.s3Bucket.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [orchestrator.backup.s3Bucket]
+            message: >-
+              The chart writes the bucket name into the backup environment without quotes, so a name made only of
+              digits would be read as a number. Use a bucket name that contains a letter or a hyphen.
           - rule: self.orchestrator.backup.s3Bucket != self.buckets.sourceBucket
             severity: info
             paths: [orchestrator.backup.s3Bucket]
@@ -1075,8 +1100,6 @@ steps:
             label: Extra replicas during a rollout
             required: true
             placeholder: 25%
-            pattern: '^[0-9]+%?$'
-            patternMessage: Enter a number of replicas or a percentage, such as 1 or 25%.
           - path: manticore.rolloutOptions.minReadySeconds
             type: integer
             label: Minimum ready time
@@ -1093,6 +1116,15 @@ steps:
             max: 900
             description: How long a stopping replica gets to leave the cluster cleanly.
         rules:
+          - when: >-
+              oldSelf == null ||
+              self.manticore.rolloutOptions.maxSurgeReplicas != oldSelf.manticore.rolloutOptions.maxSurgeReplicas
+            rule: self.manticore.rolloutOptions.maxSurgeReplicas.matches('^[0-9]+%$')
+            severity: warning
+            paths: [manticore.rolloutOptions.maxSurgeReplicas]
+            message: >-
+              Enter a percentage such as 25%. The chart writes this value without quotes, so a bare number
+              reaches the platform as a number, where it expects text.
           - rule: self.manticore.rolloutOptions.scalingPolicy != 'Parallel'
             severity: info
             paths: [manticore.rolloutOptions.scalingPolicy]
@@ -1150,6 +1182,13 @@ migrations:
     note: >-
       The platform ignores this setting on a stateful workload, so it never limited the rollout. The Restart
       order under Advanced is what controls it.
+  # 2.0.0 changed the default IAM policy from the AWS managed aws::AmazonS3ReadOnlyAccess (a real, working
+  # policy) to the placeholder my-manticore-policy. A rename/default carry would hand a release that kept the
+  # old default the placeholder and break its S3 mount: keep whatever the release runs with.
+  - fromVersions: "<2.0.0"
+    to: buckets.awsPolicyRefs
+    valueExpr: self.buckets.awsPolicyRefs
+    note: The release keeps the IAM policies its cloud account identity uses for the source bucket.
   # 2.0.0 changed the example table's CSV path (manticore-imports/addresses/data.csv became
   # imports/addresses.csv). A list that kept the default would take the new default and the next import would
   # read a file the bucket may not have: keep the tables of a 1.2.0 or 1.3.0 release. 1.0.0 and 1.1.0 tables

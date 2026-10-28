@@ -1337,9 +1337,9 @@ steps:
             # secret-secrets.yaml:6 writes it unquoted; YAML parsers (js-yaml in `cpln helm`, YAML 1.1) read digits with
             # e, and 0x/0o/0b numbers (hex, octal or binary digits only, with an optional minus sign) as numbers, which
             # the platform refuses in a dictionary secret.
-            pattern: '^(?!-?0[xX][0-9a-fA-F_]*$)(?!-?0[oO][0-7_]*$)(?!-?0[bB][01_]*$)(?=.*[A-DF-Za-df-z])([A-Za-z0-9_-]{22}|your-kraft-cluster-id)$'
+            pattern: '^(?!-?0[xX][0-9a-fA-F_]*$)(?!-?0[oO][0-7_]*$)(?!-?0[bB][01_]*$)(?=.*[A-DF-Za-df-z])([A-Za-z0-9_-]{22,}|your-kraft-cluster-id)$'
             patternMessage: >-
-              Enter the 22-character ID that `kafka-storage.sh random-uuid` prints. The chart writes it into YAML
+              Enter your KRaft cluster ID (`kafka-storage.sh random-uuid` prints 22 characters; an existing cluster keeps its ID). The chart writes it into YAML
               unquoted, so it must contain a letter other than e and must not read as a hexadecimal, octal or binary
               number (`0x…`, `0o…`, `0b…`, with or without a leading `-`).
           - path: kafka.secrets.inter_broker_password

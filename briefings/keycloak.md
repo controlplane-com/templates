@@ -70,4 +70,4 @@ below 26.7.2. Known drift (same as 1.5.0, deferred): `livenessProbe.successThres
 **1.5.1, HA database image (2026-10-27, CVE-2026-103484):** `postgresHA.image` is set to
 `controlplanecorporation/patroni-postgres:0.8` (pgvector 0.8.7), overriding the vendored
 postgres-highly-available 2.5.0 default of 0.7; `keycloak.validatePostgresHAImage` refuses tags 0.1-0.7, and an empty value (which would fall back to the subchart's 0.7), when HA
-is on (mirrored in the wizard). Keycloak does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout) and the proxy: a short database outage, even with 2+ Keycloak replicas (the measurement above predates this change). Moving to postgres-highly-available 2.8.1 is a later batch.
+is on (mirrored in the wizard). Keycloak does not use pgvector. The upgrade restarts the Patroni members (unconstrained stateful rollout); the HAProxy proxy workload does not restart (stays `Unchanged`). Measured: ~5 s of write interruption at the leader change; 2+ Keycloak replicas otherwise keep serving, and `replicas: 1` is down for its own restart as above. Moving to postgres-highly-available 2.8.1 is a later batch.

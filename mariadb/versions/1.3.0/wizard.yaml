@@ -127,6 +127,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: >-
@@ -144,6 +145,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -430,14 +432,18 @@ steps:
           # change type.
           - when: oldSelf == null || self.backup.aws.prefix != oldSelf.backup.aws.prefix
             rule: >-
-              self.backup.aws.prefix.matches('^[A-Za-z0-9_][A-Za-z0-9_./-]*$') &&
-              (self.backup.aws.prefix.matches('^[A-Za-z_]') || self.backup.aws.prefix.contains('/')) &&
-              !(self.backup.aws.prefix.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+              [self.backup.aws.prefix].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.aws.prefix]
             message: >-
-              This version writes the prefix unquoted, so some prefixes break the install or are stored as
-              something other than text. Use letters, digits and _ . / -, start with a letter, or include a /.
+              This version writes the prefix unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         fields:
@@ -469,14 +475,18 @@ steps:
           # workload-backup.yaml:31, unquoted like the AWS prefix.
           - when: oldSelf == null || self.backup.gcp.prefix != oldSelf.backup.gcp.prefix
             rule: >-
-              self.backup.gcp.prefix.matches('^[A-Za-z0-9_][A-Za-z0-9_./-]*$') &&
-              (self.backup.gcp.prefix.matches('^[A-Za-z_]') || self.backup.gcp.prefix.contains('/')) &&
-              !(self.backup.gcp.prefix.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+              [self.backup.gcp.prefix].all(x,
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
             severity: warning
             paths: [backup.gcp.prefix]
             message: >-
-              This version writes the prefix unquoted, so some prefixes break the install or are stored as
-              something other than text. Use letters, digits and _ . / -, start with a letter, or include a /.
+              This version writes the prefix unquoted into YAML, so some values break the install or are stored as
+              something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and
+              tabs, and values that read as a number, a date, true/false or null.
 
 rules:
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0

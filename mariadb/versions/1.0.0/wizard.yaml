@@ -50,53 +50,67 @@ steps:
     rules:
       # secret-config.yaml:8-11 write all four values unquoted (fixed in 1.2.0), measured with helm template:
       # "a: b", "x:", "*x", "@x" and quotes fail the render; "#x", "&x" and "null" render null; "a #b" is cut
-      # to "a"; "123", "0123" (83), "true" and "yes" change type. A value the release already has renders the
+      # to "a"; "123", "0123" and "true" change type. A value the release already has renders the
       # same as before, so it is checked only when it changes.
       - when: oldSelf == null || self.config.user != oldSelf.config.user
         rule: >-
-          self.config.user.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.config.user.contains(': ') && !self.config.user.contains(' #') &&
-          !(self.config.user.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.config.user].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.user]
         message: >-
-          This version writes the user name into its secret unquoted. Start it with a letter, and leave out
-          ': ', ' #', a trailing ':' and tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the user name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       - when: oldSelf == null || self.config.db != oldSelf.config.db
         rule: >-
-          self.config.db.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.config.db.contains(': ') && !self.config.db.contains(' #') &&
-          !(self.config.db.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.config.db].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.db]
         message: >-
-          This version writes the database name into its secret unquoted. Start it with a letter, and leave out
-          ': ', ' #', a trailing ':' and tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the database name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       - when: oldSelf == null || self.config.password != oldSelf.config.password
         rule: >-
-          self.config.password.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.config.password.contains(': ') && !self.config.password.contains(' #') &&
-          !(self.config.password.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.config.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.password]
         message: >-
-          This version writes the password into its secret unquoted, so some passwords break the install or
-          are stored as something else. Start it with a letter, and leave out ': ', ' #', a trailing ':' and
-          tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       # The root password also must not contain whitespace: workload-mariadb.yaml:32,43 run
       # `mariadb-admin ping -u root -p${MYSQL_ROOT_PASSWORD}` in sh -c, and mariadb-admin exits 1 on the
       # stray word (not a "ping" command).
       - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
         rule: >-
-          self.config.rootPassword.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.config.rootPassword.contains(': ') && !self.config.rootPassword.contains(' #') &&
-          !(self.config.rootPassword.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.config.rootPassword].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [config.rootPassword]
         message: >-
-          This version writes the root password into its secret unquoted, so some passwords break the install
-          or are stored as something else. Start it with a letter, and leave out ': ', ' #', a trailing ':' and
-          tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the root password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
         rule: "!self.config.rootPassword.matches('\\\\s')"
         severity: warning

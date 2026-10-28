@@ -191,7 +191,7 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 
 ## Upgrading from 2.1.0 or earlier
 
-2.1.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Temporal itself restarts as on any upgrade; with a single Temporal server replica (the default) that is the longer interruption. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Temporal does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
+2.1.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Temporal itself restarts without a gap, but its API is briefly unavailable while the database leader changes; running workflows and schedules continue. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Temporal does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
 
 ## Upgrading from 2.0.0
 

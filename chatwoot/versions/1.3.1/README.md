@@ -311,7 +311,7 @@ Chatwoot cannot reach Redis from step 2 until its own redeploys finish, so expec
 1.3.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
 the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a
-brief interruption of writes while the leader changes. Chatwoot itself restarts as on any upgrade; with a single Chatwoot web replica (the default) that is the longer interruption. Upgrade in a quiet window. If you pinned
+brief interruption of writes while the leader changes. Chatwoot itself restarts as on any upgrade; with a single Chatwoot web replica (the default) that is the longer interruption, because the old replica stops before the new one serves. Upgrade in a quiet window. If you pinned
 `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Chatwoot's schema creates the `vector` extension, so in the Chatwoot database `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` as the database user, through the proxy endpoint `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432`; it only updates that record.
 Single-instance mode (`postgres`) is unchanged.
 

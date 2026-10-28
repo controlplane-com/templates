@@ -60,25 +60,32 @@ steps:
       # has renders the same as before, so it is checked only when it changes.
       - when: oldSelf == null || self.admin.name != oldSelf.admin.name
         rule: >-
-          self.admin.name.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.admin.name.contains(': ') && !self.admin.name.contains(' #') &&
-          !(self.admin.name.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.admin.name].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [admin.name]
         message: >-
-          This version writes the login name into its secret unquoted. Start it with a letter, and leave
-          out ': ', ' #', a trailing ':' and tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the login name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       - when: oldSelf == null || self.admin.password != oldSelf.admin.password
         rule: >-
-          self.admin.password.matches('^[A-Za-z]([^\\t]*[^:\\s])?$') &&
-          !self.admin.password.contains(': ') && !self.admin.password.contains(' #') &&
-          !(self.admin.password.lowerAscii() in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'])
+          [self.admin.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
         severity: warning
         paths: [admin.password]
         message: >-
-          This version writes the password into its secret unquoted, so some passwords break the install or
-          are stored as something else. Start it with a letter, and leave out ': ', ' #', a trailing ':' and
-          tabs, or install 1.2.0 or later, which quotes it.
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
       - when: oldSelf != null
         rule: self.admin.password == oldSelf.admin.password
         severity: info
@@ -150,6 +157,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             description: >-

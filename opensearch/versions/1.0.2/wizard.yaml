@@ -63,6 +63,22 @@ steps:
         description: The name every node joins under. Clients and Dashboards do not use it.
         docs: "#cluster"
         rules:
+          # secret-startup.yaml writes `cluster.name: <value>` unquoted into opensearch.yml through an unquoted
+          # heredoc (measured: `$HOME` expands, ` #x` is cut as a comment); OpenSearch 3.4.0 ClusterName.java
+          # refuses a name containing ':'.
+          - rule: >-
+              (oldSelf != null && oldSelf.clusterName == self.clusterName) ||
+              [self.clusterName].all(x, !x.contains(':') && !x.contains('$') && !x.contains('`') && !x.contains('\\') &&
+                !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            message: >-
+              OpenSearch refuses a cluster name containing ":", and the startup script writes the name unquoted
+              into opensearch.yml through the shell. Leave out ":", "$", backticks and backslashes, a leading space
+              or YAML symbol, " #", a trailing space, and names that read as a number, a date, true/false or null.
           - rule: oldSelf == null || oldSelf.clusterName == null || self.clusterName == oldSelf.clusterName
             severity: info
             message: >-
@@ -100,6 +116,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Per node.
@@ -119,6 +136,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -260,6 +278,18 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+        rules:
+          # workload-backup-setup.yaml writes the prefix inside a single-quoted JSON string and a double-quoted
+          # echo of the setup job's shell script (measured: ' and " break the script, a backtick runs a command),
+          # and the platform expands $(VAR) in container args.
+          - when: self.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && oldSelf.backup.aws.prefix == self.backup.aws.prefix) ||
+              [self.backup.aws.prefix].all(x, !x.contains("'") && !x.contains('"') && !x.contains('$') &&
+                !x.contains('`') && !x.contains('\\'))
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: The setup job writes the prefix into a shell script. Leave out quotes, "$", backticks and backslashes.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         fields:
@@ -286,6 +316,18 @@ steps:
             label: Folder prefix
             pattern: '^(?!/)'
             patternMessage: Leave out the leading /.
+        rules:
+          # workload-backup-setup.yaml writes the prefix inside a single-quoted JSON string and a double-quoted
+          # echo of the setup job's shell script (measured: ' and " break the script, a backtick runs a command),
+          # and the platform expands $(VAR) in container args.
+          - when: self.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix) ||
+              [self.backup.gcp.prefix].all(x, !x.contains("'") && !x.contains('"') && !x.contains('$') &&
+                !x.contains('`') && !x.contains('\\'))
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: The setup job writes the prefix into a shell script. Leave out quotes, "$", backticks and backslashes.
 
   # Before Network: the "Specific workloads" rule there names the Dashboards and demo workloads.
       - title: Schedule and retention

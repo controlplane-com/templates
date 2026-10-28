@@ -148,6 +148,7 @@ steps:
         label: Initial capacity
         unit: GiB
         min: 10
+        max: 65536
         required: true
         suggestions: [10, 20, 50, 100, 250]
         help: Uninstalling the release deletes the volume set.
@@ -386,6 +387,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Per replica.
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
@@ -466,6 +468,18 @@ steps:
             required: true
             advanced: true
             description: Used by whichever mode is on.
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
       - title: AWS S3
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#database-backups"
@@ -703,7 +717,7 @@ rules:
       credentials (postgres.credentials) and remove the block from the values.
   - rule: >-
       !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-      dyn(self.postgresHA)['proxy']['enabled'] == true
+      dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
     mirrors: n8n.validate
     paths: [postgres.enabled]
     message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is n8n's database endpoint.

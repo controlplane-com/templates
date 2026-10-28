@@ -372,6 +372,7 @@ steps:
         label: Volume capacity
         unit: GiB
         min: 10
+        max: 65536
         required: true
         description: Holds the embedded database and SSH host keys.
     rules:

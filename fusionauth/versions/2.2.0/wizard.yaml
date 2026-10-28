@@ -1,0 +1,492 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: FusionAuth
+
+# FusionAuth keeps all state in one bundled single-instance PostgreSQL: every extra GVC location would
+# run its own FusionAuth against its own, separate database. The bundled postgres chart (3.1.0) has no
+# descriptor, so its keys are parent fields below.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: fusionauth
+    title: FusionAuth
+    description: The FusionAuth image and the compute of each replica.
+    docs: "#image-and-resources"
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: FusionAuth image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+
+  - id: access
+    title: Access
+    description: Who reaches FusionAuth from the internet and from inside the GVC, and where it may connect out to.
+    docs: "#firewall"
+    sections:
+      - title: Internet
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              FusionAuth has no administrator until its setup wizard is finished, and whoever reaches it first
+              creates that account. With inbound open to `0.0.0.0/0`, complete the setup wizard right after
+              installing.
+          - path: firewall.external.inboundAllowCIDR
+            type: list
+            label: Inbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses that can reach the admin UI and login pages. Empty keeps FusionAuth off the
+              internet.
+            item:
+              type: string
+              format: cidr
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses FusionAuth may connect to. Empty blocks all egress; open it (for example
+              `0.0.0.0/0`) to federate with an external identity provider.
+            item:
+              type: string
+              format: cidr
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: firewall.internal.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: firewall.internal.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.firewall.internal.type == 'same-gvc'
+            rules:
+              - when: self.firewall.internal.type == 'same-org'
+                rule: size(self.firewall.internal.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+
+  - id: database
+    title: Database
+    description: The user, password and name the bundled PostgreSQL creates on first start.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'This version takes the database credentials as values: they are stored in the Helm release and in
+          the secret `' +
+          (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+          '-pg-config`, which the bundled PostgreSQL chart creates. The password is used as given, so change it.'
+        text: >-
+          This version takes the database credentials as values: they are stored in the Helm release and in
+          the secret `RELEASE_NAME-pg-config`, which the bundled PostgreSQL chart creates. The password is used
+          as given, so change it.
+      - path: postgres.config.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data directory is initialized.
+      - path: postgres.config.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        help: >-
+          PostgreSQL reads the password only when its data directory is first initialized. To change it
+          later, run `ALTER ROLE ... PASSWORD` first and then set the same value here.
+      - path: postgres.config.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data directory is initialized.
+    rules:
+      - when: oldSelf == null || self.postgres.config.username != oldSelf.postgres.config.username
+        rule: self.postgres.config.username.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.config.username]
+        message: >-
+          Leave out spaces: the database's readiness probe passes the user name to pg_isready unquoted, so a
+          name with a space never becomes ready.
+      - when: oldSelf == null || self.postgres.config.database != oldSelf.postgres.config.database
+        rule: "!self.postgres.config.database.matches('[\\\\s/?#%:+]')"
+        severity: warning
+        paths: [postgres.config.database]
+        message: >-
+          This version writes the database name unquoted at the end of FusionAuth's JDBC URL
+          (jdbc:postgresql://…:5432/NAME), and the database's readiness probe passes it to pg_isready
+          unquoted. Leave out spaces and the characters / ? # % : and + (the JDBC driver decodes + to a space).
+      - rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE ... PASSWORD with the new
+          password first, or FusionAuth loses its database connection after this change.
+      - when: oldSelf != null
+        rule: self.postgres.config.password != 'password'
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          The password is still the published default "password". Change it with ALTER ROLE ... PASSWORD,
+          then set the same value here.
+
+  - id: db-server
+    title: Database server
+    description: The PostgreSQL image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+          plan a short outage.
+      - path: postgres.image
+        type: string
+        format: image
+        label: Postgres image
+        required: true
+        help: >-
+          This version ships `postgres:18`; another image is unproven with it, so try it on a test release
+          first. The data directory is specific to a major version: a different major on an existing volume
+          does not start.
+      - path: postgres.resources
+        type: resources
+        label: Database resources
+        required: true
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+          imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+        severity: warning
+        paths: [postgres.image]
+        message: >-
+          The data directory belongs to the installed Postgres major version; a different major version does
+          not start on it. Upgrade with a dump and restore instead.
+
+  - id: db-storage
+    title: Database storage
+    description: The volume set that holds the database's data directory.
+    sections:
+      - fields:
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+        paths: [postgres.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: db-network
+    title: Database network
+    description: Who can connect to the bundled PostgreSQL.
+    docs: /reference/workload/firewall
+    fields:
+      - path: postgres.internalAccess.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          FusionAuth connects to its database like any other workload: keep Same GVC, or choose Same org.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: postgres.internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        description: This version cannot take a list; remove every entry.
+        when: size(self.postgres.internalAccess.workloads) > 0
+        widget: tags
+        unique: true
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+            excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+
+  - id: db-backup
+    title: Database backups
+    description: Scheduled logical backups of the bundled PostgreSQL to object storage.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version adds the AWS cloud account and IAM policy under Scheduled backups (or, with Google
+              Cloud Storage chosen, its cloud account and bucket) to the PostgreSQL identity even when backups
+              are off. With the defaults the identity names the cloud account `my-backup-cloudaccount` and the
+              policy `my-backup-policy`. 2.3.0 and later add them only when backups are on.
+      - id: backup
+        title: Scheduled backups
+        toggle: postgres.backup.enabled
+        description: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+        fields:
+          - path: postgres.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: postgres.backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^\s*[0-9][0-9*,/-]*(\s+[0-9*,/-]+){4}\s*$'
+            patternMessage: >-
+              Use five fields of numbers, *, ranges, steps and lists, starting with a digit: this version
+              writes the schedule unquoted, so a schedule that starts with * (such as */15 * * * *) fails
+              to install. Write 0,15,30,45 * * * * instead.
+          - path: postgres.backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
+          - path: postgres.backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+        rules:
+          - rule: >-
+              imageMajor(self.postgres.image) < 0 || imageMajor(self.postgres.backup.image) < 0 ||
+              imageMajor(self.postgres.backup.image) >= imageMajor(self.postgres.image)
+            severity: warning
+            paths: [postgres.backup.image]
+            message: >-
+              The backup image's major version must be at least the Postgres major version; an older pg_dump
+              cannot dump a newer server.
+      - title: AWS S3
+        when: self.postgres.backup.enabled && self.postgres.backup.provider == 'aws'
+        fields:
+          - path: postgres.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgres.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgres.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgres.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgres.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgres.backup.enabled && self.postgres.backup.provider == 'gcp'
+        fields:
+          - path: postgres.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: Use lowercase letters, numbers, dots, hyphens and underscores.
+          - path: postgres.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the project.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgres.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+    rules:
+      - rule: "!self.postgres.backup.enabled || self.postgres.backup.provider in ['aws', 'gcp']"
+        paths: [postgres.backup.provider]
+        message: Choose AWS S3 or Google Cloud Storage as the destination.
+      - rule: "!self.postgres.backup.enabled || imageMajor(self.postgres.image) < 0 || imageMajor(self.postgres.image) >= 17"
+        severity: warning
+        paths: [postgres.backup.enabled]
+        message: Backups need Postgres 17 or later; the selected image is older.
+
+# Rules over the database network: their issues show on the Database network step.
+rules:
+  # cpln helm applies the new revision before deleting removed resources, and the platform refuses a
+  # read-write-once volume set that another workload still holds, so <release>-postgres cannot take over
+  # <release>-pg-vs from <release>-pg-db.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.2.0') >= 0
+    message: >-
+      2.2.0 renamed the database workload, and the new one cannot take over the existing volume set while the
+      old workload still holds it, so the upgrade fails (from the platform and CLI source; not measured live).
+      Install a new release of this version and move the data with a dump and restore.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks FusionAuth, which connects to its database like any other workload.'
+  # charts/postgres (3.1.0) workload-postgres.yaml writes `inboundAllowWorkload: []` after the list, so a
+  # non-empty list renders the key twice, and cpln's js-yaml refuses the manifest (duplicated mapping key).
+  - rule: size(self.postgres.internalAccess.workloads) == 0
+    paths: [postgres.internalAccess.type]
+    message: >-
+      Leave Allowed workloads empty. This version's bundled PostgreSQL chart writes the allowed-workloads key
+      twice when the list is not empty, and the install fails on the duplicate key. 2.3.0 and later accept a
+      list.
+  - rule: self.postgres.internalAccess.type != 'workload-list'
+    paths: [postgres.internalAccess.type]
+    message: >-
+      "Specific workloads" lets only listed workloads connect, and this version cannot take a list, so
+      FusionAuth could not reach its database. Choose Same GVC or Same org.
+
+migrations:
+  # Before 2.2.0 the bundled postgres chart (2.0.0 / 2.1.0) ran a fixed postgres:17 image with one cpu/memory pair.
+  # The root rule refuses in-place upgrades from <2.2.0; these <2.2.0 / <2.1.0 migrations only matter if that block is lifted.
+  - fromVersions: "<2.2.0"
+    to: postgres.image
+    valueExpr: "'postgres:17'"
+    note: Before 2.2.0 the database ran postgres:17, and the data directory belongs to that major version, so it is kept.
+  - { fromVersions: "<2.2.0", from: postgres.resources.cpu, to: postgres.resources.maxCpu }
+  - { fromVersions: "<2.2.0", from: postgres.resources.memory, to: postgres.resources.maxMemory }
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxCpu
+    valueExpr: self.postgres.resources.cpu
+    note: The single database CPU value is now the maximum; the minimum is a new setting.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxMemory
+    valueExpr: self.postgres.resources.memory
+    note: The single database memory value is now the maximum; the minimum is a new setting, and the maximum can be at most 4 times it.
+  # Keep the carried maximums within the 4:1 stateful ratio and the 4000m / 4096Mi max-min range.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.postgres.resources.cpu) < 200 ? string(cpuMillicores(self.postgres.resources.cpu)) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 5333 ? string(cpuMillicores(self.postgres.resources.cpu) - 4000) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 800 ? string((cpuMillicores(self.postgres.resources.cpu) + 3) / 4) + 'm' : '200m'
+    note: The minimum database CPU is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.postgres.resources.memory) < 134217728 ? string(memoryBytes(self.postgres.resources.memory)) :
+      memoryBytes(self.postgres.resources.memory) > 5726273536 ? string((memoryBytes(self.postgres.resources.memory) - 4294967296 + 1048575) / 1048576) + 'Mi' :
+      memoryBytes(self.postgres.resources.memory) > 536870912 ? string((memoryBytes(self.postgres.resources.memory) + 4194303) / 4194304) + 'Mi' : '128Mi'
+    note: The minimum database memory is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    from: identityProviders
+    note: >-
+      Before 2.2.0, identityProviders.google.enabled opened outbound HTTPS to oauth2.googleapis.com,
+      www.googleapis.com and accounts.google.com. This version has no hostname setting: add the CIDRs your
+      identity provider needs (or 0.0.0.0/0) under Outbound CIDRs.
+  # 2.0.0 and earlier (bundled postgres 2.0.0) created a 20 GiB volume set that grew up to 1000 GiB.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.capacity
+    valueExpr: "20"
+    note: The database volume set was created with 20 GiB, and the existing volume would not shrink, so 20 is kept.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.autoscaling.enabled
+    valueExpr: "true"
+    note: The database volume set grew automatically up to 1000 GiB; growth stays on with the same limits.
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.maxCapacity, valueExpr: "1000" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.minFreePercentage, valueExpr: "1" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.scalingFactor, valueExpr: "1.1" }

@@ -325,13 +325,15 @@ steps:
           - when: self.postgresHA.enabled
             rule: >-
               (oldSelf != null && self.postgresHA.postgres.database == oldSelf.postgresHA.postgres.database) ||
-              self.postgresHA.postgres.database.matches('^[a-z_][a-z0-9_]*$')
+              (self.postgresHA.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgresHA.postgres.database) <= 63 &&
+              !(self.postgresHA.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
             severity: warning
             paths: [postgresHA.postgres.database]
             message: >-
-              Use lowercase letters, digits and underscores, starting with a letter or underscore. The highly
-              available database creates it with an unquoted CREATE DATABASE, which folds the name to lowercase,
-              while Metabase connects with the name as typed.
+              Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+              not postgres, template0, template1 or an SQL reserved word such as user or order. The highly available
+              database runs an unquoted CREATE DATABASE when it is first created: it folds other names to lowercase or
+              fails, and a failure stops the cluster from being created.
           # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
           # through sh -c without quotes.
           - when: self.postgres.enabled
@@ -377,6 +379,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Per replica.
@@ -396,6 +399,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
@@ -596,6 +600,18 @@ steps:
             label: Backup resources
             required: true
             advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
@@ -821,7 +837,7 @@ steps:
         message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
       - rule: >-
           !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-          dyn(self.postgresHA)['proxy']['enabled'] == true
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
         mirrors: metabase.validate
         paths: [postgresHA.enabled]
         message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Metabase's database endpoint.

@@ -1,0 +1,44 @@
+# listmonk 1.6.1 — the highly available database path (three Patroni members, three etcd members, two
+# HAProxy replicas) with one listmonk replica, one location, both prerequisite secrets created by CI.
+# HA rather than the single-instance default, because the HA database image is what 1.6.1 changes.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before listmonk can run its --install (about 5-7 minutes).
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  adminpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: listmonk
+      password: "{gen.pgpw}"
+      database: listmonk
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.adminpw}"
+
+vars:
+  pg_user: listmonk
+  pg_password: "{gen.pgpw}"
+  pg_db: listmonk
+  admin_user: e2eadmin
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 1.6.0 is the previous version (same values; its HA database still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 1.6.0

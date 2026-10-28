@@ -505,12 +505,12 @@ steps:
               self.kafka.listeners.client.sasl.admin.password != oldSelf.kafka.listeners.client.sasl.admin.password)
             rule: >-
               self.kafka.listeners.client.sasl.admin.password.matches('^[A-Za-z]([!#-&(-\\[\\]-~]*[!#-&(-9;-\\[\\]-~])?$') &&
-              !(self.kafka.listeners.client.sasl.admin.password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.listeners.client.sasl.admin.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.listeners.client.sasl.admin.password]
             message: >-
               A new admin password for the client listener must start with a letter, use printable ASCII characters
               other than spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`,
-              `yes` or `null`: the chart writes it into YAML unquoted, which must read it as text, and into
+              `false` or `null`: the chart writes it into YAML unquoted, which must read it as text, and into
               double-quoted JAAS strings. An installed password is accepted as it is.
           # values.yaml:63 publishes your-admin-password (the field's example, refused on install by the engine), :81
           # tgtgtg for a listener admin, and kafka 1.0.0 shipped fkor3Dro52oodA as its fixed default. The admin is a
@@ -870,11 +870,11 @@ steps:
               self.kafka.listeners.public.sasl.admin.password != oldSelf.kafka.listeners.public.sasl.admin.password)
             rule: >-
               self.kafka.listeners.public.sasl.admin.password.matches('^[A-Za-z]([!#-&(-\\[\\]-~]*[!#-&(-9;-\\[\\]-~])?$') &&
-              !(self.kafka.listeners.public.sasl.admin.password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.listeners.public.sasl.admin.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.listeners.public.sasl.admin.password]
             message: >-
               The public listener's admin password must start with a letter, use printable ASCII characters other than
-              spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes` or
+              spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`, `false` or
               `null`: the chart writes it into YAML unquoted, which must read it as text, and into double-quoted JAAS
               strings.
           # values.yaml:66-83 (commented public block: admin admin/tgtgtg, public-user/your-public-user-password) and
@@ -1337,11 +1337,11 @@ steps:
           - when: oldSelf == null || self.kafka.secrets.inter_broker_password != oldSelf.kafka.secrets.inter_broker_password
             rule: >-
               self.kafka.secrets.inter_broker_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.inter_broker_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.inter_broker_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.inter_broker_password]
             message: >-
               A new inter-broker password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`: the chart writes it into YAML unquoted, which must read it as text, and copies it into JAAS
               strings with sed, where |, & and \ have a meaning. An installed password is accepted as it is.
           # workload-kafka-cluster.yaml:74-75 passes the ID as CLUSTER_ID to the apache/kafka image, whose launch script
@@ -1433,11 +1433,11 @@ steps:
           - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
             rule: >-
               self.kafka.secrets.controller_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.controller_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.controller_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.controller_password]
             message: >-
               A new controller password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`: the chart writes it into YAML unquoted, which must read it as text, and copies it into JAAS
               strings with sed, where |, & and \ have a meaning. An installed password is accepted as it is.
 
@@ -1685,8 +1685,8 @@ steps:
                   # booleans and helm fails.
                   - rule: >-
                       self.kafka.volumes.logs.customEncryption.region == null ||
-                      !(self.kafka.volumes.logs.customEncryption.region in ['null', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n'])
-                    message: The log volumes' encryption location cannot be named like a YAML word such as `null`, `true` or `yes`.
+                      !(self.kafka.volumes.logs.customEncryption.region in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
+                    message: The log volumes' encryption location cannot be named like a YAML word such as `null`, `true` or `false`.
               - path: keyId
                 type: string
                 label: KMS key ARN
@@ -2968,9 +2968,9 @@ steps:
                 - rule: >-
                     item.volumes == null || item.volumes.customEncryption == null ||
                     item.volumes.customEncryption.region == null ||
-                    !(item.volumes.customEncryption.region in ['null', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n'])
+                    !(item.volumes.customEncryption.region in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
                   paths: [volumes.customEncryption.region]
-                  message: The plugin volume's encryption location cannot be named like a YAML word such as `null`, `true` or `yes`.
+                  message: The plugin volume's encryption location cannot be named like a YAML word such as `null`, `true` or `false`.
                 # RELEASES 3.3.0: the workers of a multi-replica Connect cluster talk to each other
                 # (rest.advertised.host.name, _helpers.tpl:885), and a workload-list firewall governs a workload's own
                 # replicas too (CHANGELOG 2026-08: etcd-multi-location, pgedge); the chart does not add the Connect workload.

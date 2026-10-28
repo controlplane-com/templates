@@ -192,12 +192,12 @@ steps:
               (oldSelf == null || self.kafka.secrets.client_passwords != oldSelf.kafka.secrets.client_passwords)
             rule: >-
               self.kafka.secrets.client_passwords.matches('^[A-Za-z]([!#-%(-+\\--:<-\\[\\]-{}~]*[!#-%(-+\\--9<-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.client_passwords.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.client_passwords in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.client_passwords]
             message: >-
               A new client password must start with a letter, use printable ASCII characters other than spaces, quotes,
               commas, semicolons, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as
-              `true`, `yes` or `null`: the chart writes it into YAML unquoted, splits it at commas and semicolons, and
+              `true`, `false` or `null`: the chart writes it into YAML unquoted, splits it at commas and semicolons, and
               copies it into a JAAS string with sed. An installed password is accepted as it is.
           # values.yaml and README.md:36 publish fkor3Dro52oodA as the kafka-admin password.
           - when: >-
@@ -269,20 +269,20 @@ steps:
           - when: oldSelf == null || self.kafka.secrets.inter_broker_password != oldSelf.kafka.secrets.inter_broker_password
             rule: >-
               self.kafka.secrets.inter_broker_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.inter_broker_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.inter_broker_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.inter_broker_password]
             message: >-
               A new inter-broker password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`. An installed password is accepted as it is.
           - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
             rule: >-
               self.kafka.secrets.controller_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.controller_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.controller_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.controller_password]
             message: >-
               A new controller password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`. An installed password is accepted as it is.
           # values.yaml publishes HfcgCHp32e and ayd8iJwqXe; the brokers accept them for inter_broker_user (port 9094) and
           # controller_user (port 9093), which every workload the internal firewall admits can reach.

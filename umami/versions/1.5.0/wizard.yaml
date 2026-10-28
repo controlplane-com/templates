@@ -41,7 +41,7 @@ steps:
         docs: "#application"
         fields:
           - type: note
-            severity: info
+            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.5.0') < 0
@@ -148,7 +148,7 @@ steps:
                 suggestName: "context.releaseName + '-umami-2fa-key'"
                 hint: openssl rand -hex 32
         rules:
-          - when: oldSelf != null && has(oldSelf.app.twoFactorKeySecretName) && oldSelf.app.twoFactorKeySecretName != ''
+          - when: oldSelf != null && has(oldSelf.app.twoFactorKeySecretName) && oldSelf.app.twoFactorKeySecretName != null && oldSelf.app.twoFactorKeySecretName != ''
             rule: self.app.twoFactorKeySecretName == oldSelf.app.twoFactorKeySecretName
             severity: info
             paths: [app.twoFactorKeySecretName]
@@ -299,6 +299,15 @@ steps:
         description: >-
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Umami connects through.
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.5.0') < 0
+            text: >-
+              This upgrade moves the HA database to patroni-postgres 0.8 (pgvector 0.8.7). The database members
+              restart, with a brief interruption of writes while the leader changes, so upgrade in a quiet window.
+              Run `ALTER EXTENSION vector UPDATE;` in any database where you created the vector extension.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -586,6 +595,8 @@ yamlOnly:
     reason: Umami connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  - fromVersions: "<1.5.0"
+    assume: { app.twoFactorKeySecretName: "" }
   - fromVersions: "<1.4.0"
     from: postgres.credentials
     note: >-

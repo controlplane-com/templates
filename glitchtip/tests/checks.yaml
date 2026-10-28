@@ -108,7 +108,8 @@ checks:
           -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
     expect:
       stdout: "^AVAIL 0\\.8\\.7$"
-    # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
-    # old image; this runs long enough for the rollout to finish.
-    retries: 12
-    retryDelaySeconds: 15
+    # helm --wait returns while the Patroni members are still restarting one by one, and the leader (still on
+    # the old image) restarts last, about 4 min in, so until then this reads 0.8.0. 12 x 15 s ran out before the
+    # leader change on a local run; 20 x 30 s covers the rollout with room to spare.
+    retries: 20
+    retryDelaySeconds: 30

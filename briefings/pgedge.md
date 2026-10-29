@@ -50,6 +50,8 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
 - **Volume snapshots never ran before 3.0.0** (no schedule rendered; README claimed daily). Now scheduled; the
   platform rejects anything more frequent than hourly at apply, so the chart and wizard refuse it at render.
 - **Never `helm upgrade` 1.x → 2.x+:** it deletes the GVC 1.x created (proven, 6 s, "upgraded successfully").
+  In-place path (2026-10-29, render-verified only, not run live): `scripts/keep-gvc.py`, then 1.1.1 → 3.0.0 directly with
+  `--gvc <old GVC>` (node workload/volumeset/identity names match; pgcat → pgbouncer); README "Upgrading in place from 1.1.1".
 - **HAProxy DNS holds are load-bearing:** `hold obsolete 30s` (a late-registered node is adopted in ≤ 34 s; 5m made it
   ~5 min) and 5m failure holds (a DNS blip keeps the last good address). No backticks in the config heredoc.
 - **PgBouncer ini parser rejects quoted keys** — names it cannot key fall back to `*` with a WARNING.

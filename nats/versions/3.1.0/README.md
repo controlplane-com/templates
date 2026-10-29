@@ -137,11 +137,51 @@ Clients pass the credentials as options (`nats --user USERNAME --password PASSWO
 
 Read the real public hostname from `status.canonicalEndpoint` in `cpln workload get RELEASE-nats --gvc GVC -o yaml` — never assemble it from parts, as its shape varies between GVCs.
 
+## Upgrading in place from 2.0.0
+
+A plain `helm upgrade` from 2.x deletes the GVC the old release created, with everything in it, including your JetStream data. These steps keep the GVC, the servers and their streams:
+
+```bash
+cpln helm get values RELEASE_NAME > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/nats --version 3.1.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- **`--gvc` is the GVC the old release created** (`gvc.name` in `values-old.yaml`, `nats-gvc` if you never set it), not the GVC you ran the original install against.
+- **The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`.** If it does not, stop: the GVC was not protected.
+
+Write `values-new.yaml` from `values-old.yaml`. `cpln helm get values` returns only what you set, so also write in any 2.x default you relied on:
+
+```yaml
+locations:            # was gvc.locations: same names and replicas (2.x default shown)
+  - name: aws-us-east-1
+    replicas: 2
+  - name: aws-us-west-2
+    replicas: 2
+  - name: aws-eu-central-1
+    replicas: 2
+allowCIDR:            # the 2.x default was 0.0.0.0/0; 3.x defaults to [] (no public access)
+  - 0.0.0.0/0         # keep only if clients use the public WebSocket endpoint
+# delete: gvc, nats_defaults.cluster.listen, nats_defaults.gateway.listen,
+#   nats_defaults.cluster.noAdvertise (the chart refuses them), volumeset.autoscaling (no longer used)
+```
+
+- **With JetStream on, 3.x refuses a total of exactly 2 servers.** A 2.x release with one location and `replicas: 2` must change it to `replicas: 3`, which adds one server.
+- Remove any location with `replicas: 0`; the chart refuses it.
+- Keep `image`, `resources`, `jetstream`, `volumeset.capacity`, `internalAccess` and `nats_extra_config` as they are.
+
+The servers restart one at a time.
+
+Afterwards the GVC belongs to you rather than to the release: `helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME` when you no longer need it. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Migrating from 2.x
 
-**Never `helm upgrade` a 2.x release onto 3.0.0.** 2.x created its own GVC; 3.0.0 does not. An in-place upgrade drops `kind: gvc` from the manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every workload, volume set and identity inside it**, including your JetStream data. On a sibling template this was measured taking 6 seconds while Helm printed `upgraded successfully`.
+**Never run a plain `helm upgrade` from 2.x onto 3.0.0** — follow "Upgrading in place from 2.0.0" above, or migrate to a new release as described here. 2.x created its own GVC; 3.0.0 does not. A plain upgrade drops `kind: gvc` from the manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every workload, volume set and identity inside it**, including your JetStream data. On a sibling template this was measured taking 6 seconds while Helm printed `upgraded successfully`.
 
-The chart refuses to render if your values still carry the 2.x `gvc` key, so the usual path fails safely. Migrate like this instead:
+The chart refuses to render if your values still carry the 2.x `gvc` key, so the usual path fails safely. To migrate to a new release instead:
 
 1. Install 3.0.0 as a **new release** against an existing GVC, with `locations` set to that GVC's locations.
 2. Point publishers and subscribers at the new release, or mirror the streams across with `nats stream ...` if you are using JetStream.

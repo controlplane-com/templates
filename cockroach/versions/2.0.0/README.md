@@ -63,6 +63,38 @@ Two values keys moved or tightened in 2.0.0:
 - `gvc.locations` is now the top-level `locations`, and `gvc.name` is gone entirely.
 - `replicas: 0` on a location is now refused. It used to suspend that location silently while still counting it as a region the database was told about, which no node ever joined. Remove the location from `locations` instead.
 
+## Upgrading in place from 1.5.0
+
+A plain `helm upgrade` from 1.x deletes the GVC the 1.x release created, and everything in it. These steps keep that GVC, so the cluster keeps its data. They cover a 1.5.0 release (upgrade an older 1.x to 1.5.0 first) whose locations all have at least 1 replica; if one has `replicas: 0`, use [Migrating from 1.x](#migrating-from-1x) instead.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/cockroach --version 2.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 1.x release created (its `gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with one change:
+
+```yaml
+# gvc: delete the whole block
+locations:                     # the old gvc.locations: same entries, same order, same replicas
+  - name: aws-us-east-1
+    replicas: 3
+```
+
+- If `values-old.yaml` has no `gvc` key, the release ran on 1.5.0's defaults: `OLD_GVC_NAME` is `cockroach-gvc`, and `locations` is `aws-us-east-1`, `aws-eu-central-1`, `aws-us-west-2` in that order, 3 replicas each.
+- With `backup.enabled: true`, `backup.location` must be one of `locations`.
+
+Every CockroachDB node and PgBouncer replica restarts, and the platform does not serialize the restart across locations, so expect retried or failed queries for a few minutes (see [Application Retry Logic](#application-retry-logic)).
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Configuration
 
 ### Locations

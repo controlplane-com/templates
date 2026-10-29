@@ -83,6 +83,8 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
 - **Never `helm upgrade` a 2.x release onto 3.0.0.** The upgrade drops `kind: gvc` and Helm prunes it,
   destroying the GVC and everything in it — measured at 6 s on a sibling template, while printing
   `upgraded successfully`. The render-time guard blocks the normal path; migrate to a new release instead.
+- **In-place path (2026-10-29, proven live 2.0.0 → 3.1.0):** `scripts/keep-gvc.py` marks the GVC `keep`, then
+  `helm upgrade --gvc <old GVC>` with the translated values updates every resource in place; README "Upgrading in place from 2.0.0".
 - **`internalAccess` governs route and gateway traffic, not just clients.** A `workload-list` naming only
   clients cuts the cluster off from itself: routes never establish, JetStream loses its meta group, and
   every replica still reports `ready: true`. The chart adds its own workload to the list automatically.

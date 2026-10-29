@@ -110,6 +110,47 @@ Renamed in 3.0.0: `gvc.locations` is now the top-level `locations`, and `server.
 under those keys is now actually applied — in 2.x it was ignored, so `type: workload-list` silently blocked
 all internal traffic.
 
+## Upgrading in place from 2.8.0
+
+A plain `helm upgrade` from 2.x deletes the GVC the 2.x release created, and everything in it. These steps keep that GVC, so the cluster keeps its metadata, Keeper state and bucket. They cover a 2.8.0 release (upgrade an older 2.x to 2.8.0 first) whose locations all have at least 1 replica; if one has `replicas: 0`, use [Migrating from 2.x](#migrating-from-2x) instead.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/clickhouse --version 3.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 2.x release created (its `gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with these changes:
+
+```yaml
+# gvc: delete the whole block
+locations:                     # the old gvc.locations: same entries, SAME ORDER (it sets shard numbers and Keeper members)
+  - name: aws-us-east-2
+    replicas: 1
+server:
+  internalAccess:              # renamed from server.internal_access, same content
+    type: same-gvc
+    workloads: []
+keeper:
+  internalAccess:              # renamed from keeper.internal_access, same content
+    type: same-gvc
+    workloads: []
+```
+
+- If `values-old.yaml` has no `gvc` key, the release ran on 2.8.0's defaults: `OLD_GVC_NAME` is `clickhouse-gvc`, and `locations` is `aws-us-east-2`, `aws-us-west-2`, `aws-us-east-1` in that order, 1 replica each.
+- Keep your storage settings exactly as they are. If `values-old.yaml` has no `aws` block, 2.8.0 used `bucket: clickhouse-s3-bucket`, `cloudAccountName: clickhouse-s3-cloudaccount` and `policyName: clickhouse-s3-policy`; write those out, because 3.0.0's defaults name a different bucket.
+- With `type: workload-list`, `workloads` is now enforced (2.x ignored it): list every client that connects. This release's own workloads are added for you.
+
+Every server and Keeper restarts, in every location at once, so queries fail for a few minutes.
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Configuration
 
 ### Locations

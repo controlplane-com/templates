@@ -118,16 +118,140 @@ no data: uninstall it and install the current version fresh. If it has been serv
 down, back it up and restore into a fresh install of the current version (see
 [Backing Up](#backing-up)).
 
+## Upgrading in place from 1.8.1
+
+A plain `helm upgrade` from 1.x deletes the GVC the old release created, with everything in it. The
+steps below keep the GVC, the cluster and its data, from any 1.x release. Plan a maintenance window:
+PD and TiKV restart in every location at once, and reads and writes pause until they are back. Take a
+backup first (see [Backing Up](#backing-up)).
+
+**1. Save the values, and check the credentials secret.**
+
+```bash
+cpln helm get values RELEASE_NAME > values-old.yaml
+```
+
+If `values-old.yaml` has `autoCreateDatabase.credentialsSecretName` (1.8.0 and later), that secret is
+already in place. If it has an `autoCreateDatabase.database` block instead (1.7.0 and earlier), create
+the secret now with the passwords the cluster uses today, which 1.x keeps in `RELEASE_NAME-tidb-user`:
+
+```bash
+cpln secret reveal RELEASE_NAME-tidb-user -o json    # rootPassword, user, password, db under data
+cpln secret create-dictionary --name RELEASE_NAME-tidb-credentials \
+  --entry rootPassword='...' --entry user='...' --entry password='...' --entry db='...'
+```
+
+**2. Grant the new chart's access ahead of time, then wait at least 10 minutes.** The upgrade replaces
+the policy that lets the cluster read its secrets, and a new grant takes several minutes to apply; this
+temporary grant covers the gap. Save as `prestage.yaml`, using your credentials secret's name:
+
+```yaml
+kind: policy
+name: RELEASE_NAME-prestage-reveal
+targetKind: secret
+targetLinks:
+  - //secret/CREDENTIALS_SECRET_NAME
+  - //secret/RELEASE_NAME-tidb-pd-startup
+  - //secret/RELEASE_NAME-tidb-server-startup
+  - //secret/RELEASE_NAME-tidb-tikv-startup
+  - //secret/RELEASE_NAME-tidb-db-init
+bindings:
+  - permissions: [reveal]
+    principalLinks: [//gvc/OLD_GVC_NAME/identity/RELEASE_NAME-tidb-identity]
+---
+kind: policy
+name: RELEASE_NAME-prestage-gvc
+targetKind: gvc
+targetLinks: [//gvc/OLD_GVC_NAME]
+bindings:
+  - permissions: [view]
+    principalLinks: [//gvc/OLD_GVC_NAME/identity/RELEASE_NAME-tidb-identity]
+```
+
+```bash
+cpln apply -f prestage.yaml
+```
+
+**3. Mark the GVC `keep`, write the new values, and upgrade.**
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/tidb --version 2.2.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- **`--gvc` is the GVC the old release created** (`gvc.name` in `values-old.yaml`, `tidb-gvc` if you never set it), not the GVC you ran the original install against.
+- **The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`.** If it does not, stop: the GVC was not protected.
+
+Write `values-new.yaml` from `values-old.yaml`. `cpln helm get values` returns only what you set, so
+write out the 1.x defaults you relied on too (the 1.8.1 default was these three locations with 1 each):
+
+```yaml
+locations:                  # was gvc.locations; replicas: N becomes tikvReplicas: N + serverReplicas: N
+  - name: aws-us-east-2
+    tikvReplicas: 1
+    serverReplicas: 1
+  - name: aws-eu-central-1
+    tikvReplicas: 1
+    serverReplicas: 1
+  - name: aws-us-east-1
+    tikvReplicas: 1
+    serverReplicas: 1
+pdReplicas: 3               # was gvc.pdReplicas
+autoCreateDatabase:
+  credentialsSecretName: RELEASE_NAME-tidb-credentials   # your existing one, or the one from step 1
+internal_access:
+  server:
+    type: same-org          # ONLY for 1.1.1 and earlier: they had one internal_access.type; move it here
+images:
+  server: pingcap/tidb:v8.5.3   # ONLY if your servers run older than v8.5.7 (1.6.2 and earlier); see step 4
+# delete: gvc, devMode, exposeServer, autoCreateDatabase.database (the chart refuses them)
+```
+
+Keep `resources`, `volumeset` capacities, `external_access`, `internal_access` and `backup` as they
+are. Volume snapshots now run daily by default; set `volumeset.tikv.snapshots.schedule` and
+`volumeset.pd.snapshots.schedule` to `""` to keep them off.
+
+Wait until every location of `RELEASE_NAME-pd`, `RELEASE_NAME-tikv` and `RELEASE_NAME-server` is ready
+(`cpln workload get-deployments RELEASE_NAME-pd --gvc OLD_GVC_NAME`).
+
+**4. Only if you held `images.server`:** remove the `images` block from `values-new.yaml` and run the
+same `helm upgrade` again. Only the SQL servers restart, new before old, and queries keep being served.
+The hold matters: upgrading the servers while PD and TiKV are restarting can leave the new servers
+stuck on TiDB's system-table upgrade. PD and TiKV cannot be downgraded after step 3.
+
+**5. Make placement region-aware.** A cluster first installed before 1.7.0 never told PD to spread
+copies by location. Check, and set it if `location-labels` is empty:
+
+```bash
+cpln workload exec RELEASE_NAME-pd --gvc OLD_GVC_NAME --location LOCATION -- \
+  sh -c 'curl -s 127.0.0.1:2379/pd/api/v1/config/replicate'
+cpln workload exec RELEASE_NAME-pd --gvc OLD_GVC_NAME --location LOCATION -- \
+  sh -c 'curl -s -X POST -H "Content-Type: application/json" -d "{\"location-labels\":\"region\"}" 127.0.0.1:2379/pd/api/v1/config/replicate'
+```
+
+PD then moves replicas in the background with no downtime.
+
+**6. Clean up:** `cpln policy delete RELEASE_NAME-prestage-reveal RELEASE_NAME-prestage-gvc`. Never
+`helm rollback` this release to a 1.x revision.
+
+Afterwards the GVC belongs to you rather than to the release: `helm uninstall` leaves it in place, and
+you delete it with `cpln gvc delete OLD_GVC_NAME` when you no longer need it. Details:
+[scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Migrating from 1.x
 
-**Never `helm upgrade` a 1.x release onto 2.0.0.** Versions through 1.8.1 created their own GVC, so
+**Never run a plain `helm upgrade` from 1.x onto 2.x** — follow [Upgrading in place from 1.8.1](#upgrading-in-place-from-181)
+above, or migrate to a new release as described here. Versions through 1.8.1 created their own GVC, so
 that GVC is part of the 1.x release's manifest. 2.0.0 does not declare it — and Helm deletes what a
 chart stops declaring. The upgrade would therefore **delete the GVC and every workload, volume set
 and identity inside it**, including your data.
 
 The chart refuses to render if your values still carry a `gvc:` key, so an upgrade that passes your
 old values file fails before touching anything. A 1.x install made on pure defaults has no such key
-and is **not** protected — nothing at render time can see it. Migrate instead:
+and is **not** protected — nothing at render time can see it. To migrate to a new release instead:
 
 1. Back up the old cluster — enable `backup` on the 1.x release, or run `br backup full` by hand.
 2. Create (or pick) the GVC you want 2.0.0 to live in, with the locations you intend to use.
@@ -482,7 +606,7 @@ Rehearse a restore into a scratch release before you need one.
 - **Root has a password from the first moment** when `autoCreateDatabase.enabled` (the default): the first TiDB server sets it while the cluster bootstraps. With `autoCreateDatabase.enabled: false`, root starts with **no password** — set one with `ALTER USER` before exposing the cluster.
 - **Each TiDB server start makes one root login attempt with an empty password** (to confirm root is protected before serving). If you set `FAILED_LOGIN_ATTEMPTS` on root, set it above your total number of TiDB servers, since restarting them all counts one failure each.
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency).
-- **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created and everything inside it. Install a new release instead; see [Migrating from 1.x](#migrating-from-1x).
+- **Never run a plain `helm upgrade` from 1.x onto 2.x** — it deletes the GVC the 1.x release created and everything inside it. See [Upgrading in place from 1.8.1](#upgrading-in-place-from-181) or [Migrating from 1.x](#migrating-from-1x).
 - **Every location in `locations` must already exist in the GVC.** A location the GVC lacks is accepted silently by the platform; PD refuses to bootstrap and says so in its logs. A GVC location you did *not* list simply runs nothing.
 - **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's TiDB servers. See [Resiliency](#resiliency).
 - **PD's replication factor is fixed when the cluster first bootstraps.** It is the number of TiKV nodes you configure, capped at 3, and PD persists it — scaling TiKV up later does not raise it. Start with at least 3 TiKV nodes if you ever want 3-way replication.

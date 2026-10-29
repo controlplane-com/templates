@@ -108,6 +108,40 @@ Values that changed:
 | `postgresML` pinned at 1.0.3 | pinned at **2.0.0** (no GVC of its own) |
 | `redisML` pinned at 2.1.0 | pinned at **3.0.0** (no GVC of its own; adds `redisML.engine`) |
 
+## Upgrading in place from 1.1.1
+
+A plain `helm upgrade` from 1.x deletes the GVC the 1.x release created, and everything in it. These steps keep that GVC, so the release keeps its database (dashboards, users, datasources, alert rules), its etcd store and its Redis tier. They cover a 1.1.1 release; upgrade an older 1.x to 1.1.1 first.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/grafana-multi-location --version 2.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 1.x release created (its `global.gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with one change:
+
+```yaml
+global:
+  # gvc: delete the whole block (name and locations)
+  locations:                   # the old global.gvc.locations: same entries, same order, same replicas
+    - name: aws-us-east-1
+      replicas: 1
+```
+
+- If `values-old.yaml` has no `global.gvc` key, the release ran on 1.1.1's defaults: `OLD_GVC_NAME` is `grafana-multi-location-gvc`, and `global.locations` is `aws-us-east-1`, `aws-eu-central-1`, `aws-us-west-2` in that order, 1 replica each.
+- Leave `redisML.engine` unset (`redis`): the Redis data cannot move to `valkey` in place.
+- Nothing else changes. The bundled database, etcd and Redis tiers move to their own converted versions with the same resource names and secrets.
+
+Every tier restarts, the database in every location included, so Grafana is unavailable for a few minutes.
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## How many locations do you need?
 
 The database's consensus store commits a write only when a **majority** of its members agree, and it

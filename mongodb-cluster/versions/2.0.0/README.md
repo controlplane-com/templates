@@ -289,6 +289,38 @@ Values that moved or were removed in 2.0.0 — the chart names each one at rende
 | `locations[].replicas: 0` | not allowed; remove the location instead |
 | a total above 7 members, or exactly 2 | not allowed; see the sizing table above |
 
+## Upgrading in place from 1.1.1
+
+A plain `helm upgrade` from 1.x deletes the GVC the 1.x release created, and everything in it. These steps keep that GVC, so the replica set keeps its data. They cover a 1.1.1 release (upgrade an older 1.x to 1.1.1 first) with **at most 7 members in total, never exactly 2, and at least 1 in every location**. The 1.x default of 3 locations × 3 is 9 members, which 2.0.0 refuses; for that shape, use [Migrating from 1.x](#migrating-from-1x) instead.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/mongodb-cluster --version 2.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 1.x release created (its `gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with these changes:
+
+```yaml
+# gvc: delete the whole block
+locations:                     # the old gvc.locations: same entries, same order, same replicas
+  - name: aws-us-east-1
+    replicas: 3
+backup:
+  mode: logical                # 2.0.0 refuses physical
+  location: aws-us-east-1      # with backup.enabled: true, the location the job ran in (where your bucket is); must be one of locations
+```
+
+The credentials and keyfile secrets stay as they are. Every member and HAProxy replica restarts, so expect a primary election and failed writes for a few minutes.
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Important Notes
 
 - **Both prerequisite secrets must exist BEFORE you install.** A missing one wedges the deployment silently — `cpln logs` returns nothing, and the secret is named only in `status.versions[].message` from `cpln workload get-deployments`. It self-heals within roughly 6–10 minutes once the secret exists, or immediately after `cpln workload force-redeployment`.

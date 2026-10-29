@@ -3,6 +3,7 @@
 ## What it is
 - A MongoDB replica set (Percona Server for MongoDB, `percona/percona-server-mongodb:8.0`) with automatic failover, deployable in **one location or stretched across several**.
 - **2.0.0 deploys into an existing GVC** (`createsGvc: false`). 1.x created its own; that path is now refused at render time.
+- **In-place 1.1.1 → 2.0.0, keeping the GVC (5434):** README "Upgrading in place from 1.1.1" — `scripts/keep-gvc.py`, `--gvc` = the 1.x GVC. Only for ≤7 members (not the 1.x 9-member default, which 2.0.0 refuses; shrinking a live set needs `rs.remove`, not documented). Render-verified only, not live-proven.
 - Optional HAProxy in front so clients hit one endpoint instead of tracking the primary, and optional logical (mongodump) backups. Physical (PBM) was removed in 2.0.0 — see the traps.
 
 ## Common use cases

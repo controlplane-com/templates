@@ -33,6 +33,7 @@ region, and multi-region deployments needing a single logical database rather th
 ## What 2.0.0 changed
 
 - **No `kind: gvc`.** `gvc.name`/`gvc.locations` removed; a render-time `fail` refuses any values file still carrying a `gvc:` key, because a `helm upgrade` across that boundary deletes the GVC and everything in it.
+- **In-place 1.5.0 → 2.0.0, keeping the GVC (5434):** README "Upgrading in place from 1.5.0" — `scripts/keep-gvc.py`, `--gvc` = the 1.x GVC, `gvc.locations` → `locations` unchanged. Same resource names, `--cluster-name`, `--locality` and join hosts. Render-verified only, not live-proven.
 - **`defaultOptions.minScale/maxScale: 0`** on both the cockroach and pgbouncer workloads, with `localOptions` supplying the real counts. Closes "the GVC has a location the values do not list" by construction. Previously `defaultOptions.minScale` was `locations[0].replicas`, so an unlisted GVC location silently started **three more CockroachDB nodes** that joined the cluster.
 - **PgBouncer's backend list moved out of Helm** into its own startup script, deriving from the same `CRDB_*` env the nodes use for `--join`. The two tiers can no longer disagree.
 - **Boot-time GVC read** (`$CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`) — hard-fails on a node with no data, warns on one that already has data.

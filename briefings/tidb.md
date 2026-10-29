@@ -60,6 +60,7 @@
   registered (the same shape as the 2.0.0 brick below). Irrelevant to existing releases; another reason new installs go to 2.x.
 
 ## In-place `helm upgrade` 1.x → 2.2.0 into the chart-created GVC (measured 2026-10-27 — never tell a user to do this)
+- **Superseded 2026-10-29:** the supported in-place path (keep-gvc.py + pre-granted policies + staged server image) is in the 2.2.0 README, "Upgrading in place from 1.8.1"; the plain upgrade below is still never to be run.
 - With 1.x values the guard refuses (exit 1, nothing touched). With 2.x-style values and `--gvc <the 1.x GVC>` it RUNS: identity,
   volumesets and workloads share names and are updated in place, the old policy is deleted, then pruning `kind: gvc` fails —
   `GVC … cannot be deleted because it contains at least one volume set` (400). **Only that platform guard saved the data**

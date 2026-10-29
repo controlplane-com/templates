@@ -14,8 +14,8 @@ run, and deletes everything. The report lands on the PR as one comment.
 
 - **`E2E Test Coverage`** (every PR, no credentials): when a PR changes what a version of an opted-in
   template deploys, it must also change something under that template's `tests/`, and the version must have
-  a baseline. "Changes what it deploys" means the default `helm template` output differs, so README, comment
-  and `wizard.yaml` fixes are exempt. A maintainer can waive it with the `e2e-gate-exempt` label.
+  a baseline. "Changes what it deploys" means the default `helm template` output differs, so README and other `.md`, comment,
+  `wizard.yaml`, `catalog.yaml` and icon changes are exempt, and a PR with only those changes runs no suite. A maintainer can waive it with the `e2e-gate-exempt` label.
 - **`Template e2e tests`** (every PR and every push, or by hand from the Actions tab with a `targets` list
   such as `kafka/4.4.0`): a PR that changes no tested version passes at once; otherwise it runs
   automatically with the org token from the `e2e-nifah` environment. GitHub does not give that token to

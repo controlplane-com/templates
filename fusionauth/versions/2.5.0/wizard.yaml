@@ -117,6 +117,16 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  # cpln helm applies the new revision before deleting removed resources, and the platform refuses a
+  # read-write-once volume set that another workload still holds, so <release>-postgres cannot take over
+  # <release>-pg-vs from <release>-pg-db.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.2.0') >= 0
+    message: >-
+      2.2.0 renamed the database workload, and the new one cannot take over the existing volume set while the
+      old workload still holds it, so the upgrade fails (from the platform and CLI source; not measured live).
+      Install a new release of this version and move the data with a dump and restore.
   - rule: "!has(self.postgres.credentials)"
     mirrors: fusionauth.validateRemovedKeys
     paths: [postgres.config.credentialsSecretName]
@@ -131,6 +141,19 @@ rules:
     message: >-
       2.4.x created the database secret itself, and this upgrade deletes it. Create a secret under a NEW
       name holding the same username, password and database, and name it here.
+  # Before 2.4.0 the bundled postgres chart created <release>-pg-config itself; the upgrade deletes it.
+  - when: >-
+      context.mode == 'upgrade' && context.fromVersion != null &&
+      semverCompare(context.fromVersion, '2.4.0') < 0
+    rule: self.postgres.config.credentialsSecretName != context.releaseName + '-pg-config'
+    paths: [postgres.config.credentialsSecretName]
+    messageExpression: >-
+      'Before 2.4.0 the bundled PostgreSQL chart created ' + context.releaseName + '-pg-config, and this
+      upgrade deletes it. Create a secret under a NEW name holding the same username, password and database,
+      and name it here.'
+    message: >-
+      Before 2.4.0 the bundled PostgreSQL chart created RELEASE_NAME-pg-config, and this upgrade deletes it.
+      Create a secret under a NEW name holding the same username, password and database, and name it here.
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks FusionAuth, which connects to its database like any other workload.'
@@ -154,3 +177,52 @@ migrations:
     note: >-
       The database credentials are now a prerequisite dictionary secret (username, password, database). Create it
       under a NEW name with the values the database was initialized with, and choose it under Database credentials.
+  # Before 2.2.0 the bundled postgres chart (2.0.0 / 2.1.0) ran a fixed postgres:17 image with one cpu/memory pair.
+  # The root rule refuses in-place upgrades from <2.2.0; these <2.2.0 / <2.1.0 migrations only matter if that block is lifted.
+  - fromVersions: "<2.2.0"
+    to: postgres.image
+    valueExpr: "'postgres:17'"
+    note: Before 2.2.0 the database ran postgres:17, and the data directory belongs to that major version, so it is kept.
+  - { fromVersions: "<2.2.0", from: postgres.resources.cpu, to: postgres.resources.maxCpu }
+  - { fromVersions: "<2.2.0", from: postgres.resources.memory, to: postgres.resources.maxMemory }
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxCpu
+    valueExpr: self.postgres.resources.cpu
+    note: The single database CPU value is now the maximum; the minimum is a new setting.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxMemory
+    valueExpr: self.postgres.resources.memory
+    note: The single database memory value is now the maximum; the minimum is a new setting, and the maximum can be at most 4 times it.
+  # Keep the carried maximums within the 4:1 stateful ratio and the 4000m / 4096Mi max-min range.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.postgres.resources.cpu) < 200 ? string(cpuMillicores(self.postgres.resources.cpu)) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 5333 ? string(cpuMillicores(self.postgres.resources.cpu) - 4000) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 800 ? string((cpuMillicores(self.postgres.resources.cpu) + 3) / 4) + 'm' : '200m'
+    note: The minimum database CPU is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.postgres.resources.memory) < 134217728 ? string(memoryBytes(self.postgres.resources.memory)) :
+      memoryBytes(self.postgres.resources.memory) > 5726273536 ? string((memoryBytes(self.postgres.resources.memory) - 4294967296 + 1048575) / 1048576) + 'Mi' :
+      memoryBytes(self.postgres.resources.memory) > 536870912 ? string((memoryBytes(self.postgres.resources.memory) + 4194303) / 4194304) + 'Mi' : '128Mi'
+    note: The minimum database memory is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    from: identityProviders
+    note: >-
+      Before 2.2.0, identityProviders.google.enabled opened outbound HTTPS to oauth2.googleapis.com,
+      www.googleapis.com and accounts.google.com. This version has no hostname setting: add the CIDRs your
+      identity provider needs (or 0.0.0.0/0) under Outbound CIDRs.
+  # 2.0.0 and earlier (bundled postgres 2.0.0) created a 20 GiB volume set that grew up to 1000 GiB.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.capacity
+    valueExpr: "20"
+    note: The database volume set was created with 20 GiB, and the existing volume would not shrink, so 20 is kept.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.autoscaling.enabled
+    valueExpr: "true"
+    note: The database volume set grew automatically up to 1000 GiB; growth stays on with the same limits.
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.maxCapacity, valueExpr: "1000" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.minFreePercentage, valueExpr: "1" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.scalingFactor, valueExpr: "1.1" }

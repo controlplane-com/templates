@@ -68,7 +68,11 @@ steps:
           each release its own.
         help: >-
           The cluster reads the credentials only when it is first created, and the replication role shares the
-          password. To change it later, follow the rotation steps in the docs. Create the secret with:
+          password. To change it later, follow the rotation steps in the docs. Use lowercase letters, digits and
+          underscores for the database, and not an SQL reserved word such as user or a database that already exists
+          (postgres, template0, template1); use no spaces or quotes in the username. The setup script passes both
+          unquoted to the shell, and the database name unquoted to CREATE DATABASE, so the cluster fails to
+          initialise otherwise. Create the secret with:
           `cpln secret create-dictionary --name SECRET_NAME --entry username=myuser --entry password='YOUR-STRONG-PASSWORD' --entry database=mydb`
         docs: "#credentials"
         ref:
@@ -199,17 +203,18 @@ steps:
         paths: [image]
         message: >-
           The -oss tags are Apache-only builds without compression, continuous aggregates and retention policies.
-      # secret-ha-proxy.yaml reads the member count when HAProxy starts; a secret change alone redeploys nothing.
+      # secret-ha-proxy.yaml reads the member count when HAProxy starts; cpln helm tags the workload with the
+      # secret's hash, so the upgrade that changes the secret also restarts HAProxy.
       - rule: oldSelf == null || self.replicas == oldSelf.replicas || !(self.proxy.enabled || self.pgbouncer.enabled)
         severity: info
         paths: [replicas]
         messageExpression: >-
-          'HAProxy reads the member list when it starts. After the upgrade, run `cpln workload
-          force-redeployment ' + context.releaseName + '-timescaledb-ha-proxy --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '` so it routes to the new members.' +
+          'HAProxy reads the member list when it starts; the upgrade restarts the HAProxy workload so it routes to
+          the new members.' +
           (self.replicas < oldSelf.replicas ? ' Removing the member that holds the leader role triggers a failover.' : '')
         message: >-
-          HAProxy reads the member list when it starts. After the upgrade, force a redeployment of the HAProxy
-          workload so it routes to the new members.
+          HAProxy reads the member list when it starts; the upgrade restarts the HAProxy workload so it routes to
+          the new members.
 
   - id: storage
     title: Storage
@@ -221,6 +226,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: >-
@@ -241,6 +247,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -304,6 +311,7 @@ steps:
             label: etcd initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             description: Per member.
@@ -318,7 +326,8 @@ steps:
         docs: "#etcd-history-compaction"
         fields:
           # 1.0.0 bundled etcd 1.4.1, which passed no compaction flags; the flags sit in the etcd startup secret,
-          # which a member reads only when it starts (etcd 1.4.2 wizard, measured: the workload is unchanged).
+          # which a member reads when it starts. cpln helm tags the workload with the secret's hash, so the
+          # upgrade restarts the members; an extra redeploy would restart them all again.
           - type: note
             severity: warning
             when: >-
@@ -331,17 +340,16 @@ steps:
               (context.gvc == null ? 'GVC_NAME' : context.gvc) + ' --container etcd -- etcdctl alarm list`: a
               `NOSPACE` alarm needs the recovery in
               [If the backend quota is already full](/template-catalog/templates/etcd#if-the-backend-quota-is-already-full)
-              first. The flags are read when a member starts, so once the upgrade is applied, run
-              `cpln workload force-redeployment ' + context.releaseName + '-etcd --gvc ' +
-              (context.gvc == null ? 'GVC_NAME' : context.gvc) + '`. See
+              first. The flags are read when a member starts, and the upgrade restarts the etcd members to apply
+              them. See
               [Upgrading from 1.0.0](/template-catalog/templates/timescaledb-highly-available#upgrading-from-1-0-0).'
             text: >-
               Version 1.0.0 did not compact etcd, so this cluster may already be close to its 2 GiB backend quota.
               Compaction stops further growth, but it does not shrink the backend or clear a `NOSPACE` alarm. Check
               first with `etcdctl alarm list` in the etcd workload: a `NOSPACE` alarm needs the recovery in
               [If the backend quota is already full](/template-catalog/templates/etcd#if-the-backend-quota-is-already-full)
-              first. The flags are read when a member starts, so once the upgrade is applied, run
-              `cpln workload force-redeployment` on the etcd workload. See
+              first. The flags are read when a member starts, and the upgrade restarts the etcd members to apply
+              them. See
               [Upgrading from 1.0.0](/template-catalog/templates/timescaledb-highly-available#upgrading-from-1-0-0).
           - path: etcd.tuning.autoCompactionMode
             type: enum
@@ -425,7 +433,8 @@ steps:
             paths: [etcd.tuning.quotaBackendBytes]
             message: >-
               The backend size limit is a plain byte count with no unit and no leading zero, such as "6442450944".
-          # The etcd startup secret is the only thing these flags change, so they apply on the next member start.
+          # The etcd startup secret is the only thing these flags change; its hash tag makes the upgrade restart
+          # the members.
           - when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
               semverCompare(context.fromVersion, '1.0.1') >= 0
@@ -436,14 +445,9 @@ steps:
               string(self.etcd.tuning.quotaBackendBytes) == string(oldSelf.etcd.tuning.quotaBackendBytes))
             severity: info
             paths: [etcd.tuning.autoCompactionMode]
-            messageExpression: >-
-              'etcd reads the compaction settings and the backend size limit only when a member starts. Once the
-              upgrade is applied, run `cpln workload force-redeployment ' + context.releaseName + '-etcd --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`; each
-              member rejoins the cluster from its own volume.'
             message: >-
-              etcd reads the compaction settings and the backend size limit only when a member starts. Once the
-              upgrade is applied, force a redeployment of the etcd workload; each member rejoins the cluster from
-              its own volume.
+              etcd reads the compaction settings and the backend size limit only when a member starts; the upgrade
+              restarts the etcd members to apply them, and each member rejoins the cluster from its own volume.
       - title: Who can connect to etcd
         docs: /reference/workload/firewall
         fields:
@@ -643,6 +647,24 @@ steps:
             severity: warning
             paths: [backup.aws.prefix]
             message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.aws.prefix != oldSelf.backup.aws.prefix
+            rule: >-
+              !self.backup.aws.prefix.matches('^\\s') && !self.backup.aws.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.aws.prefix.startsWith("'") &&
+              !self.backup.aws.prefix.matches('^[-?:](\\s|$)') && !self.backup.aws.prefix.matches('\\t') &&
+              !self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') && !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+              !(self.backup.aws.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.aws.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.aws.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.aws.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.aws.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.aws.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: >-
+              The chart writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
       - title: Google Cloud Storage
         when: self.backup.enabled && self.backup.provider == 'gcp'
         docs: "#gcs"
@@ -675,6 +697,24 @@ steps:
             severity: warning
             paths: [backup.gcp.prefix]
             message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.gcp.prefix != oldSelf.backup.gcp.prefix
+            rule: >-
+              !self.backup.gcp.prefix.matches('^\\s') && !self.backup.gcp.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.gcp.prefix.startsWith("'") &&
+              !self.backup.gcp.prefix.matches('^[-?:](\\s|$)') && !self.backup.gcp.prefix.matches('\\t') &&
+              !self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') && !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+              !(self.backup.gcp.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.gcp.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.gcp.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.gcp.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.gcp.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.gcp.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: >-
+              The chart writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
       - title: MinIO or S3-compatible
         when: self.backup.enabled && self.backup.provider == 'minio'
         docs: "#minio"
@@ -727,12 +767,6 @@ steps:
             label: Folder prefix
             required: true
         rules:
-          - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
-            mirrors: tsdb-ha.validateCredentials
-            paths: [backup.minio.credentialsSecretName]
-            message: >-
-              backup.minio.accessKey and backup.minio.secretKey were removed in 1.1.0. Put them in a dictionary
-              secret with the keys accessKey and secretKey, and remove them from the values.
           - rule: self.backup.minio.credentialsSecretName != null && self.backup.minio.credentialsSecretName != ''
             mirrors: tsdb-ha.validateBackupConfig
             paths: [backup.minio.credentialsSecretName]
@@ -754,6 +788,24 @@ steps:
             severity: warning
             paths: [backup.minio.prefix]
             message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.minio.prefix != oldSelf.backup.minio.prefix
+            rule: >-
+              !self.backup.minio.prefix.matches('^\\s') && !self.backup.minio.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.minio.prefix.startsWith("'") &&
+              !self.backup.minio.prefix.matches('^[-?:](\\s|$)') && !self.backup.minio.prefix.matches('\\t') &&
+              !self.backup.minio.prefix.contains(': ') && !self.backup.minio.prefix.contains(' #') && !self.backup.minio.prefix.endsWith(':') && !self.backup.minio.prefix.endsWith(' ') &&
+              !(self.backup.minio.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.minio.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.minio.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.minio.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.minio.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.minio.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: >-
+              The chart writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
 
   - id: network
     title: Network
@@ -935,6 +987,19 @@ steps:
               under load clients get "remaining connection slots are reserved" instead of waiting.
     rules:
       # Step-level, so they still run while the HAProxy section is switched off.
+      # workload-ha-proxy.yaml renders HAProxy when proxy or pgbouncer is on, and writes cpu and memory without
+      # | quote; the API takes both only as strings (nodelibs schema workload.ts: Cpu and Memory are Joi.string()).
+      - when: self.proxy.enabled || self.pgbouncer.enabled
+        rule: >-
+          string(self.proxy.resources.cpu).matches('^[0-9]+m$') &&
+          string(self.proxy.resources.memory).matches('[A-Za-z]$')
+        severity: error
+        paths: [proxy.enabled]
+        message: >-
+          The chart writes the HAProxy CPU and memory into the workload unquoted, so a whole or decimal number of
+          cores, or a memory without a unit, reaches the platform as a number and the workload is refused. Give the
+          HAProxy CPU in millicores, such as 1000m, and its memory with a unit, such as 256Mi (in YAML mode while
+          the HAProxy switch is off and PgBouncer is on).
       - when: self.backup.enabled
         rule: self.proxy.enabled || self.pgbouncer.enabled
         severity: warning
@@ -1000,6 +1065,12 @@ steps:
         message: Same org already lets every workload of the org connect, so the listed workloads add nothing.
 
 rules:
+  # tsdb-ha.validateCredentials checks these keys whether or not backups are on.
+  - rule: "!has(self.backup.minio.accessKey) && !has(self.backup.minio.secretKey)"
+    mirrors: tsdb-ha.validateCredentials
+    message: >-
+      backup.minio.accessKey and backup.minio.secretKey were removed in 1.1.0. Put them in a dictionary secret with
+      the keys accessKey and secretKey, and remove them from the values.
   # Platform: a workload name has at most 49 characters and other names at most 64 (workload apply schema).
   # The longest names are RELEASE-timescaledb-ha-backup (22 more), RELEASE-timescaledb-ha-proxy (21 more),
   # RELEASE-timescaledb-ha (15 more) and the secret RELEASE-timescaledb-ha-patroni-startup (31 more).

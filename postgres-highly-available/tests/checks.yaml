@@ -79,3 +79,22 @@ checks:
       stdout: "^PERSISTED$"
     retries: 4
     retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The leader's image ships pgvector 0.8.7 (CVE-2026-103484), the version 2.8.1 moved to.
+    issue: "#5376"
+    since: 2.8.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # helm --wait returns while the Patroni members are still restarting; the old leader restarts last
+    # (~4 min in), so wait out the whole rollout.
+    retries: 20
+    retryDelaySeconds: 30

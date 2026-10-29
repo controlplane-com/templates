@@ -1,0 +1,138 @@
+# Feature checks for the unleash template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db, admin_user, admin_password).
+#
+# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
+# and calls Unleash at its internal address, as an in-GVC SDK would. Unleash keeps every flag and user in
+# PostgreSQL, so a login and a flag read back only pass when the server and its database both work.
+# (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+checks:
+  - id: unleash-healthy
+    description: Unleash reports itself healthy on its internal address (only after its migrations ran).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-unleash.{gvc}.cpln.local:4242/health
+    expect:
+      stdout: '"health":"GOOD"'
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: admin-login-and-flag
+    description: >-
+      The seeded admin logs in, creates a feature flag tagged with the running version, and reads it back
+      through the Admin API.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-unleash.{gvc}.cpln.local:4242
+        V='{version}'
+        N="e2e-$(echo "$V" | tr . -)"
+        # Status codes and the session cookie come from the header dump (curl's write-out variables look
+        # like runner placeholders), and the cookie is sent as a header so a Secure flag cannot drop it.
+        H=$(curl -s -m 15 -o /dev/null -D - -H 'Content-Type: application/json' \
+          -d '{"username":"{admin_user}","password":"{admin_password}"}' "$U/auth/simple/login" | tr -d '\r')
+        echo "LOGIN $(echo "$H" | awk 'NR==1 {print $2}')"
+        C=$(echo "$H" | awk -F'[: ;]+' 'tolower($1) == "set-cookie" {print $2}' | paste -sd ';' -)
+        # 201 on the first run of this version, 409 when the flag already exists (a re-run or a no-op upgrade).
+        echo "CREATE $(curl -s -m 15 -o /dev/null -D - -H "Cookie: $C" -H 'Content-Type: application/json' \
+          -d "{\"name\":\"$N\"}" "$U/api/admin/projects/default/features" | awk 'NR==1 {print $2}')"
+        curl -s -m 15 -H "Cookie: $C" "$U/api/admin/projects/default/features/$N" | python3 -c '
+        import json, sys
+        print("FLAG " + json.load(sys.stdin)["name"])'
+    expect:
+      stdout: "^FLAG e2e-"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong admin password is refused (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        code=$(curl -s -m 15 -o /dev/null -D - -H 'Content-Type: application/json' \
+          -d '{"username":"{admin_user}","password":"wrong-password"}' \
+          http://{release}-unleash.{gvc}.cpln.local:4242/auth/simple/login | awk 'NR==1 {print $2}')
+        echo "LOGIN $code"
+    expect:
+      stdout: "^LOGIN 401$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The flag created on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the flags carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-unleash.{gvc}.cpln.local:4242
+        V='{installed_version}'
+        N="e2e-$(echo "$V" | tr . -)"
+        C=$(curl -s -m 15 -o /dev/null -D - -H 'Content-Type: application/json' \
+          -d '{"username":"{admin_user}","password":"{admin_password}"}' "$U/auth/simple/login" | tr -d '\r' |
+          awk -F'[: ;]+' 'tolower($1) == "set-cookie" {print $2}' | paste -sd ';' -)
+        code=$(curl -s -m 15 -o /dev/null -D - -H "Cookie: $C" "$U/api/admin/projects/default/features/$N" | awk 'NR==1 {print $2}')
+        echo "GET $N $code"
+    expect:
+      stdout: "^GET e2e-\\S+ 200$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.5.1.
+    issue: "#5376"
+    since: 1.5.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The check above passes as soon as the leader has moved to a restarted member, and
+      the runner's readiness wait returns while the old leader is still restarting, so without this a member
+      that never comes back (seen once in testing: the old leader stuck initializing for 17 min) goes unseen.
+    issue: "#5376"
+    since: 1.5.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

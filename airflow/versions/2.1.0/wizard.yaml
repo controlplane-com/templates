@@ -43,8 +43,10 @@ steps:
             help: >-
               `jwtSecret` signs API tokens, `fernetKey` encrypts the Connections and Variables your DAGs use
               (32 random bytes, url-safe base64), and `adminPassword` is the UI login. Generate them with
-              `openssl rand -base64 48`, `openssl rand -base64 32 | tr '+/' '-_'` and `openssl rand -base64 18`.
-              The Fernet key can never be changed: every stored Connection and Variable becomes unreadable.
+              `openssl rand -base64 48`, `openssl rand -base64 32 | tr '+/' '-_'` and `openssl rand -base64
+              18`. Back the Fernet key up: changing it makes stored Connections and Variables unreadable
+              unless the old key stays after the new one, comma-separated (then run `airflow
+              rotate-fernet-key`).
             ref:
               kind: secret
               format: name
@@ -125,8 +127,9 @@ steps:
             severity: info
             paths: [airflow.auth.secretName]
             message: >-
-              The new auth secret must hold the same fernetKey as the old one, or every stored Connection and
-              Variable becomes unreadable.
+              The new auth secret must hold the current fernetKey: changing it makes stored Connections and
+              Variables unreadable unless the old key stays after the new one, comma-separated (then run
+              airflow rotate-fernet-key).
 
   - id: airflow
     title: Airflow
@@ -330,6 +333,7 @@ steps:
             label: Airflow home capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
             description: DAGs and task logs, shared by the webserver and every worker.
@@ -339,6 +343,7 @@ steps:
             label: Metadata database capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100]
           - path: redis.volumeset.capacity
@@ -346,6 +351,7 @@ steps:
             label: Broker capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
           - type: note

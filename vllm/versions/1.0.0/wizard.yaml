@@ -296,10 +296,10 @@ steps:
         mirrors: vllm.memoryMi
         paths: [resources]
         message: The memory must be a quantity such as 16Gi.
-      - rule: memoryBytes(self.resources.memory) < 8 * 1048576 * cpuMillicores(self.resources.cpu)
+      - rule: memoryBytes(self.resources.memory) <= 8 * 1048576 * cpuMillicores(self.resources.cpu)
         mirrors: vllm.validateGpu
         paths: [resources]
-        message: The memory must stay below 8 MiB per millicore of CPU; raise the CPU or lower the memory.
+        message: The memory must stay at or below 8 MiB per millicore of CPU; raise the CPU or lower the memory.
       - when: self.gpu.type == 'byok'
         rule: cpuMillicores(self.resources.cpu) <= 3500
         severity: info
@@ -333,6 +333,7 @@ steps:
         label: Capacity per replica
         unit: GiB
         min: 10
+        max: 65536
         required: true
         description: >-
           At least twice the model's weights plus 5 GiB, so a model switch can download beside the

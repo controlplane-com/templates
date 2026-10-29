@@ -23,7 +23,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import time
 
 import yaml
 
@@ -34,7 +33,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GVC_PREFIX = "templates-ci-"
 # The CI service account manages only resources carrying this tag (its policies match on it).
 MANAGED_TAG = ("templates-ci/managed", "true")
-IGNORED_FOR_RENDER = re.compile(r"/(README\.md|wizard\.yaml)$")
+# Files inside a version directory that never change what a chart deploys: docs and Console metadata.
+IGNORED_FOR_RENDER = re.compile(r"(\.md|/wizard\.yaml|/catalog\.yaml|\.png|\.svg)$")
 
 
 # ─── small helpers ────────────────────────────────────────────────────────────
@@ -350,8 +350,19 @@ def all_replicas_ready(t):
             want = st.get("desiredScale") or 0
             if want == 0:  # a location scaled to zero or deactivated
                 continue
-            reps = st.get("versions") or []
-            if not st.get("ready") or len(reps) < want or not all(r.get("ready") for r in reps):
+            # Measured: a standard workload has ONE `versions` entry for its version, holding the replica counts
+            # (3 ready replicas = one entry, replicasReady 3); a stateful workload has one entry PER REPLICA
+            # (replicasReady 1 each). So sum replicasReady over the newest version's entries.
+            vers = st.get("versions") or []
+            if not st.get("ready") or not vers:
+                return False
+            newest = max(v.get("workload") or 0 for v in vers)
+            cur = [v for v in vers if (v.get("workload") or 0) == newest]
+            if not all(v.get("ready") and v.get("containers") for v in cur):
+                return False
+            ready = sum(min(((c.get("resources") or {}).get("replicasReady") or 0) for c in v["containers"].values())
+                        for v in cur)
+            if ready < want:
                 return False
     return True
 

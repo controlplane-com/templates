@@ -164,6 +164,12 @@ steps:
             required: true
             cpu: { min: 25m }
             memory: { min: 32Mi }
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && oldSelf != null && oldSelf.jetstream.enabled && !self.jetstream.enabled
+            text: >-
+              Turning JetStream off removes the release's volume set, and with it every stream, consumer, key-value
+              and object store on it. Copy what you need to keep before you upgrade.
       - id: jetstream
         title: JetStream
         toggle: jetstream.enabled

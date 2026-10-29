@@ -114,7 +114,11 @@ steps:
         description: >-
           A dictionary secret with the keys `username` and `password`. The chart does not read a
           `database` key; add one only for your own connection strings.
-        help: The root user is created from it once, when the cluster is first initialized.
+        help: >-
+          The root user is created from it once, when the cluster is first initialized. The startup script
+          and the backup job put the username and password into connection strings and a script unescaped,
+          so leave out : / ? # [ ] @ % ' and \ in both; with them the root user is not created or the other
+          members cannot sign in to join the replica set.
         ref:
           kind: secret
           format: name
@@ -178,6 +182,7 @@ steps:
             label: Initial capacity per member
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set with the data.
@@ -192,6 +197,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 250, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage

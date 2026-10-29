@@ -145,6 +145,16 @@ steps:
               Usernames of users you create yourself with rpk that also get superuser rights. The first SASL user
               above is always a superuser.
             item: { type: string, label: Username }
+            rules:
+              # secret-init.yaml writes each name inside an unquoted shell here-document, where $ and backticks
+              # expand and a backslash ends up as an invalid escape in the double-quoted YAML string.
+              - when: oldSelf == null || self.redpanda.auth.superusers != oldSelf.redpanda.auth.superusers
+                rule: >-
+                  self.redpanda.auth.superusers.all(u, !u.contains('$') && !u.contains('`') && !u.contains('\\'))
+                severity: warning
+                message: >-
+                  The broker start script writes these names through the shell, which expands $ and backticks and
+                  breaks on a backslash. Leave those characters out.
           - path: redpanda.acl.allowEveryoneIfNoAclFound
             type: boolean
             label: Allow everyone on resources without ACLs
@@ -270,6 +280,22 @@ steps:
           - rule: memoryBytes(self.redpanda.maxMemory) <= 4 * memoryBytes(self.redpanda.minMemory)
             paths: [redpanda.minMemory]
             message: The brokers are stateful, so the memory limit can be at most 4 times the memory reservation.
+          # Platform limits (nodelibs/schema/src/workload.ts: MAX_CPU_RANGE 4000, MAX_MEMORY_RANGE 4096 on a
+          # stateful workload without Capacity AI; at most 8 MiB of memory per millicore of the CPU limit).
+          - rule: cpuMillicores(self.redpanda.maxCpu) - cpuMillicores(self.redpanda.minCpu) <= 4000
+            paths: [redpanda.minCpu]
+            message: The brokers are stateful, so the CPU limit can be at most 4000m above the CPU reservation.
+          - rule: memoryBytes(self.redpanda.maxMemory) - memoryBytes(self.redpanda.minMemory) <= 4096 * 1048576
+            paths: [redpanda.minMemory]
+            message: The brokers are stateful, so the memory limit can be at most 4096Mi above the memory reservation.
+          - rule: memoryBytes(self.redpanda.maxMemory) <= cpuMillicores(self.redpanda.maxCpu) * 8388608
+            paths: [redpanda.maxMemory]
+            message: The memory limit can be at most 8 MiB per millicore of the CPU limit. Raise the CPU or lower the memory.
+          # workload-redpanda-cluster.yaml writes memory and minMemory unquoted; a number reaches the API as a
+          # number, and the platform takes memory only as a string.
+          - rule: string(self.redpanda.maxMemory).matches('[A-Za-z]$') && string(self.redpanda.minMemory).matches('[A-Za-z]$')
+            paths: [redpanda.maxMemory]
+            message: Enter the broker memory with a unit, such as 4Gi or 2048Mi.
           - rule: >-
               self.redpanda.smp == (cpuMillicores(self.redpanda.maxCpu) < 1000 ? 1 :
               cpuMillicores(self.redpanda.maxCpu) / 1000)
@@ -282,6 +308,11 @@ steps:
             message: >-
               Set the reactor threads to the whole cores of the broker CPU limit, or each thread gets less CPU or
               memory than it expects.
+          # secret-init.yaml writes it unquoted into the broker's start command.
+          - rule: self.redpanda.reserveMemory.matches('^[0-9A-Za-z.]+$')
+            severity: warning
+            paths: [redpanda.reserveMemory]
+            message: Write the reserve as a number with an optional unit, such as 1G or 512M; it goes into the start command as typed.
           - rule: >-
               !self.redpanda.reserveMemory.matches('^[0-9]+[KMG]?$') ||
               memoryBytes(self.redpanda.reserveMemory) < memoryBytes(self.redpanda.maxMemory)
@@ -342,6 +373,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -386,6 +418,10 @@ steps:
             format: cron
             label: Schedule (UTC)
             description: Leave it empty to take no scheduled snapshots, only the final one.
+            pattern: '^[0-5]?[0-9] [^ #]+ [^ #]+ [^ #]+ [^ #]+$'
+            patternMessage: >-
+              Start with one fixed minute, such as `0 0 * * *`. A snapshot can run at most once an hour, and the
+              chart writes the schedule unquoted, so one that starts with `*` stops the install.
           - path: redpanda.volume.snapshots.retentionDuration
             type: string
             format: duration
@@ -521,6 +557,7 @@ steps:
             quantity: cpu
             label: Console CPU reservation
             advanced: true
+            min: 25m
           - path: redpanda_console.maxMemory
             type: quantity
             quantity: memory
@@ -533,6 +570,7 @@ steps:
             quantity: memory
             label: Console memory reservation
             advanced: true
+            min: 32Mi
           - path: redpanda_console.replicas
             type: integer
             label: Console replicas
@@ -575,6 +613,20 @@ steps:
               memoryBytes(self.redpanda_console.minMemory) <= memoryBytes(self.redpanda_console.maxMemory)
             paths: [redpanda_console.minMemory]
             message: The console memory reservation must not exceed the memory limit.
+          - rule: memoryBytes(self.redpanda_console.maxMemory) <= cpuMillicores(self.redpanda_console.maxCpu) * 8388608
+            paths: [redpanda_console.maxMemory]
+            message: The console memory limit can be at most 8 MiB per millicore of its CPU limit. Raise the CPU or lower the memory.
+          # workload-redpanda-console.yaml writes cpu unquoted: whole cores would reach the API as a number.
+          - rule: string(self.redpanda_console.maxCpu).matches('^[0-9]+m$')
+            paths: [redpanda_console.maxCpu]
+            message: Enter the console CPU limit in millicores, such as 200m or 1000m.
+          # workload-redpanda-console.yaml writes memory and minMemory unquoted.
+          - rule: >-
+              string(self.redpanda_console.maxMemory).matches('[A-Za-z]$') &&
+              (self.redpanda_console.minMemory == null || self.redpanda_console.minMemory == '' ||
+              string(self.redpanda_console.minMemory).matches('[A-Za-z]$'))
+            paths: [redpanda_console.maxMemory]
+            message: Enter the console memory with a unit, such as 256Mi.
 
   - id: network
     title: Network
@@ -859,11 +911,46 @@ steps:
             type: string
             label: Cluster ID
             description: Leave it empty to generate one on first boot; set it to keep the cluster identity across reinstalls.
+            rules:
+              - when: oldSelf == null || self.redpanda.secrets.cluster_id != oldSelf.redpanda.secrets.cluster_id
+                rule: >-
+                  !self.redpanda.secrets.cluster_id.contains('$') && !self.redpanda.secrets.cluster_id.contains('`') &&
+                  !self.redpanda.secrets.cluster_id.contains('\\')
+                severity: warning
+                message: >-
+                  The broker start script writes the cluster ID through the shell, which expands $ and backticks and
+                  breaks on a backslash. Leave those characters out.
           - path: redpanda.extra_configurations
             type: yaml
             yamlType: map
             label: Extra broker properties
             description: Written into the `redpanda` section of every broker's `redpanda.yaml` at start.
+            help: >-
+              Each value is written as typed, one `key: value` line per property: use single values, not lists or
+              maps. Quote a whole number of a million or more (`'604800000'`), or the chart writes it in exponent
+              form (6.048e+08).
+            rules:
+              # secret-init.yaml writes `key: value` unquoted inside a shell here-document (measured with helm
+              # template + bash: 604800000 -> 6.048e+08, {x: 1} -> map[x:1], $VAR and backticks expand).
+              - when: oldSelf == null || self.redpanda.extra_configurations != oldSelf.redpanda.extra_configurations
+                rule: >-
+                  self.redpanda.extra_configurations.all(k,
+                  type(self.redpanda.extra_configurations[k]) == bool ||
+                  (type(self.redpanda.extra_configurations[k]) == int && self.redpanda.extra_configurations[k] < 1000000 && self.redpanda.extra_configurations[k] > -1000000) ||
+                  (type(self.redpanda.extra_configurations[k]) == double && self.redpanda.extra_configurations[k] < 1000000.0 && self.redpanda.extra_configurations[k] > -1000000.0) ||
+                  (type(self.redpanda.extra_configurations[k]) == string &&
+                  !string(self.redpanda.extra_configurations[k]).matches('[$`\\\\\\t\\n]') &&
+                  !string(self.redpanda.extra_configurations[k]).contains(': ') &&
+                  !string(self.redpanda.extra_configurations[k]).contains(' #') && string(self.redpanda.extra_configurations[k]) != '' &&
+                  !string(self.redpanda.extra_configurations[k]).matches('^\\s') && !string(self.redpanda.extra_configurations[k]).matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+                  !string(self.redpanda.extra_configurations[k]).matches('^[-?:](\\s|$)') && !string(self.redpanda.extra_configurations[k]).endsWith(':') && !string(self.redpanda.extra_configurations[k]).endsWith(' ')))
+                severity: warning
+                message: >-
+                  Each value goes into the broker configuration as typed, through the shell. Use a true/false, a
+                  number below a million (quote larger ones), or non-empty text without $, backticks, backslashes,
+                  ': ' or ' #' that does not start with a space, a quote, a YAML symbol such as ! & * % @ [ ] { } | > , #
+                  (or with - ? : and a space) and does not end with ':' or a space; lists and maps are written
+                  unreadably.
 
 migrations:
   # 1.1.0 moved each SASL user's username and password into a dictionary secret named per user; the plaintext

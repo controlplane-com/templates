@@ -1,0 +1,201 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MariaDB
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The application user, its database and the root password MariaDB creates on first boot.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the credentials as values: they are stored in the Helm release and in the
+          secret the chart creates (RELEASE_NAME-conf). Version 1.4.0 and later read them from two secrets
+          you create instead, so they never enter the release.
+      - path: config.user
+        type: string
+        label: Application user
+        required: true
+        description: MariaDB creates this user on first boot; put it in your applications' connection strings.
+      - path: config.password
+        type: string
+        label: Application password
+        required: true
+        example: true
+        sensitive: true
+        description: >-
+          The chart's default (pw) is published and shared by every install that kept it; choose your own.
+      - path: config.db
+        type: string
+        label: Database
+        required: true
+        description: MariaDB creates this database on first boot and grants the application user all rights on it.
+      - path: config.rootPassword
+        type: string
+        label: Root password
+        required: true
+        example: true
+        sensitive: true
+        description: >-
+          The chart's default (root-pw) is published and shared by every install that kept it; choose your own.
+        help: >-
+          Choose one without spaces or tabs: the health probes pass it to mariadb-admin unquoted, so a
+          password with whitespace fails every probe.
+    rules:
+      # secret-config.yaml:8-11 write all four values unquoted (fixed in 1.2.0), measured with helm template:
+      # "a: b", "x:", "*x", "@x" and quotes fail the render; "#x", "&x" and "null" render null; "a #b" is cut
+      # to "a"; "123", "0123" and "true" change type. A value the release already has renders the
+      # same as before, so it is checked only when it changes.
+      - when: oldSelf == null || self.config.user != oldSelf.config.user
+        rule: >-
+          [self.config.user].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [config.user]
+        message: >-
+          This version writes the user name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
+      - when: oldSelf == null || self.config.db != oldSelf.config.db
+        rule: >-
+          [self.config.db].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [config.db]
+        message: >-
+          This version writes the database name unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
+      - when: oldSelf == null || self.config.password != oldSelf.config.password
+        rule: >-
+          [self.config.password].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [config.password]
+        message: >-
+          This version writes the password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
+      # The root password also must not contain whitespace: workload-mariadb.yaml:32,43 run
+      # `mariadb-admin ping -u root -p${MYSQL_ROOT_PASSWORD}` in sh -c, and mariadb-admin exits 1 on the
+      # stray word (not a "ping" command).
+      - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
+        rule: >-
+          [self.config.rootPassword].all(x,
+            !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+            !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+            !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+            !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+            !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [config.rootPassword]
+        message: >-
+          This version writes the root password unquoted into YAML, so some values break the install or are stored as
+          something else. Leave out a leading space or YAML symbol, ": " and " #", a trailing ":" or space, and tabs,
+          and values that read as a number, a date, true/false or null, or install 1.2.0 or later, which quotes it.
+      - when: oldSelf == null || self.config.rootPassword != oldSelf.config.rootPassword
+        rule: "!self.config.rootPassword.matches('\\\\s')"
+        severity: warning
+        paths: [config.rootPassword]
+        message: >-
+          The health probes pass the root password unquoted, so one with spaces or tabs fails every probe and
+          the database never becomes ready. Leave out the whitespace.
+      - when: oldSelf != null
+        rule: >-
+          self.config.user == oldSelf.config.user && self.config.password == oldSelf.config.password &&
+          self.config.db == oldSelf.config.db
+        severity: info
+        paths: [config.password]
+        message: >-
+          MariaDB reads the user, password and database only when the volume is first initialized; changing them
+          here does not change the existing ones. Run ALTER USER inside MariaDB first so the values match, or
+          your applications cannot sign in with them.
+      - when: oldSelf != null
+        rule: self.config.rootPassword == oldSelf.config.rootPassword
+        severity: info
+        paths: [config.rootPassword]
+        message: >-
+          MariaDB reads the root password only when the volume is first initialized; changing it here does
+          not change the existing root password. Run ALTER USER for both 'root'@'localhost' and 'root'@'%'
+          first so the value matches.
+
+  - id: server
+    title: Server
+    description: >-
+      One stateful replica of mariadb:10 on a 20 GiB volume set, both fixed in this version. Any workload in
+      this GVC can connect; version 1.2.0 adds a setting for who can connect. Uninstalling the release
+      deletes the volume set, and the database with it.
+    sections:
+      - title: Compute
+        fields:
+          - path: resources.cpu
+            type: quantity
+            quantity: cpu
+            label: CPU
+            required: true
+            min: 25m
+            suggestions: ["250m", "500m", "1000m", "2000m"]
+          - path: resources.memory
+            type: quantity
+            quantity: memory
+            label: Memory
+            required: true
+            min: 32Mi
+            suggestions: [512Mi, 1024Mi, 2Gi, 4Gi]
+          # The platform accepts 1 to 3600 for defaultOptions.timeoutSeconds; only serverless workloads are
+          # capped at 600 (nodelibs/schema/src/workloadOptions.ts). MariaDB is a stateful workload.
+          - path: timeoutSeconds
+            type: integer
+            label: Request timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+            advanced: true
+            docs: "/reference/workload/general#timeout-seconds"
+
+  - id: phpmyadmin
+    title: phpMyAdmin
+    description: An optional browser console for the database.
+    sections:
+      - id: phpmyadmin
+        title: phpMyAdmin
+        toggle: enablePhpMyAdmin
+        description: >-
+          You sign in with the application credentials, or with `root` and the root password.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the console is always published to the internet, with no setting to close it,
+              and it runs the moving phpmyadmin/phpmyadmin:latest image. Anyone who reaches it needs only a
+              valid database password to read and write everything. Turn it off unless you need it. Version
+              1.4.0 turns it off by default and makes it internal-only, with a separate switch to publish it.
+          - type: note
+            severity: info
+            textExpression: >-
+              'Read the public address from status.canonicalEndpoint in cpln workload get ' +
+              (context.releaseName != null ? context.releaseName : 'RELEASE_NAME') + '-phpmyadmin --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml.'
+            text: >-
+              Read the public address from status.canonicalEndpoint in
+              cpln workload get RELEASE_NAME-phpmyadmin --gvc GVC_NAME -o yaml.
+

@@ -451,6 +451,28 @@ steps:
             when: self.postgres.enabled
             description: The dictionary secret Temporal creates and PostgreSQL reads. Secret names are org-wide.
         rules:
+          # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes (postgres 3.4.1 templates/workload-postgres.yaml).
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              !self.postgres.credentials.username.matches('\\s')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Leave out spaces: the database's readiness probe passes the user name to pg_isready unquoted, so
+              it never becomes ready.
+          # The HA database (postgres-highly-available 2.7.0) runs psql with the user unquoted
+          # (templates/secret-startup.yaml); the password is escaped there, so it has no limits.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              self.postgres.credentials.username.matches('^[A-Za-z_][A-Za-z0-9_.-]*$')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Use letters, digits, _ . and -, starting with a letter or underscore. The highly available database
+              writes the user into an unquoted psql command.
           - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
             severity: info
             paths: [postgres.credentials.password]
@@ -480,14 +502,14 @@ steps:
               Secret names are org-wide: a release on this name is refused while another release manages that
               secret. Give each Temporal release its own name.
           - rule: >-
-              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
-              !has(self.postgres.config.database)
+              !self.postgres.enabled || (!has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+              !has(self.postgres.config.database))
             paths: [postgres.credentials.username]
             message: >-
               postgres.config.username, postgres.config.password and postgres.config.database were removed in
               1.1.0. Move them to postgres.credentials, from which Temporal creates the secret, and remove them
               from postgres.config.
-          - rule: "!has(self.postgresHA.postgres)"
+          - rule: "!self.postgresHA.enabled || !has(self.postgresHA.postgres)"
             paths: [postgres.credentials.username]
             message: >-
               The postgresHA.postgres block was removed in 1.2.0. Move its username, password and database to
@@ -508,6 +530,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             description: Per replica.
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
@@ -519,6 +542,23 @@ steps:
             severity: info
             paths: [postgresHA.replicas]
             message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
+          # postgres-highly-available 2.7.0 renders its backup settings into a secret named <release>-postgres-config.
+          - rule: >-
+              !self.postgresHA.backup.enabled ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name: with backups on, the highly available database renders its own backup settings
+              secret under this name.
+    rules:
+      # Changing the database mode on an installed release swaps one subchart for the other, so Helm deletes the
+      # current database workloads and volume sets and the new one starts empty.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with every workflow history,
+          and starts an empty one. Keep the current database, or install a new release and move the data.
 
   - id: backups
     title: Database backups
@@ -581,6 +621,26 @@ steps:
             required: true
             advanced: true
             description: Used by whichever mode is on. WAL-G needs about 512Mi of memory.
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
+          # 128Mi (the 1.x default) OOMKills wal-g mid-backup; this version defaults to 512Mi.
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= 536870912
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              WAL-G needs about 512Mi of memory: with less it is killed for running out of memory in the middle
+              of a backup.
       - title: AWS S3
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
@@ -694,6 +754,94 @@ steps:
             message: >-
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in a dictionary
               secret and remove them from the values.
+    rules:
+      # postgres-highly-available writes backup.<provider>.prefix unquoted: as the logical backup job's
+      # BACKUP_PREFIX env value (templates/workload-logical-backup.yaml), and after s3://bucket/ or gs://bucket/
+      # in the WAL-G prefix (templates/workload-patroni-postgres.yaml).
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.aws.prefix == self.postgresHA.backup.aws.prefix) ||
+          [self.postgresHA.backup.aws.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.aws.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.gcp.prefix == self.postgresHA.backup.gcp.prefix) ||
+          [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.gcp.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical'
+        rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: The logical backup job needs a folder prefix.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x,
+                    !x.matches('^\\s') && !x.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !x.matches('^[-?:](\\s|$)') && !x.matches('\\t') &&
+                    !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+                    !(x in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                    !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                    !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') && !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted into the backup job's settings. Leave out a leading space or YAML symbol,
+          ": " and " #", a trailing ":" or space, and values that read as a number, a date, true/false or null.
+      - when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio' && self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+        rule: >-
+          (oldSelf != null && oldSelf.postgresHA.backup.minio.prefix == self.postgresHA.backup.minio.prefix) ||
+          [self.postgresHA.backup.minio.prefix].all(x, !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' '))
+        severity: warning
+        paths: [postgresHA.backup.minio.prefix]
+        message: >-
+          The prefix is written unquoted after the bucket in the WAL-G location. Leave out ": " and " #", and a
+          trailing ":" or space.
 
 # Rules over values outside the steps: their issues show on the fields named in paths.
 rules:
@@ -713,7 +861,7 @@ rules:
       and 1.32.
   - rule: >-
       !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-      dyn(self.postgresHA)['proxy']['enabled'] == true
+      dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
     mirrors: temporal.validate
     paths: [postgresHA.config.credentialsSecretName]
     message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Temporal's database endpoint.

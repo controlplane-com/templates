@@ -1,0 +1,36 @@
+# keycloak 1.5.0 — the default install: two Keycloak replicas (an Infinispan cluster) on the bundled
+# postgres-highly-available database (three Patroni members, three etcd members, HAProxy), one location,
+# at the chart's default sizes. The admin and database credentials are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  adminpw: hex
+  pgpw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: e2e-admin
+      password: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: keycloak
+      password: "{gen.pgpw}"
+      database: keycloak
+
+vars:
+  admin_user: e2e-admin
+  admin_password: "{gen.adminpw}"
+  pg_user: keycloak
+  pg_password: "{gen.pgpw}"
+  pg_db: keycloak
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"

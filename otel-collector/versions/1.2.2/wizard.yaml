@@ -23,7 +23,7 @@ steps:
               release that still ran the shipped config moves to the generated one, which does the same work;
               a release with its own config keeps it. If that config started from the 1.0.x example, change its
               histogram bucket numbers to duration strings (bare numbers are read as nanoseconds) and give
-              `health_check` the endpoint `0.0.0.0:13133`, or the probes fail. See
+              `health_check` the endpoint `0.0.0.0:13133`, or the chart adds no readiness or liveness probes. See
               [Upgrading from 1.0.x](/template-catalog/templates/otel-collector#upgrading-from-1-0-x).
           - path: otelCollector.mode
             type: enum

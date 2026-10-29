@@ -1,0 +1,399 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Gitea
+
+# One stateful replica with its own repository volume: every GVC location would run its own copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.2.1
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # The database user, password and name are bound in the Database step below, because Gitea reads the
+      # database name too (templates/workload.yaml).
+      - config
+      # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Gitea connects to its database like any other workload: keep Same GVC, or add the Gitea
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      # postgres 3.2.1 templates/identity.yaml attaches aws::ReadOnlyAccess to the identity with the backup policy.
+      backup.aws.cloudAccountName:
+        help: >-
+          An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket. In this version the
+          database identity also carries the AWS managed policy ReadOnlyAccess, which can read every bucket in the
+          AWS account, not only this one; Gitea 1.2.0 removes it.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
+
+steps:
+  - id: gitea
+    title: Gitea
+    description: The Gitea image, its compute, the first admin login and the signing keys.
+    sections:
+      - title: Server
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Gitea image
+            required: true
+            description: Use a `-rootless` tag; the chart runs Gitea as UID 1000 with its built-in SSH server.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+      - title: Admin and signing keys
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the admin login and the three signing keys as values: they are stored in the Helm
+              release in plain text, and in the secret ' +
+              (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+              '-gitea-env, which the chart creates. Gitea 1.1.0 reads them from a secret you create instead.'
+            text: >-
+              This version takes the admin login and the three signing keys as values: they are stored in the Helm
+              release in plain text, and in the secret RELEASE_NAME-gitea-env, which the chart creates. Gitea 1.1.0
+              reads them from a secret you create instead.
+          - path: gitea.admin.username
+            type: string
+            label: Admin user name
+            required: true
+            description: The first site admin, created when Gitea first starts.
+          - path: gitea.admin.password
+            type: string
+            label: Admin password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Used as typed, so replace the published default. This login is on the public endpoint.
+          - path: gitea.admin.email
+            type: string
+            format: email
+            label: Admin email
+            required: true
+          - path: gitea.security.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Encrypts stored 2FA secrets, access tokens and mirror credentials. Any random string, for example from `openssl rand -hex 32`.
+          - path: gitea.security.internalToken
+            type: string
+            label: Internal token
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Shared token for Gitea's internal API. Any random string, for example from `openssl rand -hex 32`.
+          - path: gitea.security.jwtSecret
+            type: string
+            label: JWT secret
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Signs OAuth2 tokens. Base64url of exactly 32 bytes (43 characters), for example from
+              `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
+          - path: gitea.disableRegistration
+            type: boolean
+            label: Invite-only registration
+            description: On, only an admin creates accounts; off, anyone who reaches the web UI can sign up.
+    rules:
+      # templates/secret-bootstrap.yaml runs `gitea admin user create ... || true`, so a name Gitea refuses
+      # (models/user/user.go IsUsableUsername at v1.27.1) leaves Gitea running without an admin.
+      - when: oldSelf == null || self.gitea.admin.username != oldSelf.gitea.admin.username
+        rule: >-
+          self.gitea.admin.username.matches('^[0-9A-Za-z][-.0-9A-Za-z_]*$') &&
+          !self.gitea.admin.username.matches('[-._]{2,}|[-._]$') &&
+          !self.gitea.admin.username.lowerAscii().matches('[.](keys|gpg|rss|atom|png)$') &&
+          !(self.gitea.admin.username.lowerAscii() in ['api', 'metrics', 'v2', 'assets', 'attachments', 'avatar',
+          'avatars', 'repo-avatars', 'captcha', 'login', 'org', 'repo', 'user', 'explore', 'issues', 'pulls',
+          'milestones', 'notifications', 'favicon.ico', 'manifest.json', 'robots.txt', 'sitemap.xml', 'ssh_info',
+          'swagger.v1.json', 'openapi3.v1.json', 'ghost', 'gitea-actions'])
+        severity: warning
+        paths: [gitea.admin.username]
+        message: >-
+          Gitea refuses this user name (use letters, digits, -, _ and ., starting with a letter or digit, with no
+          two of - _ . in a row or at the end, and not a reserved name such as user or api). The start script
+          ignores the failure, so Gitea would run without an admin.
+      # modules/generate DecodeJwtSecretBase64 at v1.27.1: anything else is replaced with a random key on start.
+      - when: oldSelf == null || self.gitea.security.jwtSecret != oldSelf.gitea.security.jwtSecret
+        rule: self.gitea.security.jwtSecret.matches('^[A-Za-z0-9_-]{43}$')
+        severity: warning
+        paths: [gitea.security.jwtSecret]
+        message: >-
+          Use base64url of exactly 32 bytes (43 characters of letters, digits, - and _). Gitea replaces any other
+          value with a random key when it starts, so issued OAuth2 tokens stop working after a restart.
+      - rule: oldSelf == null || self.gitea.security.secretKey == oldSelf.gitea.security.secretKey
+        severity: warning
+        paths: [gitea.security.secretKey]
+        message: >-
+          Keep the installed secret key: a new one makes every stored 2FA secret, access token and mirror
+          credential permanently unreadable.
+      - rule: oldSelf == null || self.gitea.security.jwtSecret == oldSelf.gitea.security.jwtSecret
+        severity: info
+        paths: [gitea.security.jwtSecret]
+        message: A new JWT secret invalidates the OAuth2 tokens Gitea has issued.
+      - rule: >-
+          oldSelf == null || (self.gitea.admin.username == oldSelf.gitea.admin.username &&
+          self.gitea.admin.password == oldSelf.gitea.admin.password && self.gitea.admin.email == oldSelf.gitea.admin.email)
+        severity: info
+        paths: [gitea.admin.password]
+        message: >-
+          The admin account is created once, when Gitea first starts. Changing these values does not change the
+          existing login; change the password in the Gitea UI.
+      - when: oldSelf != null
+        rule: >-
+          self.gitea.admin.password != 'change-me-admin-pass' &&
+          !self.gitea.security.secretKey.startsWith('REPLACE_WITH_') &&
+          !self.gitea.security.internalToken.startsWith('REPLACE_WITH_') &&
+          !self.gitea.security.jwtSecret.startsWith('REPLACE_WITH_')
+        severity: info
+        paths: [gitea.admin.password]
+        message: >-
+          This release still uses published defaults, printed in a public repository. Change the admin password
+          in the Gitea UI now. The signing keys cannot be rotated safely: install a new release with new values
+          and migrate the repositories to it.
+
+  - id: storage
+    title: Storage
+    description: The volume set with repositories, LFS objects, attachments and SSH host keys.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: Uninstalling the release deletes the volume set with every repository on it.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: /reference/volumeset#autoscaling
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 200, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Who reaches the web UI and Git, from the internet and from inside the GVC.
+    sections:
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: The web UI and Git over HTTPS on the workload's `*.cpln.app` endpoint.
+      - id: ssh
+        title: Git over SSH
+        toggle: ssh.enabled
+        description: >-
+          Public SSH takes over the workload's only public endpoint, so the web UI and Git over HTTPS are no
+          longer served there. Turn it on only if you serve the web UI through a custom domain, or only need
+          Git over SSH.
+        docs: "#git-over-ssh"
+        fields:
+          - path: ssh.externalPort
+            type: integer
+            label: Public SSH port
+            min: 22
+            max: 32768
+            required: true
+          - path: ssh.domain
+            type: string
+            format: hostname
+            label: SSH host in clone URLs
+            description: Leave empty to use the web domain.
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: none, label: None, description: No workload can reach Gitea internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+                mirrors: gitea.validate
+                message: The internal access must be none, same-gvc, same-org or workload-list.
+          # workload.yaml:128-129 writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+              - when: self.internalAccess.type == 'same-org'
+                rule: size(self.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.internalAccess.type == 'none'
+                rule: size(self.internalAccess.workloads) == 0
+                severity: warning
+                message: >-
+                  The chart still writes these workloads into the firewall, where the platform checks every
+                  entry, but "None" lets none of them connect. Remove them.
+
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL's credentials. There is nothing to create first.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'These values are stored in the Helm release in plain text, and in the secret ' +
+          (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+          '-pg-config, which the bundled PostgreSQL creates. Gitea 1.3.0 takes them from a secret you create instead.'
+        text: >-
+          These values are stored in the Helm release in plain text, and in the secret RELEASE_NAME-pg-config,
+          which the bundled PostgreSQL creates. Gitea 1.3.0 takes them from a secret you create instead.
+      - path: postgres.config.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data directory is initialized.
+      - path: postgres.config.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: Used as typed, so replace the published default.
+        help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+      - path: postgres.config.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data directory is initialized.
+    rules:
+      # postgres 3.2.1's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} through sh -c, unquoted.
+      - when: oldSelf == null || self.postgres.config.username != oldSelf.postgres.config.username
+        rule: self.postgres.config.username.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.config.username]
+        message: >-
+          Leave out spaces: the database readiness probe passes the user name to pg_isready unquoted, so a
+          name with a space never becomes ready.
+      - when: oldSelf == null || self.postgres.config.database != oldSelf.postgres.config.database
+        rule: self.postgres.config.database.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.config.database]
+        message: >-
+          Leave out spaces: the database readiness probe passes the database name to pg_isready unquoted, so
+          a name with a space never becomes ready.
+      - rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Gitea loses its
+          database connection after this upgrade.
+      - when: oldSelf != null
+        rule: self.postgres.config.password != 'change-me-db-pass'
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          The password is still the published default. Change it with ALTER ROLE ... PASSWORD, then set the
+          same value here.
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Gitea, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea, or Gitea cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-gitea']"
+    message: Add the Gitea workload to the list, or Gitea cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Gitea connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.

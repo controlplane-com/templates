@@ -1,0 +1,1233 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Grafana (multi-location)
+# createsGvc: true. The chart creates its own GVC from global.gvc.name and global.gvc.locations
+# (templates/gvc.yaml), so there is no target GVC to limit and no gvc block (guide 14.2); the location rules
+# work on global.gvc.locations instead, and context.gvc is null.
+
+# No `imports`. The subcharts (postgres-multi-location 1.0.2 as postgresML, redis-multi-location 2.1.0 as
+# redisML) have no descriptor for these versions, and they read the GVC and its locations from Helm's
+# `global.gvc`, which the parent supplies at the top level. So the keys this chart's values.yaml exposes
+# under postgresML and redisML are bound as parent fields. The subcharts' own checks are restated as parent
+# rules without `mirrors` (their defines live in the subcharts' _helpers.tpl). Everything else under those
+# keys stays editable in YAML mode with the subcharts' defaults.
+
+steps:
+  - id: locations
+    title: GVC and locations
+    description: >-
+      The GVC this release creates, the locations Grafana and its database span, the database members in
+      each, and where the primary should run.
+    sections:
+      - id: gvc
+        title: GVC
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+              adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
+              workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          - path: global.gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this one
+              with everything in it, the database volumes included.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              # The chart writes the GVC name unquoted (name: {{ .Values.global.gvc.name }}).
+              - rule: >-
+                  (oldSelf != null && self.global.gvc.name == oldSelf.global.gvc.name) ||
+                  !(self.global.gvc.name in ['true', 'false', 'null'])
+                severity: warning
+                message: >-
+                  This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+                  null and the GVC cannot be created. Choose another name.
+              - rule: self.global.gvc.name != 'grafana-multi-location-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+                  Give each release its own, for example ' + context.releaseName + '-grafana.'
+                message: >-
+                  GVC names are org-wide: a release on this name is refused while another release manages that
+                  GVC. Give each release its own.
+        rules:
+          - rule: self.global.gvc.name != null && self.global.gvc.name != ''
+            mirrors: grafana-ml.validate
+            paths: [global.gvc.name]
+            message: Name the GVC this release creates.
+      - id: locations
+        title: Locations
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade, also one that changes nothing, restarts all database members in every location
+              together: database writes fail for about two minutes and Grafana returns errors in every location
+              for several minutes. The first upgrade after an install also re-applies every tier once. Plan the
+              upgrade as an outage.
+          - type: note
+            when: size(self.global.gvc.locations) >= 2
+            text: >-
+              The database's consensus store runs one etcd member per location, and the database fails over
+              only while a majority of them agree.
+            textExpression: >-
+              string(size(self.global.gvc.locations)) + ' locations: the consensus store needs ' +
+              string(size(self.global.gvc.locations) / 2 + 1) + ' of its ' + string(size(self.global.gvc.locations)) +
+              ' members, one per location, to agree, so ' +
+              ((size(self.global.gvc.locations) - 1) / 2 == 0 ?
+              'losing either location leaves logins, saves and alert-state writes failing until the survivor is promoted by hand.' :
+              'automatic database failover survives losing ' + string((size(self.global.gvc.locations) - 1) / 2) +
+              ((size(self.global.gvc.locations) - 1) / 2 == 1 ? ' location.' : ' locations.'))
+          - path: global.gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 1 }
+            itemLabel: "(item.name == null ? '' : item.name) + (item.replicas == null ? '' : ' × ' + string(item.replicas))"
+            description: >-
+              The locations of the GVC this release creates. Database members is the number of PostgreSQL members
+              in that location. Grafana runs the same number of instances in every listed location (set on the
+              Grafana step), and etcd one member per location.
+            help: >-
+              Three locations give automatic database failover, five survive losing two, and two keep
+              dashboards up after losing a location but need a manual promotion before logins and saves work
+              again. To remove a location, remove it from this list; never suspend a location. For a Grafana in
+              a single location, use the grafana template instead. Alerting HA (on the Alerting step) needs at
+              least 3.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Database members
+                  required: true
+                  min: 1
+                  suggestions: [1, 2, 3]
+              rules:
+                # grafana-ml.validate refuses replicas below 1 (`int` of a missing key is 0 too); `min` and
+                # `required` say it on the field, this rule carries the mirror.
+                - rule: item.replicas == null || item.replicas >= 1
+                  mirrors: grafana-ml.validate
+                  paths: [replicas]
+                  message: >-
+                    Every location runs at least one database member. To stop running in a location, remove it
+                    from the list.
+            rules:
+              - rule: size(self.global.gvc.locations) >= 2
+                mirrors: grafana-ml.validate
+                message: >-
+                  Grafana multi-location needs at least 2 locations: its database is stretched across them. For a
+                  Grafana in a single location, use the grafana template.
+              - rule: size(self.global.gvc.locations) < 4 || size(self.global.gvc.locations) % 2 == 1
+                severity: info
+                message: >-
+                  An even number of locations survives no more location losses than one location fewer; 3
+                  survives losing one, 5 survives losing two.
+              - rule: >-
+                  oldSelf == null || size(oldSelf.global.gvc.locations) == 0 ||
+                  (size(self.global.gvc.locations) == size(oldSelf.global.gvc.locations) &&
+                  self.global.gvc.locations.all(l, oldSelf.global.gvc.locations.exists(o, o.name == l.name)))
+                severity: info
+                message: >-
+                  Changing the locations changes the locations of the GVC this release created and restarts every
+                  database and etcd member with a new roster. Plan a maintenance window.
+      - id: primary
+        title: Preferred database primary
+        fields:
+          - path: postgresML.primaryLocation
+            type: enum
+            label: Preferred primary location
+            widget: select
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: >-
+              Grafana sends every query to the database primary, so every other location pays a cross-region
+              round trip per query. Choose where most of your users are, or leave it empty for no preference.
+            help: >-
+              A preference, not a guarantee: on a fresh install the members elsewhere wait up to 90 seconds for
+              this location to start the cluster, then start it themselves. With alerting HA on, this location
+              also runs Grafana's schema migrations first.
+            rules:
+              # pg-ml.validate (subchart): primaryLocation must be one of global.gvc.locations.
+              - rule: >-
+                  self.postgresML.primaryLocation == null || self.postgresML.primaryLocation == '' ||
+                  self.postgresML.primaryLocation in self.global.gvc.locations.map(l, l.name)
+                message: Choose one of the listed locations as the preferred primary location, or leave it empty.
+              - rule: >-
+                  oldSelf == null || (oldSelf.postgresML.primaryLocation == null ? '' : oldSelf.postgresML.primaryLocation) ==
+                  (self.postgresML.primaryLocation == null ? '' : self.postgresML.primaryLocation)
+                severity: info
+                message: >-
+                  Changing the preferred location restarts every database member, and the election that follows
+                  moves the primary there.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secrets with the admin password, the encryption key and the database credentials.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and
+              `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in
+              `cpln workload get-deployments RELEASE_NAME-grafana --gvc GVC_NAME`.
+            textExpression: >-
+              'These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits on it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
+              context.releaseName + '-grafana --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') +
+              '` (and `' + context.releaseName + '-postgres` for the database credentials). Once the secret exists the deployment recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
+              context.releaseName + '-grafana --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') + '`.'
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that adds a secret reference (an SMTP password, datasource credentials, Redis passwords,
+              MinIO backup credentials) can pause the rollout for about 10 minutes, with `is not allowed to
+              reveal the secret` in the deployment status, while Helm reports success. It clears on its own; do
+              not edit the policies.
+      - id: admin
+        title: Admin login and encryption key
+        docs: "#admin-credentials-and-encryption-key"
+        fields:
+          - path: admin.user
+            type: string
+            label: Admin user
+            required: true
+            description: Applies only when the admin account is first created.
+          - path: admin.applyPassword
+            type: boolean
+            label: Apply the admin password secret
+            description: >-
+              Turn it off after your first login: the chart then stops referencing the password secret, and you
+              can delete it.
+          - type: note
+            when: context.mode == 'upgrade' && self.admin.applyPassword
+            text: >-
+              Grafana applies the admin password only when the account is first created. If you have logged in
+              already, you can turn off applying the admin password secret and delete that secret.
+          - path: admin.passwordSecretName
+            type: ref
+            label: Admin password secret
+            required: true
+            when: self.admin.applyPassword
+            description: An opaque secret (encoding plain) holding only the first-boot admin password.
+            help: >-
+              Grafana reads it only when the admin account is first created; change the password in the Grafana
+              UI afterwards. Create it with:
+              `printf '%s' "$(openssl rand -hex 24)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-admin-password'"
+                hint: "Generate the content with: openssl rand -hex 24"
+          - path: admin.secretKeySecretName
+            type: ref
+            label: Encryption key secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) with the key that encrypts stored datasource credentials. Every
+              instance in every location reads it on every boot: keep it for the life of the install and back it
+              up.
+            help: >-
+              Never rotate or delete it: every datasource credential stored in the database becomes unreadable in
+              every location. A database restored into another release needs the same key. Create it with:
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-secret-key'"
+                hint: "Generate the content with: openssl rand -hex 32"
+        rules:
+          - rule: "!self.admin.applyPassword || (self.admin.passwordSecretName != null && self.admin.passwordSecretName != '')"
+            mirrors: grafana-ml.validate
+            paths: [admin.passwordSecretName]
+            message: Name the admin password secret, or turn off applying it once you have logged in.
+          - rule: self.admin.secretKeySecretName != null && self.admin.secretKeySecretName != ''
+            mirrors: grafana-ml.validate
+            paths: [admin.secretKeySecretName]
+            message: The encryption key secret is required.
+          - rule: oldSelf == null || self.admin.secretKeySecretName == oldSelf.admin.secretKeySecretName
+            severity: info
+            paths: [admin.secretKeySecretName]
+            message: >-
+              The new secret must hold the same encryption key as the installed one, or every datasource
+              credential stored in the database becomes unreadable in every location.
+      - id: database-credentials
+        title: Database credentials
+        fields:
+          - path: postgresML.postgres.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. The bundled database is
+              created from it, and Grafana connects with it.
+            help: >-
+              The database applies these values only when the cluster is first created. Use plain identifiers
+              for `username` and `database`: they are used unquoted when the database is created. To rotate the
+              password, follow
+              [Rotating the password](/template-catalog/templates/postgres-multi-location#rotating-the-password),
+              then run `cpln workload force-redeployment RELEASE_NAME-grafana --gvc GVC_NAME` (and the same for
+              RELEASE_NAME-grafana-alerting with a dedicated evaluator). Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry username=grafana --entry password="$(openssl rand -hex 24)" --entry database=grafana`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-grafana-db-credentials'"
+        rules:
+          - rule: self.postgresML.postgres.credentialsSecretName != null && self.postgresML.postgres.credentialsSecretName != ''
+            mirrors: grafana-ml.validate
+            paths: [postgresML.postgres.credentialsSecretName]
+            message: The database credentials secret is required.
+          - rule: >-
+              oldSelf == null || oldSelf.postgresML.postgres.credentialsSecretName == null ||
+              oldSelf.postgresML.postgres.credentialsSecretName == '' ||
+              self.postgresML.postgres.credentialsSecretName == oldSelf.postgresML.postgres.credentialsSecretName
+            severity: info
+            paths: [postgresML.postgres.credentialsSecretName]
+            message: >-
+              The database applies the credentials only when the cluster is first created; pointing at another
+              secret does not change the existing user or password. Run ALTER ROLE first so the new secret
+              matches, or Grafana loses its database connection.
+
+  - id: grafana
+    title: Grafana
+    description: The Grafana image, its instances and compute in every location, and who can reach it.
+    sections:
+      - id: server
+        title: Grafana UI tier
+        docs: "#grafana-ui-tier"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Grafana image
+            required: true
+            description: The chart wraps Grafana's entrypoint in a boot script, so the image must provide `/bin/bash`.
+            help: >-
+              This version was tested with grafana/grafana:13.1.3; another tag is unproven here. After changing
+              it, check that every location reports ready in `cpln workload get-deployments RELEASE_NAME-grafana
+              --gvc GVC_NAME` before relying on it.
+          - path: replicas
+            type: integer
+            label: Instances per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              Every listed location runs this many UI instances. With alerting HA on, every instance also
+              evaluates every alert rule.
+          - path: resources
+            type: resources
+            label: Grafana resources
+            required: true
+            description: Per instance. With alerting HA on, a large rule set may need more CPU.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            # workload-grafana.yaml quotes every key, and Helm prints a plain number of 1000000 or more from
+            # a values file in exponent form ("1.073741824e+09"), which the platform refuses.
+            rules:
+              - rule: >-
+                  (self.resources.minMemory == null || type(self.resources.minMemory) == string) &&
+                  (self.resources.maxMemory == null || type(self.resources.maxMemory) == string)
+                paths: [resources]
+                message: >-
+                  Write the Grafana memory with a unit, such as 1Gi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+          - path: database.maxOpenConn
+            type: integer
+            label: Database connections per instance
+            required: true
+            # Grafana reads 0 as unlimited, which across every instance exhausts the database's
+            # max_connections (values.yaml); the chart's budget then passes at any count.
+            min: 1
+            suggestions: [5, 10, 20]
+            description: >-
+              Every Grafana instance, and the dedicated alert evaluator, may open this many connections to the
+              shared database.
+        rules:
+          # grafana-ml.validate refuses replicas below 1; `min` says it on the field, this rule carries the mirror.
+          - rule: self.replicas == null || self.replicas >= 1
+            mirrors: grafana-ml.validate
+            paths: [replicas]
+            message: Grafana runs at least one instance per location.
+          - rule: >-
+              (size(self.global.gvc.locations) * self.replicas +
+              (self.alerting.enabled == true && self.alerting.highAvailability.enabled != true ? 1 : 0)) *
+              self.database.maxOpenConn <= 80
+            mirrors: grafana-ml.validateConnectionBudget
+            paths: [database.maxOpenConn]
+            message: >-
+              The Grafana instances, plus the dedicated alert evaluator, can open more than 80 database
+              connections, the ceiling of the bundled database. Lower the connections per instance or the
+              instances per location.
+            messageExpression: >-
+              'The Grafana instances can open ' +
+              string((size(self.global.gvc.locations) * self.replicas + (self.alerting.enabled == true && self.alerting.highAvailability.enabled != true ? 1 : 0)) * self.database.maxOpenConn) +
+              ' database connections (' + string(self.replicas) + ' per location × ' + string(size(self.global.gvc.locations)) +
+              ' locations' + (self.alerting.enabled == true && self.alerting.highAvailability.enabled != true ? ', plus the alert evaluator' : '') +
+              ', × ' + string(self.database.maxOpenConn) + '), above the 80 the bundled database allows. Lower the connections per instance or the instances per location.'
+      - id: access
+        title: Access
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI and API of the UI tier on the workload's georouted `*.cpln.app` endpoint. The dedicated
+              alert evaluator is never public. Use that endpoint: on a per-location hostname dashboards load
+              with empty panels.
+          - type: note
+            when: "!self.publicAccess.enabled"
+            textExpression: >-
+              'Without a public endpoint, links in alert notifications point at the internal address and do not open from a browser outside the GVC. Reach the UI with `cpln port-forward ' +
+              context.releaseName + '-grafana 3000:3000 --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') + '`.'
+            text: >-
+              Without a public endpoint, links in alert notifications point at the internal address and do not
+              open from a browser outside the GVC. Reach the UI with `cpln port-forward`.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect inside Control Plane
+            widget: cards
+            required: true
+            description: >-
+              Applies to the Grafana workloads. Access changes take up to a few minutes to reach every location.
+            options:
+              - { value: none, label: None, description: No workload can reach Grafana internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # The chart writes the list only with workload-list and a non-empty list (workload-grafana.yaml).
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            unique: true
+            description: The workloads allowed to connect to the Grafana workloads. The chart adds none of its own.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+        rules:
+          # grafana-ml.validate refuses any other type; the options say it on the field, this rule carries the mirror.
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: grafana-ml.validate
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With an empty list no workload can reach Grafana internally.
+
+  - id: alerting
+    title: Alerting
+    description: Who evaluates alert rules, the optional Redis tier that coordinates them, and alert emails.
+    sections:
+      - id: evaluation
+        title: Alert evaluation
+        docs: "#alert-evaluation"
+        fields:
+          - type: note
+            severity: warning
+            when: size(self.global.gvc.locations) < 3
+            text: Alerting HA needs at least 3 locations. Add one on the GVC and locations step to choose it.
+            textExpression: >-
+              'Alerting HA needs at least 3 locations; this release lists ' + string(size(self.global.gvc.locations)) +
+              '. Add one on the GVC and locations step to choose it.'
+          - type: note
+            when: context.mode == 'upgrade' && self.alerting.highAvailability.enabled == true
+            text: >-
+              Every upgrade, also one that changes nothing, restarts the Redis tier: for about a minute and a half
+              several instances send the same notification. It never goes silent.
+          - id: alertingMode
+            virtual: true
+            type: enum
+            label: Alert evaluation
+            widget: cards
+            required: true
+            init: >-
+              self.alerting.enabled != true ? 'off' :
+              (self.alerting.highAvailability.enabled == true ? 'ha' : 'evaluator')
+            options:
+              - value: evaluator
+                label: Dedicated evaluator
+                description: >-
+                  One extra Grafana instance in one location evaluates every rule. Losing that location stops
+                  alert evaluation until you move it, and the UI shows no sign of it.
+                set: { alerting.enabled: true, alerting.highAvailability.enabled: false }
+              - value: ha
+                label: Every instance (alerting HA)
+                description: >-
+                  Every UI instance evaluates every rule and a Redis tier in every location picks one sender, so
+                  alerting survives losing a location. Multiplies datasource query load by the instance count.
+                  Needs 3 or more locations.
+                set: { alerting.enabled: true, alerting.highAvailability.enabled: true }
+              - value: "off"
+                label: "Off"
+                description: Alert rules can be created and viewed, but nothing evaluates them.
+                set: { alerting.enabled: false, alerting.highAvailability.enabled: false }
+          - type: note
+            severity: warning
+            when: self.alerting.highAvailability.enabled
+            text: >-
+              Every Grafana instance runs every alert rule's query against your datasources; Redis picks one
+              sender for each notification, not one query. If Redis is unhealthy, every instance sends its own
+              copy rather than none.
+            textExpression: >-
+              'Every Grafana instance runs the query of every alert rule against your datasources: ' +
+              string(size(self.global.gvc.locations) * self.replicas) + ' instances (' + string(size(self.global.gvc.locations)) +
+              ' locations × ' + string(self.replicas) + ') make ' + string(size(self.global.gvc.locations) * self.replicas) +
+              ' times the queries of one evaluator. Redis picks one sender for each notification, not one query. If Redis is unhealthy, every instance sends its own copy rather than none.'
+        rules:
+          - rule: "!self.alerting.highAvailability.enabled || self.alerting.enabled"
+            mirrors: grafana-ml.validateAlertingHA
+            message: >-
+              alerting.highAvailability.enabled cannot be on while alerting.enabled is off. Choose Every instance,
+              or Off.
+          - when: self.alerting.highAvailability.enabled
+            rule: size(self.global.gvc.locations) >= 3
+            mirrors: grafana-ml.validateAlertingHA
+            message: >-
+              Alerting HA needs at least 3 locations: the Redis tier elects its master by a majority of
+              locations, so with 2 the loss of either one leaves no majority and every instance sends duplicate
+              notifications. Add a location, or use a dedicated evaluator.
+          - rule: >-
+              oldSelf == null ||
+              (oldSelf.alerting.enabled == true && oldSelf.alerting.highAvailability.enabled == true) ==
+              (self.alerting.enabled == true && self.alerting.highAvailability.enabled == true)
+            severity: info
+            message: >-
+              Turning alerting HA on or off changes which workloads exist: on deletes the dedicated evaluator and
+              adds a Redis and a Sentinel workload in every location, off does the reverse. Plan it as a change,
+              not something to flip during an incident.
+      - id: evaluator
+        title: Dedicated evaluator
+        when: self.alerting.enabled && !self.alerting.highAvailability.enabled
+        docs: "#alert-evaluation"
+        fields:
+          - path: alerting.location
+            type: enum
+            label: Evaluator location
+            required: true
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: >-
+              The one location the evaluator runs in. Moving it later restarts only the evaluator, which sends
+              every alert that is firing at that moment again.
+          - path: alerting.resources
+            type: resources
+            label: Evaluator resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: >-
+                  (self.alerting.resources.minMemory == null || type(self.alerting.resources.minMemory) == string) &&
+                  (self.alerting.resources.maxMemory == null || type(self.alerting.resources.maxMemory) == string)
+                paths: [alerting.resources]
+                message: >-
+                  Write the evaluator memory with a unit, such as 1Gi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+        rules:
+          - rule: >-
+              self.alerting.location != null && self.alerting.location != '' &&
+              self.alerting.location in self.global.gvc.locations.map(l, l.name)
+            mirrors: grafana-ml.validate
+            paths: [alerting.location]
+            message: >-
+              The evaluator location must be one of the listed locations, or the evaluator runs nowhere and no
+              alert rule is ever evaluated.
+          - when: >-
+              self.alerting.location != null && self.alerting.location != '' &&
+              self.postgresML.primaryLocation != null && self.postgresML.primaryLocation != ''
+            rule: self.alerting.location == self.postgresML.primaryLocation
+            severity: info
+            paths: [alerting.location]
+            message: >-
+              The evaluator runs in another location than the preferred database primary, so its database reads
+              and writes cross regions. Keep the two in the same location.
+      - id: coordination
+        title: Coordination tier (Redis Sentinel)
+        when: self.alerting.highAvailability.enabled
+        description: >-
+          One Sentinel and the Redis instances below in every listed location; Grafana asks them which instance
+          sends each notification.
+        fields:
+          - path: redisML.redis.replicasPerLocation
+            type: integer
+            label: Redis instances per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: One instance in the tier is the master; the rest replicate from it.
+          - path: redisML.redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: Per instance.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.redisML.redis.resources.memory == null || type(self.redisML.redis.resources.memory) == string
+                paths: [redisML.redis.resources]
+                message: >-
+                  Write the Redis memory with a unit, such as 256Mi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+          - path: redisML.redis.volumeset.initialCapacity
+            type: integer
+            label: Redis initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per Redis instance; coordination data is small.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: redisML.sentinel.resources
+            type: resources
+            label: Sentinel resources
+            required: true
+            description: Per Sentinel.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.redisML.sentinel.resources.memory == null || type(self.redisML.sentinel.resources.memory) == string
+                paths: [redisML.sentinel.resources]
+                message: >-
+                  Write the Sentinel memory with a unit, such as 256Mi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+          - path: redisML.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+            help: >-
+              This version was tested with redis:7.4; another tag is unproven here. After changing it, check that
+              RELEASE_NAME-redis reports ready in every location before relying on it.
+          - path: redisML.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            advanced: true
+            help: >-
+              This version was tested with redis:7.4; another tag is unproven here. After changing it, check that
+              RELEASE_NAME-sentinel reports ready in every location before relying on it.
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.alerting.highAvailability.enabled != true ||
+              oldSelf.redisML.redis.volumeset.initialCapacity == null ||
+              self.redisML.redis.volumeset.initialCapacity >= oldSelf.redisML.redis.volumeset.initialCapacity
+            paths: [redisML.redis.volumeset.initialCapacity]
+            message: Keep the Redis capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+          - rule: self.redisML.redis.image == null || !self.redisML.redis.image.matches(':[^:/@]*alpine')
+            paths: [redisML.redis.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the Redis tier builds its config in a way
+              busybox does not support. Use a Debian-based tag such as redis:7.4.
+          - rule: self.redisML.sentinel.image == null || !self.redisML.sentinel.image.matches(':[^:/@]*alpine')
+            paths: [redisML.sentinel.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the Sentinel tier builds its config in a way
+              busybox does not support. Use a Debian-based tag such as redis:7.4.
+      - id: coordination-auth
+        title: Coordination passwords
+        when: self.alerting.highAvailability.enabled
+        description: >-
+          This version's defaults name a Redis and a Sentinel password secret, which must exist before you turn
+          alerting HA on. Without a password the Redis tier is reachable from inside the GVC this release
+          creates, and anything that can write to it can suppress your alert notifications.
+        fields:
+          - type: note
+            severity: warning
+            when: ui.redisAuth == 'secret' || ui.sentinelAuth == 'secret'
+            textExpression: >-
+              'A password secret must exist **before** you install or upgrade. Grafana reads the same secret, so a missing one stops the Grafana UI too, and `cpln logs` shows nothing; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
+              context.releaseName + '-grafana --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') + '`.'
+            text: >-
+              A password secret must exist **before** you install or upgrade. Grafana reads the same secret, so a
+              missing one stops the Grafana UI too, and `cpln logs` shows nothing; the reason is under
+              `status.versions[].message` in `cpln workload get-deployments`.
+          - id: redisAuth
+            virtual: true
+            type: enum
+            label: Redis authentication
+            widget: segmented
+            required: true
+            init: "self.redisML.redis.passwordSecretName == null || self.redisML.redis.passwordSecretName == '' ? 'none' : 'secret'"
+            options:
+              - value: none
+                label: No password
+                set: { redisML.redis.passwordSecretName: "" }
+              - value: secret
+                label: Password from a secret
+          - path: redisML.redis.passwordSecretName
+            type: ref
+            label: Redis password secret
+            required: true
+            when: ui.redisAuth == 'secret'
+            description: An opaque secret (encoding plain) whose payload is the Redis password.
+            help: >-
+              Create it with
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`.
+              Every tier reads it when a container starts, so after you change its payload run
+              `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for RELEASE_NAME-sentinel,
+              RELEASE_NAME-redis and RELEASE_NAME-grafana; until then the old password keeps working.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-redis-password'"
+                hint: "Generate the content with: openssl rand -hex 32"
+          - id: sentinelAuth
+            virtual: true
+            type: enum
+            label: Sentinel authentication
+            widget: segmented
+            required: true
+            init: "self.redisML.sentinel.passwordSecretName == null || self.redisML.sentinel.passwordSecretName == '' ? 'none' : 'secret'"
+            options:
+              - value: none
+                label: No password
+                set: { redisML.sentinel.passwordSecretName: "" }
+              - value: secret
+                label: Password from a secret
+          - path: redisML.sentinel.passwordSecretName
+            type: ref
+            label: Sentinel password secret
+            required: true
+            when: ui.sentinelAuth == 'secret'
+            description: >-
+              An opaque secret (encoding plain) whose payload is Sentinel's own password, independent of the Redis
+              one.
+            help: >-
+              Create it with
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`.
+              After you change its payload run `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for
+              RELEASE_NAME-sentinel, RELEASE_NAME-redis and RELEASE_NAME-grafana; until then the old password
+              keeps working.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-sentinel-password'"
+                hint: "Generate the content with: openssl rand -hex 32"
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.alerting.highAvailability.enabled != true ||
+              (oldSelf.redisML.redis.passwordSecretName == self.redisML.redis.passwordSecretName &&
+              oldSelf.redisML.sentinel.passwordSecretName == self.redisML.sentinel.passwordSecretName)
+            severity: info
+            paths: [redisML.redis.passwordSecretName, redisML.sentinel.passwordSecretName]
+            message: >-
+              Changing a coordination password secret restarts the Redis and Sentinel tiers and every Grafana
+              instance, and notifications can arrive twice while the Redis tier restarts.
+      - id: smtp
+        title: Alert emails (SMTP)
+        toggle: smtp.enabled
+        description: >-
+          Lets Grafana send alert notifications and invites by email. Whichever instance evaluates sends: the
+          dedicated evaluator, or one UI instance with alerting HA.
+        docs: "#smtp"
+        fields:
+          - path: smtp.host
+            type: string
+            label: SMTP server
+            required: true
+            example: true
+            placeholder: smtp.example.com:587
+            pattern: '^[^:\s]+:\d+$'
+            patternMessage: Enter the host and port, such as smtp.example.com:587.
+          - path: smtp.user
+            type: string
+            label: SMTP user
+            description: Leave it empty for unauthenticated SMTP.
+          - type: note
+            severity: warning
+            when: self.smtp.user != null && self.smtp.user != ''
+            text: >-
+              With a user, the relay must offer STARTTLS or TLS: Grafana refuses to send credentials over an
+              unencrypted connection, and every notification is then lost with only a log line. Hosted relays
+              (SES, SendGrid, Mailgun, Microsoft 365, Gmail) are fine; a plain relay in the GVC is not.
+          - path: smtp.passwordSecretName
+            type: ref
+            label: SMTP password secret
+            required: true
+            when: self.smtp.user != null && self.smtp.user != ''
+            description: An opaque secret (encoding plain) holding only the SMTP password.
+            help: >-
+              It must exist before you install. After you change its payload, run
+              `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for RELEASE_NAME-grafana (and
+              RELEASE_NAME-grafana-alerting with a dedicated evaluator); until then the old password is used.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-grafana-smtp-password'"
+          - path: smtp.fromAddress
+            type: string
+            format: email
+            label: Sender address
+            required: true
+            example: true
+          - path: smtp.fromName
+            type: string
+            label: Sender name
+        rules:
+          - rule: >-
+              self.smtp.user == null || self.smtp.user == '' ||
+              (self.smtp.passwordSecretName != null && self.smtp.passwordSecretName != '')
+            mirrors: grafana-ml.validate
+            paths: [smtp.passwordSecretName]
+            message: Name the SMTP password secret, or clear the SMTP user for unauthenticated SMTP.
+
+  - id: datasources
+    title: Datasources
+    description: Datasources provisioned as code and the credentials they authenticate with.
+    sections:
+      - title: Datasources as code
+        docs: "#datasources-as-code"
+        fields:
+          - path: datasources.definitions
+            type: yaml
+            yamlType: list
+            label: Datasource definitions
+            description: >-
+              Grafana provisioning entries, passed through verbatim; every instance in every location applies
+              them at boot, and provisioned datasources are read-only in the UI. Write `$KEY` where a credential
+              goes.
+            help: >-
+              In a URL to a workload, substitute both the workload name and the GVC
+              (`http://WORKLOAD_NAME.GVC_NAME.cpln.local:9095`): a name that does not resolve shows only
+              "upstream connect error ... connection timeout" in the panels.
+      - title: Datasource credentials
+        docs: "#datasources-as-code"
+        fields:
+          - path: datasources.credentialSecrets
+            type: list
+            label: Credential secrets
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", keys: [] }
+            itemLabel: "item.name + ' (' + string(size(item.keys)) + ' keys)'"
+            description: >-
+              What Grafana authenticates to each datasource with. Each key becomes an environment variable that a
+              definition references as `$KEY`.
+            help: >-
+              Each secret must exist before you install. After you change the values inside one of these
+              secrets, run `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for RELEASE_NAME-grafana
+              (and RELEASE_NAME-grafana-alerting with a dedicated evaluator); until then the old values are used.
+              Adding or removing an entry here takes effect with the upgrade.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Secret
+                  required: true
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [dictionary] }
+                    mustExist: error
+                    allowCreate: true
+                    requiredKeysFrom: item.keys
+                - path: keys
+                  type: list
+                  label: Keys
+                  required: true
+                  unique: true
+                  widget: tags
+                  item:
+                    type: string
+                    pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                    patternMessage: Use letters, digits and underscores, and do not start with a digit.
+              rules:
+                - rule: item.name != '' && size(item.keys) > 0
+                  mirrors: grafana-ml.validate
+                  paths: [keys]
+                  message: Each credential secret needs a name and at least one key.
+
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL cluster stretched across the locations and its leader-routing proxy.
+    sections:
+      - id: members
+        title: PostgreSQL members
+        fields:
+          - path: postgresML.resources
+            type: resources
+            label: Database resources
+            required: true
+            description: Per member.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: >-
+                  (self.postgresML.resources.minMemory == null || type(self.postgresML.resources.minMemory) == string) &&
+                  (self.postgresML.resources.maxMemory == null || type(self.postgresML.resources.maxMemory) == string)
+                paths: [postgresML.resources]
+                message: >-
+                  Write the database memory with a unit, such as 2Gi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+          - path: postgresML.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: Uninstalling the release deletes the database volume sets, so enable backups if the data matters.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.postgresML.volumeset.capacity == null ||
+              self.postgresML.volumeset.capacity >= oldSelf.postgresML.volumeset.capacity
+            paths: [postgresML.volumeset.capacity]
+            message: Keep the database capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - id: proxy
+        title: Leader-routing proxy (HAProxy)
+        description: >-
+          The HAProxy tier in every location that always routes to the current primary; Grafana connects
+          through it.
+        docs: "/template-catalog/templates/postgres-multi-location#leader-routing-proxy"
+        fields:
+          - path: postgresML.proxy.minReplicas
+            type: integer
+            label: Minimum proxy replicas per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: postgresML.proxy.maxReplicas
+            type: integer
+            label: Maximum proxy replicas per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          # Not in this chart's values.yaml (the subchart defaults it to true); declared so a value set
+          # off in YAML mode is caught: Grafana connects only through RELEASE-postgres-proxy.
+          - path: postgresML.proxy.enabled
+            type: boolean
+            absent: true
+            default: true
+            label: Run the proxy
+            readOnly: true
+            advanced: true
+            description: Grafana's database endpoint; it stays on.
+        rules:
+          - rule: self.postgresML.proxy.enabled != false
+            paths: [postgresML.proxy.enabled]
+            message: >-
+              postgresML.proxy.enabled must stay on: Grafana reaches its database only through the leader-routing
+              proxy. Remove postgresML.proxy.enabled from the values.
+          - rule: self.postgresML.proxy.maxReplicas >= self.postgresML.proxy.minReplicas
+            paths: [postgresML.proxy.maxReplicas]
+            message: The maximum proxy replicas must be at least the minimum.
+
+  - id: backup
+    title: Database backups
+    description: Optional backups of the database, which holds every dashboard, user and alert rule, to object storage.
+    sections:
+      - id: backup
+        title: Database backups
+        toggle: postgresML.backup.enabled
+        description: >-
+          Logical mode runs a nightly pg_dumpall in one location; WAL-G mode archives continuously from whichever
+          member is the primary. The bucket and, for AWS S3 and Google Cloud Storage, the cloud account must exist
+          before you turn it on.
+        docs: "#backing-up"
+        fields:
+          - type: note
+            text: >-
+              A restore goes into the database and brings back dashboards, users, datasources and alert rules
+              together. Restore into a release that uses the same encryption key secret, or every saved
+              datasource credential becomes unreadable. See [Restoring a backup](#restoring-a-backup).
+          - type: note
+            severity: warning
+            when: >-
+              oldSelf != null && oldSelf.postgresML.backup.enabled == true &&
+              (oldSelf.postgresML.backup.mode == 'wal-g') != (self.postgresML.backup.mode == 'wal-g')
+            text: >-
+              Switching to or from WAL-G changes `archive_mode`, so this upgrade restarts the database in every
+              location.
+          - path: postgresML.backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            options:
+              - value: logical
+                label: Logical dumps
+                description: A scheduled pg_dumpall through the proxy, in one location. Portable SQL dumps.
+              - value: wal-g
+                label: WAL-G
+                description: >-
+                  A sidecar on every member; only the primary pushes WAL and periodic base backups, for
+                  point-in-time recovery.
+          - path: postgresML.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresML.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresML.backup.mode == 'logical'
+            description: Tag 17.x.x for PostgreSQL 17.
+          - path: postgresML.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: >-
+              The logical backup job, or the WAL-G sidecar next to each member. Google Cloud Storage needs at
+              least the default 512Mi of memory.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.postgresML.backup.resources.memory == null || type(self.postgresML.backup.resources.memory) == string
+                paths: [postgresML.backup.resources]
+                message: >-
+                  Write the backup memory with a unit, such as 512Mi: Helm prints a plain byte count in exponent
+                  form, which the platform refuses.
+              # values.yaml: the GCP path is killed at 128Mi with no log output (logical jobs report failed,
+              # the wal-g sidecar loops on OOMKilled); 512Mi is what was verified.
+              - when: >-
+                  self.postgresML.backup.provider == 'gcp' && self.postgresML.backup.resources.memory != null &&
+                  type(self.postgresML.backup.resources.memory) == string
+                rule: memoryBytes(self.postgresML.backup.resources.memory) >= 536870912
+                severity: info
+                paths: [postgresML.backup.resources]
+                message: >-
+                  Below 512Mi the Google Cloud Storage path runs out of memory with no log output: logical jobs
+                  only report failed, and the WAL-G sidecar restarts in a loop while no base backup is taken.
+        rules:
+          # pg-ml.validateBackup (subchart): the options say the mode and provider on their fields.
+          - rule: self.postgresML.backup.mode in ['logical', 'wal-g']
+            paths: [postgresML.backup.mode]
+            message: Choose logical or wal-g as the backup mode.
+          - rule: self.postgresML.backup.provider in ['aws', 'gcp', 'minio']
+            paths: [postgresML.backup.provider]
+            message: Choose aws, gcp or minio as the backup destination.
+      - title: AWS S3
+        when: self.postgresML.backup.enabled && self.postgresML.backup.provider == 'aws'
+        docs: "/template-catalog/templates/postgres-multi-location#aws-s3"
+        fields:
+          - path: postgresML.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresML.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresML.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresML.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the six S3 actions listed under [Backing up](#backing-up), on the bucket and on its
+              objects.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: postgresML.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.postgresML.backup.enabled && self.postgresML.backup.provider == 'gcp'
+        docs: "/template-catalog/templates/postgres-multi-location#gcs"
+        fields:
+          - path: postgresML.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: postgresML.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role. The chart also grants the backup identity Storage Object Admin on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresML.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: MinIO or S3-compatible
+        when: self.postgresML.backup.enabled && self.postgresML.backup.provider == 'minio'
+        docs: "/template-catalog/templates/postgres-multi-location#minio"
+        fields:
+          - type: note
+            severity: warning
+            when: self.postgresML.backup.mode == 'wal-g'
+            text: >-
+              With WAL-G every member reads the archive when it starts, so the endpoint must be reachable from
+              every location. A MinIO workload in only one location leaves the members elsewhere unable to start
+              while the primary keeps serving. Use an endpoint present in every location, or AWS S3 or Google
+              Cloud Storage.
+          - path: postgresML.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio.my-gvc.cpln.local:9000
+            description: >-
+              The S3 API address including the port. For a workload in a GVC use its full internal name,
+              `WORKLOAD.GVC.cpln.local`.
+          - path: postgresML.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresML.backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            help: >-
+              It must exist before you turn backups on: while it is missing, the deployment waits on it and
+              `cpln logs` shows nothing. Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry accessKey=MINIO_ACCESS_KEY --entry secretKey=MINIO_SECRET_KEY`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-grafana-minio-credentials'"
+          - path: postgresML.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+
+      - id: backup-schedule
+        title: Schedule
+        when: self.postgresML.backup.enabled
+        fields:
+          - path: postgresML.backup.location
+            type: enum
+            label: Run the backup job in
+            required: true
+            when: self.postgresML.backup.mode == 'logical'
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: The job runs only in this location. Pick the location nearest the bucket.
+          - path: postgresML.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresML.backup.mode == 'logical'
+          - path: postgresML.backup.walg.intervalSeconds
+            type: integer
+            label: Time between base backups
+            unit: seconds
+            required: true
+            when: self.postgresML.backup.mode == 'wal-g'
+            min: 1
+            suggestions:
+              - { value: 3600, label: "3600 (1 hour)" }
+              - { value: 21600, label: "21600 (6 hours, default)" }
+              - { value: 86400, label: "86400 (1 day)" }
+        rules:
+          - when: self.postgresML.backup.mode == 'logical'
+            rule: >-
+              self.postgresML.backup.location == null || self.postgresML.backup.location == '' ||
+              self.postgresML.backup.location in self.global.gvc.locations.map(l, l.name)
+            paths: [postgresML.backup.location]
+            message: >-
+              The backup job must run in one of the listed locations; it is suspended everywhere else and would
+              never run.
+
+migrations:
+  # 1.0.0 turned alerting off with an empty alerting.location; 1.1.0 added alerting.enabled (default true)
+  # and refuses an empty location while alerting is on.
+  - fromVersions: "<1.1.0"
+    to: alerting.enabled
+    valueExpr: self.alerting.location != null && self.alerting.location != ''
+    note: >-
+      1.0.0 turned alerting off with an empty alerting.location; since 1.1.0 that is alerting.enabled, so the
+      release keeps its alerting setting.

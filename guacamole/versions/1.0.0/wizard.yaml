@@ -1,0 +1,231 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Guacamole
+
+# The bundled single-instance PostgreSQL (stateful, one volume per location) would run an independent
+# copy in every GVC location, and the gateway is pinned to one replica.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: access
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # This chart creates the credentials secret itself from postgres.credentials (templates/secret-db.yaml),
+      # so its name is a plain string bound in the Database credentials step below, not a prerequisite reference.
+      - config.credentialsSecretName
+      # Guacamole connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      image:
+        help: >-
+          Also the image of the `schema-init` sidecar in the Guacamole workload, so its `psql` matches the
+          server. The data directory is specific to a major version: a different major on an existing volume
+          does not start.
+      internalAccess.type:
+        description: >-
+          Guacamole connects to its database like any other workload: keep Same GVC, or add the Guacamole
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: gateway
+    title: Gateway
+    description: The Guacamole web app and guacd, the prerequisite admin secret, and the log level.
+    docs: "#configuration"
+    sections:
+      - title: Web application
+        docs: "#guacamole-web-application"
+        fields:
+          - path: guacamole.image
+            type: string
+            format: image
+            label: Guacamole image
+            required: true
+          - path: guacamole.resources
+            type: resources
+            label: Web application resources
+            required: true
+            help: The JVM heap defaults to about a quarter of the maximum memory.
+      - title: Protocol daemon (guacd)
+        docs: "#guacd-protocol-daemon"
+        fields:
+          - path: guacd.image
+            type: string
+            format: image
+            label: guacd image
+            required: true
+          - path: guacd.resources
+            type: resources
+            label: guacd resources
+            required: true
+            help: Raise the memory for many concurrent RDP sessions.
+      - title: Admin account
+        docs: "#admin-account"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The admin secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: admin.secretName
+            type: ref
+            label: Admin secret
+            required: true
+            description: A dictionary secret with `username` and `password`; it replaces the stock `guacadmin` account.
+            help: >-
+              Applied on first boot only. Changing the secret later does not change the login; change the
+              password in the Guacamole UI instead.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-guacamole-admin'"
+      - title: Logging
+        docs: "#logging"
+        fields:
+          - path: logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            description: Applies to both the web application and guacd.
+            options:
+              - { value: trace, label: Trace }
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: error, label: Error }
+    rules:
+      - rule: self.admin.secretName != ''
+        mirrors: guacamole.validate
+        paths: [admin.secretName]
+        message: Name the prerequisite admin secret; the chart does not render without it.
+      - rule: >-
+          !self.guacamole.image.contains(':') || !self.guacd.image.contains(':') ||
+          self.guacamole.image.split(':')[1] == self.guacd.image.split(':')[1]
+        severity: info
+        paths: [guacd.image]
+        message: The guacd and Guacamole images have different tags; keep the two versions equal.
+
+  - id: access
+    title: Access
+    description: Who reaches the web UI, from the internet and from inside the GVC.
+    docs: "#access"
+    sections:
+      - title: Public access
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI on the workload's `*.cpln.app` endpoint. This gateway fronts your internal machines;
+              without it, reach the UI with `cpln port-forward`.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: none, label: None, description: No workload can reach Guacamole internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+            rules:
+              - rule: size(self.internalAccess.workloads) > 0
+                mirrors: guacamole.validate
+                message: List at least one workload, or choose another option above.
+
+  - id: database
+    title: Database credentials
+    description: >-
+      The user, password and database the bundled PostgreSQL is initialized with. The chart creates the
+      secret that holds them; there is nothing to create first.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          These values are stored in the Helm release in plain text. Version 1.1.0 takes them from a secret
+          you create instead.
+      - path: postgres.credentials.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data is first initialized.
+      - path: postgres.credentials.password
+        type: string
+        label: Database password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        description: Stored in the release values.
+        help: PostgreSQL reads it only when its data directory is first initialized.
+      - path: postgres.credentials.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data is first initialized.
+      - path: postgres.config.credentialsSecretName
+        type: string
+        label: Credentials secret name
+        required: true
+        advanced: true
+        description: >-
+          The dictionary secret the chart creates from these values. Secret names are org-wide, so give
+          each release its own name.
+    rules:
+      - rule: >-
+          self.postgres.config.credentialsSecretName != '' && self.postgres.credentials.username != '' &&
+          self.postgres.credentials.password != '' && self.postgres.credentials.database != ''
+        mirrors: guacamole.validate
+        paths: [postgres.credentials.password]
+        message: The database user, password, name and secret name are all required.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Guacamole, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-guacamole') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-guacamole, or Guacamole cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-guacamole']"
+    message: Add the Guacamole workload to the list, or Guacamole cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Guacamole connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.

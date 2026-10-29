@@ -183,6 +183,12 @@ steps:
         message: >-
           clusterName was removed in 1.1.0, and the chart refuses it. It was never used by any resource;
           remove it from the values.
+      # Platform schema (nodelibs workload.ts): memory (MiB) / cpu (millicores) above 8 is refused at apply.
+      - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+        paths: [memory]
+        message: >-
+          The platform allows at most 8 MiB of memory per millicore of CPU (8000Mi per CPU, a little under
+          8Gi). Raise the CPU or lower the memory.
       - rule: self.replicas != 2
         severity: info
         paths: [replicas]
@@ -362,6 +368,7 @@ steps:
             label: Initial capacity per node
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500]
             description: Fixed once created; it can only grow, through the setting below.
@@ -378,6 +385,7 @@ steps:
             label: Maximum capacity per node
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 200, 500, 1000]
           - path: volumes.data.autoscaling.minFreePercentage

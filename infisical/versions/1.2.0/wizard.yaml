@@ -37,6 +37,10 @@ imports:
           workload under Allowed workloads.
       backup.enabled:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
 
 steps:
   - id: infisical
@@ -73,7 +77,6 @@ steps:
             label: Resources
             required: true
             description: Per replica. Keep at least 2Gi of memory; boot migrations run out of memory at 1Gi.
-            maxRatio: 4
             cpu: { min: 100m }
             memory: { min: 256Mi }
       - title: Root-of-trust keys
@@ -230,6 +233,19 @@ steps:
             required: true
             min: 1
             suggestions: [1, 3, 5]
+        rules:
+          # infisical.validate checks Sentinel auth only with the Redis password on; 1.2.1 refuses it always.
+          - when: "!self.redis.redis.auth.fromSecret.enabled"
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            severity: warning
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): Infisical sends no
+              Sentinel password, so it cannot reach Redis, and the plain-text password would sit in the release.
+              Version 1.2.1 refuses it.
       - id: redis-auth
         title: Redis password
         toggle: redis.redis.auth.fromSecret.enabled
@@ -241,7 +257,9 @@ steps:
             type: ref
             label: Redis password secret
             required: true
-            description: A dictionary secret with the key `password`. Redis, Sentinel and Infisical all read it.
+            description: >-
+              A dictionary secret with the key `password`. Redis, Sentinel and Infisical all read it. Leave out
+              spaces, quotes and backslashes: the Redis nodes and Sentinels write it into their config files.
             help: >-
               Create it before you install; if it is missing, the deployment waits and `cpln logs` shows nothing.
               Changing the password later takes more than a secret edit, because a running Sentinel keeps the
@@ -257,16 +275,19 @@ steps:
               create:
                 suggestName: "context.releaseName + '-infisical-redis'"
         rules:
+          - rule: self.redis.redis.auth.fromSecret.name != null && self.redis.redis.auth.fromSecret.name != ''
+            mirrors: infisical.validate
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Choose the Redis password secret.
           - rule: >-
-              self.redis.redis.auth.fromSecret.name != null && self.redis.redis.auth.fromSecret.name != '' &&
-              (!has(self.redis.sentinel.auth) ||
-              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
-              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled))))
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
             mirrors: infisical.validate
             paths: [redis.redis.auth.fromSecret.name]
             message: >-
-              Choose the Redis password secret, and keep Sentinel authentication off (remove redis.sentinel.auth
-              from the values): Infisical authenticates only to the Redis nodes.
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): Infisical
+              authenticates only to the Redis nodes.
           # Upgrading from 1.1.0 with auth on, the redis chart's own {release}-redis-auth-password secret is
           # deleted by the upgrade itself, so the new prerequisite secret must have a different name.
           - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
@@ -284,6 +305,19 @@ steps:
             message: >-
               Pointing at another secret changes the Redis password, and a running Sentinel keeps the old one.
               Follow "Rotating the Redis password" in the README instead.
+          # redis 3.4.3 templates/workload-sentinel.yaml: bootstrap_sentinel_conf keeps an existing sentinel.conf, which
+          # survives a restart only with sentinel.persistence on (off by default, values.yaml:146-147).
+          - when: >-
+              oldSelf != null && self.redis.redis.auth.fromSecret.enabled &&
+              (!has(oldSelf.redis.redis.auth.fromSecret.enabled) || oldSelf.redis.redis.auth.fromSecret.enabled != true) &&
+              [self.redis.sentinel].exists(s, s.exists(k, k == 'persistence' && s[k] != null && [s[k]].exists(p, p.exists(e, e == 'enabled' && p[e] == true))))
+            rule: "false"
+            severity: info
+            paths: [redis.redis.auth.fromSecret.name]
+            message: >-
+              The Sentinels were first started without a Redis password and keep that config on their volume, so
+              they cannot authenticate to the Redis nodes after this change. Run SENTINEL SET mymaster auth-pass
+              with the password on every Sentinel once the Redis nodes have restarted.
       - title: Images
         advanced: true
         fields:
@@ -300,7 +334,11 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
-  - rule: "!has(self.redis.redis.auth.password)"
+  - rule: >-
+      [self.redis.redis].all(r, !r.exists(k, k == 'auth' && r[k] != null && [r[k]].exists(a,
+      a.exists(j, j == 'password' && a[j] != null && [a[j]].exists(p,
+      p.exists(e, e == 'enabled' && p[e] == true) ||
+      p.exists(e, e == 'value' && p[e] != null && !(string(p[e]) in ['', 'your-password'])))))))
     mirrors: infisical.validateRedisSecret
     paths: [redis.redis.auth.fromSecret.enabled]
     message: >-
@@ -332,6 +370,20 @@ rules:
       path: postgres.internalAccess.workloads
       items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-infisical']"
     message: Add the Infisical workload to the list, or Infisical cannot reach its database.
+
+  # Secrets the chart creates itself: the redis subchart's <release>-redis-config and <release>-sentinel-config
+  # (always). A secret you name must not share either name.
+  - rule: >-
+      !(([self.secrets.name, self.postgres.config.credentialsSecretName] +
+      (self.smtp.enabled && self.smtp.auth.secretName != '' ? [self.smtp.auth.secretName] : []) +
+      (self.redis.redis.auth.fromSecret.enabled ? [self.redis.redis.auth.fromSecret.name] : []) +
+      (self.postgres.backup.enabled && self.postgres.backup.provider == 'minio' ? [self.postgres.backup.minio.credentialsSecretName] : [])).exists(n,
+      n == context.releaseName + '-redis-config' || n == context.releaseName + '-sentinel-config'))
+    severity: warning
+    paths: [secrets.name]
+    message: >-
+      The bundled Redis creates secrets named <release>-redis-config and <release>-sentinel-config. A secret you
+      name here (keys, SMTP login, database credentials, Redis password or backup keys) must use another name.
 
 yamlOnly:
   - path: postgres.pgbouncer

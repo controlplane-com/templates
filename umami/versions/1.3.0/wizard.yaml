@@ -1,0 +1,770 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Umami
+
+# Umami itself is stateless, but both bundled databases are single-location stateful workloads with no
+# location handling: postgres brings this limit with its import, and postgres-highly-available (no
+# descriptor of its own, so its keys are parent fields below) needs the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.0
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Umami creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+      # Umami connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Umami connects to its database like any other workload: keep Same GVC, or add the Umami workload
+          under Allowed workloads.
+
+steps:
+  - id: umami
+    title: Umami
+    description: The Umami image, its compute, the prerequisite app secret, and the tracker paths.
+    sections:
+      - title: Server
+        docs: "#application"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Umami image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas are independent and share the database and the app secret; 2 or more give rolling
+              restarts without downtime.
+          - path: app.disableTelemetry
+            type: boolean
+            label: Turn off Umami's anonymous usage telemetry
+        rules:
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: umami.validate
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.1.0. Remove the old keys from the values.
+          - rule: self.replicas >= 1
+            mirrors: umami.validate
+            paths: [replicas]
+            message: Run at least one replica.
+      - title: App secret
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The app secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: app.appSecretName
+            type: ref
+            label: App secret
+            required: true
+            description: An opaque secret (plain encoding) holding a random string that signs auth tokens and sessions.
+            help: Keep it for the life of the install; changing it logs every user out.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-umami-app-secret'"
+        rules:
+          # 1.0.x rendered its own dictionary secret <release>-umami-config holding the app secret; upgrading to 1.1.0
+          # or later prunes it, so a release pointed at that name would reference a secret the upgrade deletes.
+          - rule: >-
+              context.mode != 'upgrade' || context.fromVersion == null ||
+              semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+              self.app.appSecretName != context.releaseName + '-umami-config'
+            paths: [app.appSecretName]
+            message: >-
+              That secret belongs to the 1.0.x release, and this upgrade deletes it. Create a new opaque secret holding
+              the same app secret value and choose it here.
+          - rule: "!has(self.app.appSecret)"
+            mirrors: umami.validate
+            paths: [app.appSecretName]
+            message: >-
+              app.appSecret was removed in 1.1.0. Put it in the app secret and remove it from the values.
+          - rule: self.app.appSecretName != ''
+            mirrors: umami.validate
+            paths: [app.appSecretName]
+            message: The app secret is required.
+      - title: Tracker
+        docs: "#tracker"
+        description: Custom paths for the tracking script and the collect endpoint make ad blockers less likely to block them.
+        fields:
+          - path: tracker.scriptName
+            type: string
+            label: Tracking script path
+            placeholder: s.js
+            description: Leave empty for the default `/script.js`.
+          - path: tracker.collectEndpoint
+            type: string
+            label: Collect endpoint path
+            placeholder: /api/track
+            pattern: "^(/.*)?$"
+            patternMessage: Start the path with /.
+            description: Leave empty for the default `/api/send`.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Umami inside Control Plane.
+    docs: "#access"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Umami seeds a fixed `admin` / `umami` login. Install privately, change that password over
+          `cpln port-forward`, then turn on public access.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.0') < 0
+        text: >-
+          1.1.0 turned public access off by default. This upgrade keeps the setting your release runs with, so
+          tracking keeps working; if the dashboard is public and the admin password is still `umami`, change it now.
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The dashboard, the tracking script and the collect endpoint on the canonical endpoint. Tracking
+          collects nothing until browsers on your sites can reach it.
+        docs: "#first-run"
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Umami's data, and the credentials Umami creates its database secret from.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica on a persistent volume; the default.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+      - id: credentials
+        title: Database credentials
+        description: >-
+          Used by whichever PostgreSQL is chosen above. Umami creates the dictionary secret named below from these
+          three values, and both PostgreSQL and Umami read it; there is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 1.4.0 takes them from a secret
+              you create instead.
+          - path: postgres.credentials.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+            description: >-
+              Umami puts it into its database connection URL, so use URL-safe characters (letters, digits, - and _).
+          - path: postgres.credentials.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Used as typed, so replace the published default. Umami puts it into its database connection URL, so
+              use URL-safe characters (letters, digits, - and _).
+          - path: postgres.credentials.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+        rules:
+          # Umami builds DATABASE_URL from the user and password at container start and parses it as a URL.
+          - rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              !self.postgres.credentials.username.matches('[:/?#%@]')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Leave out :, /, ?, #, % and @. Umami puts the user into its database connection URL, where they break it.
+          - rule: >-
+              (oldSelf != null && self.postgres.credentials.password == oldSelf.postgres.credentials.password) ||
+              !self.postgres.credentials.password.matches('[/?#%]')
+            severity: warning
+            paths: [postgres.credentials.password]
+            message: >-
+              Leave out /, ?, # and %. Umami puts the password into its database connection URL, where they break it.
+          # Umami's workload writes the database name unquoted at the end of its DATABASE_URL value: measured with
+          # helm template + js-yaml, ' #' cuts the name off (Umami then connects to another database) and ': '
+          # fails the render; ? / % change how Umami parses the URL.
+          - rule: >-
+              (oldSelf != null && self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              !self.postgres.credentials.database.matches('[\\s#?/%]') && !self.postgres.credentials.database.endsWith(':')
+            severity: warning
+            paths: [postgres.credentials.database]
+            message: >-
+              Use letters, digits, - and _ only. Umami writes the database name unquoted into its connection URL,
+              where a space, #, ?, / or %, or a trailing colon, changes or breaks it.
+          # The HA database (postgres-highly-available 2.5.0) writes the user and password inside double quotes
+          # in Patroni's YAML config, runs psql -U with the user unquoted, and creates the database with an
+          # unquoted CREATE DATABASE (templates/secret-startup.yaml).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              (self.postgres.credentials.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgres.credentials.database) <= 63 &&
+              !(self.postgres.credentials.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+            severity: warning
+            paths: [postgres.credentials.database]
+            message: >-
+              Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+              not postgres, template0, template1 or an SQL reserved word such as user or order. The highly
+              available database runs an unquoted CREATE DATABASE when it is first created: it folds other names
+              to lowercase or fails, and a failure stops the cluster from being created, while Umami connects
+              with the name as typed.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+              self.postgres.credentials.username.matches('^[A-Za-z0-9_][A-Za-z0-9_.-]*$')
+            severity: warning
+            paths: [postgres.credentials.username]
+            message: >-
+              Use letters, digits, _ . and -, not starting with . or -. The highly available database writes the
+              user into an unquoted psql command.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') >= 0) &&
+              self.postgres.credentials.password == oldSelf.postgres.credentials.password) ||
+              !self.postgres.credentials.password.matches('["\\\\]')
+            severity: warning
+            paths: [postgres.credentials.password]
+            message: >-
+              Leave out double quotes and backslashes. The highly available database writes the password inside
+              double quotes in its config on every start, where they break the configuration or change the
+              password. To change an existing password, run ALTER ROLE for the user and for repl first.
+          # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes.
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username &&
+              self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              (!self.postgres.credentials.username.matches('\\s') && !self.postgres.credentials.database.matches('\\s'))
+            severity: warning
+            paths: [postgres.credentials.username, postgres.credentials.database]
+            message: >-
+              Leave out spaces: the database's readiness check passes the user and the database name to pg_isready
+              unquoted, so it never becomes ready.
+          - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Umami loses its
+              database connection after this upgrade.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica. Its server, storage, network and backups follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret Umami creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+        rules:
+          - rule: self.postgres.config.credentialsSecretName != 'my-umami-db-credentials'
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Umami release its own name, for example ' + context.releaseName +
+              '-umami-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Umami release its own name.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Umami connects through.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database creates the cluster with consensus timeouts that Patroni
+              silently tightens, so a leader that cannot reach etcd for about 14 seconds is demoted.
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database writes the password into Patroni's shared configuration,
+              which anything that can reach port 8008 of the members can read without authentication at `/config`.
+          - path: postgresHA.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret Umami creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: self.postgresHA.config.credentialsSecretName != 'my-umami-db-credentials'
+            severity: info
+            paths: [postgresHA.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Umami release its own name, for example ' + context.releaseName +
+              '-umami-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each Umami release its own name.
+          # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+          # and 2.4.x (umami 1.2.x and earlier) kept the database credentials in a chart secret of that name.
+          - rule: >-
+              !self.postgresHA.enabled ||
+              (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') >= 0 &&
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+              !self.postgresHA.backup.enabled) ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name. The highly available database renders its own secret under this name when backups
+              are on, and on an upgrade from umami 1.2.x or earlier this is the old chart's secret, which the
+              upgrade removes or rewrites.
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The bundled database's WAL-G sidecar waits a full interval before its first base backup, so a new
+              cluster archives WAL with nothing to restore it from for up to that long, and turning WAL-G on for a
+              cluster that already exists does not start WAL archiving.
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - value: minio
+                label: MinIO or S3-compatible
+                description: Refused by this version on the highly available database (fixed in 1.3.1).
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory. With less it is killed for running out of memory
+              during the base backup and no backup is written.
+          # Measured by render: the bundled postgres-highly-available 2.5.0 refuses backup.minio.accessKey/secretKey,
+          # which this chart's own values.yaml always supplies, so no values can make this combination render.
+          - rule: "!self.postgresHA.enabled || !self.postgresHA.backup.enabled || self.postgresHA.backup.provider != 'minio'"
+            paths: [postgresHA.backup.provider]
+            message: >-
+              This version cannot install MinIO backups on the highly available database: the chart fails to render
+              because the bundled PostgreSQL no longer accepts the MinIO keys. Choose AWS S3 or Google Cloud Storage,
+              or use Umami 1.3.1 or later, which fixes this.
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bundled database's backup identity also carries the AWS managed policy ReadOnlyAccess, which can
+              read every bucket in the AWS account, not only this one.
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Object
+              Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: umami.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
+        mirrors: umami.validate
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Umami's database endpoint.
+      # postgres-highly-available 2.5.0 fails the render on a leftover postgres block.
+      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.postgres)"
+        paths: [postgres.credentials.username]
+        message: >-
+          postgresHA.postgres was removed in 1.3.0: move its username, password and database to the database
+          credentials (postgres.credentials) and remove the block from the values.
+      # postgres 3.4.0 fails the render on leftover config.username, password or database.
+      - rule: >-
+          !self.postgres.enabled || (!has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database))
+        paths: [postgres.credentials.username]
+        message: >-
+          postgres.config.username, password and database were removed in 1.2.0: move them to the database
+          credentials (postgres.credentials) and remove them from postgres.config.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of Umami's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Umami, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-umami') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-umami, or Umami cannot reach its database.'"
+    message: Add the Umami workload to the list, or Umami cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Umami connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.backup.minio
+    reason: >-
+      MinIO backups on the highly available database cannot render in this version (fixed in 1.3.1), so its
+      MinIO settings are not offered.
+
+migrations:
+  - fromVersions: "<1.3.0"
+    from: postgresHA.postgres
+    note: >-
+      The HA database's username, password and database moved to the database credentials (postgres.credentials),
+      from which Umami creates the secret; a release on the HA database keeps the values it was initialized with.
+  # The HA database read postgresHA.postgres.* before 1.3.0; from 1.3.0 both modes read postgres.credentials.*.
+  # Carry the values of the mode the release runs, whatever they are, so the database keeps its login.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.credentials.username"
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.credentials.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.credentials.database"
+  - fromVersions: "<1.2.0"
+    from: postgres.config.username
+    to: postgres.credentials.username
+  - fromVersions: "<1.2.0"
+    from: postgres.config.password
+    to: postgres.credentials.password
+  - fromVersions: "<1.2.0"
+    from: postgres.config.database
+    to: postgres.credentials.database
+  # The renames above move changed values only; carry the installed values of the mode the release runs.
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.config.username"
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.config.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.2.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.config.database"
+  - fromVersions: "<1.2.0"
+    from: postgres.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.2.0"
+    from: postgres.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.1.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<1.1.0"
+    from: resources.memory
+    to: resources.maxMemory
+  # 1.1.0 changed the publicAccess.enabled default from true to false; keep what the release runs, so an upgrade
+  # does not silently stop tracking.
+  - fromVersions: "<1.1.0"
+    to: publicAccess.enabled
+    valueExpr: self.publicAccess.enabled
+  - fromVersions: "<1.1.0"
+    from: app.appSecret
+    note: >-
+      The app secret is now a prerequisite opaque secret; create one holding the old value (or every user is logged
+      out), and choose it under Umami.

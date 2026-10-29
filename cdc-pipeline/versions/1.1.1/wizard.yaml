@@ -363,6 +363,7 @@ steps:
             label: Offsets volume capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50]
             help: Holds the connector's offsets; deleting it makes the connector snapshot every table again.
@@ -378,9 +379,29 @@ steps:
           - rule: oldSelf == null || self['debezium-server'].volumeset.capacity >= oldSelf['debezium-server'].volumeset.capacity
             paths: [debezium-server.volumeset.capacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+          # Platform volume set schema (nodelibs volumeSet.ts): high-throughput-ssd has a minimum capacity of 200 GB.
+          - rule: >-
+              self['debezium-server'].volumeset.performanceClass != 'high-throughput-ssd' ||
+              self['debezium-server'].volumeset.capacity >= 200
+            paths: [debezium-server.volumeset.capacity]
+            message: A high throughput SSD volume set needs at least 200 GiB; Control Plane refuses a smaller one.
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  # postgres-highly-available 2.5.0+ renders a secret named <release>-postgres-config for its backup settings,
+  # and 2.4.x (cdc-pipeline 1.0.3 and earlier) kept the database credentials in a chart secret of that name.
+  - rule: >-
+      (oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.0.4') >= 0) &&
+      self['postgres-highly-available'].config.credentialsSecretName ==
+      oldSelf['postgres-highly-available'].config.credentialsSecretName &&
+      !self['postgres-highly-available'].backup.enabled) ||
+      self['postgres-highly-available'].config.credentialsSecretName != context.releaseName + '-postgres-config'
+    severity: warning
+    paths: [postgres-highly-available.config.credentialsSecretName]
+    message: >-
+      Choose another name. The bundled PostgreSQL renders its own secret under this name when backups are on,
+      and on an upgrade from cdc-pipeline 1.0.3 or earlier this is the old chart's secret, which the upgrade
+      removes or rewrites.
   - rule: >-
       'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners['client'].sasl != null &&
       self.kafka.kafka.listeners['client'].sasl.admin != null &&
@@ -573,11 +594,13 @@ migrations:
       (`cpln secret reveal RELEASE_NAME-secrets`, key controller-password).
   # The listeners map is carried whole. The shape every 1.0.x release ships with (one `client` listener whose
   # only user is debezium) is rewritten to the references; any other shape is kept, and the Credentials rules
-  # then ask for the references.
+  # then ask for the references. A null entry is not a listener: the 1.0.x descriptors (kafka 4.0.x import)
+  # declare an optional `public` listener, which reads as public: null in the old values.
   - fromVersions: "<1.1.0"
     to: kafka.kafka.listeners
     valueExpr: >-
-      size(self.kafka.kafka.listeners) == 1 && 'client' in self.kafka.kafka.listeners &&
+      size(self.kafka.kafka.listeners.filter(k, self.kafka.kafka.listeners[k] != null)) == 1 &&
+      'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners.client != null &&
       !has(self.kafka.kafka.listeners.client.publicAddress) &&
       !has(self.kafka.kafka.listeners.client.directReplicaRouting) &&
       has(self.kafka.kafka.listeners.client.sasl) && has(self.kafka.kafka.listeners.client.sasl.admin) &&

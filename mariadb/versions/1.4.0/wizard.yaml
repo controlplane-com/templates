@@ -1,0 +1,633 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MariaDB
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The two prerequisite secrets with the application credentials and the root password.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0)
+        text: >-
+          Both secrets must exist **before** you install or upgrade. If either is missing, the deployment
+          waits on it and looks broken.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          Version 1.4.0 moved the database credentials out of the values and into the two secrets below.
+          Before you upgrade, read the credentials the database already uses, because the upgrade deletes
+          the secret that holds them: `cpln secret reveal RELEASE_NAME-maria-config -o yaml` (keys `MYSQL_USER`,
+          `MYSQL_PASSWORD`, `MYSQL_DATABASE` and `MYSQL_ROOT_PASSWORD`). Create both secrets with those same values
+          (`MYSQL_USER` becomes `username`, `MYSQL_PASSWORD` becomes `password`, `MYSQL_DATABASE` becomes `database`,
+          and `MYSQL_ROOT_PASSWORD` is the whole content of the root password secret): the database keeps the credentials stored on its volume. Earlier versions shipped published default
+          passwords (`password` and `root-password`; 1.2.0 shipped `pw` and `root-pw`), shared by every install. If the reveal shows either
+          one, treat it as compromised: after the upgrade, change it with `ALTER USER` (for root, both
+          `'root'@'localhost'` and `'root'@'%'`), then update the secret to match. See
+          [Upgrading from earlier versions](/template-catalog/templates/mariadb#upgrading-from-earlier-versions).
+      - path: credentialsSecretName
+        type: ref
+        label: Application credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. MariaDB creates this
+          user and database on first boot; put this credential in your applications' connection strings.
+        help: >-
+          MariaDB reads the credentials only when the volume is first initialized. To change a password
+          later, run `ALTER USER` inside MariaDB, then update the secret to match. Create the secret with:
+          `cpln secret create-dictionary --name CREDENTIALS_SECRET_NAME --entry username=appuser --entry password='YOUR-STRONG-PASSWORD' --entry database=appdb`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-mariadb-credentials'"
+      - path: rootPasswordSecretName
+        type: ref
+        label: Root password secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) holding only the MariaDB `root` password. It is separate from
+          the application credentials so that sharing those does not hand out root.
+        help: >-
+          MariaDB reads the root password only when the volume is first initialized. Choose one without spaces
+          or tabs: the health probes pass it to mariadb-admin unquoted, so a password with whitespace fails
+          every probe. Create the secret with:
+          `printf '%s' 'YOUR-STRONG-ROOT-PASSWORD' | cpln secret create-opaque --name ROOT_SECRET_NAME --encoding plain -f -`
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-mariadb-root-password'"
+    rules:
+      # maria.validateCredentials only checks that both names are set (required on both fields);
+      # one rule per field restates it for the mirror (guide §8.6), suppressed while REQUIRED shows.
+      - rule: self.credentialsSecretName != null && self.credentialsSecretName != ''
+        mirrors: maria.validateCredentials
+        paths: [credentialsSecretName]
+        message: The application credentials secret is required.
+      - rule: self.rootPasswordSecretName != null && self.rootPasswordSecretName != ''
+        mirrors: maria.validateCredentials
+        paths: [rootPasswordSecretName]
+        message: The root password secret is required.
+      - rule: "!has(self.config)"
+        mirrors: maria.validateRemovedKeys
+        paths: [credentialsSecretName]
+        message: >-
+          The config block was removed in 1.4.0. Put the credentials in a dictionary secret with the keys
+          username, password and database, put the root password in an opaque secret, and remove
+          config from the values.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') < 0 ||
+          self.credentialsSecretName == oldSelf.credentialsSecretName
+        severity: info
+        paths: [credentialsSecretName]
+        message: >-
+          MariaDB reads the credentials only when the volume is first initialized; pointing at another
+          secret does not change the existing user, password or database. The new secret must keep the
+          same username and database; run ALTER USER first so its password matches, or your
+          applications cannot sign in.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') < 0 ||
+          self.rootPasswordSecretName == oldSelf.rootPasswordSecretName
+        severity: info
+        paths: [rootPasswordSecretName]
+        messageExpression: >-
+          "MariaDB reads the root password only when the volume is first initialized; pointing at another
+          secret does not change the existing root password. Run ALTER USER for both 'root'@'localhost'
+          and 'root'@'%' first so the new secret matches" + (self.backup.enabled ? ", or the backup job,
+          which signs in as root with this secret, cannot connect." : ".")
+        message: >-
+          MariaDB reads the root password only when the volume is first initialized; pointing at another
+          secret does not change the existing root password. Run ALTER USER for both 'root'@'localhost'
+          and 'root'@'%' first so the new secret matches.
+
+  - id: server
+    title: Server
+    description: The MariaDB image and the compute of its single stateful replica.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: MariaDB image
+        required: true
+        description: >-
+          Moving a running database to a newer major version converts its data directory, so change it on
+          purpose, after a backup.
+        docs: "#image"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: A single stateful replica.
+        docs: "#resources"
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      # The platform accepts 1 to 3600 for defaultOptions.timeoutSeconds; only serverless workloads are
+      # capped at 600 (nodelibs/schema/src/workloadOptions.ts). MariaDB is a stateful workload.
+      - path: timeoutSeconds
+        type: integer
+        label: Request timeout
+        unit: seconds
+        min: 1
+        max: 3600
+        required: true
+        advanced: true
+        docs: "/reference/workload/general#timeout-seconds"
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the database.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes
+              the volume set, and the database with it.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, and an optional admin console.
+    sections:
+      - title: Database access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              MariaDB is never published to the internet by this template. Access changes take up to a
+              couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type: the values comment says "only used when type is workload-list", but
+          # workload-mariadb.yaml:72-73 writes any non-empty list into inboundAllowWorkload, and the platform
+          # validates every entry, though it applies the workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads allowed to connect, for example from another GVC. The platform applies the list
+              with Same GVC and Specific workloads.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - id: phpmyadmin
+        title: phpMyAdmin
+        toggle: phpMyAdmin.enabled
+        description: >-
+          A browser console for the database, internal-only unless you publish it. It shows a login form and holds no identity and no secret;
+          you sign in with the application credentials, or with `root` and the root password.
+        docs: "#phpmyadmin"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.0') < 0
+            text: >-
+              Earlier versions published phpMyAdmin to the internet. Since 1.4.0 it is internal-only: only
+              the workloads chosen below reach it. Leave "Publish to the internet" off unless you must open
+              the console from outside Control Plane, and change any published default password first (see
+              Credentials).
+          - path: phpMyAdmin.publicAccess.enabled
+            type: boolean
+            label: Publish to the internet
+            description: >-
+              Anyone who reaches the console needs only a valid database password to read and write
+              everything. Leave it off and reach the console from inside the GVC instead.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-phpmyadmin --gvc GVC_NAME -o yaml`. Turning it on or
+              off takes up to a couple of minutes to take effect.
+          - path: phpMyAdmin.internalAccess.type
+            type: enum
+            label: Who can reach the console
+            widget: cards
+            required: true
+            description: >-
+              This governs the console only; the database has its own setting above. Access changes take up
+              to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can reach the console.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type, as above: workload-phpmyadmin.yaml:48-49 writes any non-empty list.
+          - path: phpMyAdmin.internalAccess.workloads
+            when: self.phpMyAdmin.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.phpMyAdmin.internalAccess.workloads) > 0
+            type: list
+            label: Allowed console workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads allowed to reach the console, for example from another GVC. The platform applies
+              the list with Same GVC and Specific workloads.
+            item:
+              type: ref
+              label: Console workload
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.phpMyAdmin.internalAccess.type == 'same-gvc'
+          - path: phpMyAdmin.image
+            type: string
+            format: image
+            label: phpMyAdmin image
+            required: true
+            advanced: true
+          - path: phpMyAdmin.resources
+            type: resources
+            label: phpMyAdmin resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.phpMyAdmin.internalAccess.type != 'workload-list' || size(self.phpMyAdmin.internalAccess.workloads) > 0
+            mirrors: maria.validateInternalAccess
+            paths: [phpMyAdmin.internalAccess.workloads]
+            message: List at least one workload when the console is open to specific workloads.
+          - when: self.phpMyAdmin.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.phpMyAdmin.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [phpMyAdmin.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.phpMyAdmin.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.phpMyAdmin.internalAccess.type == 'same-org'
+            rule: size(self.phpMyAdmin.internalAccess.workloads) == 0
+            severity: info
+            paths: [phpMyAdmin.internalAccess.workloads]
+            message: >-
+              Same org already lets every workload of the org reach the console, so the workloads listed for
+              the console add nothing.
+          - when: self.phpMyAdmin.internalAccess.type == 'none'
+            rule: size(self.phpMyAdmin.internalAccess.workloads) == 0
+            severity: warning
+            paths: [phpMyAdmin.internalAccess.workloads]
+            message: >-
+              The chart still writes the workloads listed for the console into its firewall, where the
+              platform checks every entry, but "None" lets none of them reach it. Remove them.
+          - when: self.phpMyAdmin.internalAccess.type == 'none'
+            rule: self.phpMyAdmin.publicAccess.enabled
+            severity: info
+            paths: [phpMyAdmin.internalAccess.type]
+            message: >-
+              With "None" and "Publish to the internet" off, no workload can reach the console and it is
+              not on the internet either.
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        mirrors: maria.validateInternalAccess
+        paths: [internalAccess.workloads]
+        message: List at least one workload when the database is open to specific workloads.
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to MariaDB, so the workloads listed for MariaDB
+          add nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the workloads listed for MariaDB into its firewall, where the platform checks
+          every entry, but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.phpMyAdmin.enabled && !self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        messageExpression: >-
+          '"None" also blocks ' +
+          (self.phpMyAdmin.enabled && self.backup.enabled ? 'phpMyAdmin and the backup job, which connect' :
+          self.phpMyAdmin.enabled ? 'phpMyAdmin, which connects' : 'the backup job, which connects') +
+          ' to MariaDB like any other workload.'
+        message: >-
+          "None" also blocks the optional phpMyAdmin console and backup job, which connect to MariaDB like any
+          other workload.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (!self.phpMyAdmin.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-phpmyadmin') in self.internalAccess.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-maria-backup') in self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (self.phpMyAdmin.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-phpmyadmin' : '') +
+          (self.phpMyAdmin.enabled && self.backup.enabled ? ' and ' : '') +
+          (self.backup.enabled ? '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-maria-backup' : '') +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list; add the phpMyAdmin and backup workloads,
+          or they cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (self.phpMyAdmin.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-phpmyadmin'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-maria-backup'] : [])
+      - rule: "!has(self.enablePhpMyAdmin)"
+        mirrors: maria.validateRemovedKeys
+        paths: [phpMyAdmin.enabled]
+        message: >-
+          enablePhpMyAdmin was renamed in 1.4.0. Use phpMyAdmin.enabled instead, and remove
+          enablePhpMyAdmin from the values.
+
+  - id: backup
+    title: Backups
+    description: Scheduled database dumps to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs mysqldump on a schedule and uploads the gzipped dump to an S3 or GCS
+          bucket through a Control Plane cloud account. The bucket and the cloud account (for S3 also the
+          IAM policy) must exist before you turn it on.
+        docs: "#backup"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.0') < 0 && oldSelf != null && oldSelf.backup.enabled == true
+            text: >-
+              Backups taken before 1.4.0 may be missing entirely: 1.3.2's default backup image failed every run,
+              and earlier images dumped only a database named test. After the upgrade, check the bucket after the
+              first new run: the backup must be there and name your database, which
+              `aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz - | gunzip | grep -m1 'CREATE DATABASE'`
+              shows (`gsutil cp gs://… -` for GCS).
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Works with every MariaDB version.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: maria.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the backup destination.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version attaches the AWS managed policy `aws::ReadOnlyAccess` to the backup identity, next
+              to your own policy. It grants read access to every bucket in the AWS account, not only the backup
+              bucket. Version 1.4.1 removes it; before you upgrade to 1.4.1, make sure your IAM policy carries
+              the full action list in [Backing up](/template-catalog/templates/mariadb#backing-up).
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Scope the policy to the bucket and its objects, with the S3 actions listed under
+              [Backing up](/template-catalog/templates/mariadb#backing-up). The backup identity carries
+              `cpln-connector`, `aws::ReadOnlyAccess` and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.x or 1.1.x release in place: 1.2.0 renamed the workload and the volume set, so the
+      upgrade deletes the volume set that holds the database and starts MariaDB on an empty one. Install this
+      version as a new release, load a dump of the old database into it, then uninstall the old release.
+
+migrations:
+  # 1.0.0 and 1.1.0 set one CPU and memory value; 1.2.0 split them into minimums and maximums.
+  - { fromVersions: "<1.2.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.2.0", from: resources.memory, to: resources.maxMemory }
+  # 1.3.0 moved the default image from mariadb:10 to mariadb:11, which would move a 1.2.0 release that kept
+  # the default onto a new major: keep the image it runs.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: image
+    valueExpr: self.image
+    note: >-
+      The release keeps the MariaDB image it runs. Moving to a newer major converts the data directory, so
+      change the image on purpose, after a backup.
+  # 1.4.0 moved the credentials into secrets and renamed the phpMyAdmin switch.
+  - fromVersions: "<1.4.0"
+    from: config.db
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials. The database keeps the credentials stored on its volume.
+  - fromVersions: "<1.4.0"
+    from: config.user
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials. The database keeps the credentials stored on its volume.
+  - fromVersions: "<1.4.0"
+    from: config.password
+    note: >-
+      Credentials moved to a dictionary secret with the keys username, password and database; choose it under
+      Credentials. The database keeps the password stored on its volume. Earlier versions shipped the published
+      default password "password" (1.2.0: "pw"): if this value is that default, change it with ALTER USER after
+      the upgrade, then update the secret to match.
+  - fromVersions: "<1.4.0"
+    from: config.rootPassword
+    note: >-
+      The root password moved to an opaque secret (encoding plain); choose it under Credentials. The database
+      keeps the root password stored on its volume. Earlier versions shipped the published default root password
+      "root-password" (1.2.0: "root-pw"): if this value is that default, change it with ALTER USER for both
+      'root'@'localhost' and 'root'@'%' after the upgrade, then update the secret to match.
+  - fromVersions: "<1.4.0"
+    from: enablePhpMyAdmin
+    to: phpMyAdmin.enabled
+    note: phpMyAdmin now defaults to off, and to internal-only access when on; publishing it to the internet is a separate switch under Network.
+  # A rename moves changed values only, and 1.4.0 changed the default (earlier versions shipped
+  # enablePhpMyAdmin: true): carry the release's console even when it is on the old default.
+  - fromVersions: "<1.4.0"
+    to: phpMyAdmin.enabled
+    valueExpr: self.enablePhpMyAdmin
+    note: >-
+      The release keeps its phpMyAdmin setting. Since 1.4.0 the console is internal-only; publishing it to the
+      internet is a separate switch under Network.

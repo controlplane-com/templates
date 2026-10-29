@@ -27,9 +27,8 @@ jobs:
       - run: pip install --quiet pyyaml
       - name: Check that chart changes come with test changes
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'e2e-gate-exempt') }}
-        # The checkout is the PR merged onto today's main, so its first parent is the base. (pull_request.base.sha
-        # is main as of when the PR was opened, so changes merged since would count as this PR's.)
-        run: python3 .github/e2e/run.py gate --base "$(git rev-parse HEAD^1)"
+        # merge-base, not pull_request.base.sha: see e2e-templates.yml (a stale base counts main's own changes).
+        run: python3 .github/e2e/run.py gate --base "$(git merge-base origin/main HEAD)"
       - name: Waived
         if: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-gate-exempt') }}
         run: echo "::notice::e2e coverage gate waived by the e2e-gate-exempt label"

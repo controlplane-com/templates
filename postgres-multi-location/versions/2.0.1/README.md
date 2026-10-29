@@ -82,11 +82,54 @@ member, and the old proxies keep serving until a new one is up. Nothing for you 
 - If your values pin `image` to `controlplanecorporation/patroni-postgres` 0.7 or earlier, the chart
   refuses to render: set it to `0.8`, or remove `image` from your values.
 
+## Upgrading in place from 1.1.0
+
+A plain `helm upgrade` from 1.x deletes the GVC the old release created, with everything in it. These
+steps keep the GVC, the cluster and its data volumes:
+
+```bash
+cpln helm get values RELEASE_NAME > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/postgres-multi-location --version 2.0.1 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- **`--gvc` is the GVC the old release created** (`global.gvc.name` in `values-old.yaml`, `postgres-multi-location-gvc` if you never set it), not the GVC you ran the original install against.
+- **The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`.** If it does not, stop: the GVC was not protected.
+
+Write `values-new.yaml` from `values-old.yaml`. `cpln helm get values` returns only what you set, so
+write out the locations even if you used the 1.x default (shown):
+
+```yaml
+global:
+  locations:          # was global.gvc.locations; copy the list exactly as it is
+    - name: aws-us-east-1
+      replicas: 1
+    - name: aws-eu-central-1
+      replicas: 1
+    - name: aws-us-west-2
+      replicas: 1
+  # delete global.gvc entirely; the chart refuses to render while it is present
+# image: delete it, or set controlplanecorporation/patroni-postgres:0.8 (the chart refuses 0.7 and earlier)
+```
+
+Keep every other key as it is, including `postgres.credentialsSecretName`, and keep the location list
+unchanged. All Postgres members and etcd members restart together, so **stop writes for the upgrade**:
+writes fail until the cluster is back, and writes acknowledged just before the restart can be lost
+(see Important Notes).
+
+Afterwards the GVC belongs to you rather than to the release: `helm uninstall` leaves it in place, and
+you delete it with `cpln gvc delete OLD_GVC_NAME` when you no longer need it. Details:
+[scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Migrating from 1.x
 
 **1.x created its own GVC. 2.0.0 does not — it deploys into the GVC you install it into.**
 
-**Never `helm upgrade` a 1.x release onto 2.0.0.** The upgrade drops `kind: gvc` from the release
+**Never run a plain `helm upgrade` from 1.x onto 2.x** — follow [Upgrading in place from 1.1.0](#upgrading-in-place-from-110)
+above, or migrate to a new release as described here. A plain upgrade drops `kind: gvc` from the release
 manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every
 workload, volume set and identity inside it**, including this cluster's data volumes. Measured on a
 sibling template: **6 seconds, while printing `upgraded successfully`.**
@@ -95,7 +138,7 @@ The chart therefore **refuses to render** if your values still carry the 1.x `gl
 guard cannot fire on an upgrade run with *no* values at all, which sees only 2.0.0's defaults — so
 the procedure below is the safety, not the guard.
 
-Migrate to a **new release** instead:
+To migrate to a **new release** instead:
 
 1. Take a backup of the 1.x cluster (`backup.mode: logical`, or a manual `pg_dumpall`).
 2. Rename `global.gvc.locations` to `global.locations` in your values and delete `global.gvc.name`.
@@ -540,7 +583,7 @@ this is never needed — losing one location is an automatic failover.
 
 ## Important Notes
 
-- **Never `helm upgrade` a 1.x release onto 2.0.0.** The chart refuses to render if the 1.x `global.gvc` key is still in your values, because the upgrade would delete the GVC and everything in it. See [Migrating from 1.x](#migrating-from-1x).
+- **Never run a plain `helm upgrade` from 1.x onto 2.x.** The chart refuses to render if the 1.x `global.gvc` key is still in your values, because the upgrade would delete the GVC and everything in it. See [Upgrading in place from 1.1.0](#upgrading-in-place-from-110) or [Migrating from 1.x](#migrating-from-1x).
 - **Create the credentials secret before installing.** `postgres.credentialsSecretName` names a secret the chart does not create; without it the deployment waits forever on a secret that does not exist.
 - **`global.locations` must match the GVC you install into.** A GVC location this release does not list runs nothing; a listed location the GVC lacks makes the members refuse to bootstrap, naming it. See [Migrating from 1.x](#migrating-from-1x) if you are coming from a 1.x release.
 - **Set `primaryLocation` before the first install if you care where the primary is.** It places the primary on a fresh install, biases later failover elections, and — changed on a live cluster — moves the leader at the cost of a full restart. If the preferred location is unavailable at bootstrap, another location initialises the cluster after 90 s and logs a WARNING; move the primary afterwards with `patronictl switchover`.

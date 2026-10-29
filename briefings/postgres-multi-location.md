@@ -106,6 +106,9 @@
   defaults and the guard cannot fire. That is why the migration prose exists in both the README and
   here. Migration is: dump the old cluster -> install 2.0.0 as a NEW release into an EXISTING GVC ->
   restore -> uninstall the old release (which takes the GVC it created).
+- **In-place path (2026-10-29, render-verified only, not run live):** `scripts/keep-gvc.py`, then 1.1.0 → 2.0.1 with
+  `--gvc <old GVC>` and `global.gvc.locations` → `global.locations` (all Postgres + etcd resource names match);
+  README "Upgrading in place from 1.1.0".
 - **A quirk worth knowing when reading an error:** the etcd subchart's templates render before the
   parent's, so on a shared failure (`global.gvc` present, or a 1-location list) the message the user
   sees says **`etcd-multi-location`**, not `postgres-multi-location`. The refusal is correct and the

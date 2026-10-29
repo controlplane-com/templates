@@ -54,8 +54,10 @@ jobs:
       - run: pip install --quiet pyyaml
       - id: plan
         run: |
-          base="${{ github.event.pull_request.base.sha }}"
-          [ -n "$base" ] || base="$(git merge-base origin/main HEAD)"
+          # Diff against where this PR actually forks from main. pull_request.base.sha can be a stale main
+          # commit, and the PR checkout is the merge with CURRENT main, so diffing against a stale base counts
+          # every template merged since as part of this PR (a CHANGELOG-only PR once planned 30 suites).
+          base="$(git merge-base origin/main HEAD)"
           targets=$(python3 .github/e2e/run.py plan --base "$base" --targets "${{ inputs.targets }}")
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
           echo "Targets: $targets"

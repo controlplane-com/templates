@@ -33,7 +33,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GVC_PREFIX = "templates-ci-"
 # The CI service account manages only resources carrying this tag (its policies match on it).
 MANAGED_TAG = ("templates-ci/managed", "true")
-IGNORED_FOR_RENDER = re.compile(r"/(README\.md|wizard\.yaml)$")
+# Files inside a version directory that never change what a chart deploys: docs and Console metadata.
+IGNORED_FOR_RENDER = re.compile(r"(\.md|/wizard\.yaml|/catalog\.yaml|\.png|\.svg)$")
 
 
 # ─── small helpers ────────────────────────────────────────────────────────────

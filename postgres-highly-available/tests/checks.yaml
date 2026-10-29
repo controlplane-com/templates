@@ -94,5 +94,7 @@ checks:
           -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
     expect:
       stdout: "^AVAIL 0\\.8\\.7$"
-    retries: 6
-    retryDelaySeconds: 15
+    # helm --wait returns while the Patroni members are still restarting; the old leader restarts last
+    # (~4 min in), so wait out the whole rollout.
+    retries: 20
+    retryDelaySeconds: 30

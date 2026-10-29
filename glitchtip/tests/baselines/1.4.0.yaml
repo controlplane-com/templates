@@ -1,0 +1,48 @@
+# glitchtip 1.4.0 — the default install: highly available PostgreSQL (3 Patroni members, 3 etcd, HAProxy)
+# and the bundled Redis with Sentinel, at the chart's default sizes. All three prerequisite secrets are
+# generated per run.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  redispw: hex
+  djangokey1: hex
+  djangokey2: hex
+  adminpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: glitchtip
+      password: "{gen.pgpw}"
+      database: glitchtip
+  auth:
+    type: dictionary
+    entries:
+      secretKey: "{gen.djangokey1}{gen.djangokey2}"
+      adminEmail: e2e-admin@example.com
+      adminPassword: "{gen.adminpw}"
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  pg_user: glitchtip
+  pg_password: "{gen.pgpw}"
+  pg_db: glitchtip
+  admin_email: e2e-admin@example.com
+
+values:
+  auth:
+    secretName: "{secrets.auth.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    redis:
+      auth:
+        fromSecret:
+          name: "{secrets.redis.name}"

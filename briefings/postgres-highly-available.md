@@ -2,7 +2,7 @@
 
 ## What it is
 - A highly available PostgreSQL 17 cluster: multi-replica Patroni for automatic leader election and failover, etcd for consensus, an optional HAProxy that routes writes to the current leader, and an optional PgBouncer in front of that.
-- Ships `controlplanecorporation/patroni-postgres:0.7` (appVersion `17`).
+- Ships `controlplanecorporation/patroni-postgres:0.8` (appVersion `17`, the PostgreSQL major; it does not track the image tag). `0.8` = spilo-17 4.0-p3 + pgvector 0.8.7; Dockerfile in the `images` repo, `patroni/dockerfile`.
 - **15 other templates depend on this chart**, which makes every change here a cascade. Treat it like `postgres`: a version bump obliges a parent-adoption cycle.
 
 ## Common use cases
@@ -22,7 +22,7 @@
 | secret `{release}-postgres-ha-config` | Non-sensitive backup config only; gated on `backup.enabled` |
 | identity + policy | `reveal` on the startup secrets and the user's prerequisite secrets |
 
-## Key knobs (shipped 2.8.0 defaults)
+## Key knobs (shipped 2.8.1 defaults)
 `replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `walLevel` (`replica` \| `logical`; render `fail` on anything else) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
@@ -30,8 +30,9 @@
   2.7.0 wires `metrics: {path: /metrics, port: 8008}` on the patroni container; the platform
   scrapes it with no exporter. Declaring 8008 as `protocol: http` - which is what three of the
   four other metrics-enabled templates do, so it is the natural thing to copy - **breaks the
-  cluster**: the HAProxy startup gate never clears (`waiting for patroni endpoints to answer
-  before starting haproxy`), so no writes reach the database while Patroni itself still reports
+  cluster**: HAProxy could no longer talk to Patroni on :8008 (measured on 2.7.0, where its startup gate never
+  cleared: `waiting for patroni endpoints to answer before starting haproxy`; the same port now carries
+  its health checks), so no writes reach the database while Patroni itself still reports
   a healthy leader and two streaming replicas. Measured 2026-08-25. Same family as the Trino
   X-Forwarded-Proto break: putting a port on the mesh's HTTP path changes how it is handled.
   Verified working on `tcp` via the federate endpoint - all eight metric families present,
@@ -128,4 +129,8 @@
 - **2.8.0 stopped writing the password into `bootstrap.dcs.postgresql.authentication`.** Everything under `bootstrap.dcs` lands in etcd and is served by `GET :8008/config` with no authentication (no `restapi.authentication` is configured), so through 2.7.0 the superuser password was readable by anything that could reach port 8008. Patroni drops `authentication` from the dynamic config anyway (`_safe_copy_dynamic_configuration`), so removing it changes nothing functionally; the LOCAL `postgresql.authentication` (still rendered) is what Patroni uses. Existing clusters keep the stored copy until `PATCH /config {"postgresql":{"authentication":null}}` (README). Note the REST API is also unauthenticated for writes (`PATCH /config`, `/switchover`, `/restart`) — a pre-existing exposure limited only by `internal_access`, not addressed.
 - **Pre-existing, not fixed in 2.8.0:** `pgbouncer.enabled: true` with `proxy.enabled: false` creates the HAProxy workload (its `if` is `proxy OR pgbouncer`) but the policy grants `reveal` on its startup secret only `if proxy.enabled`, so HAProxy never starts. The 2.8.0 wizard blocks that combination with a warning rule.
 - **2.8.0 is the first version with a `wizard.yaml`.** It binds `etcd.*` as ordinary fields (no etcd import), so a parent such as `cdc-pipeline` can import it (nested imports are not supported).
-
+- **2.8.1 is an image bump for pgvector CVE-2026-103484** (`patroni-postgres` 0.7 → 0.8: PGDG `postgresql-{13..17}-pgvector` 0.8.0 → 0.8.7, plus refreshed ca-certificates/curl; nothing else differs in the image). `pg-ha.validateImage` (mirrored in the wizard) refuses `controlplanecorporation/patroni-postgres` tags `0.1`-`0.7` (optional `docker.io/`, optional patch), because the wizard stores `image` in release values and an `upgrade -f` would keep the old one. Other registries, digests and non-version tags pass. `\dx` reports the old `vector` version until `ALTER EXTENSION vector UPDATE;` per database.
+- **2.8.1 also fixed the chart-upgrade write outage (HAProxy startup).** Through 2.8.0 the proxy's start script waited for EVERY Patroni member to answer :8008 (600 s timeout) and the proxy had no readiness probe. Every chart upgrade redeploys the proxy (the tags change) while Patroni rolls, so the new proxies were counted ready, the old ones retired, and the new ones sat in the gate: **125.6 s of refused writes** with the leader untouched (measured 2026-10-23). 2.8.1 waits at most 60 s for ANY member, re-resolves server names at runtime (`resolvers mesh`, as pgedge), and has a readinessProbe on `/stats` :8405 (HAProxy listening). Measured 2026-10-26: 2.8.0 → 2.8.1 cost 3.2 s + 2.4 s (the planned switchover only), a proxy redeploy with a member hung cost 0 s, three hang failovers 70-75 s (Patroni's lease; the proxy adds < 1 s) with 0 proxy restarts. The `replica-N` names resolve to stable per-replica mesh VIPs (pod IPs change on reschedule, the VIPs do not); on a cold install the mesh can answer a placeholder for a few seconds, which runtime DNS heals (measured on timescaledb-highly-available).
+  - **Readiness must NOT be `/healthz` :8404** (false whenever no leader is routable): tried first; in hang failovers the platform restarted proxy replicas after the leaderless window while clients were still routed to them (timescaledb-highly-available: 155 s instead of 70 s).
+  - HAProxy 2.9 starts every server as UP until its first check (~1-3 s; `timeout check 5s` for a member whose :8008 hangs). The 5 s `initialDelaySeconds` covered it in every run — do not shorten it; `init-state down` needs HAProxy 3.1+.
+- **Pre-existing drift, deferred:** the Patroni workload drifts on six probe fields (`livenessProbe`/`readinessProbe` `httpGet.scheme`, `initialDelaySeconds` stored 60/10, `successThreshold`); the proxy workload is clean.

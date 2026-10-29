@@ -1,0 +1,21 @@
+{{- include "pg-ml.validate" . -}}
+kind: volumeset
+name: {{ include "pg-ml.volume.name" . }}
+description: PostgreSQL multi-location data volume
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+  workload: {{ include "pg-ml.name" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

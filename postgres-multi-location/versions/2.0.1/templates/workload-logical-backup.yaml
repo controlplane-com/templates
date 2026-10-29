@@ -1,0 +1,125 @@
+{{- include "pg-ml.validate" . -}}
+{{- if and .Values.backup.enabled (eq .Values.backup.mode "logical") }}
+kind: workload
+name: {{ include "pg-ml.backup.name" . }}
+description: Scheduled logical backup (pg_dumpall) for PostgreSQL multi-location
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+spec:
+  type: cron
+  containers:
+    - name: backup
+      image: {{ .Values.backup.logical.image }}
+      inheritEnv: false
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        # Dump through the proxy so the job always talks to the current primary,
+        # in whichever location it currently sits.
+        - name: PG_HOST
+          value: {{ include "pg-ml.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local
+        - name: PG_PORT
+          value: "5432"
+        - name: PG_USER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "minio" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.minio.bucket | quote }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.minio.prefix | quote }}
+        - name: MINIO_ENDPOINT
+          value: {{ .Values.backup.minio.endpoint | quote }}
+        - name: MINIO_ACCESS_KEY
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.accessKey
+        - name: MINIO_SECRET_KEY
+          value: cpln://secret/{{ .Values.backup.minio.credentialsSecretName }}.secretKey
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
+  # A cron workload runs in EVERY location of its GVC, which would produce one
+  # duplicate dump per location every night. Suspend everywhere by default and
+  # un-suspend only in backup.location. Both blocks are written in FULL — a
+  # partial options block makes the API backfill its own defaults.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  localOptions:
+    - location: //location/{{ .Values.backup.location }}
+      autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 3600
+  firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundBlockedCIDR: []
+      {{- if eq .Values.backup.provider "minio" }}
+      # The MinIO/S3-compatible endpoint is an arbitrary user-supplied address,
+      # so it cannot be resolved to an allowlisted hostname at render time.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      outboundAllowCIDR: []
+      outboundAllowPort:
+        - number: 443
+          protocol: tcp
+      {{- end }}
+      {{- if eq .Values.backup.provider "aws" }}
+      outboundAllowHostname:
+        - s3.{{ .Values.backup.aws.region }}.amazonaws.com
+        - s3.amazonaws.com
+      {{- else if eq .Values.backup.provider "gcp" }}
+      outboundAllowHostname:
+        - storage.googleapis.com
+      {{- else }}
+      outboundAllowHostname: []
+      {{- end }}
+    internal:
+      # Nothing connects INTO a cron, so this is deliberately not wired to
+      # internalAccess.type: the job only makes outbound connections, to the
+      # HAProxy tier (which lists this workload via pg-ml.ownWorkloadLinks).
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  job:
+    schedule: {{ .Values.backup.logical.schedule | quote }}
+    concurrencyPolicy: Forbid
+    restartPolicy: Never
+    historyLimit: 5
+  supportDynamicTags: false
+{{- end }}

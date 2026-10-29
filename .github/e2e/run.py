@@ -325,13 +325,62 @@ def helm(t, verb, version, vfile, timeout_s):
     args = ["helm", verb, t.release, chart, "--gvc", t.gvc, "--dependency-update", *chart_values(chart), "-f", vfile,
             "--wait", "--timeout", str(timeout_s), "--tag", "=".join(MANAGED_TAG), "--state-tag", "=".join(MANAGED_TAG)]
     code, out, err = cpln(*args, timeout=timeout_s + 300)
+    if code == 0 and not wait_all_replicas(t, timeout_s):
+        return 1, out + err + f"\nnot every replica was ready within {timeout_s}s of the helm {verb} returning"
     return code, out + err
+
+
+def release_workloads(t):
+    wls = cpln_json("workload", "query", "--gvc", t.gvc, "--tag", f"app.cpln.io/instance={t.release}") or {}
+    return wls.get("items", [])
+
+
+def all_replicas_ready(t):
+    """`--wait` reads the workload's server-side health, which can report ready while a stateful workload is
+    still starting its later replicas one by one (elasticsearch, redis-cluster). Count them instead: every
+    location has its desired number of replicas, all of them ready."""
+    for w in release_workloads(t):
+        if w.get("spec", {}).get("type") == "cron":
+            continue
+        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc)
+        if d is None:
+            return False
+        for dep in d.get("items", []):
+            st = dep.get("status", {})
+            want = st.get("desiredScale") or 0
+            if want == 0:  # a location scaled to zero or deactivated
+                continue
+            # Measured: a standard workload has ONE `versions` entry for its version, holding the replica counts
+            # (3 ready replicas = one entry, replicasReady 3); a stateful workload has one entry PER REPLICA
+            # (replicasReady 1 each). So sum replicasReady over the newest version's entries.
+            vers = st.get("versions") or []
+            if not st.get("ready") or not vers:
+                return False
+            newest = max(v.get("workload") or 0 for v in vers)
+            cur = [v for v in vers if (v.get("workload") or 0) == newest]
+            if not all(v.get("ready") and v.get("containers") for v in cur):
+                return False
+            ready = sum(min(((c.get("resources") or {}).get("replicasReady") or 0) for c in v["containers"].values())
+                        for v in cur)
+            if ready < want:
+                return False
+    return True
+
+
+def wait_all_replicas(t, timeout_s):
+    """True once all_replicas_ready holds on two polls in a row, so a ramp that briefly reads ready does not count."""
+    deadline, streak = time.time() + timeout_s, 0
+    while time.time() < deadline:
+        streak = streak + 1 if all_replicas_ready(t) else 0
+        if streak >= 2:
+            return True
+        time.sleep(10)
+    return False
 
 
 def deployments_summary(t):
     lines = []
-    wls = cpln_json("workload", "query", "--gvc", t.gvc, "--tag", f"app.cpln.io/instance={t.release}") or {}
-    for w in wls.get("items", []):
+    for w in release_workloads(t):
         d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
         for dep in d.get("items", []):
             st = dep.get("status", {})

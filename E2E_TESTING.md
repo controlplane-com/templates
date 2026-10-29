@@ -31,7 +31,9 @@ newest version with a baseline.
 
 For the version under test, on a fresh install:
 
-1. The install succeeds and every workload becomes ready (`--wait`, the baseline's `timeoutSeconds`).
+1. The install succeeds and every workload becomes ready: `--wait`, then every replica in every location, so a
+   stateful workload that starts its replicas one at a time has finished starting before any check runs
+   (the baseline's `timeoutSeconds` bounds each wait).
 2. **Rendered == stored**: each workload, volumeset, identity and policy the API stored matches the chart's
    render under the Console Drift tab's rules. Any difference is the drift users see on a default install.
    For now drift is reported as a **warning** and does not fail the run, until the catalog's existing drift

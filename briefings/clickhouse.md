@@ -49,6 +49,9 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   "upgraded successfully". The chart refuses at render if the old `gvc` key is present, but an upgrade run
   with **no values at all** slips past the guard. Migration is: existing GVC → new release → reload data →
   uninstall the old release **against the GVC you originally installed it into**.
+- **In-place 2.8.0 → 3.0.0, keeping the GVC (5434):** README "Upgrading in place from 2.8.0" — `scripts/keep-gvc.py`,
+  `--gvc` = the 2.x GVC, `locations` in the SAME order (shard numbers, Keeper ids), `internal_access` → `internalAccess`.
+  Render-verified only (same resource names, same macros/Keeper config), not live-proven.
 - **Prerequisite secret missing = silent wedge.** `cpln logs` returns **zero lines** (the container never
   starts). The only honest diagnostic is `status.versions[].message` from
   `cpln workload get-deployments {rel}-clickhouse-server` — note `get-deployments`, not `get`. Self-heals in

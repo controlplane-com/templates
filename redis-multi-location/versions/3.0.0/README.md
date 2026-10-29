@@ -5,8 +5,8 @@ location to elect a new master when the current one is lost. Runs **Redis (the d
 one `engine` knob, chosen at install. This chart deploys into an existing GVC and requires that GVC to
 have **at least two locations**; for a single-location cluster, use the `redis` template instead.
 
-> **Upgrading from 2.x?** Do **not** `helm upgrade` onto this version — it would delete your GVC and
-> everything in it. See [Migrating from 2.x](#migrating-from-2x). The chart refuses to render if your
+> **Upgrading from 2.x?** Do **not** run a plain `helm upgrade` onto this version — it would delete your GVC and
+> everything in it. See [Upgrading in place from 2.2.0](#upgrading-in-place-from-220) or [Migrating from 2.x](#migrating-from-2x). The chart refuses to render if your
 > values still carry the 2.x `global.gvc` key.
 
 ## Architecture
@@ -346,16 +346,54 @@ redis-cli -h $MASTER_HOST -p $MASTER_PORT --no-auth-warning -a "$REDIS_PASSWORD"
 redis-cli -h {release}-redis.{gvc}.cpln.local -p 6379 --no-auth-warning -a "$REDIS_PASSWORD" GET my-key
 ```
 
+## Upgrading in place from 2.2.0
+
+A plain `helm upgrade` from 2.x deletes the GVC the old release created, with everything in it. These
+steps keep the GVC, both tiers and their data, and every client hostname stays the same:
+
+```bash
+cpln helm get values RELEASE_NAME > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/redis-multi-location --version 3.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- **`--gvc` is the GVC the old release created** (`global.gvc.name` in `values-old.yaml`, `redis-multi-location-gvc` if you never set it), not the GVC you ran the original install against.
+- **The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`.** If it does not, stop: the GVC was not protected.
+
+Write `values-new.yaml` from `values-old.yaml`. `cpln helm get values` returns only what you set, so
+write out the locations even if you used the 2.x default (shown):
+
+```yaml
+global:
+  locations:          # was global.gvc.locations; copy the list exactly as it is
+    - name: aws-us-east-1
+    - name: aws-eu-central-1
+    - name: aws-us-west-2
+  # delete global.gvc entirely; the chart refuses to render while it is present
+```
+
+Keep every other key as it is, including `engine`, which cannot change on an existing install. Every
+Redis and Sentinel replica in every location restarts at once, so treat the upgrade as a planned write
+outage.
+
+Afterwards the GVC belongs to you rather than to the release: `helm uninstall` leaves it in place, and
+you delete it with `cpln gvc delete OLD_GVC_NAME` when you no longer need it. Details:
+[scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Migrating from 2.x
 
-**2.x created its own GVC. 3.0.0 does not, and there is no in-place upgrade path.** A `helm upgrade`
+**2.x created its own GVC. 3.0.0 does not.** Upgrade in place with [Upgrading in place from 2.2.0](#upgrading-in-place-from-220)
+above, or migrate to a new release as described here. A plain `helm upgrade`
 from 2.x drops `kind: gvc` from the release manifest, and Helm deletes what a chart no longer declares
 — which destroys that GVC and **every workload, volume set and identity inside it**, in seconds, while
 printing `upgraded successfully`. The chart refuses to render when the 2.x `global.gvc` key is still
 present, but an upgrade run with **no values at all** falls back to 3.0.0's own defaults and cannot be
-caught that way. Do not attempt it.
+caught that way. Never run a plain upgrade.
 
-Migrate to a **new release** instead:
+To migrate to a **new release** instead:
 
 1. Pick or create a GVC with the locations you want, and confirm it has at least two.
 2. Install 3.0.0 as a **new release** into that GVC, with `global.locations` listing exactly those
@@ -403,8 +441,8 @@ Values that changed:
   no replica was eligible for promotion — but treat a Redis password change as a planned restart of the
   whole tier, not a rolling one. Changing the SENTINEL password alone is safe: sentinel-only restarts
   produced no failover vote at all.
-- **Never `helm upgrade` a 2.x release onto 3.0.0** — it deletes the GVC and everything in it. See
-  [Migrating from 2.x](#migrating-from-2x).
+- **Never run a plain `helm upgrade` from 2.x onto 3.0.0** — it deletes the GVC and everything in it. See
+  [Upgrading in place from 2.2.0](#upgrading-in-place-from-220) or [Migrating from 2.x](#migrating-from-2x).
 - **Every location in `global.locations` must already exist in the GVC.** The platform accepts a
   location the GVC lacks, stores it, and silently runs nothing there — which removes the Sentinel
   quorum failover depends on while every status surface reads healthy. On a **fresh** install the

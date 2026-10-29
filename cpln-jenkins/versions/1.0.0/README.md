@@ -159,6 +159,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-jenkins"} |= "Failed to list 
 - **The agent GVC must have exactly one location.** Multi-location GVCs are rejected by the plugin.
 - **An API key with no policy bindings authenticates but provisions nothing** — it needs workload `view`/`create`/`delete` in the agent GVC, plus `view` on GVCs, identities and volume sets.
 - **Agents in a different GVC (`cloud.gvc`) dial back to the controller's internal address**, which the default `internalAccess.type: same-gvc` does not admit; widen it (for example `same-org`) for cross-GVC agents. This combination has not been tested.
+- **Renaming `admin.username` does not remove the old login** — it keeps full admin rights and its current password, and later password changes do not reach it; delete it under Manage Jenkins › Users after the upgrade.
 - **`publicAccess.enabled: true` puts a Jenkins login on the internet.** Set a strong admin password first, or use a port-forward tunnel instead.
 - **Agent CPU and memory have floors** (50 millicores, 128 MiB). The chart refuses to render below them, because the agent JVM fails to start or is OOM-killed.
 - **Jobs, build history and installed plugins live on the volume set** and survive redeployment; uninstalling the release deletes it.

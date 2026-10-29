@@ -25,7 +25,9 @@ steps:
               3.0.0 dropped the Bitnami images of Kafka and Kafka Connect in favour of the Apache upstream
               images, and the chart now refuses a Kafka or Kafka Connect image with `bitnami` in its name. A
               release that kept the default image moves to `apache/kafka:3.9.1` with this upgrade; if you set a
-              Bitnami image, set an `apache/kafka` image instead.
+              Bitnami image, set an `apache/kafka` image instead. A release that kept the default log directories also
+              moves them from `/opt/bitnami/kafka/logs-N` to `/opt/kafka/logs-N`. Moving a 2.x Bitnami release's data
+              onto 3.x is unverified: plan a new release and mirror the topics into it instead.
           - path: kafka.image
             type: string
             format: image
@@ -139,7 +141,7 @@ steps:
           - rule: oldSelf == null || self.kafka.image == oldSelf.kafka.image
             severity: info
             paths: [kafka.image]
-            message: A new Kafka image restarts the brokers, one at a time.
+            message: A new Kafka image restarts the brokers.
           # Platform limits (nodelibs/schema/src/workload.ts:33-84, :441-505): CPU at least 25 millicores, memory at
           # least 32 MiB, at most 8 MiB of memory per millicore; on a stateful workload the maximum is at most 4 times
           # the minimum and at most 4000 millicores or 4096 MiB above it. The platform converts cores and Gi with
@@ -522,12 +524,12 @@ steps:
               self.kafka.listeners.client.sasl.admin.password != oldSelf.kafka.listeners.client.sasl.admin.password)
             rule: >-
               self.kafka.listeners.client.sasl.admin.password.matches('^[A-Za-z]([!#-&(-\\[\\]-~]*[!#-&(-9;-\\[\\]-~])?$') &&
-              !(self.kafka.listeners.client.sasl.admin.password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.listeners.client.sasl.admin.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.listeners.client.sasl.admin.password]
             message: >-
               A new admin password for the client listener must start with a letter, use printable ASCII characters
               other than spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`,
-              `yes` or `null`: the chart writes it into YAML unquoted, which must read it as text, and into
+              `false` or `null`: the chart writes it into YAML unquoted, which must read it as text, and into
               double-quoted JAAS strings. An installed password is accepted as it is.
           # values.yaml:90 publishes your-admin-password (the field's example, refused on install by the engine), :108
           # tgtgtg for a listener admin, and kafka 1.0.0 shipped fkor3Dro52oodA as its fixed default. The admin is a
@@ -887,11 +889,11 @@ steps:
               self.kafka.listeners.public.sasl.admin.password != oldSelf.kafka.listeners.public.sasl.admin.password)
             rule: >-
               self.kafka.listeners.public.sasl.admin.password.matches('^[A-Za-z]([!#-&(-\\[\\]-~]*[!#-&(-9;-\\[\\]-~])?$') &&
-              !(self.kafka.listeners.public.sasl.admin.password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.listeners.public.sasl.admin.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.listeners.public.sasl.admin.password]
             message: >-
               The public listener's admin password must start with a letter, use printable ASCII characters other than
-              spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes` or
+              spaces, quotes and backslashes, not end with a colon, and not be a YAML word such as `true`, `false` or
               `null`: the chart writes it into YAML unquoted, which must read it as text, and into double-quoted JAAS
               strings.
           # values.yaml:93-110 (commented public block: admin admin/tgtgtg, public-user/your-public-user-password) and
@@ -1330,9 +1332,9 @@ steps:
             # secret-secrets.yaml:6 writes it unquoted; YAML parsers (js-yaml in `cpln helm`, YAML 1.1) read digits with
             # e, and 0x/0o/0b numbers (hex, octal or binary digits only, with an optional minus sign) as numbers, which
             # the platform refuses in a dictionary secret.
-            pattern: '^(?!-?0[xX][0-9a-fA-F_]*$)(?!-?0[oO][0-7_]*$)(?!-?0[bB][01_]*$)(?=.*[A-DF-Za-df-z])([A-Za-z0-9_-]{22}|your-kraft-cluster-id)$'
+            pattern: '^(?!-?0[xX][0-9a-fA-F_]*$)(?!-?0[oO][0-7_]*$)(?!-?0[bB][01_]*$)(?=.*[A-DF-Za-df-z])([A-Za-z0-9_-]{22,}|your-kraft-cluster-id)$'
             patternMessage: >-
-              Enter the 22-character ID that `kafka-storage.sh random-uuid` prints. The chart writes it into YAML
+              Enter your KRaft cluster ID (`kafka-storage.sh random-uuid` prints 22 characters; an existing cluster keeps its ID). The chart writes it into YAML
               unquoted, so it must contain a letter other than e and must not read as a hexadecimal, octal or binary
               number (`0x…`, `0o…`, `0b…`, with or without a leading `-`).
           - path: kafka.secrets.inter_broker_password
@@ -1354,11 +1356,11 @@ steps:
           - when: oldSelf == null || self.kafka.secrets.inter_broker_password != oldSelf.kafka.secrets.inter_broker_password
             rule: >-
               self.kafka.secrets.inter_broker_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.inter_broker_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.inter_broker_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.inter_broker_password]
             message: >-
               A new inter-broker password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`: the chart writes it into YAML unquoted, which must read it as text, and copies it into JAAS
               strings with sed, where |, & and \ have a meaning. An installed password is accepted as it is.
           # workload-kafka-cluster.yaml:75-76 passes the ID as CLUSTER_ID to the apache/kafka image, whose launch script
@@ -1425,17 +1427,16 @@ steps:
               brokers cannot format their storage and do not start. Enter a 22-character cluster ID, such as one from
               `kafka-storage.sh random-uuid`.
           # secret-controller-configuration.yaml:38 and :60 take the password a broker sends and the one it accepts from
-          # one placeholder, which secret-init.yaml:115-116 fills when the broker starts; the brokers roll one at a time
-          # (workload-kafka-cluster.yaml rolloutOptions.maxUnavailableReplicas '1'), so a restarted broker and one not
-          # yet restarted cannot log in to each other. With the brokers suspended, they all start on the new password.
+          # one placeholder, which secret-init.yaml:115-116 fills when the broker starts;
+          # until every broker has restarted, a restarted broker and one not yet restarted cannot log in to each other. With the brokers suspended, they all start on the new password.
           - rule: >-
               oldSelf == null || self.kafka.suspend == true || oldSelf.kafka.suspend == true ||
               self.kafka.secrets.inter_broker_password == oldSelf.kafka.secrets.inter_broker_password
             severity: warning
             paths: [kafka.secrets.inter_broker_password]
             message: >-
-              The brokers restart one at a time, and until every broker runs on the new inter-broker password, the restarted
-              brokers and the others cannot log in to each other, so the cluster is degraded during the rollout and,
+              Until every broker has restarted on the new inter-broker password, the restarted brokers and the others cannot
+              log in to each other, so the cluster is degraded during the rollout and,
               with the health sidecar on, the rollout stalls. Turn on Suspend the brokers in the upgrade that changes the
               password, then turn it off in the next upgrade.
           - rule: >-
@@ -1444,18 +1445,18 @@ steps:
             severity: warning
             paths: [kafka.secrets.controller_password]
             message: >-
-              The brokers restart one at a time, and until every broker runs on the new controller password, the restarted
-              brokers and the others cannot log in to each other, so the cluster is degraded during the rollout and,
+              Until every broker has restarted on the new controller password, the restarted brokers and the others cannot
+              log in to each other, so the cluster is degraded during the rollout and,
               with the health sidecar on, the rollout stalls. Turn on Suspend the brokers in the upgrade that changes the
               password, then turn it off in the next upgrade.
           - when: oldSelf == null || self.kafka.secrets.controller_password != oldSelf.kafka.secrets.controller_password
             rule: >-
               self.kafka.secrets.controller_password.matches('^[A-Za-z]([!#-%(-\\[\\]-{}~]*[!#-%(-9;-\\[\\]-{}~])?$') &&
-              !(self.kafka.secrets.controller_password.lowerAscii() in ['y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null'])
+              !(self.kafka.secrets.controller_password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
             paths: [kafka.secrets.controller_password]
             message: >-
               A new controller password must start with a letter, use printable ASCII characters other than spaces,
-              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `yes`
+              quotes, pipes, ampersands and backslashes, not end with a colon, and not be a YAML word such as `true`, `false`
               or `null`: the chart writes it into YAML unquoted, which must read it as text, and copies it into JAAS
               strings with sed, where |, & and \ have a meaning. An installed password is accepted as it is.
 
@@ -1832,8 +1833,8 @@ steps:
                   # booleans and helm fails.
                   - rule: >-
                       self.kafka.volumes.logs.customEncryption.region == null ||
-                      !(self.kafka.volumes.logs.customEncryption.region in ['null', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n'])
-                    message: The log volumes' encryption location cannot be named like a YAML word such as `null`, `true` or `yes`.
+                      !(self.kafka.volumes.logs.customEncryption.region in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
+                    message: The log volumes' encryption location cannot be named like a YAML word such as `null`, `true` or `false`.
               - path: keyId
                 type: string
                 label: KMS key ARN
@@ -2208,6 +2209,7 @@ steps:
           - path: kafka_rest_proxy.jaas_conf
             type: string
             label: JAAS configuration
+            sensitive: true
             multiline: true
             required: true
             # Written with nindent into a folded (>-) YAML block of the proxy's JAAS secret (kafka-rest-proxy.yaml:36),
@@ -2644,7 +2646,6 @@ steps:
     sections:
       - id: connectors
         title: Connect clusters
-        docs: "#kafka-connect"
         description: >-
           A Connect cluster is a stateful workload with its own plugin volume and the connectors you configure.
           Leave the list empty to run no Kafka Connect.
@@ -2864,7 +2865,7 @@ steps:
                   label: Workload tags
                   # kafka-connectors.yaml writes each value with | quote, so booleans and numbers render as text.
                   keys:
-                    pattern: '^(?!(null|Null|NULL|true|True|TRUE|false|False|FALSE|yes|Yes|YES|no|No|NO|on|On|ON|off|Off|OFF|y|Y|n|N|helm\.sh/chart|app\.cpln\.io/(name|instance|version|managed-by)|cpln/(marketplace|marketplace-template|marketplace-template-version|marketplace-gvc|protected|release))$)[A-Za-z][A-Za-z0-9._/-]*$'
+                    pattern: '^(?!(null|Null|NULL|true|True|TRUE|false|False|FALSE|helm\.sh/chart|app\.cpln\.io/(name|instance|version|managed-by)|cpln/(marketplace|marketplace-template|marketplace-template-version|marketplace-gvc|protected|release))$)[A-Za-z][A-Za-z0-9._/-]*$'
                     patternMessage: >-
                       Start with a letter and use letters, digits, dots, underscores, slashes and hyphens. Do not use a YAML
                       word such as `true` or `null`, or a tag the chart or the install sets itself (such as `cpln/release`).
@@ -3136,9 +3137,9 @@ steps:
                 - rule: >-
                     item.volumes == null || item.volumes.customEncryption == null ||
                     item.volumes.customEncryption.region == null ||
-                    !(item.volumes.customEncryption.region in ['null', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n'])
+                    !(item.volumes.customEncryption.region in ['true','True','TRUE','false','False','FALSE','null','Null','NULL'])
                   paths: [volumes.customEncryption.region]
-                  message: The plugin volume's encryption location cannot be named like a YAML word such as `null`, `true` or `yes`.
+                  message: The plugin volume's encryption location cannot be named like a YAML word such as `null`, `true` or `false`.
                 # The values document cannot carry a raw DEL, C1 control character, U+FFFE, U+FFFF, U+2028 or U+2029 in a
                 # tag value written as given in YAML mode (Helm cannot parse it).
                 - rule: >-
@@ -4133,7 +4134,7 @@ migrations:
       set its public inbound CIDRs under Kafbat UI on the Web UI and REST step.
   - fromVersions: ">=2.0.0 <3.1.1"
     to: kafka.firewall.external_inboundAllowCIDR
-    valueExpr: "'external_inboundAllowCIDR' in self.kafka.firewall ? self.kafka.firewall.external_inboundAllowCIDR : null"
+    valueExpr: "'external_inboundAllowCIDR' in self.kafka.firewall ? (type(self.kafka.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.kafka.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.kafka.firewall.external_inboundAllowCIDR)) : null"
     note: >-
       These versions allowed 0.0.0.0/0 from the internet on the brokers by default, and the value is carried so
       the release keeps its public access. Newer versions set nothing by default: narrow it or clear it under

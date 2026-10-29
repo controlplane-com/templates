@@ -1,0 +1,83 @@
+# Feature checks for the elasticsearch template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# The checks run in an Elasticsearch node. Security is off by design (the mesh secures the network), so
+# requests carry no credentials. The expected node count assumes the default three replicas.
+checks:
+  - id: cluster-green
+    description: All three nodes joined one cluster and every shard is allocated.
+    exec:
+      workload: "{release}-elasticsearch"
+      container: elasticsearch
+      script: |
+        h=$(curl -s -m 20 localhost:9200/_cluster/health 2>&1); rc=$?
+        if echo "$h" | grep -q '"status":"green"' && echo "$h" | grep -q '"number_of_nodes":3,'; then echo "GREEN 3"
+        elif [ -z "$h" ]; then echo "NOT GREEN on $HOSTNAME: no response (curl exit $rc)"
+        else echo "NOT GREEN on $HOSTNAME: $(echo "$h" | grep -o '"status":"[a-z]*"\|"number_of_nodes":[0-9]*' | tr '\n' ' ')"
+        fi
+    expect:
+      stdout: "^GREEN 3$"
+    # The nodes start one at a time (OrderedReady, ~2 min each), and `helm install --wait` returns once
+    # the workload reports ready, which is when the FIRST node is. Measured 2026-10-27: the third node
+    # joined ~4 min after the install returned. Eight minutes covers that with room to spare.
+    retries: 24
+    retryDelaySeconds: 20
+
+  - id: index-replicates
+    description: A document indexed with two replicas is stored on all three nodes and reads back through the service.
+    exec:
+      workload: "{release}-elasticsearch"
+      container: elasticsearch
+      script: |
+        set -e
+        S="http://{release}-elasticsearch.{gvc}.cpln.local:9200"
+        M="e2e-$(date +%s%N)"
+        curl -sf -XPUT localhost:9200/e2e -H 'Content-Type: application/json' \
+          -d '{"settings":{"number_of_replicas":2}}' >/dev/null 2>&1 || true
+        curl -sf -XPOST 'localhost:9200/e2e/_doc?refresh=wait_for' -H 'Content-Type: application/json' \
+          -d "{\"version\":\"{version}\",\"marker\":\"$M\"}" >/dev/null
+        curl -s "localhost:9200/_cluster/health/e2e?wait_for_status=green&timeout=60s" >/dev/null
+        echo "COPIES $(curl -s 'localhost:9200/_cat/shards/e2e?h=state' | grep -c STARTED)"
+        curl -sf "$S/e2e/_search?q=marker:$M" | grep -q "\"$M\"" && echo "READ $M"
+    expect:
+      stdout: "^COPIES 3$(.|\\n)*^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: missing-index-404
+    description: A search on an index that does not exist is refused (the control for the read above).
+    exec:
+      workload: "{release}-elasticsearch"
+      container: elasticsearch
+      script: curl -s -i localhost:9200/e2e-does-not-exist/_search | head -1
+    expect:
+      stdout: "^HTTP/1.1 404"
+
+  - id: kibana-available
+    description: Kibana is up and reports its connection to Elasticsearch as available.
+    exec:
+      workload: "{release}-kibana"
+      container: kibana
+      script: |
+        curl -s localhost:5601/api/status | sed -n 's/.*"overall":{"level":"\([a-z]*\)".*/OVERALL \1/p'
+    expect:
+      stdout: "^OVERALL available$"
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The document indexed on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data carried over.
+    exec:
+      workload: "{release}-elasticsearch"
+      container: elasticsearch
+      script: |
+        r=$(curl -s -m 30 -G localhost:9200/e2e/_count --data-urlencode 'q=version:"{installed_version}"' 2>&1)
+        n=$(echo "$r" | sed -n 's/.*"count":\([0-9]*\).*/\1/p')
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (documents for {installed_version}: ${n:-none}) $r $(curl -s -m 10 'localhost:9200/_cat/indices/e2e?v' 2>&1)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

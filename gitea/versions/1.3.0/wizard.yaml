@@ -29,6 +29,10 @@ imports:
           workload under Allowed workloads.
       backup.enabled:
         help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
 
 steps:
   - id: gitea
@@ -88,6 +92,30 @@ steps:
             label: Invite-only registration
             description: On, only an admin creates accounts; off, anyone who reaches the web UI can sign up.
     rules:
+      # Secrets this release creates, or that the upgrade deletes because the installed version created them.
+      - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+        rule: self.gitea.auth.secretName != context.releaseName + '-gitea-env'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-gitea-env was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.'
+        message: >-
+          That secret was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.
+      - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+        rule: self.gitea.auth.secretName != context.releaseName + '-pg-config'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-pg-config was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.'
+        message: >-
+          That secret was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.
+      - rule: self.gitea.auth.secretName != context.releaseName + '-gitea-bootstrap'
+        severity: warning
+        paths: [gitea.auth.secretName]
+        messageExpression: >-
+          context.releaseName + '-gitea-bootstrap is created by this chart for its start script. Use a different name.'
+        message: >-
+          That secret is created by this chart for its start script. Use a different name.
       - rule: self.gitea.auth.secretName != ''
         mirrors: gitea.validateAuth
         paths: [gitea.auth.secretName]
@@ -110,6 +138,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume set with every repository on it.
@@ -123,6 +152,7 @@ steps:
             label: Maximum capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [50, 100, 200, 500, 1000, 2000]
           - path: volumeset.autoscaling.minFreePercentage
@@ -151,7 +181,7 @@ steps:
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
         paths: [volumeset.capacity]
-        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
   - id: access
     title: Access
@@ -256,6 +286,30 @@ rules:
     message: >-
       1.2.0 created the database secret itself, and this upgrade deletes it. Create a secret under a NEW
       name holding the same username, password and database, and name it here.
+  # Secrets this release creates, or that the upgrade deletes because the installed version created them.
+  - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+    rule: self.postgres.config.credentialsSecretName != context.releaseName + '-gitea-env'
+    severity: warning
+    paths: [postgres.config.credentialsSecretName]
+    messageExpression: >-
+      context.releaseName + '-gitea-env was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.'
+    message: >-
+      That secret was created by Gitea 1.0.0, and this upgrade deletes it. Create the secret under a new name.
+  - when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') < 0
+    rule: self.postgres.config.credentialsSecretName != context.releaseName + '-pg-config'
+    severity: warning
+    paths: [postgres.config.credentialsSecretName]
+    messageExpression: >-
+      context.releaseName + '-pg-config was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.'
+    message: >-
+      That secret was created by the bundled PostgreSQL of the installed version, and this upgrade deletes it. Create the secret under a new name.
+  - rule: self.postgres.config.credentialsSecretName != context.releaseName + '-gitea-bootstrap'
+    severity: warning
+    paths: [postgres.config.credentialsSecretName]
+    messageExpression: >-
+      context.releaseName + '-gitea-bootstrap is created by this chart for its start script. Use a different name.'
+    message: >-
+      That secret is created by this chart for its start script. Use a different name.
   - rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks Gitea, which connects to its database like any other workload.'

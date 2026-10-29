@@ -1,0 +1,298 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MinIO
+# One stateful workload with no location handling: every GVC location would form its own independent
+# pool with its own data, which the template does not replicate between locations.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Root credentials
+    description: The MinIO root user and password.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the root user and password as values: they are stored in the Helm release and
+          in a RELEASE_NAME-minio-admin secret the chart creates. Version 1.3.0 and later take them from a
+          dictionary secret you create instead.
+        textExpression: >-
+          'This version takes the root user and password as values: they are stored in the Helm release
+          and in a ' + context.releaseName + '-minio-admin secret the chart creates. Version 1.3.0 and
+          later take them from a dictionary secret you create instead.'
+      - path: admin.username
+        type: string
+        label: Root user
+        required: true
+        example: true
+        minLength: 3
+        description: >-
+          The MinIO root user, and the S3 access key every client and every other template uses. At least
+          3 characters.
+      - path: admin.password
+        type: string
+        label: Root password
+        required: true
+        example: true
+        sensitive: true
+        widget: password
+        minLength: 8
+        description: >-
+          The MinIO root password, and the S3 secret key every client and every other template uses. At
+          least 8 characters.
+        help: >-
+          The chart's defaults (myuser / mypassword123) are published in the template repository and shared
+          by every install that keeps them. Generate a password, for example with `openssl rand -hex 24`.
+    rules:
+      # This version writes both values into the admin secret unquoted (templates/secret-admin.yaml), so a
+      # value YAML reads as another type or as syntax changes or breaks the rendered secret.
+      - when: oldSelf == null || self.admin.username != oldSelf.admin.username
+        rule: >-
+          !self.admin.username.matches('^\\s') && !self.admin.username.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.admin.username.matches('^[-?:](\\s|$)') && !self.admin.username.matches('\\t') &&
+          !self.admin.username.contains(': ') && !self.admin.username.contains(' #') && !self.admin.username.endsWith(':') && !self.admin.username.endsWith(' ') &&
+          !(self.admin.username in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.admin.username.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.admin.username.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.admin.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.admin.username.matches('^\\.(nan|NaN|NAN)$') && !self.admin.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [admin.username]
+        message: >-
+          This version writes the root user into its secret unquoted, so this value would be read as another
+          type or break the secret. Avoid a value that is only a number, a date, true, false or null, one
+          that starts with a space or one of ! & * % @ ` ' " [ ] { } | > , # - ? :, and one that contains
+          ": " or " #" or ends with ":" or a space.
+      - when: oldSelf == null || self.admin.password != oldSelf.admin.password
+        rule: >-
+          !self.admin.password.matches('^\\s') && !self.admin.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.admin.password.matches('^[-?:](\\s|$)') && !self.admin.password.matches('\\t') &&
+          !self.admin.password.contains(': ') && !self.admin.password.contains(' #') && !self.admin.password.endsWith(':') && !self.admin.password.endsWith(' ') &&
+          !(self.admin.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.admin.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.admin.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.admin.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.admin.password.matches('^\\.(nan|NaN|NAN)$') && !self.admin.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [admin.password]
+        message: >-
+          This version writes the root password into its secret unquoted, so this value would be read as
+          another type or break the secret. Avoid a value that is only a number, a date, true, false or
+          null, one that starts with a space or one of ! & * % @ ` ' " [ ] { } | > , # - ? :, and one that
+          contains ": " or " #" or ends with ":" or a space. A hex password from openssl rand -hex is fine.
+      - rule: >-
+          oldSelf == null || (self.admin.username == oldSelf.admin.username &&
+          self.admin.password == oldSelf.admin.password)
+        severity: info
+        paths: [admin.password]
+        message: >-
+          Changing the root user or password rotates the root credentials, which are also the S3 access key
+          and secret key. The nodes restart with the new pair; update every client and every template that
+          uses the old pair in the same window.
+
+  - id: cluster
+    title: Cluster
+    description: The size of the erasure-coded pool and the compute of each node.
+    fields:
+      - type: note
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the pool's nodes, and the first upgrade after an install does so even with
+          unchanged values. Treat it as a planned restart of the pool.
+      - type: note
+        severity: warning
+        text: >-
+          This version runs the image minio/minio:RELEASE.2025-09-07T16-13-09Z, fixed in the chart, and
+          Docker Hub no longer serves MinIO's images to anonymous pulls (MinIO withdrew them in 2025). Its
+          nodes cannot pull the image, so a new install never starts.
+      - path: replicas
+        type: integer
+        label: Nodes
+        min: 4
+        required: true
+        immutable: >-
+          The peer list is fixed when the pool first forms. MinIO grows by adding server pools, which this
+          template does not model.
+        suggestions: [4, 6, 8, 10, 12, 16]
+        description: >-
+          Every object is striped across all nodes with data and parity blocks, so the node count sets both
+          the usable share of the raw capacity and how many nodes may be down. 6 or more is recommended for
+          production. Choose it now: it cannot change after install.
+      - type: note
+        severity: warning
+        when: context.mode == 'install' && self.replicas > 5
+        textExpression: >-
+          'The default replicas-per-workload quota is 5, and ' + string(self.replicas) + ' nodes need more. ' +
+          'Request a quota increase before you install, or the install is refused; check your org limit with ' +
+          '`cpln quota get` (it may already be raised).'
+        text: >-
+          The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
+          install is refused; check your org limit with `cpln quota get` (it may already be raised).
+      - path: resources.cpu
+        type: quantity
+        quantity: cpu
+        label: CPU
+        required: true
+        min: 25m
+        suggestions: ["500m", "1", "2", "4"]
+        description: Per node.
+      - path: resources.memory
+        type: quantity
+        quantity: memory
+        label: Memory
+        required: true
+        min: 32Mi
+        suggestions: [1Gi, 2Gi, 4Gi, 8Gi]
+        description: Per node, with a unit such as Mi or Gi.
+    rules:
+      - rule: oldSelf != null && self.replicas == oldSelf.replicas || self.replicas % 2 == 0
+        paths: [replicas]
+        message: Use an even number of nodes.
+      - rule: oldSelf != null || self.replicas <= 5
+        severity: info
+        paths: [replicas]
+        message: >-
+          The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
+          install is refused; check your org's current limit with cpln quota get (it may already be raised).
+      # templates/workload.yaml writes memory unquoted: a plain number reaches the API as a number, and the
+      # platform schema (Memory = Joi.string()) refuses it.
+      - rule: self.resources.memory.matches('[a-zA-Z]$')
+        paths: [resources.memory]
+        message: >-
+          Give the memory a unit, for example 4Gi. This version writes the value unquoted, so a plain number
+          reaches the platform as a number, which it refuses.
+      # The image is fixed in templates/workload.yaml (minio/minio on Docker Hub), which MinIO withdrew in
+      # 2025; the same reference made every fresh install of 1.3.0 fail to pull (CHANGELOG, minio 1.3.1).
+      # quay.io/minio/minio refuses anonymous pulls too (registry API, 401), so no public copy is named.
+      - rule: context.mode != 'install'
+        severity: warning
+        message: >-
+          MinIO's images are no longer publicly pullable from Docker Hub or quay.io, and this version fixes
+          the image in the chart. Install 1.2.0 or later, which has an image setting, and set an image your
+          org can pull, such as a copy in your org's registry.
+      - rule: context.mode == 'install'
+        severity: info
+        message: >-
+          MinIO's images are no longer publicly pullable from Docker Hub or quay.io, and this version fixes
+          the image in the chart, so nodes that restart cannot pull it. Upgrade to 1.2.0 or later, which has
+          an image setting, and set an image your org can pull, such as a copy in your org's registry.
+
+  - id: storage
+    title: Storage
+    description: One volume per node, holding that node's share of every object.
+    fields:
+      - type: note
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.0') < 0
+        text: >-
+          Version 1.0.0 set automatic growth on the volume set (up to 1000 GiB per node); this version's
+          chart no longer sets it, and has no setting for it. Version 1.2.0 makes it a switch.
+      - path: volumeset.capacity
+        type: integer
+        label: Initial capacity per node
+        unit: GiB
+        min: 10
+        max: 65536
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        help: >-
+          The data lives on the volume set and survives redeploys. Uninstalling the release deletes the
+          volume set, and every stored object with it.
+      - type: note
+        text: >-
+          With the parity MinIO applies, usable space is roughly nodes × capacity ÷ 2 up to 8 nodes, and
+          a larger share (about 60 to 75%) on bigger pools.
+        textExpression: >-
+          self.replicas <= 8 ?
+          'With the parity MinIO applies, usable space is roughly ' +
+          string(self.replicas * self.volumeset.capacity / 2) + ' GiB (' + string(self.replicas) +
+          ' nodes × ' + string(self.volumeset.capacity) + ' GiB ÷ 2).' :
+          'With the parity MinIO applies to ' + string(self.replicas) + ' nodes, usable space is about 60 to ' +
+          '75% of the ' + string(self.replicas * self.volumeset.capacity) + ' GiB raw capacity.'
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: network
+    title: Network
+    description: Who can reach the S3 API and the web console. The template has no public endpoint.
+    sections:
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            text: >-
+              To open the web console from your computer, run cpln port-forward to port 9001 of the MinIO
+              workload, open http://localhost:9001 and sign in with the root credentials.
+            textExpression: >-
+              'To open the web console from your computer, run `cpln port-forward ' + context.releaseName +
+              '-minio 9001:9001 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, open http://localhost:9001 and sign in with the root credentials. Inside the GVC the S3 API
+              is `http://' + context.releaseName + '-minio.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:9000`.'
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              The nodes reach each other over this same firewall, so it must let the pool through as well as
+              your clients. Access changes take a few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC, the nodes included.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org, the nodes included.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, which must include the MinIO workload itself.
+              - value: none
+                label: None
+                description: No workload can connect, not even the other nodes, so the pool never forms.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            when: self.internalAccess.type in ['same-gvc', 'workload-list']
+            description: >-
+              With Specific workloads, the only workloads allowed to connect, and it must include MinIO's own
+              workload; with Same GVC, extra workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+    rules:
+      - rule: self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          The nodes discover and reach each other over internal GVC traffic, so "None" breaks the pool
+          rather than isolating it. Choose another option.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-minio') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The nodes reach each other through this list, and the chart does not add its own workload. Add //gvc/' +
+          context.gvc + '/workload/' + context.releaseName + '-minio, or the pool never forms.'
+        message: >-
+          The nodes reach each other through this list, and the chart does not add its own workload. Add the
+          MinIO workload, or the pool never forms.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-minio']"
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.

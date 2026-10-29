@@ -86,24 +86,28 @@ steps:
           - path: redis.redis.resources.minCpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis minimum CPU
             required: true
             advanced: true
           - path: redis.redis.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis maximum CPU
             required: true
             advanced: true
           - path: redis.redis.resources.minMemory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis minimum memory
             required: true
             advanced: true
           - path: redis.redis.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis maximum memory
             required: true
             advanced: true
@@ -116,28 +120,94 @@ steps:
           - path: redis.sentinel.resources.minCpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel minimum CPU
             required: true
             advanced: true
           - path: redis.sentinel.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel maximum CPU
             required: true
             advanced: true
           - path: redis.sentinel.resources.minMemory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel minimum memory
             required: true
             advanced: true
           - path: redis.sentinel.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel maximum memory
             required: true
             advanced: true
         rules:
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              (oldSelf != null && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu) &&
+              string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu) &&
+              string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory) &&
+              string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              (cpuMillicores(self.redis.redis.resources.cpu) - cpuMillicores(self.redis.redis.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.redis.resources.memory) - memoryBytes(self.redis.redis.resources.minMemory) <= 4096 * 1048576)
+            paths: [redis.redis.resources.cpu, redis.redis.resources.memory]
+            message: The Redis CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.cpu) && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu)) ||
+              string(self.redis.redis.resources.cpu).endsWith('m')
+            paths: [redis.redis.resources.cpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minCpu) && string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu)) ||
+              string(self.redis.redis.resources.minCpu).endsWith('m')
+            paths: [redis.redis.resources.minCpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.memory) && string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory)) ||
+              string(self.redis.redis.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.memory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minMemory) && string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              string(self.redis.redis.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.minMemory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              (oldSelf != null && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu) &&
+              string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu) &&
+              string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory) &&
+              string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              (cpuMillicores(self.redis.sentinel.resources.cpu) - cpuMillicores(self.redis.sentinel.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.sentinel.resources.memory) - memoryBytes(self.redis.sentinel.resources.minMemory) <= 4096 * 1048576)
+            paths: [redis.sentinel.resources.cpu, redis.sentinel.resources.memory]
+            message: The Sentinel CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.x writes the value unquoted: a whole number of cores or a unitless memory reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.cpu) && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu)) ||
+              string(self.redis.sentinel.resources.cpu).endsWith('m')
+            paths: [redis.sentinel.resources.cpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minCpu) && string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu)) ||
+              string(self.redis.sentinel.resources.minCpu).endsWith('m')
+            paths: [redis.sentinel.resources.minCpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.memory) && string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory)) ||
+              string(self.redis.sentinel.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.memory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minMemory) && string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              string(self.redis.sentinel.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.minMemory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
           # Redis and Sentinel are stateful workloads: the platform rejects a max:min ratio above 4:1.
           - rule: >-
               cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu) &&
@@ -149,19 +219,23 @@ steps:
               memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
             paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
             message: The Sentinel maximum CPU and memory can each be at most 4 times their minimum on a stateful workload.
+          # Read through a bound variable: redis.redis.auth comes from the redis subchart's defaults, which
+          # this descriptor does not import. The chart fails only when an enabled flag is true.
           - rule: >-
-              !has(self.redis.redis.auth) ||
-              ((!has(self.redis.redis.auth.password) || !has(self.redis.redis.auth.password.enabled)) &&
-              (!has(self.redis.redis.auth.fromSecret) || !has(self.redis.redis.auth.fromSecret.enabled)))
+              [self.redis.redis].all(r, !has(r.auth) ||
+              ((!has(r.auth.password) || !has(r.auth.password.enabled) || r.auth.password.enabled != true) &&
+              (!has(r.auth.fromSecret) || !has(r.auth.fromSecret.enabled) || r.auth.fromSecret.enabled != true)))
             mirrors: grafana.validate
             paths: [redis.redis.replicas]
             message: >-
               Redis authentication is not supported in this version: remove redis.redis.auth from the values (the
               same-GVC firewall is the boundary).
+          # Read through a bound variable: redis.sentinel.auth comes from the redis subchart's defaults, which
+          # this descriptor does not import. The chart fails only when an enabled flag is true.
           - rule: >-
-              !has(self.redis.sentinel.auth) ||
-              ((!has(self.redis.sentinel.auth.password) || !has(self.redis.sentinel.auth.password.enabled)) &&
-              (!has(self.redis.sentinel.auth.fromSecret) || !has(self.redis.sentinel.auth.fromSecret.enabled)))
+              [self.redis.sentinel].all(r, !has(r.auth) ||
+              ((!has(r.auth.password) || !has(r.auth.password.enabled) || r.auth.password.enabled != true) &&
+              (!has(r.auth.fromSecret) || !has(r.auth.fromSecret.enabled) || r.auth.fromSecret.enabled != true)))
             mirrors: grafana.validate
             paths: [redis.sentinel.replicas]
             message: >-
@@ -439,6 +513,15 @@ steps:
         fields:
           - type: note
             severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.4.0') < 0
+            text: >-
+              From 1.4.0 the highly available database writes the password inside double quotes in its config on
+              every start, so a password with a `"` or `\` breaks it. If yours has one, change it with ALTER ROLE
+              for the user and for repl before upgrading, and put the new one in the secret.
+          - type: note
+            severity: warning
             text: >-
               The credentials secret must exist **before** you install. If it is missing, the deployment waits and
               `cpln logs` shows nothing at all.
@@ -447,8 +530,8 @@ steps:
             label: Database credentials secret
             required: true
             description: >-
-              A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes from
-              it and Grafana connects with it.
+              A dictionary secret with the keys `username`, `password` and `database`, and no `"` or `\` in the
+              user or password. PostgreSQL initializes from it and Grafana connects with it.
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized. To rotate the
               password later, run `ALTER ROLE ... PASSWORD`, update the secret, and force a redeployment of the
@@ -474,6 +557,7 @@ steps:
             label: Initial capacity per replica
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
@@ -506,7 +590,27 @@ steps:
             message: >-
               PostgreSQL reads the credentials only when the data directory is first initialized; the new secret
               must hold the same username, password and database.
+          # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+          # and 2.4.x (grafana 1.3.x and earlier) kept the database credentials in a chart secret of that name.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') >= 0 &&
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+              !self.postgresHA.backup.enabled) ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name. The highly available database renders its own secret under this name when backups
+              are on, and on an upgrade from grafana 1.3.x or earlier this is the old chart's secret, which the
+              upgrade removes or rewrites.
     rules:
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of Grafana's
+          dashboards, users and alert rules, and starts an empty one. Keep the current database, or install a new
+          release with the other database and move the data.
       - rule: self.postgresHA.enabled != self.postgres.enabled
         mirrors: grafana.validate
         paths: [postgresHA.enabled]
@@ -566,6 +670,18 @@ steps:
             label: Backup resources
             required: true
             advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
       - title: AWS S3
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
         docs: "#backing-up"
@@ -603,6 +719,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX / WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: Google Cloud Storage
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
         docs: "#backing-up"
@@ -629,6 +782,43 @@ steps:
             label: Folder prefix
             pattern: "^(?!/)"
             patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX / WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
       - title: MinIO or S3-compatible
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
         docs: "#backing-up"
@@ -669,6 +859,42 @@ steps:
             message: >-
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.4.1. Put them in a dictionary
               secret and remove them from the values.
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix> (WALG_S3_PREFIX / WALG_GS_PREFIX),
+          # so ' #' starts a comment that silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
 
 rules:
   - rule: "!has(self.postgres.credentials)"
@@ -750,3 +976,20 @@ migrations:
   - fromVersions: "<1.3.0"
     from: postgres.backup.minio.secretKey
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.2.0"
+    from: admin.password
+    note: >-
+      The admin account already exists, so a new password secret changes nothing: turn off Apply the admin
+      password secret, or name any opaque secret. The admin password does not change on upgrade; if it is still
+      change-me-grafana-1, change it in Grafana now.
+  - fromVersions: "<1.2.0"
+    from: admin.secretKey
+    note: >-
+      Create an opaque secret holding exactly this key and choose it as the encryption key secret. Any other value
+      makes every saved datasource credential unreadable.
+  - fromVersions: "<1.1.0"
+    from: resources.cpu
+    to: resources.maxCpu
+  - fromVersions: "<1.1.0"
+    from: resources.memory
+    to: resources.maxMemory

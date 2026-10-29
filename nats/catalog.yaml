@@ -10,12 +10,14 @@ summary: >-
   A NATS server cluster, three servers in one location by default, with optional JetStream
   persistence on per-server volumes for streams, key-value and object storage. List several GVC
   locations to run one cluster per location, joined into a super cluster over gateways; clients
-  can also connect over WebSocket. No authentication is configured by default. The pick for
+  can also connect over WebSocket. Optional username and password authentication, read from a
+  secret you create, covers clients, WebSocket and the links between servers. The pick for
   low-latency pub/sub, request-reply and queue groups between services, including across regions.
 
 keywords:
   - jetstream
   - pub/sub
+  - authentication
   - request-reply
   - queue groups
   - message bus
@@ -65,3 +67,10 @@ prerequisites:
     valuesPath: locations
     required: true
     description: Set locations to locations your GVC already has (default aws-us-east-1); servers in a location the GVC lacks never start.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: auth.credentialsSecretName
+    required: false
+    when: auth.credentialsSecretName is set
+    description: Username and password every client, WebSocket client, route and gateway must present. Create it before installing; when it is missing the deployment waits on it and looks broken.

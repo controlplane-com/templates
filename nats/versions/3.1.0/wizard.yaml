@@ -1,0 +1,413 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: NATS
+# The chart lists its locations (`locations[]`) and runs nothing in the GVC's other locations
+# (defaultOptions scale 0), so any GVC with at least one location fits (§14.2).
+gvc:
+  minLocations: 1
+
+steps:
+  - id: locations
+    title: Locations
+    description: One NATS cluster per listed location, and how many servers each one runs.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              Every location you list must already be a location of the GVC you install into. The platform
+              accepts one the GVC lacks without an error, and the servers there never start. Look for
+              `[nats]` lines in `cpln logs` when a server does not come up.
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+            text: GVC locations not listed here run no NATS server.
+            textExpression: >-
+              'GVC locations not listed here run no NATS server: ' +
+              context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+          - type: note
+            when: size(self.locations) > 1
+            text: >-
+              Two or more locations are joined into a super cluster over NATS gateways. Cross-region gateway
+              traffic is billed.
+          - path: locations
+            type: list
+            label: Locations
+            docs: "#locations-and-cluster-sizing"
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 3 }
+            itemLabel: "(item.name == null ? '' : item.name) + ' × ' + (item.replicas == null ? '' : string(item.replicas))"
+            description: Each location is its own cluster; servers in it are joined by routes.
+            help: >-
+              Three servers is NATS's recommended cluster size and the minimum for fault-tolerant JetStream.
+              To stop running in a location, remove it from the list.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Servers
+                  required: true
+                  min: 1
+                  widget: stepper
+              rules:
+                - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not one of the target GVC's locations, so its servers would never start
+                    while the others keep retrying them. Add the location to the GVC, or pick another.
+                  messageExpression: >-
+                    item.name + ' is not one of the target GVC\'s locations, so its servers would never start while the others keep retrying them. Add the location to the GVC, or pick another.'
+                - rule: item.replicas == null || item.replicas >= 1
+                  mirrors: nats.validateReplicas
+                  paths: [replicas]
+                  message: >-
+                    A location needs at least 1 server. To stop running in a location, remove it from the
+                    list.
+            rules:
+              - rule: size(self.locations) >= 1
+                mirrors: nats.validateLocations
+                message: List at least one location.
+
+  - id: authentication
+    title: Authentication
+    description: Whether clients, WebSocket clients and the servers themselves must present credentials.
+    sections:
+      - title: Client authentication
+        docs: "#authentication"
+        fields:
+          - id: natsAuth
+            virtual: true
+            type: enum
+            label: Authentication
+            widget: segmented
+            required: true
+            init: >-
+              self.auth.credentialsSecretName == null || self.auth.credentialsSecretName == '' ? 'none' : 'secret'
+            options:
+              - value: none
+                label: None
+                description: Anyone who can reach a port can publish and subscribe.
+                set: { auth.credentialsSecretName: "" }
+              - value: secret
+                label: Username and password
+                description: Read from a dictionary secret when each server starts; never stored in the release.
+          - type: note
+            severity: warning
+            when: ui.natsAuth == 'secret'
+            text: >-
+              The secret must exist **before** you install or upgrade. If it is missing, the deployment waits
+              and `cpln logs` shows nothing; `cpln workload get-deployments` names the secret under
+              `status.versions[].message`.
+          - path: auth.credentialsSecretName
+            type: ref
+            label: Credentials secret
+            required: true
+            when: ui.natsAuth == 'secret'
+            description: >-
+              A dictionary secret with the keys `username` and `password`. Every client, WebSocket client,
+              route and gateway connection presents them.
+            help: >-
+              Store the plain password, without a line break; a bcrypt hash is refused, because the servers
+              also present the password to each other. After changing the secret, force a redeployment
+              (`cpln workload force-redeployment`): a running server keeps the credentials it started with.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-nats-credentials'"
+                hint: "Generate the password with: openssl rand -hex 24"
+        rules:
+          - rule: >-
+              oldSelf == null ||
+              (oldSelf.auth.credentialsSecretName == null ? '' : oldSelf.auth.credentialsSecretName) ==
+              (self.auth.credentialsSecretName == null ? '' : self.auth.credentialsSecretName)
+            severity: info
+            paths: [auth.credentialsSecretName]
+            message: >-
+              Changing authentication restarts every server, and clients that send no credentials, or the old
+              ones, are disconnected. Update your clients in the same window.
+
+  - id: server
+    title: Server
+    description: The NATS image, the compute of each server and JetStream persistence.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade that changes the workload restarts the servers; core NATS clients reconnect on
+              their own.
+          - path: image
+            type: string
+            format: image
+            label: NATS image
+            docs: "#image-and-resources"
+            required: true
+          - path: resources
+            type: resources
+            label: Resources per server
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && oldSelf != null && oldSelf.jetstream.enabled && !self.jetstream.enabled
+            text: >-
+              Turning JetStream off removes the release's volume set, and with it every stream, consumer, key-value
+              and object store on it. Copy what you need to keep before you upgrade.
+      - id: jetstream
+        title: JetStream
+        toggle: jetstream.enabled
+        description: >-
+          Durable streams, consumers, key-value and object store, on a volume per server. Without it,
+          messages are delivered only to subscribers connected at the time.
+        docs: "#jetstream"
+        fields:
+          - type: note
+            text: >-
+              Streams default to one replica. A stream survives a server loss only if you create it with
+              `num_replicas` 3 or more.
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per server
+            required: true
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100, 250]
+            rules:
+              - rule: oldSelf == null || !oldSelf.jetstream.enabled || self.volumeset.capacity >= oldSelf.volumeset.capacity
+                message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+        rules:
+          - rule: >-
+              sum(self.locations.map(l, l.replicas == null ? 0 : l.replicas)) != 2
+            mirrors: nats.validateJetStreamQuorum
+            paths: [jetstream.enabled]
+            message: >-
+              JetStream on exactly 2 servers has no fault tolerance and is worse than 1: its quorum is 2 of 2,
+              so losing either server takes it down. Use 1 server, or 3 or more, across all locations.
+
+  - id: network
+    title: Network
+    description: The listener ports, the public WebSocket endpoint and which workloads can connect.
+    sections:
+      - title: Listeners
+        docs: "#listeners"
+        fields:
+          - path: nats_defaults.port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats_defaults.cluster.port
+            type: integer
+            label: Route port
+            required: true
+            description: Connections between the servers in the same location.
+            min: 1
+            max: 65535
+          - path: nats_defaults.gateway.port
+            type: integer
+            label: Gateway port
+            required: true
+            when: size(self.locations) > 1
+            description: Connections between locations.
+            min: 1
+            max: 65535
+        rules:
+          - rule: >-
+              ![8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000].exists(p,
+              p == self.nats_defaults.port || p == self.nats_defaults.cluster.port ||
+              (size(self.locations) > 1 && p == self.nats_defaults.gateway.port) ||
+              (self.nats_defaults.websocket.enabled && p == self.nats_defaults.websocket.port))
+            mirrors: nats.validatePorts
+            paths: [nats_defaults.port]
+            message: >-
+              A listener uses a port Control Plane reserves (8012, 8022, 9090, 9091, 15000, 15001, 15006,
+              15020, 15021, 15090, 41000), which the platform refuses at install. Pick another port.
+          - rule: >-
+              ([self.nats_defaults.port, self.nats_defaults.cluster.port, 8222] +
+              (size(self.locations) > 1 ? [self.nats_defaults.gateway.port] : []) +
+              (self.nats_defaults.websocket.enabled ? [self.nats_defaults.websocket.port] : []))
+              .all(p, ([self.nats_defaults.port, self.nats_defaults.cluster.port, 8222] +
+              (size(self.locations) > 1 ? [self.nats_defaults.gateway.port] : []) +
+              (self.nats_defaults.websocket.enabled ? [self.nats_defaults.websocket.port] : []))
+              .filter(q, q == p).size() == 1)
+            mirrors: nats.validatePorts
+            paths: [nats_defaults.port]
+            message: >-
+              Two listeners share a port (monitoring is fixed on 8222); the second one fails at boot with
+              `address already in use`. Give each listener its own port.
+      - id: websocket
+        title: WebSocket
+        toggle: nats_defaults.websocket.enabled
+        description: >-
+          A WebSocket listener for browser and edge clients, served on the workload's public endpoint on
+          port 443 once you allow inbound CIDRs below.
+        fields:
+          - path: nats_defaults.websocket.port
+            type: integer
+            label: WebSocket port
+            required: true
+            min: 1
+            max: 65535
+          - path: nats_defaults.websocket.compression
+            type: boolean
+            label: Compression
+          - path: nats_defaults.websocket.noTls
+            type: boolean
+            label: Plain WebSocket behind the platform's TLS
+            advanced: true
+            description: Control Plane terminates TLS; leave it on unless you supply certificates.
+      - title: Public access
+        docs: "#public-access"
+        fields:
+          - path: allowCIDR
+            type: list
+            label: Public inbound CIDRs
+            widget: tags
+            unique: true
+            description: >-
+              Addresses allowed to reach the WebSocket endpoint from the internet. Empty means no public
+              access. Firewall changes take up to about 10 minutes to take effect.
+            item: { type: string, format: cidr }
+            rules:
+              - when: size(self.allowCIDR) > 0 && context.mode == 'install'
+                rule: >-
+                  (self.auth.credentialsSecretName != null && self.auth.credentialsSecretName != '') ||
+                  self.nats_extra_config.matches('(^|[\\s{;,])(authorization|accounts)\\s*[{:=]')
+                severity: warning
+                message: >-
+                  Opening public access without authentication publishes an open message bus: anyone in these
+                  ranges can publish and subscribe. Turn on authentication under Authentication first.
+              - when: size(self.allowCIDR) > 0 && context.mode == 'upgrade'
+                rule: >-
+                  (self.auth.credentialsSecretName != null && self.auth.credentialsSecretName != '') ||
+                  self.nats_extra_config.matches('(^|[\\s{;,])(authorization|accounts)\\s*[{:=]')
+                severity: info
+                message: >-
+                  Opening public access without authentication publishes an open message bus: anyone in these
+                  ranges can publish and subscribe. Turn on authentication under Authentication.
+              - when: size(self.allowCIDR) > 0
+                rule: self.nats_defaults.websocket.enabled
+                severity: info
+                message: The WebSocket listener is off, so nothing is served on the public endpoint.
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Also governs the routes and gateways between the servers; the chart always lets its own
+              servers reach each other.
+            options:
+              - { value: none, label: Nobody, description: Only reachable over the public WebSocket endpoint. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: >-
+                  self.internalAccess.type != 'none' ||
+                  sum(self.locations.map(l, l.replicas == null ? 0 : l.replicas)) <= 1
+                mirrors: nats.validateInternalAccess
+                message: >-
+                  Nobody closes the path the servers use to reach each other, so a cluster of more than one
+                  server can never form. Choose Same GVC, or Specific workloads.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: Extra workloads allowed to connect, for example from another GVC.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.internalAccess.type == 'workload-list'
+                rule: size(self.internalAccess.workloads) > 0
+                severity: warning
+                message: With "Specific workloads" and an empty list, no client can connect.
+              - when: self.internalAccess.type == 'same-org'
+                rule: size(self.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+
+  - id: advanced
+    title: Advanced
+    description: Extra NATS configuration appended to the generated server config.
+    sections:
+      - title: Extra configuration
+        docs: "#extra-nats-configuration"
+        fields:
+          - path: nats_extra_config
+            type: string
+            multiline: true
+            label: Extra NATS configuration
+            description: >-
+              Appended verbatim to each server's config at startup. It is stored in the release values as
+              plain text, so never put credentials here. A syntax error stops the servers from starting.
+            placeholder: "max_payload: 2MB"
+            rules:
+              - when: self.auth.credentialsSecretName != null && self.auth.credentialsSecretName != ''
+                rule: "!self.nats_extra_config.lowerAscii().matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
+                mirrors: nats.validateAuth
+                message: >-
+                  With authentication on, the chart generates the authorization itself, and an `authorization`
+                  or `accounts` block here would replace it. Remove the block.
+              - when: self.auth.credentialsSecretName == null || self.auth.credentialsSecretName == ''
+                rule: "!self.nats_extra_config.lowerAscii().matches('(^|[\\\\s{;,])(authorization|accounts)\\\\s*[{:=]')"
+                severity: info
+                message: >-
+                  Credentials here are stored in the release values as plain text. Use a credentials secret
+                  under Authentication instead.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '3.0.0') >= 0
+    message: >-
+      Do not upgrade a NATS 2.x release to 3.x: the upgrade deletes the GVC that the 2.x chart created, with
+      every workload, volume set and identity in it, including your JetStream data. Install this version as a
+      new release in an existing GVC, move your clients and streams across, then uninstall the old release.
+  - rule: "!has(self.gvc)"
+    mirrors: nats.validateNoLegacyGvc
+    paths: [locations]
+    message: >-
+      The `gvc` key was removed in NATS 3.0.0: the chart deploys into the GVC you install into, and
+      `gvc.locations` moved to `locations`. Remove `gvc` from the values.
+  - rule: >-
+      !has(self.nats_defaults.cluster.listen) && !has(self.nats_defaults.gateway.listen) &&
+      !has(self.nats_defaults.cluster.noAdvertise)
+    mirrors: nats.validateRemovedKnobs
+    paths: [nats_defaults.cluster.port]
+    message: >-
+      `nats_defaults.cluster.listen`, `nats_defaults.gateway.listen` and `nats_defaults.cluster.noAdvertise`
+      were removed in 3.0.0; the listen addresses are derived from the ports. Remove them from the values.
+
+migrations:
+  # Authentication was added in 3.1.0; an older release ran without it.
+  - fromVersions: "<3.1.0"
+    assume: { auth.credentialsSecretName: "" }

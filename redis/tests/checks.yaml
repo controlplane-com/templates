@@ -1,0 +1,64 @@
+# Feature checks for the redis template (production mode). Each runs after install (and after each
+# upgrade) on every version in its since/until range. Add a check with `since: <new version>` for every
+# change you ship. Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline
+# var redis_password.
+#
+# The checks run in a Sentinel container and ask its own Sentinel (127.0.0.1) for the master, then talk
+# to the master across workloads, the way a client does.
+checks:
+  - id: sentinel-quorum
+    description: The Sentinels agree on a master and have enough of them to fail over.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: redis-cli -p 26379 --no-auth-warning -a '{redis_password}' SENTINEL ckquorum mymaster
+    expect:
+      stdout: "^OK 3 usable Sentinels"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-replicates
+    description: A write on the master reaches both replicas and reads back.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        P='{redis_password}'
+        M=$(redis-cli -p 26379 --no-auth-warning -a "$P" SENTINEL get-master-addr-by-name mymaster | head -1)
+        r() { redis-cli -h "$M" -p 6379 --no-auth-warning -a "$P" "$@"; }
+        V="e2e-$(date +%s%N)"
+        r SET e2e:last "$V" >/dev/null
+        r SET "e2e:{version}" "$V" >/dev/null
+        echo "REPLICATED $(r WAIT 2 10000)"
+        [ "$(r GET e2e:last)" = "$V" ] && echo "READ $V"
+    expect:
+      stdout: "^REPLICATED 2$(.|\\n)*^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: rejects-bad-password
+    description: The master refuses a wrong password (the control for the checks above).
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        M=$(redis-cli -p 26379 --no-auth-warning -a '{redis_password}' SENTINEL get-master-addr-by-name mymaster | head -1)
+        redis-cli -h "$M" -p 6379 --no-auth-warning -a wrong-password PING 2>&1
+    expect:
+      stdout: "WRONGPASS|invalid password|invalid username-password"
+      notStdout: "^PONG$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The key written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data carried over.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        P='{redis_password}'
+        M=$(redis-cli -p 26379 --no-auth-warning -a "$P" SENTINEL get-master-addr-by-name mymaster | head -1)
+        n=$(redis-cli -h "$M" -p 6379 --no-auth-warning -a "$P" EXISTS "e2e:{installed_version}")
+        [ "$n" = 1 ] && echo PERSISTED || echo "MISSING (EXISTS e2e:{installed_version} = $n)"
+    expect:
+      stdout: "^PERSISTED$"

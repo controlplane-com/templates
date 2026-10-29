@@ -1,0 +1,332 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: CockroachDB
+# createsGvc: true. The chart creates its own GVC from gvc.name and gvc.locations (templates/gvc.yaml), so there is
+# no target GVC to limit and no gvc block (guide 14.2); the location rules work on gvc.locations instead, and
+# context.gvc is null.
+
+steps:
+  - id: locations
+    title: GVC and locations
+    description: The GVC this release creates, where the CockroachDB nodes run, and how many run in each location.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'install'
+        text: >-
+          This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+          adopts an existing GVC of that name when no other release manages it (one another release manages is
+          refused), and uninstalling the release then deletes that GVC with every workload in it. Uninstall the
+          release against the GVC you install it into, not the GVC it creates.
+      - path: gvc.name
+        type: string
+        label: GVC name
+        required: true
+        immutable: >-
+          The release runs in the GVC it created; another name would create a new, empty GVC and delete this one
+          with everything in it, the CockroachDB volumes included.
+        description: >-
+          The GVC this release creates and runs in. Give every install its own. Your applications must run in
+          this GVC, or be allowed by name under Access.
+        pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+        patternMessage: >-
+          Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+        rules:
+          - when: context.mode == 'install'
+            rule: self.gvc.name != 'cockroach-gvc'
+            severity: info
+            messageExpression: >-
+              'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+              Give each release its own, for example ' + context.releaseName + '-cockroach.'
+            message: >-
+              GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+              Give each release its own.
+          # policy.yaml names the policy {release}-cockroach-{gvc.name}-policy; names are at most 64 characters
+          # (nodelibs/schema base.ts Name).
+          - when: context.mode == 'install'
+            rule: size(context.releaseName) + size(self.gvc.name) + 18 <= 64
+            message: >-
+              This version names its policy RELEASE-cockroach-GVC-policy, which must not exceed 64 characters;
+              shorten the GVC name.
+          # templates/gvc.yaml writes `name: {{ .Values.gvc.name }}` unquoted, so YAML reads these as a boolean or null.
+          - rule: >-
+              (oldSelf != null && self.gvc.name == oldSelf.gvc.name) ||
+              !(self.gvc.name in ['true', 'false', 'null'])
+            severity: warning
+            message: >-
+              This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+              null and the GVC cannot be created. Choose another name.
+      # secret.yaml: `cockroach start` has no --locality in this version, and the start script sets up no regions.
+      - type: note
+        severity: warning
+        text: >-
+          This version starts the nodes without a locality and sets up no database regions, so CockroachDB
+          does not know which location a node runs in and does not keep a range's replicas in different
+          locations. 1.1.0 gives each node its location as its region.
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Check that every node is live first, with `cockroach node status --insecure` from a node: if the
+          nodes of a location are down, wait for them to come back before you upgrade. Restarting nodes in
+          the remaining locations during the outage exceeds the cluster's fault tolerance, and the ranges
+          on those nodes are briefly unavailable.
+      - path: gvc.locations
+        type: list
+        label: Locations
+        required: true
+        minItems: 1
+        uniqueBy: [name]
+        widget: table
+        newItem: { name: "", replicas: 3 }
+        itemLabel: "item.replicas == null ? item.name : item.name + ' × ' + string(item.replicas)"
+        description: >-
+          The locations of the GVC this release creates, one entry per location; replicas are the CockroachDB
+          nodes in that location. The first location's first node initialises the cluster.
+        help: >-
+          Removing a location removes it from the GVC, and its nodes stop without being drained: decommission
+          them before you remove the location.
+        item:
+          type: object
+          fields:
+            - path: name
+              type: ref
+              label: Location
+              required: true
+              ref: { kind: location, format: name, mustExist: error }
+            - path: replicas
+              type: integer
+              label: Replicas
+              required: true
+              min: 0
+              widget: stepper
+          rules:
+            # workload.yaml: replicas 0 suspends the location (localOptions); the start script skips it in the join list.
+            - rule: item.replicas == null || item.replicas != 0
+              severity: info
+              paths: [replicas]
+              message: 0 suspends the nodes in this location; the GVC keeps the location.
+    rules:
+      # No check in this chart: `index .Values.gvc.locations 0` (workload.yaml, secret.yaml) fails the render on an
+      # empty list.
+      - rule: size(self.gvc.locations) > 0
+        paths: [gvc.locations]
+        message: List at least one location.
+      - rule: isUnique(self.gvc.locations.filter(l, l.name != '').map(l, l.name))
+        severity: warning
+        paths: [gvc.locations]
+        message: >-
+          List each location once. A duplicate produces duplicate join hosts.
+      # The first location's replica-0 runs `cockroach init` (secret.yaml FIRST_LOCATION).
+      - when: context.mode == 'install'
+        rule: >-
+          size(self.gvc.locations) == 0 || self.gvc.locations[0].replicas == null ||
+          self.gvc.locations[0].replicas >= 1
+        severity: warning
+        paths: [gvc.locations]
+        message: >-
+          The first location needs at least 1 replica: its first node initialises the cluster, so with 0 the
+          cluster is never initialised.
+      # Each node joins every other node; one node gets an empty --join and exits (CHANGELOG cockroach 2.0.0,
+      # 2.0.0 _helpers.tpl validateNotSingleNode).
+      - rule: >-
+          self.gvc.locations.exists(l, l.replicas == null) ||
+          sum(self.gvc.locations.map(l, l.replicas)) != 1
+        severity: warning
+        paths: [gvc.locations]
+        message: >-
+          A single node cannot start: each node joins every other node, so one node has nothing to join and
+          crash-loops. Use at least 3 replicas in total; 3 in one location is the smallest supported shape.
+      - rule: >-
+          self.gvc.locations.exists(l, l.replicas == null) ||
+          sum(self.gvc.locations.map(l, l.replicas)) != 2
+        severity: info
+        paths: [gvc.locations]
+        message: >-
+          Use at least 3 replicas in total, matching CockroachDB's default replication factor of 3;
+          3 in one location is the smallest supported shape.
+      # templates/gvc.yaml: staticPlacement.locationLinks is the list, so a removed location leaves the GVC.
+      - rule: >-
+          oldSelf == null ||
+          oldSelf.gvc.locations.all(o, self.gvc.locations.exists(l, l.name == o.name))
+        severity: info
+        paths: [gvc.locations]
+        messageExpression: >-
+          'Removing a location removes it from the GVC this release created, and its nodes stop without being drained. Decommission the nodes in ' +
+          oldSelf.gvc.locations.filter(o, !self.gvc.locations.exists(l, l.name == o.name)).map(o, o.name).join(', ') +
+          ' before you apply this change: `cockroach node status --insecure` on a node lists their ids with their addresses, which name the location, then run `cockroach node decommission <ids> --insecure`.'
+        message: >-
+          Removing a location removes it from the GVC this release created, and its nodes stop without being
+          drained. Decommission them before you apply this change: `cockroach node status --insecure` on a
+          node lists their ids with their addresses, which name the location, then run `cockroach node decommission <ids> --insecure`.
+      # Every location and replica count is in the start script (secret.yaml LOCATIONS / REPLICAS).
+      - rule: oldSelf == null || self.gvc.locations == oldSelf.gvc.locations
+        severity: info
+        paths: [gvc.locations]
+        message: Changing the locations or their replica counts restarts every CockroachDB node.
+
+  - id: cluster
+    title: Cluster
+    description: The compute and storage of each node, and the database the first deploy creates.
+    fields:
+      - type: note
+        text: This version runs the image `cockroachdb/cockroach:v25.4.0`, fixed in the chart.
+      # volumeset.yaml: initialCapacity 10, autoscaling maxCapacity 1000, minFreePercentage 1, scalingFactor 1.1.
+      - type: note
+        text: >-
+          Each node gets a 10 GiB volume that grows automatically up to 1000 GiB, fixed in the chart.
+          Uninstalling the release deletes the volume set, after a final snapshot that is kept for 7 days.
+      - type: note
+        text: >-
+          The cluster runs in insecure mode: there are no SQL passwords, and the firewall settings under
+          Access are the only access control.
+      - type: note
+        text: >-
+          Your application must retry transient errors: they reach clients during failover events, such
+          as a location outage or a rolling restart, while leader elections complete.
+      - path: resources
+        type: resources
+        label: Node resources
+        required: true
+        description: Per node.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        rules:
+          # workload.yaml writes cpu and memory unquoted, so a plain number reaches the API as a number, which it
+          # refuses (nodelibs/schema workload.ts: Cpu and Memory are Joi.string()).
+          - rule: "!string(self.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+            message: >-
+              Write the CPU in millicores, such as `2000m`: this version writes it unquoted, and a plain number
+              is refused.
+          - rule: "!string(self.resources.memory).matches('^[0-9]+([.][0-9]+)?$')"
+            message: >-
+              Give the memory a unit, such as `4096Mi` or `4Gi`: this version writes it unquoted, and a plain
+              number is refused.
+          - rule: >-
+              oldSelf == null ||
+              (cpuMillicores(self.resources.cpu) == cpuMillicores(oldSelf.resources.cpu) &&
+              memoryBytes(self.resources.memory) == memoryBytes(oldSelf.resources.memory))
+            severity: info
+            message: Changing the node resources restarts every CockroachDB node.
+      - path: database.name
+        type: string
+        label: Database name
+        required: true
+        immutable: CockroachDB creates the database on the first deploy only.
+        help: >-
+          The start script uses the name unquoted in SQL, so it must not be a reserved SQL keyword such as
+          `order` or `user`.
+        docs: "#database"
+        rules:
+          # Reserved keywords: reserved_keyword and cockroachdb_extra_reserved_keyword in pkg/sql/parser/sql.y at
+          # v25.4.0. workload.yaml writes the name unquoted into YAML (DB_NAME), and secret.yaml unquoted into SQL in an
+          # unquoted heredoc. A rule, not a `pattern`: the field is immutable, so only a new value is checked.
+          - rule: >-
+              (oldSelf != null && self.database.name == oldSelf.database.name) ||
+              (self.database.name.matches('^[a-z_][a-z0-9_]*$') && !(self.database.name in ['all','analyse','analyze','and','any','array','as','asc','asymmetric','both','case','cast','check','collate','column','concurrently','constraint','create','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','from','grant','group','having','in','index','initially','intersect','into','lateral','leading','limit','localtime','localtimestamp','not','nothing','null','offset','on','only','or','order','placing','primary','references','returning','select','session_user','some','symmetric','table','then','to','trailing','true','union','unique','user','using','variadic','when','where','window','with']))
+            message: >-
+              Use lowercase letters, digits and underscores, starting with a letter or an underscore, and not a
+              reserved SQL keyword such as true, null, order or user: this version writes the name unquoted
+              into YAML and SQL.
+      - path: database.user
+        type: string
+        label: Database user
+        required: true
+        immutable: CockroachDB creates this user on the first deploy only.
+        description: Granted ALL on the database. Like `root`, it has no password.
+        rules:
+          # secret.yaml writes the user unquoted into the user secret's YAML and into SQL.
+          - rule: >-
+              (oldSelf != null && self.database.user == oldSelf.database.user) ||
+              (self.database.user.matches('^[a-z_][a-z0-9_]*$') && size(self.database.user) <= 63 &&
+              !(self.database.user in ['all','analyse','analyze','and','any','array','as','asc','asymmetric','both','case','cast','check','collate','column','concurrently','constraint','create','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','from','grant','group','having','in','index','initially','intersect','into','lateral','leading','limit','localtime','localtimestamp','not','nothing','null','offset','on','only','or','order','placing','primary','references','returning','select','session_user','some','symmetric','table','then','to','trailing','true','union','unique','user','using','variadic','when','where','window','with']))
+            message: >-
+              Use lowercase letters, digits and underscores, starting with a letter or an underscore, at most 63
+              characters, and not a reserved SQL keyword such as true, null, order or user: this version writes
+              the user unquoted into YAML and SQL.
+
+  - id: access
+    title: Access
+    description: Who can connect to the CockroachDB nodes on port 26257.
+    fields:
+      - type: note
+        text: Clients connect to `RELEASE_NAME-cockroach.GVC_NAME.cpln.local` on port 26257.
+        textExpression: >-
+          'Clients connect to `' + context.releaseName + '-cockroach.' +
+          (self.gvc.name == '' ? 'GVC_NAME' : self.gvc.name) + '.cpln.local` on port 26257.'
+      - path: internal_access.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: A firewall change can take a few minutes to take effect.
+        options:
+          - { value: same-gvc, label: Same GVC, description: Any workload in the GVC this release creates. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      # Shown with every type: workload.yaml writes a non-empty list into the firewall whatever the type.
+      - path: internal_access.workloads
+        type: list
+        label: Allowed workloads
+        widget: tags
+        description: >-
+          With Same GVC, workloads in other GVCs to allow as well; with Specific workloads, every client.
+          This version does not add the release's own workloads to the list.
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - when: self.internal_access.type == 'same-gvc'
+        rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + self.gvc.name + '/workload/'))"
+        severity: info
+        paths: [internal_access.workloads]
+        message: >-
+          Same GVC already allows every workload in the GVC this release creates, so its entries can be
+          removed from the list.
+      - when: self.internal_access.type == 'same-org'
+        rule: size(self.internal_access.workloads) == 0
+        severity: info
+        paths: [internal_access.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to CockroachDB, so the workloads listed
+          for CockroachDB add nothing.
+      - rule: self.internal_access.type != 'workload-list' || size(self.internal_access.workloads) > 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: With "Specific workloads" and an empty list, no client can connect to CockroachDB.
+      # The list also governs node-to-node traffic. Measured on this chart's 1.x shape (2.0.0
+      # workload-cockroach.yaml comment, 2026-08-27): a list naming only clients denied the nodes each other;
+      # 2.0.0 adds the release's own workload itself.
+      - when: self.internal_access.type == 'workload-list'
+        rule: >-
+          ('//gvc/' + self.gvc.name + '/workload/' + context.releaseName + '-cockroach') in
+          self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'This list also governs the traffic between the nodes, and this version does not add its own workload to it, so the nodes cannot reach each other. Add //gvc/' +
+          self.gvc.name + '/workload/' + context.releaseName + '-cockroach, or choose Same GVC. 2.0.0 adds it itself.'
+        message: >-
+          This list also governs the traffic between the nodes, and this version does not add the release's
+          own workload to it, so the nodes cannot reach each other. Add the release's CockroachDB workload, or
+          choose Same GVC. 2.0.0 adds it itself.
+
+rules:
+  # secret.yaml lists the join hosts without a port, and CockroachDB dials 26257 for a join address without one.
+  - rule: self.cockroach_defaults.sql_port == 26257
+    severity: warning
+    message: >-
+      Keep the SQL port at 26257: this version lists the other nodes to join without a port, so CockroachDB
+      dials 26257 and the nodes cannot join each other on another port.
+
+yamlOnly:
+  - path: cockroach_defaults
+    reason: >-
+      The SQL and HTTP ports; the SQL port must keep its default, because the nodes join each other on 26257
+      whatever it says (1.2.0 fixes both ports at 26257 and 8080).

@@ -63,6 +63,12 @@ prerequisites:
     valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
     required: true
     description: Credentials the bundled PostgreSQL initializes with and Umami connects with (URL-safe values); set the key of the database mode in use. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: app.twoFactorKeySecretName
+    required: false
+    when: two-factor authentication is wanted
+    description: 64-character hex key (plain encoding, from openssl rand -hex 32) that encrypts users' two-factor secrets; keep it stable.
   - kind: bucket
     valuesPath:
       - postgres.backup.aws.bucket

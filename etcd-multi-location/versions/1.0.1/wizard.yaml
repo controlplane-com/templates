@@ -1,0 +1,365 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: etcd Multi-Location
+# createsGvc: true. The chart creates its own GVC from global.gvc.name and global.gvc.locations
+# (templates/gvc.yaml), so there is no target GVC to limit and no gvc block (guide 14.2): the location
+# rules work on global.gvc.locations, and every resource lands in global.gvc.name, not context.gvc.
+
+steps:
+  - id: locations
+    title: GVC and locations
+    description: The GVC this release creates, and the cluster roster, with one etcd member in each listed location.
+    sections:
+      - id: gvc
+        title: GVC
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+              adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
+              workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          - path: global.gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this
+              one with everything in it, the etcd volumes included.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              # The chart writes the name unquoted (gvc.yaml:9, workload.yaml:5, identity.yaml:4,
+              # volumeset.yaml:4), where YAML 1.2 reads these words as a boolean or null.
+              - rule: "!(self.global.gvc.name in ['true', 'false', 'null'])"
+                message: This name would be read as a boolean or null; choose another.
+              - when: context.mode == 'install'
+                rule: self.global.gvc.name != 'etcd-multi-location-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+                  Give each release its own, for example ' + context.releaseName + '-etcd.'
+                message: >-
+                  GVC names are org-wide: a release on this name is refused while another release manages that
+                  GVC. Give each release its own.
+        rules:
+          # etcd-ml.validate refuses an empty name; `required` says it on the field, this rule carries the mirror.
+          - rule: self.global.gvc.name != null && self.global.gvc.name != ''
+            mirrors: etcd-ml.validate
+            paths: [global.gvc.name]
+            message: Name the GVC this release creates.
+      - id: roster
+        title: Locations
+        fields:
+          - type: note
+            when: context.mode == 'install'
+            text: >-
+              Look for `Starting etcd node` lines in `cpln logs` when a member does not come up, and after a
+              fresh install allow about two minutes first: service discovery across regions can lag a ready
+              member by over a minute.
+          - type: note
+            when: size(self.global.gvc.locations) >= 2
+            text: Each location runs one member, and a write needs a majority of the members.
+            textExpression: >-
+              string(size(self.global.gvc.locations)) + ' members: a write needs ' +
+              string(size(self.global.gvc.locations) / 2 + 1) + ' of them, and the cluster survives losing ' +
+              string((size(self.global.gvc.locations) - 1) / 2) +
+              ((size(self.global.gvc.locations) - 1) / 2 == 1 ? ' location.' : ' locations.')
+          - path: global.gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "" }
+            itemLabel: "item.name == null ? '' : item.name"
+            description: >-
+              The locations of the GVC this release creates, with one member in each, named
+              `<release>-etcd-<location>`.
+            help: >-
+              Three locations survive the loss of one, five survive two, and two survive none. For a
+              single-location cluster, use the etcd template instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+              rules:
+                # `replicas` is no item field (a parent sets it for its own tier), and lint refuses any read
+                # of an undeclared item key outside has(), so the rule compares the whole entry; standalone,
+                # the chart accepts only 1 ("1" too), _helpers.tpl:65-71.
+                - rule: >-
+                    !has(item.replicas) || item == {'name': item.name, 'replicas': 1} ||
+                    item == {'name': item.name, 'replicas': '1'}
+                  mirrors: etcd-ml.validate
+                  paths: [name]
+                  message: >-
+                    etcd runs exactly one member per location, so an entry takes only `name` and, optionally,
+                    `replicas: 1`. A second member in a location makes that location's loss a quorum loss.
+            rules:
+              - rule: size(self.global.gvc.locations) >= 2
+                mirrors: etcd-ml.validate
+                message: >-
+                  The cluster needs at least 2 locations. For a single-location cluster, use the etcd template
+                  instead.
+              - rule: size(self.global.gvc.locations) < 2 || size(self.global.gvc.locations) % 2 == 1
+                severity: info
+                message: An even number of locations survives no more location losses than one location fewer.
+                messageExpression: >-
+                  size(self.global.gvc.locations) == 2 ?
+                  'Two locations survive no location loss: losing either stops writes until you recover by hand. Three locations survive one.' :
+                  string(size(self.global.gvc.locations)) + ' locations survive ' + string((size(self.global.gvc.locations) - 1) / 2) +
+                  ((size(self.global.gvc.locations) - 1) / 2 == 1 ? ' location loss' : ' location losses') + ', no more than ' +
+                  string(size(self.global.gvc.locations) - 1) + ' do; 3 is the recommended shape, and 5 survive two losses.'
+              - rule: >-
+                  oldSelf == null ||
+                  (size(self.global.gvc.locations) == size(oldSelf.global.gvc.locations) &&
+                  self.global.gvc.locations.all(l, oldSelf.global.gvc.locations.exists(o, o.name == l.name)))
+                severity: info
+                message: >-
+                  Changing the locations changes the locations of the GVC this release created and reprovisions
+                  the cluster: every member restarts with a new cluster list, which is not etcd's graceful
+                  `member add` or `member remove`. Plan a maintenance window.
+      - id: recovery
+        title: Disaster recovery
+        when: >-
+          context.mode == 'upgrade' ||
+          (self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != '')
+        description: >-
+          Emergency only, after quorum is lost for good: one surviving member restarts as a new
+          single-member cluster from its own write-ahead log.
+        fields:
+          - type: note
+            severity: warning
+            when: self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != ''
+            text: >-
+              Once the member serves writes again, clear this setting with the next upgrade: while it is set,
+              the member forces a new cluster on every restart. Before the lost location's member can rejoin,
+              reset its volume (uninstall and reinstall, or delete that member's volume), because it still
+              holds the old cluster ID.
+          - path: recovery.forceNewClusterInLocation
+            type: enum
+            label: Force a new cluster in
+            widget: select
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: The surviving location. Leave it empty in normal operation.
+            help: >-
+              Use it only when quorum is permanently gone (with two locations, the loss of either one). If the
+              lost location is coming back, wait: a member that returns with its volume intact rejoins on its
+              own. `etcdctl member remove` cannot help, because it needs quorum itself.
+            rules:
+              # README "Recovering from a lost location": an upgrade-time action after quorum is lost, never
+              # left set.
+              - when: context.mode == 'install'
+                rule: self.recovery.forceNewClusterInLocation == null || self.recovery.forceNewClusterInLocation == ''
+                severity: warning
+                message: >-
+                  Forcing a new cluster is an emergency step for a running release that lost quorum for good; a
+                  fresh install has nothing to recover, and the member would force a new cluster on every
+                  restart. Leave it empty.
+        rules:
+          # etcd-ml.validate (_helpers.tpl:84-92) refuses a location that is not in the list; the options say
+          # it on the field, this rule carries the mirror.
+          - when: self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != ''
+            rule: self.recovery.forceNewClusterInLocation in self.global.gvc.locations.map(l, l.name)
+            mirrors: etcd-ml.validate
+            paths: [recovery.forceNewClusterInLocation]
+            message: Pick one of the listed locations.
+
+  - id: server
+    title: Server
+    description: The etcd image, the compute of each member and the Raft timers.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts all members roughly together, also one that changes nothing: quorum is
+              lost until they are back, and writes time out meanwhile. The data survives. Plan the upgrade as a
+              short outage.
+          - path: image
+            type: string
+            format: image
+            label: etcd image
+            docs: "#image-and-resources"
+            required: true
+            help: >-
+              This version was tested with `controlplanecorporation/etcd:0.1` (etcd 3.6.5). Another image is
+              unproven here: it must provide `bash` and `etcd`, because the start script runs with them.
+          - path: resources
+            type: resources
+            label: Resources per member
+            docs: "#image-and-resources"
+            required: true
+            # Limits only (`cpu`, `memory`): there is no minimum to compare, so no maxRatio (§18 item 17).
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            # Edge probe: workload.yaml:16,19 quote the values, but Helm reads a plain number from a values
+            # file as a float and prints 1000000 and more in exponent form (memory 536870912 renders
+            # "5.36870912e+08", cpu 1000000 "1e+06"); the platform's Memory and Cpu patterns
+            # (nodelibs/schema workload.ts) refuse both. Every memory above the 32Mi floor is that large.
+            rules:
+              - rule: self.resources.memory == null || type(self.resources.memory) == string
+                paths: [resources.memory]
+                message: >-
+                  Write the memory with a unit, such as `512Mi` or `1Gi`: Helm prints a plain byte count in
+                  exponent form (536870912 as `5.36870912e+08`), which the platform refuses.
+              - rule: >-
+                  self.resources.cpu == null || type(self.resources.cpu) == string ||
+                  self.resources.cpu < 1000000
+                paths: [resources.cpu]
+                message: >-
+                  Write the CPU in millicores, such as `500m`: Helm prints a plain number of 1000000 or more
+                  in exponent form (`1e+06`), which the platform refuses.
+      - id: raft
+        title: Raft timers
+        description: >-
+          The defaults suit locations up to about 250 ms apart. Raise both in proportion for locations
+          further apart (US to Asia-Pacific is 350 to 400 ms).
+        docs: "#raft-tuning"
+        fields:
+          - path: tuning.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            required: true
+            description: About 0.5 to 1.5 times the worst round trip between your locations.
+            unit: ms
+            # etcd 3.6 (the chart's appVersion) refuses --heartbeat-interval 0 ("must be >0"). The chart needs
+            # election <= 50000 and election >= 10 x heartbeat (_helpers.tpl:72-79), so no heartbeat above 5000
+            # renders; a huge one also overflows the chart's own `mul` and renders as 1e+18, which etcd cannot read.
+            min: 1
+            max: 5000
+          - path: tuning.electionTimeoutMs
+            type: integer
+            label: Election timeout
+            required: true
+            description: The defaults detect a dead leader in about 5 seconds across US and EU regions.
+            unit: ms
+            max: 50000
+        rules:
+          # Above 5000 the heartbeat's own MAX says it; no election timeout fits under 50000 then.
+          - when: self.tuning.heartbeatIntervalMs <= 5000
+            rule: self.tuning.electionTimeoutMs >= 10 * self.tuning.heartbeatIntervalMs
+            mirrors: etcd-ml.validate
+            paths: [tuning.electionTimeoutMs]
+            message: >-
+              The election timeout must be at least 10 times the heartbeat interval; a shorter one makes
+              members campaign over ordinary heartbeat jitter.
+            messageExpression: >-
+              'The election timeout must be at least ' + string(10 * self.tuning.heartbeatIntervalMs) +
+              ' ms, 10 times the heartbeat interval; a shorter one makes members campaign over ordinary heartbeat jitter.'
+
+  - id: storage
+    title: Storage
+    description: Each member's volume, and how etcd keeps its backend from growing.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per member
+            required: true
+            help: >-
+              Each member has its own ext4 volume for the Raft write-ahead log and snapshots. Uninstalling the
+              release takes a final snapshot, kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            # The chart fixes general-purpose-ssd (volumeset.yaml), which the platform allows from 10 to
+            # 65536 GiB (nodelibs/schema volumeSet.ts: minCapacity 10, maxCapacity 65536).
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        rules:
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: compaction
+        title: Compaction and quota
+        fields:
+          - type: note
+            text: >-
+              This version compacts the history every hour (periodic, 1h) and keeps etcd's default 2 GiB backend
+              quota; neither is configurable here. etcd goes read-only if its backend reaches the quota.
+
+  - id: access
+    title: Access
+    description: Which workloads can reach the etcd client API.
+    fields:
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          etcd here has no TLS and no authentication: every workload allowed here can read and write the
+          whole keyspace. Firewall changes take up to a couple of minutes to take effect.
+        options:
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - value: workload-list
+            label: Specific workloads
+            description: >-
+              Only the workloads listed below. List the etcd workload itself too: this version does not add
+              it, and the members reach each other through the same list.
+      # Shown for every type: workload.yaml:81-83 writes a non-empty list into the firewall under
+      # same-gvc and same-org too, so it must stay validated.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        widget: tags
+        unique: true
+        description: >-
+          With Specific workloads, every workload allowed to connect, this release's etcd workload included.
+          The platform also applies the list with Same GVC, for clients in other GVCs.
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+        rules:
+          # This version writes the list as given (workload.yaml:80-83); 2.0.0 appends the etcd workload itself.
+          # The list also governs the Raft peer traffic on 2380 between the members, so a list without it
+          # loses quorum cluster-wide (CHANGELOG etcd-multi-location 2.0.0; 2.0.0 workload.yaml comment:
+          # measured 2026-08-27, re-adding the workload recovered the cluster).
+          - when: >-
+              self.internalAccess.type == 'workload-list' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: >-
+              ('//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-etcd') in self.internalAccess.workloads
+            severity: warning
+            message: >-
+              With Specific workloads, add this release's etcd workload to the list: the list also governs the
+              traffic between the members, so without it they cannot reach each other and the cluster loses
+              quorum. 2.0.0 adds it on its own.
+            messageExpression: >-
+              'Add //gvc/' + self.global.gvc.name + '/workload/' + context.releaseName +
+              '-etcd to the list: it also governs the traffic between the members, so without it they cannot reach each other and the cluster loses quorum. 2.0.0 adds it on its own.'
+            fix:
+              path: internalAccess.workloads
+              items: >-
+                ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-etcd']
+          - when: self.internalAccess.type == 'same-gvc' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + self.global.gvc.name + '/workload/'))"
+            severity: info
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + self.global.gvc.name + '/workload/')).map(w, self.global.gvc.name + '/' + w.substring(size('//gvc/' + self.global.gvc.name + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internalAccess.type == 'same-org'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: info
+            message: Same org already lets every workload of the org connect, so these entries add nothing.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: warning
+            message: With "Specific workloads" and an empty list, no client can connect.

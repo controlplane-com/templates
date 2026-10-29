@@ -95,12 +95,16 @@ steps:
         type: string
         label: Redis password key
         required: true
+        pattern: '^[-._a-zA-Z0-9]+$'
+        patternMessage: Use letters, digits, -, . and _.
         advanced: true
         description: The key in the Redis credentials secret that holds the Redis password.
       - path: redis.sentinel.auth.fromSecret.passwordKey
         type: string
         label: Sentinel password key
         required: true
+        pattern: '^[-._a-zA-Z0-9]+$'
+        patternMessage: Use letters, digits, -, . and _.
         advanced: true
         description: The key in the Sentinel credentials secret that holds the Sentinel password.
       - path: api.admin.apiKeySecretName
@@ -430,6 +434,26 @@ steps:
             message: >-
               Changing persistence on a running release replaces the Redis and Sentinel workloads' storage;
               queued tasks can be lost. Keep the installed setting.
+
+# 1.0.0 bundles redis 3.0.2; 1.1.0 and later bundle redis 3.1.1 or later, which renamed the volume sets
+# ({release}-redis → {release}-redis-vs, {release}-sentinel → {release}-sentinel-vs), so an in-place upgrade from
+# 1.0.0 deletes the volume sets the release runs on. Same rule as the redis template's own descriptor.
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+      (!oldSelf.redis.redis.persistence.enabled && !oldSelf.redis.sentinel.persistence.enabled)
+    message: >-
+      Do not upgrade a 1.0.0 release in place: its bundled Redis (3.0.2) names the volume sets differently
+      (RELEASE-redis and RELEASE-sentinel; later versions use RELEASE-redis-vs and RELEASE-sentinel-vs), so the
+      upgrade deletes the volume sets this release runs on, with the queued tasks. Install this version as a new
+      release, move producers and drain the old queue, then uninstall the old release.
+    messageExpression: >-
+      'Do not upgrade a 1.0.0 release in place: its bundled Redis (3.0.2) names the volume sets ' +
+      context.releaseName + '-redis and ' + context.releaseName + '-sentinel, and this version names them ' +
+      context.releaseName + '-redis-vs and ' + context.releaseName + '-sentinel-vs, so the upgrade deletes the ' +
+      'volume sets this release runs on, with the queued tasks. Install this version as a new release, move ' +
+      'producers and drain the old queue, then uninstall the old release.'
 
 yamlOnly:
   - path: image

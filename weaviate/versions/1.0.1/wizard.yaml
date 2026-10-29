@@ -1,0 +1,564 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Weaviate
+# One stateful Raft cluster with no location handling: replicas join the cluster through replica 0 of
+# their own location, so every GVC location would run a separate cluster with its own volumes.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: authentication
+    title: Authentication
+    description: The API key every client sends, and the user it maps to.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the API key as a plain value, kept in the Helm release and in the
+          `RELEASE_NAME-weaviate-credentials` secret. Its default is a key published in the public template
+          repository and shared by every install that kept it; it is the only authentication Weaviate has, so
+          replace it with a key of your own. Version 1.1.0 and later take the key from a secret you create
+          instead.
+      - path: apiKey
+        type: string
+        label: API key
+        required: true
+        example: true
+        sensitive: true
+        description: >-
+          Every client sends it as `Authorization: Bearer <key>`; there is no anonymous access.
+        help: >-
+          Generate one with `openssl rand -hex 32`. Changing it here and applying the change replaces the key:
+          every client must then send the new key.
+      - path: apiUser
+        type: string
+        label: API user
+        required: true
+        description: >-
+          The user the API key maps to, and the one admin of the cluster. It is an identity, not a secret.
+    rules:
+      # secret-credentials.yaml writes both values unquoted into the secret's YAML.
+      - rule: >-
+          oldSelf != null && self.apiKey == oldSelf.apiKey ||
+          !self.apiKey.matches('^\\s') && !self.apiKey.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.apiKey.matches('^[-?:](\\s|$)') && !self.apiKey.matches('\\t') &&
+          !self.apiKey.contains(': ') && !self.apiKey.contains(' #') && !self.apiKey.endsWith(':') && !self.apiKey.endsWith(' ') &&
+          !(self.apiKey in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.apiKey.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.apiKey.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.apiKey.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.apiKey.matches('^\\.(nan|NaN|NAN)$') && !self.apiKey.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [apiKey]
+        message: >-
+          The chart writes the API key into YAML without quotes, so this value would change type or break the
+          install. Use letters and digits, for example the output of openssl rand -hex 32.
+      - rule: >-
+          oldSelf != null && self.apiUser == oldSelf.apiUser ||
+          !self.apiUser.matches('^\\s') && !self.apiUser.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.apiUser.matches('^[-?:](\\s|$)') && !self.apiUser.matches('\\t') &&
+          !self.apiUser.contains(': ') && !self.apiUser.contains(' #') && !self.apiUser.endsWith(':') && !self.apiUser.endsWith(' ') &&
+          !(self.apiUser in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.apiUser.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.apiUser.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.apiUser.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.apiUser.matches('^\\.(nan|NaN|NAN)$') && !self.apiUser.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [apiUser]
+        message: >-
+          The chart writes the API user into YAML without quotes, so this value would change type or break the
+          install. Use a plain name or an email address.
+      - rule: oldSelf == null || self.apiKey != '21203583df918a538cecb1f96c85c4516c4c0e478be23f76466ad8a30adc68cc'
+        severity: info
+        paths: [apiKey]
+        message: >-
+          This release still uses the API key published as the default in the template repository, so anyone
+          who has it can read and write every collection. Replace it with a key of your own.
+      - rule: oldSelf == null || self.apiKey == oldSelf.apiKey
+        severity: info
+        paths: [apiKey]
+        message: >-
+          A new key locks out every client that still sends the old one, and the backup job uses it from its
+          next run. The change restarts the cluster.
+
+  - id: cluster
+    title: Cluster
+    description: The Weaviate nodes, their image and their compute.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade' && self.replicas > 1
+        textExpression: >-
+          'An upgrade that changes the workload restarts the nodes one at a time, and a node can fail to ' +
+          'rejoin the Raft cluster while still reporting ready, so about one request in ' + string(self.replicas) +
+          ' then fails with 404 for collections that exist. Take a backup first, and after the upgrade check ' +
+          'the cluster from inside `' + context.releaseName + '-weaviate` as described in ' +
+          '[Scaling and Availability](/template-catalog/templates/weaviate#scaling-and-availability).'
+        text: >-
+          An upgrade that changes the workload restarts the nodes one at a time, and a node can fail to rejoin
+          the Raft cluster while still reporting ready, so some requests then fail with 404 for collections
+          that exist. Take a backup first, and after the upgrade check the cluster as described in
+          [Scaling and Availability](/template-catalog/templates/weaviate#scaling-and-availability).
+      - path: replicas
+        type: integer
+        label: Nodes
+        min: 1
+        required: true
+        suggestions: [1, 3, 5]
+        description: >-
+          Each node has its own volume. Raft needs a majority of the nodes to elect a leader and accept
+          schema changes, so three nodes survive the loss of one. A single node has no cluster membership
+          to lose on a restart.
+        docs: "#scaling-and-availability"
+      - path: multiZone.enabled
+        type: boolean
+        label: Spread nodes across availability zones
+        description: The location must support multiple zones.
+        docs: "#placement"
+      - path: image
+        type: string
+        format: image
+        label: Weaviate image
+        required: true
+        docs: "#cluster"
+      - path: cpu
+        type: quantity
+        quantity: cpu
+        label: CPU per node
+        required: true
+        min: 25m
+        suggestions: ["1", "2", "4", "8"]
+        docs: "#resources"
+      - path: memory
+        type: quantity
+        quantity: memory
+        label: Memory per node
+        required: true
+        min: 32Mi
+        suggestions: [2Gi, 4Gi, 8Gi, 16Gi, 32Gi]
+        description: >-
+          Vector indexes live in memory, so size memory rather than CPU: roughly vectors × dimensions × 4
+          bytes × 1.5. Too little shows as out-of-memory restarts.
+    rules:
+      - rule: self.replicas >= 1
+        mirrors: weaviate.validate
+        paths: [replicas]
+        message: Run at least one node.
+      # Platform schema (nodelibs workload.ts): memory (MiB) / cpu (millicores) above 8 is refused at apply.
+      - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+        paths: [memory]
+        message: >-
+          The platform allows at most 8 MiB of memory per millicore of CPU (8000Mi per CPU, a little under
+          8Gi). Raise the CPU or lower the memory.
+      - rule: self.replicas != 2
+        severity: info
+        paths: [replicas]
+        message: >-
+          Two nodes survive no node loss, because Raft needs both for a majority. Use one node, or three
+          or more.
+      - rule: oldSelf == null || self.replicas == oldSelf.replicas
+        severity: info
+        paths: [replicas]
+        message: >-
+          Changing the number of nodes of a running cluster has not been verified for this template. Take a
+          backup first, and check the cluster afterwards as described in Scaling and Availability.
+      - rule: oldSelf == null || self.image == oldSelf.image
+        severity: info
+        paths: [image]
+        message: >-
+          A new image restarts every node on its existing data. Take a backup first, and read the Weaviate
+          release notes for the versions in between.
+
+  - id: search
+    title: Search and AI modules
+    description: Query defaults, and the AI providers Weaviate may call with your keys.
+    sections:
+      - title: AI providers
+        description: >-
+          Enter a provider's key only if Weaviate should call that provider. A key makes the provider live and
+          billed to you, whether or not its modules are listed below, and opens outbound internet access for
+          the cluster. Leave all four empty when you supply your own vectors. This version keeps the keys in
+          the Helm release and in the `RELEASE_NAME-weaviate-credentials` secret; version 1.1.0 and later
+          take each from a secret you create instead.
+        fields:
+          - path: modules.openai.apiKey
+            type: string
+            label: OpenAI key
+            sensitive: true
+            description: The OpenAI key, for text2vec-openai, generative-openai and qna-openai.
+          - path: modules.anthropic.apiKey
+            type: string
+            label: Anthropic key
+            sensitive: true
+            description: The Anthropic key, for generative-anthropic.
+          - path: modules.cohere.apiKey
+            type: string
+            label: Cohere key
+            sensitive: true
+            description: The Cohere key, for text2vec-cohere and generative-cohere.
+          - path: modules.huggingface.apiKey
+            type: string
+            label: Hugging Face key
+            sensitive: true
+            description: The Hugging Face key, for text2vec-huggingface.
+      - title: Query defaults
+        docs: "#query-behavior"
+        fields:
+          - path: defaultVectorizerModule
+            type: string
+            label: Default vectorizer
+            required: true
+            suggestions: [none, text2vec-openai, text2vec-cohere, text2vec-huggingface]
+            description: >-
+              The module new collections use to compute vectors. Keep none when your application supplies
+              the vectors; a provider module calls that provider on every insert and query.
+          - path: modules.enabled
+            type: list
+            label: Modules
+            widget: tags
+            unique: true
+            description: >-
+              Listed for Weaviate's ENABLE_MODULES setting. On Weaviate 1.38 the API-based modules load
+              whether or not they are listed; a provider's key is what turns it on. The backup module
+              is added for you when backups are on.
+            item:
+              type: string
+              label: Module
+              suggestions:
+                - text2vec-openai
+                - text2vec-cohere
+                - text2vec-huggingface
+                - generative-openai
+                - generative-cohere
+                - generative-anthropic
+                - qna-openai
+                - ref2vec-centroid
+          - path: queryDefaultsLimit
+            type: integer
+            label: Default result limit
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            description: How many objects a query returns when it sets no limit of its own.
+        rules:
+          - when: self.defaultVectorizerModule in ['text2vec-openai', 'text2vec-cohere', 'text2vec-huggingface']
+            rule: >-
+              (self.defaultVectorizerModule == 'text2vec-openai' && self.modules.openai.apiKey != '') ||
+              (self.defaultVectorizerModule == 'text2vec-cohere' && self.modules.cohere.apiKey != '') ||
+              (self.defaultVectorizerModule == 'text2vec-huggingface' && self.modules.huggingface.apiKey != '')
+            severity: info
+            paths: [defaultVectorizerModule]
+            message: >-
+              This vectorizer calls a provider whose key is empty under AI providers, so inserts into
+              new collections fail unless each client sends the provider key in a request header. Enter the
+              provider's key, or keep none.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each node's objects and vector indexes.
+    sections:
+      - fields:
+          - path: volumes.data.initialCapacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            description: Fixed once created; it can only grow, through the setting below.
+            help: >-
+              Each node has its own volume. The data survives redeploys; uninstalling the release deletes
+              the volume set, and the data with it.
+            docs: "#storage"
+      - title: Grow storage automatically
+        description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumes.data.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 200, 500, 1000]
+          - path: volumes.data.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumes.data.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.2, label: "1.2×" }
+              - { value: 1.5, label: "1.5× (default)" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumes.data.autoscaling.maxCapacity >= self.volumes.data.initialCapacity
+            paths: [volumes.data.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: >-
+          oldSelf == null || oldSelf.volumes.data.initialCapacity == null ||
+          self.volumes.data.initialCapacity >= oldSelf.volumes.data.initialCapacity
+        paths: [volumes.data.initialCapacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: backup
+    title: Backups
+    description: Scheduled Weaviate backups to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload calls Weaviate's backup API on a schedule, which writes a full backup of every
+          collection to an S3 or GCS bucket through a Control Plane cloud account. The bucket and the cloud
+          account (for S3 also the IAM policy) must exist before you turn it on. Turning it on opens outbound
+          internet access for the cluster. Check that the first backup lands in your bucket before you rely
+          on the schedule.
+        docs: "#backing-up"
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: weaviate.validate
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the backup destination.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the backup identity also carries the AWS managed policy `aws::ReadOnlyAccess`,
+              which grants read access to every bucket in your AWS account, not only the backup bucket.
+              Version 1.1.1 removes it; scope your own IAM policy to the full action list in
+              [AWS S3](/template-catalog/templates/weaviate#aws-s3) so the backups keep working after that
+              upgrade.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Scope the policy to the bucket and its objects, with the S3 actions listed under
+              [AWS S3](/template-catalog/templates/weaviate#aws-s3). The backup identity carries
+              `cpln-connector`, `aws::ReadOnlyAccess` and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.path
+            type: string
+            label: Folder in the bucket
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) for the project that holds the bucket.
+              Grant its service account `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.path
+            type: string
+            label: Folder in the bucket
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+
+  - id: network
+    title: Network
+    description: Which workloads can connect to Weaviate. It is never published to the internet.
+    sections:
+      - title: Access
+        fields:
+          - type: note
+            severity: info
+            textExpression: >-
+              'Applications connect to `' + context.releaseName + '-weaviate.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local` on port 8080 (REST and GraphQL) or 50051 (gRPC), with the header ' +
+              '`Authorization: Bearer <API key>`.'
+            text: >-
+              Applications connect to `RELEASE_NAME-weaviate.GVC_NAME.cpln.local` on port 8080 (REST and
+              GraphQL) or 50051 (gRPC), with the header `Authorization: Bearer <API key>`.
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              This template opens no public endpoint. Access changes take up to a couple of minutes to take
+              effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown while it matters or holds entries: the values comment says "used only with workload-list",
+          # but workload-weaviate.yaml writes any non-empty list into inboundAllowWorkload, and the platform
+          # applies the workload links with same-gvc and workload-list.
+          - path: internal_access.workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads allowed to connect, including this release's own
+              Weaviate workload when it runs more than one node (the nodes reach each other through it); with
+              Same GVC, extra workloads from other GVCs. The platform ignores the list with the other choices.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+    rules:
+      - when: self.internal_access.type == 'workload-list'
+        rule: size(self.internal_access.workloads) > 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: List at least one workload when Weaviate is open to specific workloads, or none can connect.
+      - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internal_access.type == 'same-org'
+        rule: size(self.internal_access.workloads) == 0
+        severity: info
+        paths: [internal_access.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to Weaviate, so the workloads listed add
+          nothing.
+      - when: self.internal_access.type == 'none'
+        rule: size(self.internal_access.workloads) == 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: >-
+          The chart still writes the listed workloads into the firewall, where the platform checks every
+          entry, but "None" lets none of them connect. Remove them.
+      - when: self.internal_access.type == 'none'
+        rule: "!self.backup.enabled"
+        severity: warning
+        paths: [internal_access.type]
+        message: >-
+          "None" also blocks the backup job, which calls Weaviate like any other workload, so no backup is
+          taken.
+      # Measured 2026-10-23 (wizard round): workload-list without the release's own workload splits a
+      # 3-node cluster (each node lists only itself, schema writes time out) while every replica reports ready.
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null && self.replicas > 1
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate') in self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The Weaviate nodes reach each other through their own workload, and the chart does not add it to the list. Add //gvc/' +
+          context.gvc + '/workload/' + context.releaseName + '-weaviate, or the cluster splits while every node still reports ready.'
+        message: >-
+          The Weaviate nodes reach each other through their own workload, and the chart does not add it to the
+          list. Add this release's Weaviate workload, or the cluster splits while every node still reports ready.
+        fix:
+          path: internal_access.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate']"
+      - when: oldSelf != null && self.replicas > 1 && oldSelf.internal_access.type != self.internal_access.type
+        rule: "false"
+        severity: info
+        paths: [internal_access.type]
+        message: >-
+          Changing who can connect restarts every node in turn, which exposes the rejoin issue described on the
+          Cluster step: plan it like a version upgrade.
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null && self.backup.enabled
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate-backup') in self.internal_access.workloads
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The chart does not add its own backup job to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-weaviate-backup, or it cannot reach Weaviate and no backup is taken.'
+        message: >-
+          The chart does not add its own backup job to the list; add the backup workload, or it cannot reach
+          Weaviate and no backup is taken.
+        fix:
+          path: internal_access.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-weaviate-backup']"
+
+yamlOnly:
+  - path: clusterName
+    reason: Not read by this version; no template uses it, and 1.1.0 removed it.

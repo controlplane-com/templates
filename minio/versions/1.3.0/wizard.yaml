@@ -1,0 +1,393 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MinIO
+# One stateful workload with no location handling: every GVC location would form its own independent
+# pool with its own data, which the template does not replicate between locations.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Root credentials
+    description: The prerequisite secret with the MinIO root user and password.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0)
+        text: >-
+          The secret must exist **before** you install or upgrade. If it is missing, the deployment waits
+          on it with no log output at all and looks broken.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.3.0') < 0
+        text: >-
+          Version 1.3.0 moved the root credentials out of the values and into the secret below. Before you
+          upgrade, read the pair the cluster already uses, because the upgrade deletes the secret that holds
+          it: `cpln secret reveal RELEASE_NAME-minio-admin -o yaml` (keys `username` and `password`). Create
+          a dictionary secret with those same two keys and values under a name of your own (not
+          RELEASE_NAME-minio-admin), and choose it below. Earlier versions shipped the published default
+          pair `myuser` / `mypassword123`, shared by every install: if the reveal shows it, rotate it after
+          the upgrade. See
+          [Upgrading From Earlier Versions](/template-catalog/templates/minio#upgrading-from-earlier-versions).
+        textExpression: >-
+          'Version 1.3.0 moved the root credentials out of the values and into the secret below. Before you
+          upgrade, read the pair the cluster already uses, because the upgrade deletes the secret that holds
+          it: `cpln secret reveal ' + context.releaseName + '-minio-admin -o yaml` (keys `username` and
+          `password`). Create a dictionary secret with those same two keys and values under a name of your
+          own (not ' + context.releaseName + '-minio-admin), and choose it below. Earlier versions shipped
+          the published default pair `myuser` / `mypassword123`, shared by every install: if the reveal
+          shows it, rotate it after the upgrade. See
+          [Upgrading From Earlier Versions](/template-catalog/templates/minio#upgrading-from-earlier-versions).'
+      - path: admin.credentialsSecretName
+        type: ref
+        label: Root credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username` (at least 3 characters) and `password` (at least 8).
+          They are the MinIO root user and password, and the S3 access key and secret key every client and
+          every other template uses.
+        help: >-
+          Create the secret with:
+          `cpln secret create-dictionary --name SECRET_NAME --entry username=minioadmin --entry password="$(openssl rand -hex 24)"`.
+          MinIO reads the pair on every start, but a running node keeps the pair it started with: after you
+          change the secret's values, force a redeployment of the workload, and update every client in the
+          same window.
+        docs: "#root-credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            suggestName: "context.releaseName + '-minio-credentials'"
+    rules:
+      - rule: self.admin.credentialsSecretName != null && self.admin.credentialsSecretName != ''
+        mirrors: minio.validateCredentials
+        paths: [admin.credentialsSecretName]
+        message: The root credentials secret is required.
+      - rule: "!has(self.admin.username)"
+        mirrors: minio.validateCredentials
+        paths: [admin.credentialsSecretName]
+        message: >-
+          admin.username was removed in 1.3.0. Put the root user and password in a dictionary secret with
+          the keys username and password, choose it here, and remove admin.username from the values.
+      - rule: "!has(self.admin.password)"
+        mirrors: minio.validateCredentials
+        paths: [admin.credentialsSecretName]
+        message: >-
+          admin.password was removed in 1.3.0. Put the root user and password in a dictionary secret with
+          the keys username and password, choose it here, and remove admin.password from the values.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') < 0 ||
+          self.admin.credentialsSecretName == oldSelf.admin.credentialsSecretName
+        severity: info
+        paths: [admin.credentialsSecretName]
+        message: >-
+          Another secret rotates the root credentials. The nodes restart one at a time, and until every
+          node has restarted clients see intermittent sign-in failures with both the old and the new pair.
+          Plan it as a maintenance window and update every client in the same window. A newly chosen secret
+          also needs a new reveal grant, which can hold the first node back for several minutes.
+
+  - id: cluster
+    title: Cluster
+    description: The size of the erasure-coded pool, the MinIO image and the compute of each node.
+    fields:
+      - type: note
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the pool's nodes, and the first upgrade after an install does so even with
+          unchanged values. Treat it as a planned restart of the pool.
+      - path: replicas
+        type: integer
+        label: Nodes
+        min: 4
+        required: true
+        immutable: >-
+          The peer list is fixed when the pool first forms. MinIO grows by adding server pools, which this
+          template does not model.
+        suggestions: [4, 6, 8, 10, 12, 16]
+        description: >-
+          Every object is striped across all nodes with data and parity blocks, so the node count sets both
+          the usable share of the raw capacity and how many nodes may be down. 6 or more is recommended for
+          production. Choose it now: it cannot change after install.
+        docs: "#image-and-replicas"
+      - type: note
+        severity: warning
+        when: context.mode == 'install' && self.replicas > 5
+        textExpression: >-
+          'The default replicas-per-workload quota is 5, and ' + string(self.replicas) + ' nodes need more. ' +
+          'Request a quota increase before you install, or the install is refused; check your org limit with ' +
+          '`cpln quota get` (it may already be raised).'
+        text: >-
+          The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
+          install is refused; check your org limit with `cpln quota get` (it may already be raised).
+      - path: image
+        type: string
+        format: image
+        label: MinIO image
+        required: true
+        description: Any MinIO server image; every node runs the same one.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per node.
+        docs: "#resources"
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: oldSelf != null && self.replicas == oldSelf.replicas || self.replicas % 2 == 0
+        paths: [replicas]
+        message: Use an even number of nodes.
+      - rule: oldSelf != null || self.replicas <= 5
+        severity: info
+        paths: [replicas]
+        message: >-
+          The default replicas-per-workload quota is 5. Request a quota increase before you install, or the
+          install is refused; check your org's current limit with cpln quota get (it may already be raised).
+      # MinIO's own images are no longer served to anonymous pulls: minio/minio on Docker Hub (withdrawn
+      # in 2025; every fresh install of 1.3.0 failed to pull it, CHANGELOG minio 1.3.1) and, since then,
+      # quay.io/minio/minio (registry API: 401 to an anonymous pull token, measured 2026-10-28). This is
+      # the registries' behaviour, not a platform rule.
+      - when: oldSelf == null || context.fromVersion != context.version || self.image != oldSelf.image
+        rule: >-
+          !self.image.startsWith('minio/minio') && !self.image.startsWith('docker.io/minio/minio') &&
+          !self.image.startsWith('index.docker.io/minio/minio') && !self.image.startsWith('quay.io/minio/minio')
+        severity: warning
+        paths: [image]
+        message: >-
+          Neither Docker Hub nor quay.io serves MinIO's images to anonymous pulls any more (a registry
+          change, not a platform rule), so the nodes cannot pull this image and the pool never starts. Set
+          an image your org can pull, for example a copy in your org's registry.
+      - when: oldSelf != null && context.fromVersion == context.version && self.image == oldSelf.image
+        rule: >-
+          !self.image.startsWith('minio/minio') && !self.image.startsWith('docker.io/minio/minio') &&
+          !self.image.startsWith('index.docker.io/minio/minio') && !self.image.startsWith('quay.io/minio/minio')
+        severity: info
+        paths: [image]
+        message: >-
+          Neither Docker Hub nor quay.io serves MinIO's images to anonymous pulls any more (a registry
+          change, not a platform rule), so nodes that restart cannot pull this image. Set an image your org
+          can pull, for example a copy in your org's registry.
+
+  - id: storage
+    title: Storage
+    description: One volume per node, holding that node's share of every object.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes the
+              volume set, and every stored object with it.
+            docs: "#storage"
+          - type: note
+            text: >-
+              With the parity MinIO applies, usable space is roughly nodes × capacity ÷ 2 up to 8 nodes, and
+              a larger share (about 60 to 75%) on bigger pools.
+            textExpression: >-
+              self.replicas <= 8 ?
+              'With the parity MinIO applies, usable space is roughly ' +
+              string(self.replicas * self.volumeset.capacity / 2) + ' GiB (' + string(self.replicas) +
+              ' nodes × ' + string(self.volumeset.capacity) + ' GiB ÷ 2).' :
+              'With the parity MinIO applies to ' + string(self.replicas) + ' nodes, usable space is about 60 to ' +
+              '75% of the ' + string(self.replicas * self.volumeset.capacity) + ' GiB raw capacity.'
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Each node's volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [1, 10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: network
+    title: Network
+    description: Who can reach the S3 API and the web console. The template has no public endpoint.
+    sections:
+      - title: Internal access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            text: >-
+              To open the web console from your computer, run cpln port-forward to port 9001 of the MinIO
+              workload, open http://localhost:9001 and sign in with the root credentials.
+            textExpression: >-
+              'To open the web console from your computer, run `cpln port-forward ' + context.releaseName +
+              '-minio 9001:9001 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, open http://localhost:9001 and sign in with the root credentials. Inside the GVC the S3 API
+              is `http://' + context.releaseName + '-minio.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:9000`.'
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              The nodes reach each other over this same firewall, so it must let the pool through as well as
+              your clients. Access changes take a few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC, the nodes included.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org, the nodes included.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, which must include the MinIO workload itself.
+              - value: none
+                label: None
+                description: No workload can connect, not even the other nodes, so the pool never forms.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            when: self.internalAccess.type in ['same-gvc', 'workload-list']
+            description: >-
+              With Specific workloads, the only workloads allowed to connect, and it must include MinIO's own
+              workload; with Same GVC, extra workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+    rules:
+      - rule: self.internalAccess.type != 'none'
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          The nodes discover and reach each other over internal GVC traffic, so "None" breaks the pool
+          rather than isolating it. Choose another option.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-minio') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The nodes reach each other through this list, and the chart does not add its own workload. Add //gvc/' +
+          context.gvc + '/workload/' + context.releaseName + '-minio, or the pool never forms.'
+        message: >-
+          The nodes reach each other through this list, and the chart does not add its own workload. Add the
+          MinIO workload, or the pool never forms.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-minio']"
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+
+migrations:
+  # 1.0.0 and 1.1.0 set one CPU and memory value; 1.2.0 split them into minimums and maximums. The old
+  # defaults (2 and 4Gi) equal the new maximums, so the rename alone keeps what a release runs.
+  - fromVersions: "<1.2.0"
+    from: resources.cpu
+    to: resources.maxCpu
+    note: 1.2.0 split the CPU setting into a minimum and a maximum; the release's value is now the maximum, and the minimum is set to keep it valid. Check both under Cluster.
+  - fromVersions: "<1.2.0"
+    from: resources.memory
+    to: resources.maxMemory
+    note: 1.2.0 split the memory setting into a minimum and a maximum; the release's value is now the maximum, and the minimum is set to keep it valid. Check both under Cluster.
+  # A release on 1.0.0 or 1.1.0 carries its single CPU and memory value as the new maximum. The 1.2.0
+  # minimums (1 CPU, 2Gi) would then break the stateful-workload limits for a large maximum (at most 4:1,
+  # and at most 4000m / 4096Mi between minimum and maximum) or exceed a small one: set the minimum so
+  # the carried maximum stays valid, and keep the 1.2.0 default otherwise.
+  - fromVersions: "<1.2.0"
+    to: resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.resources.cpu) < 1000 ? dyn(string(cpuMillicores(self.resources.cpu)) + 'm') :
+      cpuMillicores(self.resources.cpu) > 2000 ?
+      dyn(string((cpuMillicores(self.resources.cpu) + 3) / 4 > cpuMillicores(self.resources.cpu) - 4000 ?
+      (cpuMillicores(self.resources.cpu) + 3) / 4 : cpuMillicores(self.resources.cpu) - 4000) + 'm') : dyn(1)
+  - fromVersions: "<1.2.0"
+    to: resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.resources.memory) < 2147483648 ? string(memoryBytes(self.resources.memory)) :
+      memoryBytes(self.resources.memory) > 4294967296 ?
+      string((memoryBytes(self.resources.memory) + 4194303) / 4194304 > (memoryBytes(self.resources.memory) + 1048575) / 1048576 - 4096 ?
+      (memoryBytes(self.resources.memory) + 4194303) / 4194304 : (memoryBytes(self.resources.memory) + 1048575) / 1048576 - 4096) + 'Mi' : '2Gi'
+  # 1.0.0 hard-coded volume autoscaling on (maximum 1000 GiB, scale below 1 % free, factor 1.1); 1.1.0
+  # dropped it and 1.2.0 made it a switch that defaults to off. Keep what a 1.0.0 release runs.
+  - fromVersions: "=1.0.0"
+    to: volumeset.autoscaling.enabled
+    valueExpr: "true"
+    note: 1.0.0 always grew the volumes automatically; the release keeps that, with the same limits. Turn it off under Storage if you do not want it.
+  - fromVersions: "=1.0.0"
+    to: volumeset.autoscaling.maxCapacity
+    valueExpr: "1000"
+  - fromVersions: "=1.0.0"
+    to: volumeset.autoscaling.minFreePercentage
+    valueExpr: "1"
+  - fromVersions: "=1.0.0"
+    to: volumeset.autoscaling.scalingFactor
+    valueExpr: "1.1"
+  # 1.3.0 moved the root credentials into a prerequisite secret.
+  - fromVersions: "<1.3.0"
+    from: admin.username
+    note: >-
+      The root credentials moved to a dictionary secret with the keys username and password; choose it under
+      Root credentials. Create it with the pair the cluster uses today, read from the RELEASE_NAME-minio-admin
+      secret before you upgrade.
+  - fromVersions: "<1.3.0"
+    from: admin.password
+    note: >-
+      The root credentials moved to a dictionary secret with the keys username and password; choose it under
+      Root credentials. Earlier versions shipped the published default pair myuser / mypassword123: if the
+      release still uses it, rotate it after the upgrade.

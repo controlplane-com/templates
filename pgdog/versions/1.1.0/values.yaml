@@ -95,7 +95,6 @@ logging:
 
 publicAccess:
   enabled: false
-  # address: my-pgdog-domain.example.com  # name of an existing cpln domain resource
 
 internalAccess:
   type: same-gvc             # options: none, same-gvc, same-org, workload-list

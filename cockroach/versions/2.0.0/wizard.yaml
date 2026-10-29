@@ -708,10 +708,10 @@ steps:
             # The chart writes AWS_BUCKET unquoted (workload-backup.yaml): a name YAML reads as a number, a boolean or
             # null (`123`, `1e3`, `true`), or as a date (`2024-01-01`), would reach the job as another type, so those
             # names are refused.
-            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null|yes|off)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
             patternMessage: >-
               Use 3 to 63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or a
-              digit. A name that YAML reads as a number, a date, a boolean (`true`, `yes`, `off`) or null is not supported.
+              digit. A name that YAML reads as a number, a date, a boolean (`true`, `false`, `off`) or null is not supported.
           - path: backup.aws.region
             type: string
             label: Bucket region
@@ -760,10 +760,10 @@ steps:
             required: true
             example: true
             # GCP_BUCKET is written unquoted too (workload-backup.yaml).
-            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null|yes|off)$)[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            pattern: '^(?![0-9][0-9_]*(\.[0-9_]*)?(e[-+]?[0-9]+)?$)(?!0[xob][0-9a-f]+$)(?![0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$)(?!(true|false|null)$)[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
             patternMessage: >-
               Use lowercase letters, digits, dots, hyphens and underscores, starting and ending with a letter
-              or a digit. A name that YAML reads as a number, a date, a boolean (`true`, `yes`, `off`) or null is not supported.
+              or a digit. A name that YAML reads as a number, a date, a boolean (`true`, `false`, `off`) or null is not supported.
           - path: backup.gcp.cloudAccountName
             type: ref
             label: Cloud account

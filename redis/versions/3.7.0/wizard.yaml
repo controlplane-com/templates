@@ -123,6 +123,12 @@ steps:
             widget: password
             required: true
             example: true
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.auth.password.enabled &&
+                  self.redis.auth.password.value == oldSelf.redis.auth.password.value) ||
+                  self.redis.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes and backslashes. The chart writes the Redis password into a configuration line.
             when: ui.redisAuth == 'password'
           - path: redis.auth.fromSecret.name
             type: ref
@@ -174,6 +180,12 @@ steps:
             widget: password
             required: true
             example: true
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.sentinel.auth.password.enabled &&
+                  self.sentinel.auth.password.value == oldSelf.sentinel.auth.password.value) ||
+                  self.sentinel.auth.password.value.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes and backslashes. The chart writes the Sentinel password into a configuration line.
             when: ui.sentinelAuth == 'password'
           - path: sentinel.auth.fromSecret.name
             type: ref
@@ -219,6 +231,15 @@ steps:
         message: >-
           Changing the Sentinel password on a running release deadlocks the rollout. Keep the installed
           password, or reinstall.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: >-
+          (self.sentinel.auth.password.enabled || self.sentinel.auth.fromSecret.enabled) ==
+          (oldSelf.sentinel.auth.password.enabled || oldSelf.sentinel.auth.fromSecret.enabled)
+        severity: warning
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so
+          turning its authentication on or off does not reach it and can deadlock the rollout. Keep the
+          installed setting, or reinstall.
       - rule: >-
           self.redis.auth.fromSecret.enabled == self.sentinel.auth.fromSecret.enabled &&
           self.redis.auth.password.enabled == self.sentinel.auth.password.enabled
@@ -237,16 +258,30 @@ steps:
             required: true
             description: Per node.
             maxRatio: 4
+            rules:
+              - rule: "![self.redis.resources.maxCpu, self.redis.resources.minCpu].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+                severity: warning
+                paths: [redis.resources]
+                message: >-
+                  Give the Redis CPU values a unit, such as `1000m` for one core. This version writes them unquoted,
+                  so a bare number reaches the platform as a number and the workload is rejected at install; 3.8.0 fixes it.
       - id: redis-volume
         title: Persistent volume for Redis
         toggle: redis.persistence.enabled
         docs: /reference/volumeset
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version the temp-file cleanup hook that runs when a node starts can delete a file Redis is
+              still writing on a fresh volume, which crashes a new node or aborts a replica's first sync. 3.8.0
+              moves the cleanup into the start script.
           - path: redis.persistence.volumes.data.initialCapacity
             type: integer
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             docs: "/reference/volumeset#capacity-and-billing"
@@ -271,6 +306,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
@@ -368,6 +404,13 @@ steps:
             required: true
             description: Per Sentinel.
             maxRatio: 4
+            rules:
+              - rule: "![self.sentinel.resources.maxCpu, self.sentinel.resources.minCpu].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+                severity: warning
+                paths: [sentinel.resources]
+                message: >-
+                  Give the Sentinel CPU values a unit, such as `1000m` for one core. This version writes them unquoted,
+                  so a bare number reaches the platform as a number and the workload is rejected at install; 3.8.0 fixes it.
       - id: sentinel-volume
         title: Persistent volume for Sentinel
         toggle: sentinel.persistence.enabled
@@ -380,6 +423,7 @@ steps:
             label: Initial capacity
             unit: GiB
             min: 10
+            max: 65536
             required: true
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
           - path: sentinel.persistence.volumes.data.performanceClass
@@ -402,6 +446,7 @@ steps:
                 label: Maximum capacity
                 unit: GiB
                 min: 10
+                max: 65536
                 required: true
                 suggestions: [50, 100, 250, 500, 1000, 2000]
               - path: minFreePercentage
@@ -726,9 +771,67 @@ steps:
         rule: self.redis.publicAccess.address != self.sentinel.publicAccess.address
         paths: [sentinel.publicAccess.address]
         message: Redis and Sentinel need different hostnames; each tier creates its own domain.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: self.redis.publicAccess.enabled == oldSelf.redis.publicAccess.enabled
+        severity: warning
+        paths: [redis.publicAccess.enabled]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the Redis address it saved at its first start, so this
+          change leaves the nodes replicating from an address that no longer answers and deadlocks the rollout.
+          Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: >-
+          !oldSelf.redis.publicAccess.enabled || !self.redis.publicAccess.enabled ||
+          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+        severity: warning
+        paths: [redis.publicAccess.address]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the Redis address it saved at its first start, so a new
+          hostname leaves the nodes replicating from an address that no longer answers and deadlocks the rollout.
+          Keep the installed hostname, or reinstall.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled
+        rule: self.sentinel.publicAccess.enabled == oldSelf.sentinel.publicAccess.enabled
+        severity: warning
+        paths: [sentinel.publicAccess.enabled]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so this
+          change does not reach it and deadlocks the rollout. Keep the installed setting, or reinstall.
+      - when: self.sentinel.publicAccess.enabled && !self.redis.publicAccess.enabled
+        rule: "!self.redis.replicaDirect"
+        paths: [redis.replicaDirect]
+        message: >-
+          With Sentinel public access on, the chart leaves the location out of the per-replica Redis address
+          Sentinel monitors, so Sentinel never finds the primary. Turn off per-replica endpoints for Redis, or
+          turn on Redis public access too.
+      - when: self.redis.publicAccess.enabled && !self.sentinel.publicAccess.enabled
+        rule: "!self.sentinel.replicaDirect"
+        paths: [sentinel.replicaDirect]
+        message: >-
+          With Redis public access on, the chart leaves the location out of the per-replica Sentinel addresses
+          the Redis nodes query, so no Redis node starts. Turn off per-replica endpoints for Sentinel, or turn on
+          Sentinel public access too.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && !oldSelf.redis.publicAccess.enabled && !self.redis.publicAccess.enabled
+        rule: "!oldSelf.redis.replicaDirect || self.redis.replicaDirect"
+        severity: warning
+        paths: [redis.replicaDirect]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && !oldSelf.sentinel.publicAccess.enabled && !self.sentinel.publicAccess.enabled
+        rule: "!oldSelf.sentinel.replicaDirect || self.sentinel.replicaDirect"
+        severity: warning
+        paths: [sentinel.replicaDirect]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
+      - when: oldSelf != null && oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled && oldSelf.sentinel.publicAccess.enabled && self.sentinel.publicAccess.enabled
+        rule: self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+        severity: warning
+        paths: [sentinel.publicAccess.address]
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the addresses it saved at its first start, so this change leaves them pointing at names that no longer resolve and can deadlock the rollout. Keep the installed setting, or reinstall.
       - rule: >-
           oldSelf == null || !oldSelf.redis.publicAccess.enabled || !self.redis.publicAccess.enabled ||
-          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address
+          self.redis.publicAccess.address == oldSelf.redis.publicAccess.address ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
         severity: info
         paths: [redis.publicAccess.address]
         message: >-
@@ -737,7 +840,8 @@ steps:
           of the old hostname lose access.
       - rule: >-
           oldSelf == null || !oldSelf.sentinel.publicAccess.enabled || !self.sentinel.publicAccess.enabled ||
-          self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address
+          self.sentinel.publicAccess.address == oldSelf.sentinel.publicAccess.address ||
+          (oldSelf.sentinel.persistence.enabled && self.sentinel.persistence.enabled)
         severity: info
         paths: [sentinel.publicAccess.address]
         message: >-
@@ -885,7 +989,21 @@ steps:
             advanced: true
             description: A sidecar next to each Redis node.
             maxRatio: 4
+            rules:
+              - rule: "![self.redis.exporter.resources.maxCpu, self.redis.exporter.resources.minCpu].exists(v, string(v).matches('^[0-9]+([.][0-9]+)?$'))"
+                severity: warning
+                paths: [redis.exporter.resources]
+                message: >-
+                  Give the exporter CPU values a unit, such as `1000m` for one core. This version writes them unquoted,
+                  so a bare number reaches the platform as a number and the workload is rejected at install; 3.8.0 fixes it.
     rules:
+      - when: self.backup.enabled
+        rule: "!self.redis.publicAccess.enabled"
+        severity: warning
+        paths: [backup.enabled]
+        message: >-
+          With public access on, Redis listens only on its public ports (6380 and up), but the backup job
+          connects on 6379, so every backup run fails. Turn off one of the two.
       - rule: "!self.backup.enabled || self.backup.provider in ['aws', 'gcp']"
         mirrors: redis.validateBackupConfig
         paths: [backup.provider]
@@ -1172,6 +1290,21 @@ steps:
                     - { value: resource-exhausted, label: resource-exhausted }
                     - { value: retriable-status-codes, label: retriable-status-codes }
 
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '3.1.1') >= 0 ||
+      (semverCompare(context.fromVersion, '3.0.0') >= 0 &&
+      !oldSelf.redis.persistence.enabled && !oldSelf.sentinel.persistence.enabled)
+    messageExpression: >-
+      semverCompare(context.fromVersion, '3.0.0') < 0 ?
+      'Do not upgrade a ' + context.fromVersion + ' release in place: 3.x is a different chart that replaces its workloads and volume sets, so the upgrade deletes the data. Install ' + context.version + ' as a new release, copy the data across, then uninstall the old release. If the release set `locations`, it created its own GVCs, which this upgrade and the uninstall delete with everything inside.' :
+      'Do not upgrade this release in place: 3.1.1 renamed the volume sets (' + context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so the upgrade deletes the volume sets this release runs on, with their data. Install this version as a new release, copy the data across, then uninstall the old release.'
+    message: >-
+      Do not upgrade this release in place: this version names the volume sets differently, so the upgrade
+      deletes the ones the release runs on, with their data. Install this version as a new release, copy the data
+      across, then uninstall the old release.
+
 yamlOnly:
   - path: grafana
     reason: A Kubernetes GrafanaDashboard resource for the Grafana Operator; never reconciled on the managed platform.
@@ -1183,6 +1316,19 @@ yamlOnly:
 migrations:
   - fromVersions: "<3.7.0"
     assume: { engine: redis }
+  - fromVersions: "<3.2.0"
+    assume: { backup.enabled: false }
+  - fromVersions: "<3.0.4"
+    assume: { redis.replicaDirect: false, sentinel.replicaDirect: false }
+  # 3.0.0 to 3.4.3 defaulted both passwords to your-password (3.5.0 changed the default): carry the one a release runs on.
+  - fromVersions: ">=3.0.0 <3.5.0"
+    to: redis.auth.password.value
+    valueExpr: "self.redis.auth.password.enabled ? self.redis.auth.password.value : null"
+    note: Redis keeps running on the installed password, so it is kept; changing it on a running release deadlocks the rollout.
+  - fromVersions: ">=3.0.0 <3.5.0"
+    to: sentinel.auth.password.value
+    valueExpr: "self.sentinel.auth.password.enabled ? self.sentinel.auth.password.value : null"
+    note: Sentinel keeps running on the installed password, so it is kept; changing it on a running release deadlocks the rollout.
   - fromVersions: "<3.6.0"
     from: redis.resources.cpu
     to: redis.resources.maxCpu
@@ -1201,3 +1347,45 @@ migrations:
   - fromVersions: "<3.6.0"
     from: sentinel.resources.memory
     to: sentinel.resources.maxMemory
+  # 3.0.2 to 3.3.0 defaulted to 2 Redis nodes (3.4.0 changed the default to 3): keep the count the release runs.
+  - fromVersions: ">=3.0.2 <3.4.0"
+    to: redis.replicas
+    valueExpr: self.redis.replicas
+    note: The release keeps the number of Redis nodes it runs; raise it here if you want more.
+  # 3.0.3 defaulted multiZone to true (3.0.4 changed it to false): keep the placement the release runs.
+  - fromVersions: "=3.0.3"
+    to: redis.multiZone
+    valueExpr: self.redis.multiZone
+  - fromVersions: "=3.0.3"
+    to: sentinel.multiZone
+    valueExpr: self.sentinel.multiZone
+  # 3.0.0 and 3.0.1 defaulted to Redis Stack (3.0.2 changed the default to plain Redis): keep the server the data was written by.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.image
+    valueExpr: self.redis.image
+    note: The release keeps the image it runs; data written by Redis Stack can hold module types that plain Redis cannot load.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.image
+    valueExpr: self.sentinel.image
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.serverCommand
+    valueExpr: self.redis.serverCommand
+  # 3.0.0 and 3.0.1 set both external CIDR lists to 0.0.0.0/0 by default; 3.0.2 left them unset. Keep what the release runs.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.firewall.external_inboundAllowCIDR
+    valueExpr: "(type(self.redis.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.redis.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.redis.firewall.external_inboundAllowCIDR))"
+    note: >-
+      The release keeps the external CIDRs it runs; 3.0.0 and 3.0.1 allowed 0.0.0.0/0 by default. Clear the
+      list under Network to close external access.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: redis.firewall.external_outboundAllowCIDR
+    valueExpr: "(type(self.redis.firewall.external_outboundAllowCIDR) == list ? dyn(dyn(self.redis.firewall.external_outboundAllowCIDR).join(',')) : dyn(self.redis.firewall.external_outboundAllowCIDR))"
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.firewall.external_inboundAllowCIDR
+    valueExpr: "(type(self.sentinel.firewall.external_inboundAllowCIDR) == list ? dyn(dyn(self.sentinel.firewall.external_inboundAllowCIDR).join(',')) : dyn(self.sentinel.firewall.external_inboundAllowCIDR))"
+    note: >-
+      The release keeps the external CIDRs it runs; 3.0.0 and 3.0.1 allowed 0.0.0.0/0 by default. Clear the
+      list under Network to close external access.
+  - fromVersions: ">=3.0.0 <3.0.2"
+    to: sentinel.firewall.external_outboundAllowCIDR
+    valueExpr: "(type(self.sentinel.firewall.external_outboundAllowCIDR) == list ? dyn(dyn(self.sentinel.firewall.external_outboundAllowCIDR).join(',')) : dyn(self.sentinel.firewall.external_outboundAllowCIDR))"

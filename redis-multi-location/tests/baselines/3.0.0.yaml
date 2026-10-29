@@ -1,0 +1,36 @@
+# redis-multi-location 3.0.0 — three locations (one Sentinel each, so automatic failover has a majority),
+# one Redis instance per location to keep the run small, Redis and Sentinel passwords in prerequisite
+# secrets.
+#
+# No upgrade source: 1.x and 2.x (customers run 1.2.0) create their own GVC, and 3.0.0 refuses that upgrade by
+# design (stand up a new release and move the data, as the README says).
+locations: [aws-us-east-1, aws-us-east-2, aws-us-west-2]
+timeoutSeconds: 900
+
+generated:
+  redispw: hex
+  sentinelpw: hex
+
+secrets:
+  redis:
+    type: opaque
+    payload: "{gen.redispw}"
+  sentinel:
+    type: opaque
+    payload: "{gen.sentinelpw}"
+
+vars:
+  redis_password: "{gen.redispw}"
+  sentinel_password: "{gen.sentinelpw}"
+
+values:
+  global:
+    locations:
+      - name: aws-us-east-1
+      - name: aws-us-east-2
+      - name: aws-us-west-2
+  redis:
+    replicasPerLocation: 1
+    passwordSecretName: "{secrets.redis.name}"
+  sentinel:
+    passwordSecretName: "{secrets.sentinel.name}"

@@ -457,7 +457,7 @@ same secret. `cpln helm install` still reports **success**; the Redis, Sentinel 
 then sit at 0 replicas with no containers and therefore no logs. The explanation is on each workload's
 `status.versions[].message` — not the top-level `status.message`, which is empty — and reads `The
 secret <name> no longer exists. Workload updates are paused until the secret is added or the reference
-to the secret removed.` Create the missing secret and it recovers on its own in about 5-6 minutes; no
+to the secret removed.` Create the missing secret and it recovers on its own within about 10 minutes; no
 helm action, and re-running the upgrade does not speed it up.
 
 ## Storage setup

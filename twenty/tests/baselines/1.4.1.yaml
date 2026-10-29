@@ -1,0 +1,48 @@
+# twenty 1.4.1 — the highly available database path (three Patroni members, three etcd members, two
+# HAProxy replicas) with one Twenty server, the worker, the bundled Redis and local attachment storage,
+# one location, all three prerequisite secrets created by CI.
+# HA rather than the single-instance default, because the HA database image is what 1.4.1 changes.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before Twenty can run its migrations (about 6-8 minutes).
+timeoutSeconds: 1500
+
+generated:
+  pgpw: hex
+  redispw: hex
+  appkey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: twenty
+      password: "{gen.pgpw}"
+      database: twenty
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  app:
+    type: opaque
+    payload: "{gen.appkey}"
+
+vars:
+  pg_user: twenty
+  pg_password: "{gen.pgpw}"
+  pg_db: twenty
+
+values:
+  secrets:
+    name: "{secrets.app.name}"
+  redis:
+    credentialsSecretName: "{secrets.redis.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 1.4.0 is the previous version (same values; its HA database still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 1.4.0

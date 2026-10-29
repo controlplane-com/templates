@@ -16,6 +16,8 @@ This template creates no credential secret of its own, and does not create a GVC
 
 This application works only with a single replica, do not scale up the replicas.
 
+<b>Upgrading from 1.1.x or older:</b> 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-mongo` and `RELEASE_NAME-mongo-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
+
 ### Prerequisites
 
 **One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.

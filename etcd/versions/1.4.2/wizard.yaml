@@ -13,18 +13,20 @@ steps:
     title: Cluster
     description: The number of members in the quorum and how they are spread.
     fields:
-      # Measured: from 1.3.0 and older the rendered workload changes (the startup secret's volume uri lost its
-      # `.payload` suffix in 1.4.0), so the upgrade itself restarts the members; secret.yaml:55-59 makes each
-      # member with a data directory start with --initial-cluster-state existing.
+      # From every version before 1.4.2 the startup secret changes (1.4.2 adds the compaction flags; 1.4.0 also
+      # dropped the `.payload` suffix from its volume uri), and cpln helm stamps a cpln/secret:<name> hash tag on
+      # every workload that references a chart-managed secret (@controlplane/cli helm-release-revision-manager.js
+      # prepareBeforeApply), so the upgrade itself restarts the members; secret.yaml:55-59 makes each member
+      # with a data directory start with --initial-cluster-state existing.
       - type: note
         severity: warning
         when: >-
           context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '1.4.0') < 0
+          semverCompare(context.fromVersion, '1.4.2') < 0
         text: >-
-          Upgrading from etcd template versions before 1.4.0 changes the workload itself, so every member
-          restarts during the upgrade and rejoins the cluster from its own volume. Plan the upgrade for a time
-          when every member may restart.
+          Upgrading from etcd template versions before 1.4.2 changes the members' startup configuration, so
+          every member restarts during the upgrade and rejoins the cluster from its own volume. Plan the upgrade
+          for a time when every member may restart.
       - path: replicas
         type: integer
         label: Members
@@ -105,6 +107,7 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
     rules:
       - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
@@ -120,8 +123,10 @@ steps:
           # NOSPACE; the two etcdctl commands; DB SIZE near 2.1 GB). CHANGELOG 2026-08 etcd 1.4.2.
           # secret.yaml:65-80: the flags are part of the startup script that `exec etcd` reads at start;
           # secret.yaml:55-59: a member with a data directory restarts with --initial-cluster-state existing.
-          # Measured: from 1.4.0 and 1.4.1 the rendered workload is unchanged apart from tags, so nothing
-          # restarts the members during the upgrade.
+          # The upgrade changes the startup secret, and cpln helm stamps a cpln/secret:<name> hash tag on every
+          # workload that references a chart-managed secret (@controlplane/cli helm-release-revision-manager.js
+          # prepareBeforeApply), so the upgrade itself restarts the members. An extra force-redeployment would
+          # restart every member again at once.
           - type: note
             severity: warning
             when: >-
@@ -132,10 +137,8 @@ steps:
               close to its backend quota. Compaction stops further growth, but it does not shrink the backend or
               clear a `NOSPACE` alarm: check the cluster first, as
               [If the backend quota is already full](#if-the-backend-quota-is-already-full) describes (a database
-              that uses etcd for coordination restart-looping with `exitCode: 0` is the usual sign). The flags
-              are in the startup script, which each member reads only when it starts, so once the upgrade is
-              applied, run `cpln workload force-redeployment` on the etcd workload so that every member restarts
-              with compaction on; each rejoins the cluster from its own volume. See
+              that uses etcd for coordination restart-looping with `exitCode: 0` is the usual sign). The upgrade
+              restarts the etcd members to apply compaction; each rejoins the cluster from its own volume. See
               [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2).
             textExpression: >-
               'etcd template versions before 1.4.2 passed no compaction flags, so this cluster may already be
@@ -146,11 +149,8 @@ steps:
               `etcdctl alarm list`: a `DB SIZE` near 2.1 GB on every member with `NOSPACE` in the alarm list
               needs the recovery in [If the backend quota is already full](#if-the-backend-quota-is-already-full)
               first; a database that uses etcd for coordination restart-looping with `exitCode: 0` and
-              `reason: Completed` is the usual sign of it. The flags are in the startup script, which each
-              member reads only when it starts, so once the upgrade is applied, run
-              `cpln workload force-redeployment ' + context.releaseName + '-etcd --gvc ' +
-              (context.gvc == null ? 'GVC_NAME' : context.gvc) + '` so that every member restarts with
-              compaction on; each rejoins the cluster from its own volume. See
+              `reason: Completed` is the usual sign of it. The upgrade restarts the etcd members to apply
+              compaction; each rejoins the cluster from its own volume. See
               [Upgrading from a version before 1.4.2](#upgrading-from-a-version-before-1-4-2).'
           - type: note
             text: >-
@@ -324,9 +324,10 @@ steps:
               '`' + string(self.tuning.quotaBackendBytes) + '`') + ' now.'
 
     rules:
-      # secret.yaml:65-80: these flags are read when a member starts, and they live only in the startup secret
-      # (measured: helm template with other tuning values changes the secret, not the workload), so changing
-      # them restarts nothing. A new image or new resources restart the members anyway.
+      # secret.yaml:65-80: these flags live only in the startup secret, which each member reads when it starts.
+      # cpln helm stamps a cpln/secret:<name> hash tag on every workload that references a chart-managed secret
+      # (@controlplane/cli helm-release-revision-manager.js prepareBeforeApply), so a changed secret changes the
+      # workload and the upgrade itself restarts the members.
       - when: >-
           context.mode == 'upgrade' && context.fromVersion != null &&
           semverCompare(context.fromVersion, '1.4.2') >= 0
@@ -334,20 +335,11 @@ steps:
           oldSelf == null ||
           (self.tuning.autoCompactionMode == oldSelf.tuning.autoCompactionMode &&
           string(self.tuning.autoCompactionRetention) == string(oldSelf.tuning.autoCompactionRetention) &&
-          string(self.tuning.quotaBackendBytes) == string(oldSelf.tuning.quotaBackendBytes)) ||
-          self.image != oldSelf.image ||
-          string(self.resources.cpu) != string(oldSelf.resources.cpu) ||
-          string(self.resources.memory) != string(oldSelf.resources.memory)
+          string(self.tuning.quotaBackendBytes) == string(oldSelf.tuning.quotaBackendBytes))
         severity: info
-        messageExpression: >-
-          'etcd reads the compaction settings and the backend size limit only when a member starts, and this
-          change alone does not restart the members. Once the upgrade is applied, run `cpln workload
-          force-redeployment ' + context.releaseName + '-etcd --gvc ' + (context.gvc == null ? 'GVC_NAME' :
-          context.gvc) + '`; each member rejoins the cluster from its own volume.'
         message: >-
-          etcd reads the compaction settings and the backend size limit only when a member starts, and this
-          change alone does not restart the members. Once the upgrade is applied, run `cpln workload
-          force-redeployment` on the etcd workload; each member rejoins the cluster from its own volume.
+          etcd reads the compaction settings and the backend size limit when a member starts. The upgrade
+          restarts the etcd members to apply them; each rejoins the cluster from its own volume.
 
   - id: access
     title: Access

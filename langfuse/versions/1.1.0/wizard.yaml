@@ -1,0 +1,598 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Langfuse
+
+# Redis and ClickHouse are stateful single replicas with their own volume sets and no location handling:
+# every extra GVC location would run its own, separate copy of the whole stack.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.2.1
+    title: Bundled PostgreSQL
+    after: access
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # Asked under Datastore credentials below, next to the Redis and ClickHouse passwords: Langfuse also puts
+      # them in its own secret and its database connection URL.
+      - config.username
+      - config.password
+      - config.database
+      # Langfuse connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          The Langfuse web and worker workloads connect to their database like any other workload: keep Same
+          GVC, or add both under Allowed workloads.
+      backup.aws.policyName:
+        help: >-
+          This version also attaches the AWS managed policy aws::ReadOnlyAccess (read access across the whole AWS
+          account) to the database's identity. langfuse 1.2.0 (postgres 3.4.0 and later) removes it.
+
+steps:
+  - id: langfuse
+    title: Langfuse
+    description: The prerequisite auth secret, sign-in, and the web and worker workloads.
+    sections:
+      - title: Auth secret
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The auth secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - type: note
+            severity: warning
+            when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.0.x took nextAuthSecret, encryptionKey and salt as values, with working defaults published in a
+              public repository. Put them in the auth secret: keep your installed encryptionKey and salt if you had
+              replaced them, so the stored LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets) and the
+              Langfuse API keys keep working. If the release still ran the published defaults, use new values, then
+              set up the LLM connections and integrations again and create new Langfuse API keys.
+              adminEmail and adminPassword are new: they create the owner account at boot.
+          - path: langfuse.auth.secretName
+            type: ref
+            label: Auth secret
+            required: true
+            description: >-
+              A dictionary secret with `nextAuthSecret`, `encryptionKey`, `salt`, `adminEmail` and
+              `adminPassword`.
+            help: >-
+              `encryptionKey` must be exactly 64 hex characters and can never change: it encrypts the LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+              users store in Langfuse. Use three different random values for the key material.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [nextAuthSecret, encryptionKey, salt, adminEmail, adminPassword]
+              create:
+                suggestName: "context.releaseName + '-langfuse-auth'"
+                hint: >-
+                  nextAuthSecret and salt: openssl rand -base64 32. encryptionKey: openssl rand -hex 32.
+                  adminPassword: 8 characters or more.
+        rules:
+          # From 1.0.x there was no auth secret; the note above covers that upgrade.
+          - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.1.0') >= 0)
+            rule: self.langfuse.auth.secretName == oldSelf.langfuse.auth.secretName
+            severity: info
+            paths: [langfuse.auth.secretName]
+            message: >-
+              The new secret must hold the same encryptionKey and salt as the installed one, or the stored LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+              become unreadable and existing Langfuse API keys stop working; set those up again too.
+      - title: Sign-in
+        docs: "#langfuse"
+        fields:
+          - path: langfuse.auth.disableSignup
+            type: boolean
+            label: Close self-service sign-up
+            description: >-
+              On, only the admin from the auth secret and the users they invite can sign in. Off, anyone who
+              reaches the UI can create an account and their own organization.
+          - path: langfuse.auth.organizationName
+            type: string
+            label: First organization
+            required: true
+            description: Created for the first-run admin.
+          - path: langfuse.publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://langfuse.example.com
+            description: >-
+              Only for a custom domain. Empty uses the workload's `*.cpln.app` endpoint when public access is on.
+            help: Auth redirects and the session cookie's Secure flag are derived from it.
+        rules:
+          - rule: >-
+              self.langfuse.publicUrl == '' || self.langfuse.publicUrl.startsWith('http://') ||
+              self.langfuse.publicUrl.startsWith('https://')
+            mirrors: langfuse.validateAuth
+            paths: [langfuse.publicUrl]
+            message: Include the scheme, for example https://langfuse.example.com.
+      - title: Web
+        fields:
+          - type: note
+            severity: info
+            when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.0.x ran the moving tags langfuse/langfuse:3 and langfuse/langfuse-worker:3, so the release may
+              already run a Langfuse newer than this version's 3.225.2. If it does, set both images to that version
+              rather than going back to an older one.
+          - path: langfuse.web.image
+            type: string
+            format: image
+            label: Web image
+            required: true
+          - path: langfuse.web.minReplicas
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: Two or more keep the UI up during rolling deploys.
+          - path: langfuse.web.maxReplicas
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [2, 5, 10]
+            description: The web workload scales between the two on CPU.
+          - path: langfuse.web.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            description: Per replica.
+        rules:
+          - rule: self.langfuse.web.maxReplicas >= self.langfuse.web.minReplicas
+            paths: [langfuse.web.maxReplicas]
+            message: The maximum must be at least the minimum.
+          - rule: self.langfuse.web.minReplicas >= 2
+            severity: info
+            paths: [langfuse.web.minReplicas]
+            message: With one replica, every deploy and restart briefly takes the UI and API down.
+      - title: Worker
+        fields:
+          - path: langfuse.worker.image
+            type: string
+            format: image
+            label: Worker image
+            required: true
+          - path: langfuse.worker.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: langfuse.worker.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            description: Per replica.
+
+  - id: credentials
+    title: Datastore credentials
+    description: The logins of the bundled PostgreSQL, Redis and ClickHouse. There is nothing to create first.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the datastore passwords as values: they are stored in the Helm release in plain
+              text and in the secrets ' + (context.releaseName != null && context.releaseName != '' ?
+              context.releaseName : 'RELEASE_NAME') + '-langfuse-config and ' + (context.releaseName != null &&
+              context.releaseName != '' ? context.releaseName : 'RELEASE_NAME') + '-pg-config, which the chart
+              creates. Version 1.3.0 reads them from secrets you create instead.'
+            text: >-
+              This version takes the datastore passwords as values: they are stored in the Helm release in plain
+              text and in the secrets RELEASE_NAME-langfuse-config and RELEASE_NAME-pg-config, which the chart
+              creates. Version 1.3.0 reads them from secrets you create instead.
+      - title: PostgreSQL
+        fields:
+          - path: postgres.config.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.config.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Used as typed, so replace the published default. Letters, digits and `- . _ ~ ! $ & ' ( ) * + , ; =`
+              only: Langfuse puts it in its database connection URL.
+            help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+          - path: postgres.config.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+        rules:
+          # Langfuse builds DATABASE_URL as postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@<host>:5432/<database>,
+          # with the user and password expanded unencoded at container start and the database name written
+          # unquoted into the env value (templates/workload-langfuse-web.yaml, workload-langfuse-worker.yaml).
+          - rule: >-
+              (oldSelf != null && self.postgres.config.username == oldSelf.postgres.config.username) ||
+              self.postgres.config.username.matches("^[A-Za-z0-9._~!$&'()*+,;=-]+$")
+            severity: warning
+            paths: [postgres.config.username]
+            message: >-
+              Use only letters, digits and - . _ ~ ! $ & ' ( ) * + , ; =: Langfuse puts the user unencoded in its
+              database connection URL.
+          - rule: >-
+              (oldSelf != null && self.postgres.config.password == oldSelf.postgres.config.password) ||
+              self.postgres.config.password.matches("^[A-Za-z0-9._~!$&'()*+,;=-]+$")
+            severity: warning
+            paths: [postgres.config.password]
+            message: >-
+              Use only letters, digits and - . _ ~ ! $ & ' ( ) * + , ; =: Langfuse puts the password unencoded in
+              its database connection URL, where other characters break it.
+          - rule: >-
+              (oldSelf != null && self.postgres.config.database == oldSelf.postgres.config.database) ||
+              self.postgres.config.database.matches('^[A-Za-z0-9._~-]+$')
+            severity: warning
+            paths: [postgres.config.database]
+            message: >-
+              Use only letters, digits, -, _, . and ~: Langfuse writes the database name unencoded and unquoted at
+              the end of its database connection URL.
+          - rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+            severity: info
+            paths: [postgres.config.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE ... PASSWORD with the new
+              password first, or Langfuse loses its database connection.
+      - title: Redis
+        fields:
+          - path: redis.auth.password
+            type: string
+            label: Redis password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Used as typed, so replace the published default.
+            help: Redis and Langfuse read it at every start, so a new value here takes effect on the upgrade.
+      - title: ClickHouse
+        fields:
+          - path: clickhouse.config.password
+            type: string
+            label: ClickHouse password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              The password of the ClickHouse user default. Used as typed, so replace the published default.
+              Letters, digits, `-`, `_`, `.` and `~` only: Langfuse puts it in its migration URL.
+            help: ClickHouse writes it into its user config at every start, so a new value here takes effect on the upgrade.
+          - path: clickhouse.config.database
+            type: string
+            label: ClickHouse database
+            required: true
+            description: >-
+              Langfuse keeps its tables in the ClickHouse database default whatever this is set to, so this only
+              creates an extra, empty database. 1.3.0 removes the setting.
+        rules:
+          # The password lands in CLICKHOUSE_MIGRATION_URL (clickhouse://default:$(CLICKHOUSE_PASSWORD)@...) and,
+          # through an unquoted heredoc, between <password> tags in users.xml (templates/secret-clickhouse-startup.yaml).
+          - rule: >-
+              (oldSelf != null && self.clickhouse.config.password == oldSelf.clickhouse.config.password) ||
+              self.clickhouse.config.password.matches('^[A-Za-z0-9._~-]+$')
+            severity: warning
+            paths: [clickhouse.config.password]
+            message: >-
+              Use only letters, digits, -, _, . and ~: Langfuse puts the password unencoded in its migration URL,
+              and ClickHouse's startup script writes it unescaped into its XML user config.
+          # The startup script runs CREATE DATABASE IF NOT EXISTS ${CLICKHOUSE_DATABASE} with the name unquoted,
+          # under set -e, and the name also ends the migration URL.
+          - rule: >-
+              (oldSelf != null && self.clickhouse.config.database == oldSelf.clickhouse.config.database) ||
+              self.clickhouse.config.database.matches('^[A-Za-z_][A-Za-z0-9_]*$')
+            severity: warning
+            paths: [clickhouse.config.database]
+            message: >-
+              Use letters, digits and _, starting with a letter or _: ClickHouse's startup script creates the
+              database with the name unquoted and stops when that fails.
+
+  - id: object-store
+    title: Object store
+    description: The bucket that holds ClickHouse data and Langfuse events and media.
+    sections:
+      - fields:
+          - path: objectStore.provider
+            type: enum
+            label: Provider
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3, description: Keyless access through a Control Plane cloud account. }
+              - { value: gcp, label: Google Cloud Storage, description: An HMAC key pair in a prerequisite secret. }
+            rules:
+              - rule: self.objectStore.provider in ['aws', 'gcp']
+                mirrors: langfuse.validateObjectStore
+                message: The provider must be aws or gcp.
+      - id: aws
+        title: AWS S3
+        when: self.objectStore.provider == 'aws'
+        docs: "#object-store"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy aws::ReadOnlyAccess to the Langfuse identity, which
+              grants read access across the AWS account, every bucket included. Version 1.2.1 removes it.
+          - path: objectStore.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: objectStore.aws.region
+            type: string
+            label: Region
+            required: true
+            suggestions: [us-east-1, us-east-2, us-west-2, eu-west-1, eu-central-1, ap-southeast-1]
+          - path: objectStore.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            docs: /guides/create-cloud-account
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: objectStore.aws.policyName
+            type: string
+            label: IAM policy
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket; the README has the exact JSON.
+      - id: gcp
+        title: Google Cloud Storage
+        when: self.objectStore.provider == 'gcp'
+        docs: "#object-store"
+        fields:
+          - path: objectStore.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - type: note
+            severity: warning
+            text: The HMAC secret must exist **before** you install.
+          - path: objectStore.gcp.credentialsSecretName
+            type: ref
+            label: HMAC key secret
+            required: true
+            description: >-
+              A dictionary secret with `accessKeyId` and `secretAccessKey`, for a service account with
+              `roles/storage.objectAdmin` on the bucket.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
+              create:
+                suggestName: "context.releaseName + '-langfuse-gcs-credentials'"
+    rules:
+      - rule: oldSelf == null || self.objectStore.provider == oldSelf.objectStore.provider
+        severity: info
+        paths: [objectStore.provider]
+        message: >-
+          Traces already stored stay in the old bucket; ClickHouse and Langfuse read only the new one after the
+          upgrade.
+
+  - id: access
+    title: Access
+    description: Who reaches the Langfuse UI and public API, from the internet and from inside Control Plane.
+    sections:
+      - title: Public access
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Public HTTPS endpoint
+            description: >-
+              The UI and public API on the workload's `*.cpln.app` endpoint. Off, only workloads inside Control
+              Plane reach them: `cpln port-forward` does not reach the Langfuse web server, so keep this on if you
+              need to sign in.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - { value: none, label: None, description: No workload can reach Langfuse internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: langfuse.validateAccess
+            paths: [internalAccess.type]
+            message: The internal access must be none, same-gvc, same-org or workload-list.
+          - rule: >-
+              size(self.internalAccess.workloads) == 0 ||
+              self.internalAccess.type in ['same-gvc', 'workload-list']
+            mirrors: langfuse.validateAccess
+            paths: [internalAccess.workloads]
+            message: Allowed workloads apply only to Same GVC or Specific workloads. Remove them.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: datastores
+    title: Redis and ClickHouse
+    description: The queue and cache, and the trace store, each a single replica with its own volume set.
+    sections:
+      - title: Redis
+        fields:
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+          - path: redis.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+          - path: redis.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50]
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+            paths: [redis.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - title: ClickHouse
+        fields:
+          - path: clickhouse.image
+            type: string
+            format: image
+            label: ClickHouse image
+            required: true
+          - path: clickhouse.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+          - path: clickhouse.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50]
+            description: Local metadata only; the trace data lives in the bucket.
+        rules:
+          - rule: oldSelf == null || self.clickhouse.volumeset.capacity >= oldSelf.clickhouse.volumeset.capacity
+            paths: [clickhouse.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+# Rules over the imported values and removed keys.
+rules:
+  - rule: >-
+      !has(self.langfuse.auth.nextAuthSecret) && !has(self.langfuse.auth.encryptionKey) &&
+      !has(self.langfuse.auth.salt)
+    mirrors: langfuse.validateRemovedKeys
+    paths: [langfuse.auth.secretName]
+    message: >-
+      langfuse.auth.nextAuthSecret, encryptionKey and salt were removed in 1.1.0: put them in the auth secret
+      (reuse the SAME values) and remove them from the values.
+  - rule: "!has(self.objectStore.gcp.accessKeyId) && !has(self.objectStore.gcp.secretAccessKey)"
+    mirrors: langfuse.validateRemovedKeys
+    # The chart refuses these whatever the provider, and the secret field is hidden unless it is gcp.
+    paths: [objectStore.provider]
+    message: >-
+      objectStore.gcp.accessKeyId and secretAccessKey were removed in 1.1.0: put them in the HMAC key secret
+      and remove them from the values.
+  - rule: "!has(self.langfuse.firewall)"
+    mirrors: langfuse.validateRemovedKeys
+    paths: [publicAccess.enabled]
+    message: >-
+      langfuse.firewall was removed in 1.1.0: use the public access switch and the internal access choice
+      instead, and remove it from the values.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Langfuse, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-langfuse-web') in self.postgres.internalAccess.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-langfuse-worker') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-langfuse-web and //gvc/' +
+      context.gvc + '/workload/' + context.releaseName + '-langfuse-worker, or Langfuse cannot reach its database.'
+    message: Add the Langfuse web and worker workloads to the list, or Langfuse cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Langfuse connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  # 1.1.0 changed the default password (mypassword became change-me-langfuse-db): carry a 1.0.x release's
+  # password even when it is the old default.
+  - fromVersions: "<1.1.0"
+    to: postgres.config.password
+    valueExpr: self.postgres.config.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.nextAuthSecret
+    note: >-
+      Moved into the auth secret (key nextAuthSecret). 1.0.x shipped a published default: generate a new value
+      unless you had replaced it.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.encryptionKey
+    note: >-
+      Moved into the auth secret (key encryptionKey). Keep the installed value to keep the stored LLM connections and integration secrets (PostHog, Mixpanel, blob storage export, Slack, webhook secrets)
+      readable; a new one (the 1.0.x default was published) makes them unreadable, so set those up again too.
+  - fromVersions: "<1.1.0"
+    from: langfuse.auth.salt
+    note: >-
+      Moved into the auth secret (key salt). Keep the installed value, or existing Langfuse API keys stop working.
+  - fromVersions: "<1.1.0"
+    from: objectStore.gcp.accessKeyId
+    note: Moved into the HMAC key secret (key accessKeyId); choose it under Object store.
+  - fromVersions: "<1.1.0"
+    from: objectStore.gcp.secretAccessKey
+    note: Moved into the HMAC key secret (key secretAccessKey); choose it under Object store.
+  - fromVersions: "<1.1.0"
+    from: langfuse.firewall
+    note: >-
+      Replaced by the public access switch and the internal access choice under Access. There is no address
+      allow-list any more: the public endpoint is open to everyone or off.
+  # A 1.0.x release with an empty allow-list was not reachable from the internet; keep it that way.
+  - fromVersions: "<1.1.0"
+    to: publicAccess.enabled
+    valueExpr: >-
+      has(self.langfuse.firewall) && has(self.langfuse.firewall.inboundAllowCIDR) &&
+      self.langfuse.firewall.inboundAllowCIDR != null &&
+      self.langfuse.firewall.inboundAllowCIDR.exists(c, c in ['0.0.0.0/0', '::/0'])
+    note: >-
+      A 1.0.x allow-list limited to some addresses starts with the public endpoint off; this version cannot limit
+      it to those addresses, so turning it on opens it to everyone.
+  # 1.0.x created the Redis volume set with a fixed 10 GiB and had no key for it.
+  - fromVersions: "<1.1.0"
+    assume: { redis.volumeset.capacity: 10 }

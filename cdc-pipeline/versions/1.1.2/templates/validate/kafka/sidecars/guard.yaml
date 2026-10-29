@@ -1,0 +1,3 @@
+{{- /* Deeper than the kafka subchart's templates, so Helm renders it first: with kafka_orchestrator or
+kafka_exporter set to true, the subchart would otherwise fail first with a raw template error. Renders nothing. */ -}}
+{{- include "cdc.validateKafkaSecretRefs" . -}}

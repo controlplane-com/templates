@@ -62,6 +62,13 @@ steps:
                 encoding: plain
                 suggestName: "context.releaseName + '-tyk-admin'"
                 hint: "Generate the content with: openssl rand -hex 32"
+            rules:
+              # Before 1.3.0 the chart created <release>-tyk-gateway-secret itself; the upgrade deletes it.
+              - when: context.fromVersion != null && semverCompare(context.fromVersion, '1.3.0') < 0
+                rule: self.adminSecretName != context.releaseName + '-tyk-gateway-secret'
+                message: >-
+                  The previous version created this secret itself, and this upgrade deletes it. Create an opaque
+                  secret under a NEW name holding your admin key, and name it here.
       - id: redis-password
         title: Redis password
         toggle: redis.redis.auth.fromSecret.enabled
@@ -175,12 +182,38 @@ steps:
               create:
                 encoding: plain
                 suggestName: "context.releaseName + '-tyk-policies'"
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0 && !self.allowMasterKeys
+            text: >-
+              Versions before 1.3.0 always allowed master keys. With this switch off, creating a key without an
+              `access_rights` section is refused, and the gateway log says "master keys disabled". Add
+              `access_rights` to the keys you create, or turn the switch on.
           - path: allowMasterKeys
             type: boolean
             label: Allow master keys
             description: >-
               On, a key created without an `access_rights` section can call every API on this gateway. Off
               matches upstream Tyk.
+
+    rules:
+      # From the bundled redis chart (3.4.2): flipping authentication on a running store deadlocks the rollout.
+      - when: oldSelf != null
+        rule: self.redis.redis.auth.fromSecret.enabled == oldSelf.redis.redis.auth.fromSecret.enabled
+        severity: warning
+        message: >-
+          Turning the Redis password on or off on a running release deadlocks the rollout: restarted Redis nodes
+          cannot replicate from the not-yet-restarted primary. Keep the installed setting, or reinstall.
+      - when: >-
+          oldSelf != null && oldSelf.redis.sentinel.persistence.enabled && self.redis.sentinel.persistence.enabled
+        rule: self.redis.sentinel.auth.fromSecret.enabled == oldSelf.redis.sentinel.auth.fromSecret.enabled
+        severity: warning
+        message: >-
+          With Sentinel persistence on, Sentinel keeps the configuration it wrote at its first start, so turning
+          its password on or off does not reach it and can deadlock the rollout. Keep the installed setting, or
+          reinstall.
 
   - id: gateway
     title: Gateway
@@ -338,15 +371,33 @@ steps:
           - path: redis.redis.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Redis CPU limit
             required: true
             advanced: true
           - path: redis.redis.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Redis memory limit
             required: true
             advanced: true
+          - path: redis.redis.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU reservation
+            absent: true
+            advanced: true
+            min: 25m
+            description: Empty uses the redis chart's 80m. Releases from before 1.3.0 keep the value they set.
+          - path: redis.redis.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Redis memory reservation
+            absent: true
+            advanced: true
+            min: 32Mi
+            description: Empty uses the redis chart's 128Mi. Releases from before 1.3.0 keep the value they set.
           - path: redis.redis.firewall.internal_inboundAllowType
             type: enum
             label: Who can connect to Redis
@@ -356,34 +407,61 @@ steps:
               - { value: same-gvc, label: Same GVC }
               - { value: same-org, label: Same org }
         rules:
-          # Redis is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
-          # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
-          # 8 times the CPU (millicores) or more.
-          - rule: cpuMillicores(self.redis.redis.resources.cpu) >= 80
+          # Redis is a stateful workload. Its reservation is the redis subchart's minCpu 80m / minMemory 128Mi unless
+          # the values set redis.redis.resources.minCpu / minMemory (carried from releases before 1.3.0). The API refuses
+          # a limit below the reservation or above 4 times it, and memory (MiB) at 8 times the CPU (millicores) or more.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) >= (has(self.redis.redis.resources.minCpu) && self.redis.redis.resources.minCpu != null ? cpuMillicores(self.redis.redis.resources.minCpu) : 80)
             paths: [redis.redis.resources.cpu]
-            message: The Redis CPU limit cannot be below the 80m the redis subchart reserves; set 80m or more.
-          - rule: memoryBytes(self.redis.redis.resources.memory) >= memoryBytes('128Mi')
+            message: The Redis CPU limit cannot be below its CPU reservation (80m unless set in YAML).
+            messageExpression: >-
+              'The Redis CPU limit cannot be below its CPU reservation of ' + string((has(self.redis.redis.resources.minCpu) && self.redis.redis.resources.minCpu != null ? cpuMillicores(self.redis.redis.resources.minCpu) : 80)) + 'm.'
+          - rule: >-
+              memoryBytes(self.redis.redis.resources.memory) >= (has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi'))
             paths: [redis.redis.resources.memory]
-            message: The Redis memory limit cannot be below the 128Mi the redis subchart reserves; set 128Mi or more.
-          - rule: cpuMillicores(self.redis.redis.resources.cpu) <= 320
+            message: The Redis memory limit cannot be below its memory reservation (128Mi unless set in YAML).
+            messageExpression: >-
+              'The Redis memory limit cannot be below its memory reservation of ' + string((has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi.'
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) <= 4 * (has(self.redis.redis.resources.minCpu) && self.redis.redis.resources.minCpu != null ? cpuMillicores(self.redis.redis.resources.minCpu) : 80)
             paths: [redis.redis.resources.cpu]
             message: >-
-              Redis is a stateful workload that reserves 80m CPU, and Control Plane allows a limit of at most 4
-              times the reservation: set the Redis CPU limit to 320m or less.
-          - rule: memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes('128Mi')
+              Redis is a stateful workload, and Control Plane allows a CPU limit of at most 4 times the CPU
+              reservation (80m unless set in YAML): lower the Redis CPU limit.
+            messageExpression: >-
+              'Redis is a stateful workload that reserves ' + string((has(self.redis.redis.resources.minCpu) && self.redis.redis.resources.minCpu != null ? cpuMillicores(self.redis.redis.resources.minCpu) : 80)) + 'm CPU, and Control Plane allows a ' +
+              'limit of at most 4 times the reservation: set the Redis CPU limit to ' + string(4 * (has(self.redis.redis.resources.minCpu) && self.redis.redis.resources.minCpu != null ? cpuMillicores(self.redis.redis.resources.minCpu) : 80)) + 'm or less.'
+          - rule: >-
+              memoryBytes(self.redis.redis.resources.memory) <= 4 * (has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi'))
             paths: [redis.redis.resources.memory]
             message: >-
-              Redis is a stateful workload that reserves 128Mi of memory, and Control Plane allows a limit of at
-              most 4 times the reservation: set the Redis memory limit to 512Mi or less.
-          - rule: memoryBytes(self.redis.redis.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+              Redis is a stateful workload, and Control Plane allows a memory limit of at most 4 times the memory
+              reservation (128Mi unless set in YAML): lower the Redis memory limit.
+            messageExpression: >-
+              'Redis is a stateful workload that reserves ' + string((has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi of memory, and Control ' +
+              'Plane allows a limit of at most 4 times the reservation: set the Redis memory limit to ' +
+              string(4 * (has(self.redis.redis.resources.minMemory) && self.redis.redis.resources.minMemory != null ? memoryBytes(self.redis.redis.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi or less.'
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
             paths: [redis.redis.resources.memory]
             message: >-
-              The Redis memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              The Redis memory limit in Mi must be at most 8 times its CPU limit in millicores: raise the CPU
               limit or lower the memory limit.
             messageExpression: >-
-              'The Redis memory limit must be under ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
+              'The Redis memory limit must be at most ' + string(8 * cpuMillicores(self.redis.redis.resources.cpu)) +
               'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.redis.resources.cpu)) +
               'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
+          - rule: "!string(self.redis.redis.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+            severity: warning
+            paths: [redis.redis.resources.cpu]
+            message: >-
+              Give the Redis CPU limit a unit, such as `200m`. The bundled redis chart writes it unquoted, so a bare
+              number reaches the platform as a number and the workload is rejected.
+          - rule: "!string(self.redis.redis.resources.memory).matches('^[0-9]+([.][0-9]+)?$')"
+            severity: warning
+            paths: [redis.redis.resources.memory]
+            message: >-
+              Give the Redis memory limit a unit, such as `256Mi`. The bundled redis chart writes it unquoted, so a
+              bare number reaches the platform as a number and the workload is rejected.
       - title: Sentinel
         fields:
           - path: redis.sentinel.replicas
@@ -400,15 +478,33 @@ steps:
           - path: redis.sentinel.resources.cpu
             type: quantity
             quantity: cpu
+            min: 25m
             label: Sentinel CPU limit
             required: true
             advanced: true
           - path: redis.sentinel.resources.memory
             type: quantity
             quantity: memory
+            min: 32Mi
             label: Sentinel memory limit
             required: true
             advanced: true
+          - path: redis.sentinel.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU reservation
+            absent: true
+            advanced: true
+            min: 25m
+            description: Empty uses the redis chart's 80m. Releases from before 1.3.0 keep the value they set.
+          - path: redis.sentinel.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory reservation
+            absent: true
+            advanced: true
+            min: 32Mi
+            description: Empty uses the redis chart's 128Mi. Releases from before 1.3.0 keep the value they set.
           - path: redis.sentinel.firewall.internal_inboundAllowType
             type: enum
             label: Who can connect to Sentinel
@@ -418,37 +514,111 @@ steps:
               - { value: same-gvc, label: Same GVC }
               - { value: same-org, label: Same org }
         rules:
-          # Sentinel is a stateful workload, and the redis subchart reserves minCpu 80m and minMemory 128Mi, which
-          # this chart does not expose. The API refuses a limit above 4 times the reservation, and memory (MiB) at
-          # 8 times the CPU (millicores) or more.
-          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) >= 80
+          # Sentinel is a stateful workload. Its reservation is the redis subchart's minCpu 80m / minMemory 128Mi unless
+          # the values set redis.sentinel.resources.minCpu / minMemory (carried from releases before 1.3.0). The API refuses
+          # a limit below the reservation or above 4 times it, and memory (MiB) at 8 times the CPU (millicores) or more.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) >= (has(self.redis.sentinel.resources.minCpu) && self.redis.sentinel.resources.minCpu != null ? cpuMillicores(self.redis.sentinel.resources.minCpu) : 80)
             paths: [redis.sentinel.resources.cpu]
-            message: The Sentinel CPU limit cannot be below the 80m the redis subchart reserves; set 80m or more.
-          - rule: memoryBytes(self.redis.sentinel.resources.memory) >= memoryBytes('128Mi')
+            message: The Sentinel CPU limit cannot be below its CPU reservation (80m unless set in YAML).
+            messageExpression: >-
+              'The Sentinel CPU limit cannot be below its CPU reservation of ' + string((has(self.redis.sentinel.resources.minCpu) && self.redis.sentinel.resources.minCpu != null ? cpuMillicores(self.redis.sentinel.resources.minCpu) : 80)) + 'm.'
+          - rule: >-
+              memoryBytes(self.redis.sentinel.resources.memory) >= (has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi'))
             paths: [redis.sentinel.resources.memory]
-            message: The Sentinel memory limit cannot be below the 128Mi the redis subchart reserves; set 128Mi or more.
-          - rule: cpuMillicores(self.redis.sentinel.resources.cpu) <= 320
+            message: The Sentinel memory limit cannot be below its memory reservation (128Mi unless set in YAML).
+            messageExpression: >-
+              'The Sentinel memory limit cannot be below its memory reservation of ' + string((has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi.'
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) <= 4 * (has(self.redis.sentinel.resources.minCpu) && self.redis.sentinel.resources.minCpu != null ? cpuMillicores(self.redis.sentinel.resources.minCpu) : 80)
             paths: [redis.sentinel.resources.cpu]
             message: >-
-              Sentinel is a stateful workload that reserves 80m CPU, and Control Plane allows a limit of at most 4
-              times the reservation: set the Sentinel CPU limit to 320m or less.
-          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes('128Mi')
+              Sentinel is a stateful workload, and Control Plane allows a CPU limit of at most 4 times the CPU
+              reservation (80m unless set in YAML): lower the Sentinel CPU limit.
+            messageExpression: >-
+              'Sentinel is a stateful workload that reserves ' + string((has(self.redis.sentinel.resources.minCpu) && self.redis.sentinel.resources.minCpu != null ? cpuMillicores(self.redis.sentinel.resources.minCpu) : 80)) + 'm CPU, and Control Plane allows a ' +
+              'limit of at most 4 times the reservation: set the Sentinel CPU limit to ' + string(4 * (has(self.redis.sentinel.resources.minCpu) && self.redis.sentinel.resources.minCpu != null ? cpuMillicores(self.redis.sentinel.resources.minCpu) : 80)) + 'm or less.'
+          - rule: >-
+              memoryBytes(self.redis.sentinel.resources.memory) <= 4 * (has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi'))
             paths: [redis.sentinel.resources.memory]
             message: >-
-              Sentinel is a stateful workload that reserves 128Mi of memory, and Control Plane allows a limit of at
-              most 4 times the reservation: set the Sentinel memory limit to 512Mi or less.
-          - rule: memoryBytes(self.redis.sentinel.resources.memory) < 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+              Sentinel is a stateful workload, and Control Plane allows a memory limit of at most 4 times the memory
+              reservation (128Mi unless set in YAML): lower the Sentinel memory limit.
+            messageExpression: >-
+              'Sentinel is a stateful workload that reserves ' + string((has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi of memory, and Control ' +
+              'Plane allows a limit of at most 4 times the reservation: set the Sentinel memory limit to ' +
+              string(4 * (has(self.redis.sentinel.resources.minMemory) && self.redis.sentinel.resources.minMemory != null ? memoryBytes(self.redis.sentinel.resources.minMemory) : memoryBytes('128Mi')) / 1048576) + 'Mi or less.'
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
             paths: [redis.sentinel.resources.memory]
             message: >-
-              The Sentinel memory limit in Mi must be less than 8 times its CPU limit in millicores: raise the CPU
+              The Sentinel memory limit in Mi must be at most 8 times its CPU limit in millicores: raise the CPU
               limit or lower the memory limit.
             messageExpression: >-
-              'The Sentinel memory limit must be under ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
+              'The Sentinel memory limit must be at most ' + string(8 * cpuMillicores(self.redis.sentinel.resources.cpu)) +
               'Mi with a CPU limit of ' + string(cpuMillicores(self.redis.sentinel.resources.cpu)) +
               'm (less than 8 Mi per millicore): raise the CPU limit or lower the memory limit.'
+          - rule: "!string(self.redis.sentinel.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+            severity: warning
+            paths: [redis.sentinel.resources.cpu]
+            message: >-
+              Give the Sentinel CPU limit a unit, such as `200m`. The bundled redis chart writes it unquoted, so a bare
+              number reaches the platform as a number and the workload is rejected.
+          - rule: "!string(self.redis.sentinel.resources.memory).matches('^[0-9]+([.][0-9]+)?$')"
+            severity: warning
+            paths: [redis.sentinel.resources.memory]
+            message: >-
+              Give the Sentinel memory limit a unit, such as `256Mi`. The bundled redis chart writes it unquoted, so a
+              bare number reaches the platform as a number and the workload is rejected.
+
+    rules:
+      - rule: oldSelf == null || !oldSelf.redis.redis.persistence.enabled || self.redis.redis.persistence.enabled
+        severity: info
+        paths: [redis.redis.persistence.enabled]
+        message: >-
+          Turning Redis persistence off deletes the Redis volume set with the keys, rate-limit counters and
+          quotas on it, and it cannot be turned on again for this release.
+      - rule: oldSelf == null || oldSelf.redis.redis.persistence.enabled || !self.redis.redis.persistence.enabled
+        paths: [redis.redis.persistence.enabled]
+        message: >-
+          Redis persistence cannot be turned on for a running release: the rollout stalls. Turn it on at install,
+          or reinstall.
+      - rule: oldSelf == null || oldSelf.redis.sentinel.persistence.enabled || !self.redis.sentinel.persistence.enabled
+        paths: [redis.sentinel.persistence.enabled]
+        message: >-
+          Sentinel persistence cannot be turned on for a running release: the rollout stalls. Turn it on at
+          install, or reinstall.
 
 # Rules over removed keys: the chart refuses them whatever else is set.
 rules:
+  # Secret key names are limited to letters, digits, -, . and _ (platform secret schema).
+  - rule: >-
+      !self.redis.redis.auth.fromSecret.enabled ||
+      self.redis.redis.auth.fromSecret.passwordKey.matches('^[-._a-zA-Z0-9]+$')
+    message: >-
+      redis.redis.auth.fromSecret.passwordKey must be a secret key name: letters, digits, -, . and _.
+  - rule: >-
+      !self.redis.sentinel.auth.fromSecret.enabled ||
+      self.redis.sentinel.auth.fromSecret.passwordKey.matches('^[-._a-zA-Z0-9]+$')
+    message: >-
+      redis.sentinel.auth.fromSecret.passwordKey must be a secret key name: letters, digits, -, . and _.
+  # 1.1.0 moved to redis chart 3.1.1, which renamed the volume sets (<release>-redis became <release>-redis-vs,
+  # and the same for Sentinel): an upgrade from 1.0.0 deletes the volume sets the store runs on.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+      (!oldSelf.redis.redis.persistence.enabled && !oldSelf.redis.sentinel.persistence.enabled)
+    message: >-
+      Do not upgrade this release in place: 1.1.0 renamed the Redis and Sentinel volume sets, so the upgrade
+      deletes the ones the release runs on, with every API key, rate-limit counter and quota on them. Install
+      this version as a new release, recreate or copy the keys, then uninstall the old release.
+    messageExpression: >-
+      'Do not upgrade this release in place: 1.1.0 renamed the Redis and Sentinel volume sets (' +
+      context.releaseName + '-redis became ' + context.releaseName + '-redis-vs, and the same for Sentinel), so ' +
+      (oldSelf.redis.redis.persistence.enabled ?
+        'the upgrade deletes the ones the release runs on, with every API key, rate-limit counter and quota on ' +
+        'them. Install this version as a new release, recreate or copy the keys, then uninstall the old release.' :
+        'the upgrade deletes the Sentinel volume set the release runs on. Install this version as a new release, ' +
+        'then uninstall the old release.')
   - rule: "!has(self.redis.redis.auth.password) && !has(self.redis.sentinel.auth.password)"
     mirrors: tyk.validateRedisPassword
     paths: [redis.redis.auth.fromSecret.enabled]
@@ -463,6 +633,34 @@ yamlOnly:
     reason: The key name inside the Sentinel password secret; `password` matches the documented secret.
 
 migrations:
+  # 1.0.0 ignored `resources` and ran the gateway with 100m CPU and 256Mi; 1.1.0 honours the values (50m / 128Mi
+  # by default). Keep the size the gateway runs with.
+  - fromVersions: "<1.1.0"
+    to: resources.cpu
+    valueExpr: "'100m'"
+    note: >-
+      1.0.0 ran the gateway with 100m CPU and 256Mi whatever `resources` said; the release keeps that size. Lower
+      it here if you want the smaller default.
+  - fromVersions: "<1.1.0"
+    to: resources.memory
+    valueExpr: "'256Mi'"
+  # 1.3.0 made new installs private (externalAccess false, internalAccess same-gvc). A release that kept the old
+  # defaults would lose its public endpoint on upgrade: keep the access it runs.
+  - fromVersions: "<1.3.0"
+    to: externalAccess
+    valueExpr: self.externalAccess
+    note: >-
+      The release keeps its public access setting. Since 1.3.0 new installs start private, because the public
+      endpoint also serves the `/tyk` admin API; turn it off unless clients outside Control Plane need the gateway.
+  - fromVersions: "<1.3.0"
+    to: internalAccess.type
+    valueExpr: self.internalAccess.type
+  - fromVersions: "<1.3.0"
+    from: adminSecret
+    note: >-
+      The admin API key is now a prerequisite opaque secret. Create one under a new name (the upgrade deletes
+      RELEASE-tyk-gateway-secret, which held the key) and choose it under Secrets. If the release still used the
+      published default mysecret, put a new random key in it and rotate the API keys issued so far.
   - fromVersions: "<1.4.0"
     from: redis.redis.auth.password.enabled
     to: redis.redis.auth.fromSecret.enabled
@@ -481,3 +679,17 @@ migrations:
       The Sentinel password is now a prerequisite dictionary secret (key password). Create it under a NEW name
       holding your CURRENT Sentinel password (read it with `cpln secret reveal RELEASE-sentinel-auth-password`
       before upgrading; the upgrade deletes that secret), and choose it under Secrets.
+  # Before 1.3.0 the values set the Redis and Sentinel reservations; keep them, since the limits were sized
+  # against them (the redis subchart still reads the keys).
+  - fromVersions: "<1.3.0"
+    from: redis.redis.resources.minCpu
+    to: redis.redis.resources.minCpu
+  - fromVersions: "<1.3.0"
+    from: redis.redis.resources.minMemory
+    to: redis.redis.resources.minMemory
+  - fromVersions: "<1.3.0"
+    from: redis.sentinel.resources.minCpu
+    to: redis.sentinel.resources.minCpu
+  - fromVersions: "<1.3.0"
+    from: redis.sentinel.resources.minMemory
+    to: redis.sentinel.resources.minMemory

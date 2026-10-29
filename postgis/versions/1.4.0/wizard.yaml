@@ -1,0 +1,493 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostGIS
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and name.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0)
+        textExpression: >-
+          'The credentials secret must exist **before** you install or upgrade. If it is missing, the ' +
+          'deployment waits on it and `cpln logs` shows nothing at all; the reason is in ' +
+          '`cpln workload get-deployments ' + context.releaseName + '-postgis` under `status.versions[].message`.'
+        text: >-
+          The credentials secret must exist **before** you install or upgrade. If it is missing, the
+          deployment waits on it and `cpln logs` shows nothing at all; the reason is in
+          `cpln workload get-deployments RELEASE-postgis` under `status.versions[].message`.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.4.0') < 0
+        text: >-
+          Version 1.4.0 moved the database credentials out of the values and into the secret below. Before
+          you upgrade, read the credentials the database already uses, because the upgrade removes them from
+          the secret that holds them: `cpln secret reveal RELEASE_NAME-postgis-config -o yaml` (keys `username`
+          and `password`). The database name was a value: `test` unless you changed it (`database` on a 1.2.0
+          release). Create the secret with those same values: the database keeps the credentials stored on its
+          volume. Earlier versions shipped the published defaults `username` and `password`, shared by every
+          install. If the reveal shows them, treat the password as compromised: after the upgrade, change it
+          with `ALTER ROLE`, then update the secret to match. See
+          [Upgrading from 1.3.2 or earlier](/template-catalog/templates/postgis#upgrading-from-1-3-2-or-earlier).
+        textExpression: >-
+          'Version 1.4.0 moved the database credentials out of the values and into the secret below. Before ' +
+          'you upgrade, read the credentials the database already uses, because the upgrade removes them from ' +
+          'the secret that holds them: `cpln secret reveal ' + context.releaseName + '-postgis-config -o yaml` ' +
+          '(keys `username` and `password`). The database name was a value: `test` unless you changed it ' +
+          '(`database` on a 1.2.0 release). Create the secret with those same values: the database keeps the ' +
+          'credentials stored on its volume. Earlier versions shipped the published defaults `username` and ' +
+          '`password`, shared by every install. If the reveal shows them, treat the password as compromised: ' +
+          'after the upgrade, change it with `ALTER ROLE`, then update the secret to match. See ' +
+          '[Upgrading from 1.3.2 or earlier](/template-catalog/templates/postgis#upgrading-from-1-3-2-or-earlier).'
+      - path: config.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. PostGIS creates this user
+          and database on first boot; put this credential in your applications' connection strings. The
+          backup job signs in with it too.
+        help: >-
+          PostgreSQL reads the credentials only when the volume is first initialized. To change the password
+          later, run `ALTER ROLE` inside PostgreSQL, then update the secret to match. Create the secret with:
+          `cpln secret create-dictionary --name CREDENTIALS_SECRET_NAME --entry username=myuser --entry password='YOUR-STRONG-PASSWORD' --entry database=mydb`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-postgis-credentials'"
+    rules:
+      # postgis.validate refuses the removed keys and an empty secret name.
+      - rule: self.config.credentialsSecretName != null && self.config.credentialsSecretName != ''
+        mirrors: postgis.validate
+        paths: [config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.config.username) && !has(self.config.password)"
+        mirrors: postgis.validate
+        paths: [config.credentialsSecretName]
+        message: >-
+          config.username and config.password were removed in 1.4.0. Put them in a dictionary secret with the
+          keys username, password and database, and remove them from the values.
+      - rule: "!has(self.config.database)"
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          config.database is no longer read since 1.4.0; the database name comes from the database key of the
+          credentials secret. Remove it from the values.
+      # The chart owns RELEASE-postgis-config: 1.4.0+ creates it only with backups on, holding only the bucket
+      # settings, and an upgrade from 1.3.x removes the credentials from it.
+      - when: self.config.credentialsSecretName != null && self.config.credentialsSecretName != ''
+        rule: self.config.credentialsSecretName != context.releaseName + '-postgis-config'
+        paths: [config.credentialsSecretName]
+        messageExpression: >-
+          context.releaseName + '-postgis-config is managed by the chart: it holds only the backup settings, and
+          it is deleted when backups are off. Create your own secret with the keys username, password and database.'
+        message: >-
+          This secret is managed by the chart: it holds only the backup settings, and it is deleted when backups
+          are off. Create your own secret with the keys username, password and database.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') < 0 ||
+          self.config.credentialsSecretName == oldSelf.config.credentialsSecretName
+        severity: info
+        paths: [config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when the volume is first initialized; pointing at another
+          secret does not change the existing user, password or database. The new secret must keep the same
+          username and database; run ALTER ROLE first so its password matches, or your applications and the
+          backup job cannot sign in.
+
+  - id: server
+    title: Server
+    description: The PostGIS image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
+          short write outage.
+      - path: image
+        type: string
+        format: image
+        label: PostGIS image
+        required: true
+        description: >-
+          The PostgreSQL major is fixed once the volume holds data, and backups need PostgreSQL 17 or later.
+        help: >-
+          For example `postgis/postgis:18-3.6` (PostgreSQL 18, PostGIS 3.6) or `postgis/postgis:17-3.5`. The
+          data directory is specific to a PostgreSQL major version: a different major on an existing volume
+          does not start.
+        docs: "#server-and-resources"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: A single stateful replica.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) == imageMajor(oldSelf.image)
+        severity: warning
+        paths: [image]
+        message: >-
+          The data directory belongs to the installed PostgreSQL major version; a different major version
+          does not start on it. Upgrade with a dump and restore instead.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes
+              the volume set; a final snapshot is kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database.
+    sections:
+      - title: Database access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              PostGIS is never published to the internet by this template. Access changes can take several
+              minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type once the list has entries: workload-postgis.yaml:44-46 writes any non-empty
+          # list into inboundAllowWorkload, and the platform validates every entry, though it applies the
+          # workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads allowed to connect; with Same GVC, extra workloads
+              from other GVCs. The platform ignores the list with the other choices.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to PostGIS, so the listed workloads add
+          nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the listed workloads into the firewall, where the platform checks every
+          entry, but "None" lets none of them connect. Remove them.
+      - when: self.internalAccess.type == 'none'
+        rule: "!self.backup.enabled"
+        severity: warning
+        paths: [internalAccess.type]
+        message: >-
+          "None" also blocks the backup job, which connects to PostGIS like any other workload.
+      - when: self.internalAccess.type == 'workload-list' && self.backup.enabled && context.gvc != null
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgis-backup') in self.internalAccess.workloads
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The chart does not add its own backup job to the list. Add //gvc/' + context.gvc + '/workload/' +
+          context.releaseName + '-postgis-backup, or it cannot connect.'
+        message: >-
+          The chart does not add its own backup job to the list; add the backup workload, or it cannot connect.
+        fix:
+          path: internalAccess.workloads
+          items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgis-backup']"
+
+  - id: backup
+    title: Backups
+    description: Scheduled logical backups to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs pg_dumpall on a schedule and uploads a gzip-compressed dump of every database
+          and role to an S3 or GCS bucket through a Control Plane cloud account. The bucket and the cloud
+          account (for S3 also the IAM policy) must exist before you turn it on.
+        docs: "#backup"
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^\s*[0-9][0-9,/-]*(\s+[0-9A-Za-z*,/-]+){4}\s*$'
+            patternMessage: >-
+              Use five fields that start with a digit: this version writes the schedule unquoted, so a
+              schedule that starts with * (such as */15 * * * *) fails to install. Write 0,15,30,45 * * * *
+              instead.
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x for PostgreSQL 18, 17.x.x for PostgreSQL 17.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: postgis.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the backup destination.
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >= imageMajor(self.image)
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the PostgreSQL major version of the server
+              image; an older pg_dump cannot dump a newer server.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS-managed `ReadOnlyAccess` policy to the backup identity, which
+              grants read-only access across the AWS account behind the cloud account, every bucket included.
+              1.4.1 removes it.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The backup job uploads with `s3:PutObject`, so the policy must allow at least that on the
+              bucket's objects. The backup identity carries `cpln-connector`, the AWS-managed
+              `ReadOnlyAccess` policy and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            description: The backup job stops with an error when the prefix is empty.
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+    rules:
+      - rule: "!self.backup.enabled || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
+        severity: warning
+        paths: [backup.enabled]
+        message: Backups need PostgreSQL 17 or later; the selected PostGIS image is older.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.0 or 1.1.0 release in place: 1.2.0 renamed the workload and the volume set, so the
+      upgrade deletes the volume set that holds the database and starts PostGIS on an empty one. Install this
+      version as a new release, load a pg_dump of the old database into it, then uninstall the old release.
+
+migrations:
+  # 1.0.0 and 1.1.0 set one CPU and memory value; 1.2.0 split them into minimums and maximums.
+  - { fromVersions: "<1.2.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.2.0", from: resources.memory, to: resources.maxMemory }
+  # 1.3.0 moved the default image from postgis/postgis:17-3.5 to 18-3.6, which would put a 1.2.0 release that
+  # kept the default on a new PostgreSQL major its data directory cannot start on: keep the image it runs.
+  - fromVersions: ">=1.2.0 <1.3.0"
+    to: image
+    valueExpr: self.image
+    note: >-
+      The release keeps the PostGIS image it runs. The data directory belongs to its PostgreSQL major
+      version, so move to a newer major only with a dump and restore. Backups need PostgreSQL 17 or later
+      and a backup image of the same or a newer major (tag 17.x.x or later for PostgreSQL 17).
+  # 1.3.0 moved the database name from postgres.database to config.database; 1.4.0 moved all three into a secret.
+  - fromVersions: "<1.3.0"
+    from: postgres.database
+    note: >-
+      The database name moved to the database key of the credentials secret; choose the secret under
+      Credentials. Use the name the database already has ("database" unless you changed it).
+  - fromVersions: ">=1.3.0 <1.4.0"
+    from: config.database
+    note: >-
+      The database name moved to the database key of the credentials secret; choose the secret under
+      Credentials. Use the name the database already has ("test" unless you changed it).
+  - fromVersions: "<1.4.0"
+    from: config.username
+    note: Credentials moved to a dictionary secret with the keys username, password and database; choose it under Credentials. The database keeps the credentials stored on its volume.
+  - fromVersions: "<1.4.0"
+    from: config.password
+    note: >-
+      Credentials moved to a dictionary secret with the keys username, password and database; choose it under
+      Credentials. The database keeps the password stored on its volume. Earlier versions shipped the published
+      default password "password": if this value is that default, change it with ALTER ROLE after the upgrade,
+      then update the secret to match.

@@ -102,6 +102,7 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             unit: GiB
             min: 10
+            max: 65536
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
           # secret.yaml:47-57 passes no --auto-compaction-* and no --quota-backend-bytes. CHANGELOG 2026-08,
           # entry etcd 1.4.2: storage filled the default 2 GiB after a couple of months, the cluster went

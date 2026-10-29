@@ -1,0 +1,45 @@
+# tidb 2.2.0 — production shape: three locations, one TiKV store and one SQL server in each, three PD
+# members, credentials in a prerequisite secret, default sizes. ProxySQL is on: it is the pooler most
+# multi-location installs put in front, and its image carries the MySQL client the checks use.
+#
+# No upgrade source: customers run 1.x, which creates its own GVC, and 2.0.0+ refuses that upgrade by
+# design (stand up a new release and move the data, as the README says).
+locations: [aws-us-east-1, aws-us-east-2, aws-us-west-2]
+timeoutSeconds: 1500
+
+generated:
+  apppw: hex
+  rootpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      user: e2e
+      password: "{gen.apppw}"
+      db: e2e
+      rootPassword: "{gen.rootpw}"
+
+vars:
+  app_user: e2e
+  app_password: "{gen.apppw}"
+  app_db: e2e
+  root_password: "{gen.rootpw}"
+
+values:
+  locations:
+    - name: aws-us-east-1
+      tikvReplicas: 1
+      serverReplicas: 1
+    - name: aws-us-east-2
+      tikvReplicas: 1
+      serverReplicas: 1
+    - name: aws-us-west-2
+      tikvReplicas: 1
+      serverReplicas: 1
+  pdReplicas: 3
+  autoCreateDatabase:
+    credentialsSecretName: "{secrets.creds.name}"
+  proxysql:
+    enabled: true
+    replicas: 1

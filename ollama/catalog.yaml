@@ -8,8 +8,8 @@ topology: single
 
 summary: >-
   An Ollama model server on an NVIDIA GPU, one T4 by default, with Open WebUI as a sidecar chat
-  interface on the public endpoint, keeping models and chat data on one persistent volume. It pulls
-  a default model on first start, and the Ollama API, including its OpenAI-compatible endpoints,
+  interface on the public endpoint, keeping models and chat data on one persistent volume. Models are
+  pulled once by hand after install, and the Ollama API, including its OpenAI-compatible endpoints,
   is reachable from other workloads in the GVC. Pick it to run open-weight models such as Llama,
   Mistral or Gemma yourself instead of calling a hosted API.
 

@@ -269,6 +269,52 @@ The upgrade restarts PostgreSQL, the webserver and the workers (they now read th
 
 Other 2.0.0 changes: `gvc.locations` became the single top-level `location`; `keda.enabled` now defaults to **false** and requires KEDA enabled on your GVC; `airflow.celeryWorker.replicas` sets the worker count when KEDA is off; and `internalAccess` is new.
 
+## Upgrading in place from 1.5.0
+
+A plain `helm upgrade` from 1.x deletes the GVC the 1.x release created, and everything in it. These steps keep that GVC, so the release keeps its metadata database, broker and DAGs. They cover a 1.5.0 release (upgrade an older 1.x to 1.5.0 first) that runs in **one** location; with more than one entry in `gvc.locations`, use [Migrating from 1.x](#migrating-from-1x) instead.
+
+1. Create the database credentials secret under a **new** name, holding the values the database runs with today. 1.5.0 keeps them in `RELEASE_NAME-airflow-config`, and the upgrade deletes that secret:
+
+   ```bash
+   cpln secret reveal RELEASE_NAME-airflow-config -o yaml   # username and password in use today
+   cpln secret create-dictionary --name RELEASE_NAME-airflow-db \
+     --entry username='YOUR_CURRENT_USERNAME' --entry password='YOUR_CURRENT_PASSWORD' --entry database='YOUR_CURRENT_DATABASE'
+   ```
+
+   `YOUR_CURRENT_DATABASE` is `postgres.config.database` of the 1.5.0 release, `airflow` unless you changed it.
+
+2. Mark the GVC "keep", then upgrade:
+
+   ```bash
+   cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+   curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+   python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+   python3 keep-gvc.py RELEASE_NAME --apply
+   # write values-new.yaml from values-old.yaml (see below)
+   cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/airflow --version 2.1.0 --gvc OLD_GVC_NAME -f values-new.yaml
+   ```
+
+   - `OLD_GVC_NAME` is the GVC the 1.x release created (its `gvc.name`), not the GVC you ran the original install against.
+   - The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with these changes:
+
+```yaml
+# gvc: delete the whole block
+location: aws-eu-central-1     # the one entry of the old gvc.locations
+postgres:
+  config:                      # delete username, password and database
+    credentialsSecretName: RELEASE_NAME-airflow-db   # the secret from step 1
+keda:
+  enabled: true                # what 1.5.0 ran with (its default was true)
+```
+
+If `values-old.yaml` has no `gvc` key, the release ran on 1.5.0's defaults: `OLD_GVC_NAME` is `airflow` and `location` is `aws-eu-central-1`. Keep `keda.enabled` as 1.5.0 had it: the GVC it created has KEDA on exactly when that was `true`, and `true` against a GVC with KEDA off stops the webserver from starting.
+
+The upgrade restarts PostgreSQL, Redis, the webserver and the workers, so Airflow is unavailable for a few minutes. A workload can wait with `is not allowed to reveal the secret` in `get-deployments` while access to the new secrets propagates; it clears by itself (see [Upgrading from 2.0.0](#upgrading-from-200)).
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Important Notes
 
 - **Enable KEDA on the GVC before setting `keda.enabled: true`.** The workload is accepted either way with no error: without KEDA on the GVC the workers never autoscale and sit at `keda.minScale` forever — at `minScale: 0` that is zero workers and every task queues silently. The webserver checks the GVC at boot and refuses a fresh install that has this wrong.

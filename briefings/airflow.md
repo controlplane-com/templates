@@ -4,6 +4,8 @@ Self-hosted **Apache Airflow 3.x** with the CeleryExecutor. One webserver worklo
 
 **2.0.0 is the GVC conversion.** 1.x created its own GVC, because KEDA is a GVC-level setting and the chart wanted to own it. It no longer does: 2.0.0 deploys into the GVC you install into, KEDA became an opt-in that requires a GVC prerequisite, and the whole release is pinned to a single `location`.
 
+**In-place 1.5.0 → 2.1.0, keeping the GVC (5434):** README "Upgrading in place from 1.5.0" — `scripts/keep-gvc.py`, `--gvc` = the 1.x GVC, a new-name DB credentials secret created first, `keda.enabled` kept as 1.x had it (the first 2.x boot has no init marker, so the boot checks are fatal once). Render-verified only (same resource names), not live-proven.
+
 **2.1.0 removes the last plaintext credential.** `postgres.config.username/password/database` became one prerequisite dictionary secret named by `postgres.config.credentialsSecretName` (keys `username`, `password`, `database`). The chart no longer creates `{rel}-airflow-config`; the upgrade deletes it, so the new secret must use another name (the chart `fail`s on that name, and on the three old keys). Every Airflow credential is now a prerequisite secret; nothing sensitive is a value.
 
 ## Common use cases

@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "logto.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "logto.tags" . | nindent 4 }}

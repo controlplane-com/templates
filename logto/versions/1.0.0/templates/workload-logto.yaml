@@ -1,0 +1,81 @@
+{{- include "logto.validate" . }}
+kind: workload
+name: {{ include "logto.name" . }}
+description: Logto sign-in, OIDC and Management API
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "logto.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "logto.identity.name" . }}
+  containers:
+    - name: logto
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "logto.inlineScript" (include "logto.script.boot" (dict "root" . "role" "core")) | nindent 10 }}
+      env:
+        {{- include "logto.env.common" . | nindent 8 }}
+        # Admin Console account, created on first boot only (prerequisite dictionary secret)
+        - name: BOOTSTRAP_ADMIN_USERNAME
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
+        - name: BOOTSTRAP_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+      ports:
+        - number: 3001
+          protocol: http
+      readinessProbe:
+        exec:
+          command: {{- include "logto.probe.ready" 3001 | nindent 12 }}
+        initialDelaySeconds: 10
+        periodSeconds: 25
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 10
+      livenessProbe:
+        exec:
+          command: {{- include "logto.probe.live" 3001 | nindent 12 }}
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 10
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

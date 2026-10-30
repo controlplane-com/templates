@@ -1,0 +1,12 @@
+kind: policy
+name: {{ include "logto.policy.name" . }}
+tags: {{- include "logto.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "logto.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "logto.db.secretName" . }}
+  - //secret/{{ .Values.admin.secretName }}

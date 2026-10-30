@@ -202,6 +202,7 @@ checks:
     timeoutSeconds: 180
 
   - id: single-admin
+    # Runs in the HA database container: every logto baseline uses postgresHA (a single-postgres baseline needs its own check).
     description: The bootstrap created exactly one admin-tenant account and switched the admin tenant to sign-in only.
     exec:
       workload: "{release}-postgres-ha"

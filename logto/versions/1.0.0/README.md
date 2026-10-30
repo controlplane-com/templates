@@ -38,7 +38,7 @@ cpln secret create-dictionary --name my-logto-db-credentials \
 
 All three values must be URL-safe (letters, digits, `-`, `_`, `.`). Secret names are org-wide, so give each release its own secrets.
 
-**If either secret does not exist at install time, the deployment waits silently**: `cpln logs` returns nothing. The only signal is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-logto --gvc GVC_NAME -o yaml`. Create the secret and it recovers on its own within about 10 minutes, or right away with `cpln workload force-redeployment RELEASE_NAME-logto --gvc GVC_NAME`.
+**If either secret does not exist at install time, the deployment waits silently**: `cpln logs` returns nothing. The only signal is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-logto --gvc GVC_NAME -o yaml`, which reads `The secret <name> no longer exists. Workload updates are paused until the secret is added or the reference to the secret removed.` Create the secret and it recovers on its own within about 10 minutes, or right away with `cpln workload force-redeployment RELEASE_NAME-logto --gvc GVC_NAME`.
 
 **Custom domains (optional)**: the apex domain must be [registered with Control Plane](https://docs.controlplane.com/guides/configure-domain), and each hostname needs a CNAME to the GVC endpoint before you install.
 
@@ -209,6 +209,8 @@ postgres:
 - With the public Admin Console on, a Console opened through `cpln port-forward` can sign in but cannot load data. Use the public Console URL, or turn the public Console off.
 - With custom domains set, give users the domain URLs: the `*.cpln.app` URLs still answer, but the Admin Console's one then serves the sign-in service instead of the Console.
 - Uninstalling removes the domain resources. Reinstalling recreates them, and no re-verification is needed while the apex domain stays registered.
+- A database failover interrupts sign-in for about a minute while PostgreSQL promotes a new leader; Logto reconnects on its own.
+- The first `helm upgrade` after an install can restart the bundled database, which briefly interrupts sign-in.
 - Use a single-location GVC: the bundled database runs in one location.
 - Uninstalling deletes the database volumes, and with them every user and signing key.
 - The open-source edition has one Admin Console account; inviting more admins is a paid Logto feature.

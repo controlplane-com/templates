@@ -33,6 +33,7 @@
 - **`EADDRINUSE :3002` on the admin workload:** something unset `PORT`. The platform injects `PORT` = the first container port (3002 there), and Logto reads `PORT` for its core server, so the chart pins `PORT=3001` / `ADMIN_PORT=3002` on both workloads.
 - **The admin secret is read once.** Rotating it changes nothing; the password is changed in the Console. No verified recovery for a lost admin password.
 - **CORS:** with the public Console on, `ADMIN_ENDPOINT` is set, so Logto drops localhost from the admin origins. A port-forwarded Console can sign in but cannot call the API. Turn the public Console off for a working port-forward Console.
+- **Database failover:** Logto's pg pool emits an unhandled `error` when the server drops a connection, which used to crash every replica at once (≈60–70 s outage + cold boot). The boot script runs `node --import /tmp/logto-guard.mjs .`, which swallows only lost-connection errors (`Connection terminated`, `ECONNRESET`, `57P01`…; anything else still exits 1). Measured 10-30: SIGSTOP of the Patroni leader → ~58 s of failed sign-ins (the failover itself), zero Logto restarts, recovered on its own. Log line: `[logto-guard] database connection lost`.
 - **Changing `publicAccess` or `customDomain.core` changes the OIDC issuer:** every app's config must change.
 - **OSS = one Console admin;** inviting more admins is the paid Self-Hosted Pro feature.
 - **Uninstall deletes the database volumes,** and with them all users and signing keys.

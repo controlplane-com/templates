@@ -72,8 +72,23 @@ node /tmp/logto-db.mjs wait-admin
 rm -f /tmp/logto-awaiting-claim
 {{- end }}
 
+# Logto's database pool emits an unhandled 'error' when the server drops an idle connection
+# (a Patroni failover does), and Node then exits, restarting every replica at once. Swallow
+# only lost-connection errors so the pool reconnects; anything else still exits.
+cat > /tmp/logto-guard.mjs <<'LOGTO_GUARD_EOF'
+const lost = /Connection terminated|terminating connection|ECONNRESET|ECONNREFUSED|EPIPE|57P01|57P02|57P03/;
+process.on('uncaughtException', (e) => {
+  if (lost.test(String(e && (e.code || '') + ' ' + e.message))) {
+    console.error('[logto-guard] database connection lost, the pool will reconnect: ' + e.message);
+    return;
+  }
+  console.error(e);
+  process.exit(1);
+});
+LOGTO_GUARD_EOF
+
 rm -f /tmp/logto-booting
 cd /etc/logto/packages/core
 export NODE_ENV=production
-exec node .
+exec node --import /tmp/logto-guard.mjs .
 {{- end }}

@@ -15,13 +15,15 @@ imports:
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    after: database
+    after: domains
     steps:
       - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Logto stores its data in. }
       - { id: storage, title: Database storage }
       - { id: etcd, title: Database consensus }
       - { id: network, title: Database network }
-      - { id: backup, title: Database backups }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
     exclude:
       # Chosen in the Database step, next to the single-instance mode's secret, so both modes ask in one place.
       - config.credentialsSecretName
@@ -36,12 +38,14 @@ imports:
     version: 3.4.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: database
+    after: domains
     steps:
       - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
-      - { id: backup, title: Database backups }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
     exclude:
       - config.credentialsSecretName
       - pgbouncer
@@ -117,6 +121,141 @@ steps:
             mirrors: logto.validateAdmin
             paths: [admin.secretName]
             message: The admin secret is required.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Logto's data, and the prerequisite secret with its credentials.
+    docs: "#database"
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+          # Declared so the imports' conditions are fields; the chooser above writes them.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Logto connects through.
+          Recommended for production.
+        fields:
+          - type: note
+            when: self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Logto connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of both Logto workloads.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-logto-db-credentials'"
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups follow
+          in the next steps.
+        fields:
+          - type: note
+            when: self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Logto connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-logto-db-credentials'"
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Logto's database endpoint.
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
 
   - id: access
     title: Access
@@ -236,129 +375,6 @@ steps:
             mirrors: logto.validateDomains
             paths: [customDomain.core, customDomain.adminConsole]
             message: Use two different hostnames; Logto tells the Admin Console from the sign-in service by hostname.
-
-  - id: database
-    title: Database
-    description: Which PostgreSQL holds Logto's data, and the prerequisite secret with its credentials.
-    docs: "#database"
-    sections:
-      - fields:
-          - id: dbMode
-            virtual: true
-            type: enum
-            label: Database
-            widget: cards
-            required: true
-            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
-            options:
-              - value: ha
-                label: Highly available PostgreSQL
-                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
-                set: { postgresHA.enabled: true, postgres.enabled: false }
-              - value: single
-                label: Single-instance PostgreSQL
-                description: One PostgreSQL replica; lighter, without failover.
-                set: { postgresHA.enabled: false, postgres.enabled: true }
-          # Declared so the imports' conditions are fields; the chooser above writes them.
-          - path: postgres.enabled
-            type: boolean
-            label: Single-instance PostgreSQL on
-            readOnly: true
-            advanced: true
-            description: Set by the database choice above.
-          - path: postgresHA.enabled
-            type: boolean
-            label: Highly available PostgreSQL on
-            readOnly: true
-            advanced: true
-            description: Set by the database choice above.
-          - type: note
-            severity: warning
-            text: >-
-              The database credentials secret must exist **before** you install; if it is missing, the
-              deployment waits and `cpln logs` shows nothing at all.
-      - id: ha
-        title: Highly available PostgreSQL
-        when: self.postgresHA.enabled
-        description: >-
-          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Logto connects through.
-          Recommended for production.
-        fields:
-          - path: postgresHA.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: >-
-              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
-              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
-            help: >-
-              PostgreSQL reads these values only when its data is first initialized, and Logto connects with them.
-              Changing it later is a database operation: follow the postgres-highly-available template's password
-              rotation steps, then update the secret and force a redeployment of both Logto workloads.
-            docs: "#prerequisites"
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-logto-db-credentials'"
-      - id: single
-        title: Single-instance PostgreSQL
-        when: self.postgres.enabled
-        description: >-
-          One PostgreSQL replica, for development and light use. Its server, storage, network and backups follow
-          in the next steps.
-        fields:
-          - path: postgres.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: >-
-              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
-              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
-            help: >-
-              PostgreSQL reads these values only when its data directory is first initialized, and Logto connects
-              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
-              and force a redeployment.
-            docs: "#prerequisites"
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-logto-db-credentials'"
-    rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: logto.validateDatabase
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
-      - rule: >-
-          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-          dyn(self.postgresHA)['proxy']['enabled'] == true
-        mirrors: logto.validateDatabase
-        paths: [postgresHA.enabled]
-        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Logto's database endpoint.
-      - rule: >-
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
-        mirrors: logto.validateDatabase
-        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
-        message: The database credentials secret is required.
-      - rule: >-
-          oldSelf == null ||
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
-          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
-        severity: info
-        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
-        message: >-
-          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
-          does not change the existing user or password.
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:

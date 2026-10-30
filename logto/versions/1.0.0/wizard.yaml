@@ -170,7 +170,9 @@ steps:
           Recommended for production.
         fields:
           - type: note
-            when: self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
             text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
             textExpression: >-
               'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
@@ -204,7 +206,9 @@ steps:
           in the next steps.
         fields:
           - type: note
-            when: self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
             text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
             textExpression: >-
               'Each database type keeps its own secret setting. To use the one you chose for the highly available database,

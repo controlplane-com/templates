@@ -206,6 +206,7 @@ postgres:
 - The admin secret is read once, when the database is first initialized. Afterwards change the admin password in the Admin Console; editing the secret changes nothing. There is no supported reset for a lost admin password, so store it safely.
 - Choose `publicAccess` and the custom domains at install: the public URL is the OIDC issuer, and changing it later breaks every app configured against it.
 - First boot needs outbound HTTPS to `api.pwnedpasswords.com`: Logto checks the admin password against known breaches and refuses it if the check cannot run.
+- To send verification and sign-in emails, add an email connector (SMTP or a provider) under Admin Console → Connectors. Logto reaches the mail server over outbound TCP, which the template allows.
 - With the public Admin Console on, a Console opened through `cpln port-forward` can sign in but cannot load data. Use the public Console URL, or turn the public Console off.
 - With custom domains set, give users the domain URLs: the `*.cpln.app` URLs still answer, but the Admin Console's one then serves the sign-in service instead of the Console.
 - Uninstalling removes the domain resources. Reinstalling recreates them, and no re-verification is needed while the apex domain stays registered.

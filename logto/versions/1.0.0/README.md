@@ -147,7 +147,7 @@ postgresHA:
       endpoint: http://my-minio-workload:9000
       bucket: my-logto-backup-bucket
       # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
-      # secret holding exactly `accessKey` and `secretKey`. See README Storage setup.
+      # secret holding exactly `accessKey` and `secretKey` (see the postgres-highly-available docs).
       credentialsSecretName: my-logto-minio-credentials
       prefix: postgres/backups
 ```
@@ -187,7 +187,7 @@ postgres:
       endpoint: http://my-minio-workload:9000
       bucket: my-logto-backup-bucket
       # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
-      # only when backup is enabled with provider: minio. See README Storage setup.
+      # only when backup is enabled with provider: minio (see the postgres template docs).
       credentialsSecretName: my-logto-minio-credentials
       prefix: postgres/backups
 ```
@@ -207,6 +207,8 @@ postgres:
 - Choose `publicAccess` and the custom domains at install: the public URL is the OIDC issuer, and changing it later breaks every app configured against it.
 - First boot needs outbound HTTPS to `api.pwnedpasswords.com`: Logto checks the admin password against known breaches and refuses it if the check cannot run.
 - With the public Admin Console on, a Console opened through `cpln port-forward` can sign in but cannot load data. Use the public Console URL, or turn the public Console off.
+- With custom domains set, give users the domain URLs: the `*.cpln.app` URLs still answer, but the Admin Console's one then serves the sign-in service instead of the Console.
+- Uninstalling removes the domain resources. Reinstalling recreates them, and no re-verification is needed while the apex domain stays registered.
 - Use a single-location GVC: the bundled database runs in one location.
 - Uninstalling deletes the database volumes, and with them every user and signing key.
 - The open-source edition has one Admin Console account; inviting more admins is a paid Logto feature.

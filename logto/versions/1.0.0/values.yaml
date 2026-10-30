@@ -83,7 +83,7 @@ postgresHA:
       endpoint: http://my-minio-workload:9000
       bucket: my-logto-backup-bucket
       # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
-      # secret holding exactly `accessKey` and `secretKey`. See README Storage setup.
+      # secret holding exactly `accessKey` and `secretKey` (see the postgres-highly-available docs).
       credentialsSecretName: my-logto-minio-credentials
       prefix: postgres/backups
 
@@ -121,6 +121,6 @@ postgres:
       endpoint: http://my-minio-workload:9000
       bucket: my-logto-backup-bucket
       # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
-      # only when backup is enabled with provider: minio. See README Storage setup.
+      # only when backup is enabled with provider: minio (see the postgres template docs).
       credentialsSecretName: my-logto-minio-credentials
       prefix: postgres/backups

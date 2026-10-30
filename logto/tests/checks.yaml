@@ -35,7 +35,7 @@ checks:
         const admin = process.env.CPLN_GLOBAL_ENDPOINT.replace('//{release}-logto-', '//{release}-logto-admin-');
         const r = await fetch(admin + '/oidc/.well-known/openid-configuration');
         const d = await r.json().catch(() => ({}));
-        console.log(d.issuer === admin + '/oidc' ? 'ADMIN_ISSUER_OK' : 'ADMIN_ISSUER_BAD ' + r.status + ' ' + d.issuer);
+        console.log(admin !== process.env.CPLN_GLOBAL_ENDPOINT && d.issuer === admin + '/oidc' ? 'ADMIN_ISSUER_OK' : 'ADMIN_ISSUER_BAD ' + r.status + ' ' + d.issuer);
         EOF
         node /tmp/e2e.mjs
     expect:

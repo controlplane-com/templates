@@ -290,11 +290,11 @@ steps:
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
-              all three values must be URL-safe (letters, digits, `_`).
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Logto connects with them.
-              To change the password later, move the leader to member -0 first (see the README), change it in the
-              database, then update the secret and force a redeployment.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of both Logto workloads.
             docs: "#prerequisites"
             ref:
               kind: secret
@@ -318,7 +318,7 @@ steps:
             required: true
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
-              all three values must be URL-safe (letters, digits, `_`).
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Logto connects
               with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret

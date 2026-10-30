@@ -157,6 +157,8 @@ async function bootstrapAdmin(c) {
   if (mode !== 'SignIn') fatal(`bootstrap: admin sign-in mode is ${mode}, expected SignIn`);
   const org = await c.query("select 1 from organization_role_user_relations where tenant_id = 'admin' and user_id = $1", [u.rows[0].id]);
   if (org.rowCount < 1) fatal('bootstrap: the admin was not given the tenant Admin role');
+  const roles = await c.query("select 1 from users_roles where tenant_id = 'admin' and user_id = $1", [u.rows[0].id]);
+  if (roles.rowCount < 2) fatal('bootstrap: the admin was not given the Admin Console user and Management API roles');
   log(`admin account "${username}" created; Admin Console sign-up is now closed`);
 }
 

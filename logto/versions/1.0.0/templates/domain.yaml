@@ -8,6 +8,7 @@ description: {{ $d.host }}
 tags: {{- include "logto.tags" $ | nindent 2 }}
 spec:
   acceptAllHosts: false
+  acceptAllSubdomains: false
   dnsMode: cname
   ports:
     - number: 443

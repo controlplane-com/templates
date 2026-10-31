@@ -62,6 +62,9 @@ pickInsteadIf:
     template: pocketbase
 
 related:
+  - template: logto
+    relation: alternative
+    note: Logto open-source auth platform with OIDC sign-in, organizations and a developer-first console
   - template: fusionauth
     relation: alternative
     note: FusionAuth identity server with OAuth2, OIDC and SAML on a bundled single PostgreSQL

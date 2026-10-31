@@ -1,0 +1,428 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Logto
+
+# Both bundled databases are single-location stateful workloads with no location handling, and the
+# Logto replicas share one database: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: domains
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Logto stores its data in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      # Chosen in the Database step, next to the single-instance mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Logto connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          Logto connects through the HAProxy endpoint like any other workload: keep Same GVC, or add both Logto
+          workloads under Allowed workloads.
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: domains
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      - config.credentialsSecretName
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Logto connects to its database like any other workload: keep Same GVC, or add both Logto workloads
+          under Allowed workloads.
+
+steps:
+  - id: logto
+    title: Logto
+    description: The Logto image, its compute and replica count, and the prerequisite admin secret.
+    sections:
+      - title: Server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Logto image
+            required: true
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 4
+            suggestions: [1, 2, 3]
+            description: >-
+              All state lives in the database, so replicas are interchangeable. 2 keeps sign-in up through restarts
+              and upgrades; 1 is the lighter shape.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per Logto process, for each replica and for the Admin Console workload.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.replicas >= 1 && self.replicas <= 4
+            mirrors: logto.validateReplicas
+            paths: [replicas]
+            message: Use between 1 and 4 replicas; each replica holds its own database connection pools.
+      - title: Admin account
+        docs: "#admin-account"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The admin secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: admin.secretName
+            type: ref
+            label: Admin secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username` (letters, digits and `_`, starting with a letter or `_`)
+              and `password` (8 or more characters).
+            help: >-
+              Logto creates the Admin Console account from it on first boot only; afterwards change the password in
+              the Admin Console. Editing the secret later changes nothing.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-logto-admin'"
+        rules:
+          - rule: has(self.admin.secretName) && self.admin.secretName != ''
+            mirrors: logto.validateAdmin
+            paths: [admin.secretName]
+            message: The admin secret is required.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Logto's data, and the prerequisite secret with its credentials.
+    docs: "#database"
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
+            options:
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; lighter, without failover.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+          # Declared so the imports' conditions are fields; the chooser above writes them.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Logto connects through.
+          Recommended for production.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Logto connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of both Logto workloads.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-logto-db-credentials'"
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica, for development and light use. Its server, storage, network and backups follow
+          in the next steps.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Logto puts them in a URL, so
+              all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Logto connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-logto-db-credentials'"
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Logto's database endpoint.
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: logto.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: access
+    title: Access
+    description: The public endpoints, the Admin Console, and which workloads can reach Logto inside Control Plane.
+    sections:
+      - title: Public endpoint
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              The sign-in pages and OIDC endpoints on the canonical endpoint. Turn it off to reach Logto only
+              through `cpln port-forward`.
+      - title: Public Admin Console
+        toggle: adminConsole.publicAccess.enabled
+        description: >-
+          Serves the Admin Console from a second workload on its own endpoint, with sign-in only. Without it, reach
+          the Console with `cpln port-forward`.
+        fields:
+          - type: note
+            severity: info
+            text: The Console signs in with the account from the Admin account section; sign-up is closed.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no other workload inside Control Plane can connect.
+      - title: Webhooks
+        fields:
+          - path: webhooks.allowInternalTargets
+            type: boolean
+            label: Allow webhooks to workloads inside Control Plane
+            description: >-
+              Off, Logto sends webhooks only to public URLs and refuses internal `*.cpln.local` addresses.
+            help: >-
+              On, anyone who can manage webhooks (the Console admin, or an app with Management API access) can make
+              Logto call any workload it can reach inside Control Plane. Turn it on only for internal receivers.
+    rules:
+      - rule: "!self.adminConsole.publicAccess.enabled || self.publicAccess.enabled"
+        mirrors: logto.validateAccess
+        paths: [adminConsole.publicAccess.enabled]
+        message: >-
+          The public Admin Console calls the Management API on Logto's public URL. Turn on the public endpoint, or
+          turn the Console off and use `cpln port-forward`.
+
+  - id: domains
+    title: Custom domains
+    description: Optional hostnames for the sign-in service and the Admin Console. Leave both empty to use the canonical endpoints.
+    sections:
+      - title: Custom domains
+        docs: "#custom-domains"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The core domain becomes the OIDC issuer, so choose it at install. Register the apex domain with
+              Control Plane and add a CNAME for each hostname first.
+          - path: customDomain.core
+            type: string
+            label: Sign-in domain
+            placeholder: auth.example.com
+            description: A bare hostname, no scheme, path or port. Empty uses the canonical endpoint.
+          - path: customDomain.adminConsole
+            type: string
+            label: Admin Console domain
+            placeholder: auth-admin.example.com
+            when: self.adminConsole.publicAccess.enabled
+            description: A bare hostname, different from the sign-in domain. Empty uses the canonical endpoint.
+        rules:
+          - rule: >-
+              self.customDomain.core == '' ||
+              self.customDomain.core.matches('^([a-z0-9]([a-z0-9-]*[a-z0-9])?[.])+[a-z]{2,63}$')
+            mirrors: logto.validateDomains
+            paths: [customDomain.core]
+            message: Use a bare lowercase hostname such as auth.example.com, with no scheme, path or port.
+          - rule: >-
+              self.customDomain.adminConsole == '' ||
+              self.customDomain.adminConsole.matches('^([a-z0-9]([a-z0-9-]*[a-z0-9])?[.])+[a-z]{2,63}$')
+            mirrors: logto.validateDomains
+            paths: [customDomain.adminConsole]
+            message: Use a bare lowercase hostname such as auth-admin.example.com, with no scheme, path or port.
+          - rule: self.customDomain.core == '' || self.publicAccess.enabled
+            mirrors: logto.validateDomains
+            paths: [customDomain.core]
+            message: A custom domain routes public traffic to Logto; turn on the public endpoint in Access.
+          - rule: self.customDomain.adminConsole == '' || self.adminConsole.publicAccess.enabled
+            mirrors: logto.validateDomains
+            paths: [adminConsole.publicAccess.enabled]
+            message: >-
+              The Admin Console domain routes to the public Admin Console: turn the public Admin Console back on in
+              Access, or clear the Admin Console domain.
+          - rule: self.customDomain.core == '' || self.customDomain.core != self.customDomain.adminConsole
+            mirrors: logto.validateDomains
+            paths: [customDomain.core, customDomain.adminConsole]
+            message: Use two different hostnames; Logto tells the Admin Console from the sign-in service by hostname.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Logto, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto') in self.postgres.internalAccess.workloads &&
+      (!self.adminConsole.publicAccess.enabled ||
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto-admin') in self.postgres.internalAccess.workloads)
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto' +
+      (self.adminConsole.publicAccess.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto-admin' : '') +
+      ', or Logto cannot reach its database.'
+    message: Add the Logto workloads to the list, or Logto cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto') in self.postgresHA.internal_access.workloads &&
+      (!self.adminConsole.publicAccess.enabled ||
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto-admin') in self.postgresHA.internal_access.workloads)
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto' +
+      (self.adminConsole.publicAccess.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-logto-admin' : '') +
+      ', or Logto cannot reach its database.'
+    message: Add the Logto workloads to the list, or Logto cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Logto connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Logto connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.

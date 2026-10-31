@@ -59,6 +59,9 @@ pickInsteadIf:
     template: supabase
 
 related:
+  - template: logto
+    relation: alternative
+    note: Logto open-source auth platform with OIDC sign-in, organizations and a developer-first console
   - template: keycloak
     relation: alternative
     note: Keycloak identity server with SSO, OIDC, SAML and user federation

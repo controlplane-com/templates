@@ -118,3 +118,25 @@ checks:
     expect:
       stdout: "^LEVEL=INFO$"
       notStdout: "server\\.log"
+
+  - id: connect-stdout-only
+    issue: "#5401"
+    since: 4.4.1
+    description: >-
+      The Kafka Connect worker runs with a root logger of INFO, stdout only, so it does not also write connect.log,
+      which filled the container's ephemeral storage.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        wget -qO- http://127.0.0.1:8083/ | grep -o '"version":"[^"]*"' || echo "CONNECT-DOWN"
+        for p in /proc/[0-9]*; do
+          tr '\0' '\n' < $p/cmdline 2>/dev/null | grep -qx org.apache.kafka.connect.cli.ConnectDistributed &&
+            tr '\0' '\n' < $p/cmdline | grep '^-Dlog4j.configuration='
+        done
+        grep '^log4j.rootLogger=' /opt/kafka/config/connect-log4j-updated.properties 2>/dev/null || echo "NO-UPDATED-CONFIG"
+        ls -l /opt/kafka/logs/connect.log* 2>/dev/null || echo "NO-CONNECT-LOG"
+    expect:
+      stdout: '\A"version":"3\.[0-9.]+"\n-Dlog4j\.configuration=file:/opt/kafka/config/connect-log4j-updated\.properties\nlog4j\.rootLogger=INFO, stdout\nNO-CONNECT-LOG\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30

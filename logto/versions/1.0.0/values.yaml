@@ -40,6 +40,11 @@ internalAccess: # which workloads inside Control Plane can call Logto
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
+webhooks:
+  # true = webhooks may call workloads inside Control Plane (*.cpln.local URLs). Off, Logto
+  # refuses internal addresses and sends webhooks only to public URLs.
+  allowInternalTargets: false
+
 # ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
 # replicas, and an HAProxy leader endpoint Logto connects to.

@@ -73,6 +73,12 @@ must therefore be URL-safe (the start script checks).
   value: "3001"
 - name: ADMIN_PORT
   value: "3002"
+{{- if .Values.webhooks.allowInternalTargets }}
+# Logto refuses webhook URLs that resolve to special-use addresses; internal *.cpln.local
+# names resolve into the mesh's 240.240.0.0/16, so allow exactly that range.
+- name: SSRF_ALLOWED_ADDRESSES
+  value: "240.240.0.0/16"
+{{- end }}
 {{- end }}
 
 {{/*

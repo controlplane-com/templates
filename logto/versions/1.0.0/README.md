@@ -97,6 +97,11 @@ internalAccess: # which workloads inside Control Plane can call Logto
   workloads: [] # used with workload-list
   # workloads:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+webhooks:
+  # true = webhooks may call workloads inside Control Plane (*.cpln.local URLs). Off, Logto
+  # refuses internal addresses and sends webhooks only to public URLs.
+  allowInternalTargets: false
 ```
 
 ### Database
@@ -194,12 +199,17 @@ postgres:
 
 ## Connecting
 
-| What | Where |
-|---|---|
-| Sign-in pages and OIDC | `status.canonicalEndpoint` of `RELEASE_NAME-logto` (`cpln workload get RELEASE_NAME-logto --gvc GVC_NAME -o yaml`), or `https://{customDomain.core}`. The OIDC issuer is that URL + `/oidc`. |
-| Admin Console | `status.canonicalEndpoint` of `RELEASE_NAME-logto-admin`, or `https://{customDomain.adminConsole}`. Sign in with the admin secret's `username` and `password`. |
-| Admin Console without public access | `cpln port-forward RELEASE_NAME-logto 3001:3001 3002:3002 --gvc GVC_NAME`, then open `http://localhost:3002` (only with `adminConsole.publicAccess.enabled: false`) |
-| Inside the GVC | `http://RELEASE_NAME-logto.GVC_NAME.cpln.local:3001` |
+Logto serves two URLs. Give each audience only its own:
+
+| Who | URL | What they do there |
+|---|---|---|
+| Administrators | `https://{customDomain.adminConsole}/console`, or the canonical endpoint of `RELEASE_NAME-logto-admin` + `/console` | The Admin Console: applications, users, sign-in experience, connectors, MFA, roles. Sign in with the admin secret's `username` and `password`. |
+| Your app's users | `https://{customDomain.core}`, or the canonical endpoint of `RELEASE_NAME-logto` | Nothing directly: your app redirects them to Logto's sign-in and sign-up pages here and back. Opened on its own, the URL shows an error page, because no app started a sign-in. To try sign-in as a user, open `/demo-app` on this URL. |
+| Your applications (OIDC) | Issuer: the users' URL above + `/oidc` (discovery at `/oidc/.well-known/openid-configuration`) | Paste the issuer, App ID and App secret from Admin Console → Applications into your app. |
+| Workloads in the same GVC | `http://RELEASE_NAME-logto.GVC_NAME.cpln.local:3001` | The same endpoints over the internal network. |
+| Admin Console without public access | `cpln port-forward RELEASE_NAME-logto 3001:3001 3002:3002 --gvc GVC_NAME`, then `http://localhost:3002/console` | Only with `adminConsole.publicAccess.enabled: false`. |
+
+Find a canonical endpoint with `cpln workload get RELEASE_NAME-logto --gvc GVC_NAME -o yaml` (`status.canonicalEndpoint`).
 
 ## Important Notes
 
@@ -207,6 +217,7 @@ postgres:
 - Choose `publicAccess` and the custom domains at install: the public URL is the OIDC issuer, and changing it later breaks every app configured against it.
 - First boot needs outbound HTTPS to `api.pwnedpasswords.com`: Logto checks the admin password against known breaches and refuses it if the check cannot run.
 - To send verification and sign-in emails, add an email connector (SMTP or a provider) under Admin Console → Connectors. Logto reaches the mail server over outbound TCP, which the template allows.
+- Webhooks are sent only to public URLs unless `webhooks.allowInternalTargets` is on. Turning it on lets anyone who can manage webhooks (Console admin, or an app with Management API access) make Logto call any workload it can reach inside Control Plane; leave it off unless you need internal receivers.
 - With the public Admin Console on, a Console opened through `cpln port-forward` can sign in but cannot load data. Use the public Console URL, or turn the public Console off.
 - With custom domains set, give users the domain URLs: the `*.cpln.app` URLs still answer, but the Admin Console's one then serves the sign-in service instead of the Console.
 - Uninstalling removes the domain resources. Reinstalling recreates them, and no re-verification is needed while the apex domain stays registered.

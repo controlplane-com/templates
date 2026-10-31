@@ -321,6 +321,16 @@ steps:
             severity: info
             paths: [internalAccess.workloads]
             message: With "Specific workloads" and an empty list, no other workload inside Control Plane can connect.
+      - title: Webhooks
+        fields:
+          - path: webhooks.allowInternalTargets
+            type: boolean
+            label: Allow webhooks to workloads inside Control Plane
+            description: >-
+              Off, Logto sends webhooks only to public URLs and refuses internal `*.cpln.local` addresses.
+            help: >-
+              On, anyone who can manage webhooks (the Console admin, or an app with Management API access) can make
+              Logto call any workload it can reach inside Control Plane. Turn it on only for internal receivers.
     rules:
       - rule: "!self.adminConsole.publicAccess.enabled || self.publicAccess.enabled"
         mirrors: logto.validateAccess

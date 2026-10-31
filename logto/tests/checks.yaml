@@ -447,6 +447,567 @@ checks:
     retryDelaySeconds: 20
     timeoutSeconds: 240
 
+  - id: captcha-turnstile
+    description: >-
+      Bot protection: with Turnstile CAPTCHA on (Cloudflare's published test keys), a sign-in without a token is refused, a token the provider accepts signs in, and one it rejects is refused. Needs outbound HTTPS to challenges.cloudflare.com. The settings are restored afterwards.
+    exec:
+      workload: "{release}-logto"
+      container: logto
+      script: |
+        cat > /tmp/e2e.mjs <<'EOF'
+        import { createHash, createHmac, randomBytes } from 'node:crypto';
+        const core = process.env.CPLN_GLOBAL_ENDPOINT;
+        const admin = core.replace('//{release}-logto-', '//{release}-logto-admin-');
+        const redirect = 'https://e2e.invalid/callback';
+        const rnd = (n) => randomBytes(n || 4).toString('hex');
+        const jwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url'));
+        function client(base) {
+          const jar = new Map();
+          return async (method, url, body, form) => {
+            const res = await fetch(url.startsWith('http') ? url : base + url, { method: method, redirect: 'manual',
+              headers: Object.assign({ cookie: [...jar].map((e) => e[0] + '=' + e[1]).join('; ') },
+                body ? { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
+              body: body ? (form ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined });
+            for (const h of res.headers.getSetCookie()) { const kv = h.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
+            const t = await res.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+            return { status: res.status, json: j, location: res.headers.get('location') };
+          };
+        }
+        // Experience-API password sign-in, stopping before submit.
+        async function signIn(base, clientId, redirectUri, username, password, extra) {
+          const call = client(base); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams(Object.assign({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+            scope: 'openid offline_access', state: 's', prompt: 'login consent',
+            code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' }, extra || {}));
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'SignIn' });
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (!p.json.verificationId) throw new Error('password ' + p.status + ' ' + p.json.code);
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) throw new Error('identification ' + i.status + ' ' + i.json.code);
+          return { call: call, verifier: v, base: base, redirectUri: redirectUri };
+        }
+        // Submit, follow the OIDC redirects (granting consent) to the redirect_uri; returns the code or an error.
+        async function finish(s) {
+          const r0 = await s.call('POST', '/api/experience/submit');
+          if (r0.status >= 400) return { error: r0.status + ' ' + r0.json.code };
+          let loc = r0.json.redirectTo;
+          for (let n = 0; n < 8 && loc && !loc.startsWith(s.redirectUri); n++) {
+            const r = await s.call('GET', loc);
+            if (r.status === 200 || !r.location) { const c = await s.call('POST', '/api/interaction/consent', {}); loc = c.json.redirectTo; continue; }
+            loc = new URL(r.location, s.base).toString();
+          }
+          if (!loc || !loc.startsWith(s.redirectUri)) return { error: 'no code; stopped at ' + loc };
+          return { code: new URL(loc).searchParams.get('code') };
+        }
+        async function token(base, clientId, secret, body) {
+          const r = await fetch(base + '/oidc/token', { method: 'POST', headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' },
+            secret ? { authorization: 'Basic ' + Buffer.from(clientId + ':' + secret).toString('base64') } : {}),
+            body: new URLSearchParams(secret ? body : Object.assign({ client_id: clientId }, body)) });
+          return { status: r.status, json: await r.json().catch(() => ({})) };
+        }
+        // The admin's Management API token, the way the Console gets one.
+        const mg = 'https://default.logto.app/api';
+        const as = await signIn(admin, 'admin-console', admin + '/console/callback', '{admin_user}', '{admin_password}', { resource: mg, scope: 'openid offline_access all' });
+        const af = await finish(as);
+        if (!af.code) throw new Error('admin sign-in ' + af.error);
+        const at = (await token(admin, 'admin-console', null, { grant_type: 'authorization_code', code: af.code,
+          redirect_uri: admin + '/console/callback', code_verifier: as.verifier, resource: mg })).json.access_token;
+        if (!at) throw new Error('no management token');
+        const api = async (method, path, body) => {
+          const r = await fetch(core + '/api' + path, { method: method, headers: Object.assign({ authorization: 'Bearer ' + at },
+            body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+          if (r.status >= 400) throw new Error('api ' + method + ' ' + path + ' ' + r.status + ' ' + j.code);
+          return j;
+        };
+        const cleanup = [];
+        const app = await api('POST', '/applications', { name: 'e2e-app-' + rnd(), type: 'Traditional',
+          oidcClientMetadata: { redirectUris: [redirect], postLogoutRedirectUris: [] } });
+        cleanup.push(() => api('DELETE', '/applications/' + app.id));
+        const appSecret = (await api('POST', '/applications/' + app.id + '/secrets', { name: 'e2e' })).value;
+        const pw = rnd(12) + 'Aa9!';
+        const newUser = async (prefix) => { const u = await api('POST', '/users', { username: prefix + rnd(), password: pw });
+          cleanup.push(() => api('DELETE', '/users/' + u.id)); return u; };
+        async function attempt(username, password, captchaToken) {
+          const call = client(core); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams({ client_id: app.id, redirect_uri: redirect, response_type: 'code', scope: 'openid', state: 's',
+            prompt: 'login consent', code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' });
+          await call('GET', '/oidc/auth?' + q);
+          const e = await call('PUT', '/api/experience', Object.assign({ interactionEvent: 'SignIn' }, captchaToken ? { captchaToken: captchaToken } : {}));
+          if (e.status >= 400) return e.status + ' ' + e.json.code;
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (p.status >= 400) return p.status + ' ' + p.json.code;
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) return i.status + ' ' + i.json.code;
+          const f = await finish({ call: call, verifier: v, base: core, redirectUri: redirect });
+          return f.code ? 'SIGNED_IN' : f.error;
+        }
+        const orig = (await api('GET', '/sign-in-exp')).captchaPolicy;
+        const setProvider = (secretKey) => api('PUT', '/captcha-provider', { config: { type: 'Turnstile', siteKey: '1x00000000000000000000AA', secretKey: secretKey } });
+        try {
+          const u = await newUser('e2e_cap_');
+          // Cloudflare's published Turnstile test keys: 1x… always passes, 2x… always fails.
+          await setProvider('1x0000000000000000000000000000000AA');
+          await api('PATCH', '/sign-in-exp', { captchaPolicy: { enabled: true } });
+          console.log('NO_TOKEN ' + await attempt(u.username, pw, null));
+          console.log('PASS_KEY ' + await attempt(u.username, pw, 'XXXX.DUMMY.TOKEN.XXXX'));
+          await setProvider('2x0000000000000000000000000000000AA');
+          console.log('FAIL_KEY ' + await attempt(u.username, pw, 'XXXX.DUMMY.TOKEN.XXXX'));
+        } finally {
+          await api('PATCH', '/sign-in-exp', { captchaPolicy: orig || { enabled: false } }).catch(() => {});
+          await api('DELETE', '/captcha-provider').catch(() => {});
+          for (const c of cleanup.reverse()) await c().catch(() => {});
+        }
+        EOF
+        node /tmp/e2e.mjs
+    expect:
+      stdout: "(?s)^NO_TOKEN 422 session.captcha_required\\nPASS_KEY SIGNED_IN\\nFAIL_KEY 422 session.captcha_failed$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 240
+
+  - id: mfa-backup-code
+    description: >-
+      MFA backup codes: with MFA mandatory, a backup code completes the sign-in once, the same code is refused when reused, and a made-up code is refused. The tenant's MFA settings are restored afterwards.
+    exec:
+      workload: "{release}-logto"
+      container: logto
+      script: |
+        cat > /tmp/e2e.mjs <<'EOF'
+        import { createHash, createHmac, randomBytes } from 'node:crypto';
+        const core = process.env.CPLN_GLOBAL_ENDPOINT;
+        const admin = core.replace('//{release}-logto-', '//{release}-logto-admin-');
+        const redirect = 'https://e2e.invalid/callback';
+        const rnd = (n) => randomBytes(n || 4).toString('hex');
+        const jwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url'));
+        function client(base) {
+          const jar = new Map();
+          return async (method, url, body, form) => {
+            const res = await fetch(url.startsWith('http') ? url : base + url, { method: method, redirect: 'manual',
+              headers: Object.assign({ cookie: [...jar].map((e) => e[0] + '=' + e[1]).join('; ') },
+                body ? { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
+              body: body ? (form ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined });
+            for (const h of res.headers.getSetCookie()) { const kv = h.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
+            const t = await res.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+            return { status: res.status, json: j, location: res.headers.get('location') };
+          };
+        }
+        // Experience-API password sign-in, stopping before submit.
+        async function signIn(base, clientId, redirectUri, username, password, extra) {
+          const call = client(base); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams(Object.assign({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+            scope: 'openid offline_access', state: 's', prompt: 'login consent',
+            code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' }, extra || {}));
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'SignIn' });
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (!p.json.verificationId) throw new Error('password ' + p.status + ' ' + p.json.code);
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) throw new Error('identification ' + i.status + ' ' + i.json.code);
+          return { call: call, verifier: v, base: base, redirectUri: redirectUri };
+        }
+        // Submit, follow the OIDC redirects (granting consent) to the redirect_uri; returns the code or an error.
+        async function finish(s) {
+          const r0 = await s.call('POST', '/api/experience/submit');
+          if (r0.status >= 400) return { error: r0.status + ' ' + r0.json.code };
+          let loc = r0.json.redirectTo;
+          for (let n = 0; n < 8 && loc && !loc.startsWith(s.redirectUri); n++) {
+            const r = await s.call('GET', loc);
+            if (r.status === 200 || !r.location) { const c = await s.call('POST', '/api/interaction/consent', {}); loc = c.json.redirectTo; continue; }
+            loc = new URL(r.location, s.base).toString();
+          }
+          if (!loc || !loc.startsWith(s.redirectUri)) return { error: 'no code; stopped at ' + loc };
+          return { code: new URL(loc).searchParams.get('code') };
+        }
+        async function token(base, clientId, secret, body) {
+          const r = await fetch(base + '/oidc/token', { method: 'POST', headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' },
+            secret ? { authorization: 'Basic ' + Buffer.from(clientId + ':' + secret).toString('base64') } : {}),
+            body: new URLSearchParams(secret ? body : Object.assign({ client_id: clientId }, body)) });
+          return { status: r.status, json: await r.json().catch(() => ({})) };
+        }
+        // The admin's Management API token, the way the Console gets one.
+        const mg = 'https://default.logto.app/api';
+        const as = await signIn(admin, 'admin-console', admin + '/console/callback', '{admin_user}', '{admin_password}', { resource: mg, scope: 'openid offline_access all' });
+        const af = await finish(as);
+        if (!af.code) throw new Error('admin sign-in ' + af.error);
+        const at = (await token(admin, 'admin-console', null, { grant_type: 'authorization_code', code: af.code,
+          redirect_uri: admin + '/console/callback', code_verifier: as.verifier, resource: mg })).json.access_token;
+        if (!at) throw new Error('no management token');
+        const api = async (method, path, body) => {
+          const r = await fetch(core + '/api' + path, { method: method, headers: Object.assign({ authorization: 'Bearer ' + at },
+            body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+          if (r.status >= 400) throw new Error('api ' + method + ' ' + path + ' ' + r.status + ' ' + j.code);
+          return j;
+        };
+        const cleanup = [];
+        const app = await api('POST', '/applications', { name: 'e2e-app-' + rnd(), type: 'Traditional',
+          oidcClientMetadata: { redirectUris: [redirect], postLogoutRedirectUris: [] } });
+        cleanup.push(() => api('DELETE', '/applications/' + app.id));
+        const appSecret = (await api('POST', '/applications/' + app.id + '/secrets', { name: 'e2e' })).value;
+        const pw = rnd(12) + 'Aa9!';
+        const newUser = async (prefix) => { const u = await api('POST', '/users', { username: prefix + rnd(), password: pw });
+          cleanup.push(() => api('DELETE', '/users/' + u.id)); return u; };
+        const orig = (await api('GET', '/sign-in-exp')).mfa;
+        try {
+          await api('PATCH', '/sign-in-exp', { mfa: { factors: ['Totp', 'BackupCode'], policy: 'Mandatory' } });
+          const u = await newUser('e2e_bc_');
+          await api('POST', '/users/' + u.id + '/mfa-verifications', { type: 'Totp', secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP' });
+          const codes = (await api('POST', '/users/' + u.id + '/mfa-verifications', { type: 'BackupCode' })).codes;
+          const withCode = async (code) => {
+            const s = await signIn(core, app.id, redirect, u.username, pw);
+            const v = await s.call('POST', '/api/experience/verification/backup-code/verify', { code: code });
+            if (v.status >= 400) return v.status + ' ' + v.json.code;
+            const f = await finish(s);
+            return f.code ? 'SIGNED_IN' : f.error;
+          };
+          console.log('CODES ' + codes.length);
+          console.log('FIRST_USE ' + await withCode(codes[0]));
+          console.log('REUSE ' + await withCode(codes[0]));
+          console.log('MADE_UP ' + await withCode('zzzzzzzzzz'));
+        } finally {
+          await api('PATCH', '/sign-in-exp', { mfa: orig }).catch(() => {});
+          for (const c of cleanup.reverse()) await c().catch(() => {});
+        }
+        EOF
+        node /tmp/e2e.mjs
+    expect:
+      stdout: "(?s)^CODES 10\\nFIRST_USE SIGNED_IN\\nREUSE 400 session.mfa.invalid_backup_code\\nMADE_UP 400 session.mfa.invalid_backup_code$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 240
+
+  - id: password-policy
+    description: >-
+      Password policy: with a 12-character, three-character-type policy, registration with a password of two character types is refused and a compliant password registers. The policy is restored afterwards.
+    exec:
+      workload: "{release}-logto"
+      container: logto
+      script: |
+        cat > /tmp/e2e.mjs <<'EOF'
+        import { createHash, createHmac, randomBytes } from 'node:crypto';
+        const core = process.env.CPLN_GLOBAL_ENDPOINT;
+        const admin = core.replace('//{release}-logto-', '//{release}-logto-admin-');
+        const redirect = 'https://e2e.invalid/callback';
+        const rnd = (n) => randomBytes(n || 4).toString('hex');
+        const jwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url'));
+        function client(base) {
+          const jar = new Map();
+          return async (method, url, body, form) => {
+            const res = await fetch(url.startsWith('http') ? url : base + url, { method: method, redirect: 'manual',
+              headers: Object.assign({ cookie: [...jar].map((e) => e[0] + '=' + e[1]).join('; ') },
+                body ? { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
+              body: body ? (form ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined });
+            for (const h of res.headers.getSetCookie()) { const kv = h.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
+            const t = await res.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+            return { status: res.status, json: j, location: res.headers.get('location') };
+          };
+        }
+        // Experience-API password sign-in, stopping before submit.
+        async function signIn(base, clientId, redirectUri, username, password, extra) {
+          const call = client(base); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams(Object.assign({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+            scope: 'openid offline_access', state: 's', prompt: 'login consent',
+            code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' }, extra || {}));
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'SignIn' });
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (!p.json.verificationId) throw new Error('password ' + p.status + ' ' + p.json.code);
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) throw new Error('identification ' + i.status + ' ' + i.json.code);
+          return { call: call, verifier: v, base: base, redirectUri: redirectUri };
+        }
+        // Submit, follow the OIDC redirects (granting consent) to the redirect_uri; returns the code or an error.
+        async function finish(s) {
+          const r0 = await s.call('POST', '/api/experience/submit');
+          if (r0.status >= 400) return { error: r0.status + ' ' + r0.json.code };
+          let loc = r0.json.redirectTo;
+          for (let n = 0; n < 8 && loc && !loc.startsWith(s.redirectUri); n++) {
+            const r = await s.call('GET', loc);
+            if (r.status === 200 || !r.location) { const c = await s.call('POST', '/api/interaction/consent', {}); loc = c.json.redirectTo; continue; }
+            loc = new URL(r.location, s.base).toString();
+          }
+          if (!loc || !loc.startsWith(s.redirectUri)) return { error: 'no code; stopped at ' + loc };
+          return { code: new URL(loc).searchParams.get('code') };
+        }
+        async function token(base, clientId, secret, body) {
+          const r = await fetch(base + '/oidc/token', { method: 'POST', headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' },
+            secret ? { authorization: 'Basic ' + Buffer.from(clientId + ':' + secret).toString('base64') } : {}),
+            body: new URLSearchParams(secret ? body : Object.assign({ client_id: clientId }, body)) });
+          return { status: r.status, json: await r.json().catch(() => ({})) };
+        }
+        // The admin's Management API token, the way the Console gets one.
+        const mg = 'https://default.logto.app/api';
+        const as = await signIn(admin, 'admin-console', admin + '/console/callback', '{admin_user}', '{admin_password}', { resource: mg, scope: 'openid offline_access all' });
+        const af = await finish(as);
+        if (!af.code) throw new Error('admin sign-in ' + af.error);
+        const at = (await token(admin, 'admin-console', null, { grant_type: 'authorization_code', code: af.code,
+          redirect_uri: admin + '/console/callback', code_verifier: as.verifier, resource: mg })).json.access_token;
+        if (!at) throw new Error('no management token');
+        const api = async (method, path, body) => {
+          const r = await fetch(core + '/api' + path, { method: method, headers: Object.assign({ authorization: 'Bearer ' + at },
+            body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+          if (r.status >= 400) throw new Error('api ' + method + ' ' + path + ' ' + r.status + ' ' + j.code);
+          return j;
+        };
+        const cleanup = [];
+        const app = await api('POST', '/applications', { name: 'e2e-app-' + rnd(), type: 'Traditional',
+          oidcClientMetadata: { redirectUris: [redirect], postLogoutRedirectUris: [] } });
+        cleanup.push(() => api('DELETE', '/applications/' + app.id));
+        const appSecret = (await api('POST', '/applications/' + app.id + '/secrets', { name: 'e2e' })).value;
+        const pw = rnd(12) + 'Aa9!';
+        const newUser = async (prefix) => { const u = await api('POST', '/users', { username: prefix + rnd(), password: pw });
+          cleanup.push(() => api('DELETE', '/users/' + u.id)); return u; };
+        const orig = (await api('GET', '/sign-in-exp')).passwordPolicy;
+        async function register(username, password) {
+          const call = client(core); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams({ client_id: app.id, redirect_uri: redirect, response_type: 'code', scope: 'openid', state: 's',
+            prompt: 'login consent', code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' });
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'Register' });
+          const p = await call('POST', '/api/experience/verification/new-password-identity', { identifier: { type: 'username', value: username }, password: password });
+          if (p.status >= 400) return p.status + ' ' + p.json.code;
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) return i.status + ' ' + i.json.code;
+          const f = await finish({ call: call, verifier: v, base: core, redirectUri: redirect });
+          if (!f.code) return f.error;
+          // Delete the new user by the id in its id_token.
+          const t = await token(core, app.id, appSecret, { grant_type: 'authorization_code', code: f.code, redirect_uri: redirect, code_verifier: v });
+          if (t.json.id_token) { const id = jwt(t.json.id_token).sub; cleanup.push(() => api('DELETE', '/users/' + id)); }
+          return 'REGISTERED';
+        }
+        try {
+          await api('PATCH', '/sign-in-exp', { passwordPolicy: { length: { min: 12, max: 64 }, characterTypes: { min: 3 },
+            rejects: { pwned: false, repetitionAndSequence: true, userInfo: true, words: [] } } });
+          console.log('TWO_TYPES ' + await register('e2e_pw_' + rnd(), 'abcdefgh' + '1357'));
+          console.log('COMPLIANT ' + await register('e2e_pw_' + rnd(), 'Zq7!mK2#vR9p' + rnd(2)));
+        } finally {
+          await api('PATCH', '/sign-in-exp', { passwordPolicy: orig }).catch(() => {});
+          for (const c of cleanup.reverse()) await c().catch(() => {});
+        }
+        EOF
+        node /tmp/e2e.mjs
+    expect:
+      stdout: "(?s)^TWO_TYPES 422 password.rejected\\nCOMPLIANT REGISTERED$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 240
+
+  - id: user-suspension
+    description: >-
+      A suspended user cannot sign in; after unsuspending, the same password signs in.
+    exec:
+      workload: "{release}-logto"
+      container: logto
+      script: |
+        cat > /tmp/e2e.mjs <<'EOF'
+        import { createHash, createHmac, randomBytes } from 'node:crypto';
+        const core = process.env.CPLN_GLOBAL_ENDPOINT;
+        const admin = core.replace('//{release}-logto-', '//{release}-logto-admin-');
+        const redirect = 'https://e2e.invalid/callback';
+        const rnd = (n) => randomBytes(n || 4).toString('hex');
+        const jwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url'));
+        function client(base) {
+          const jar = new Map();
+          return async (method, url, body, form) => {
+            const res = await fetch(url.startsWith('http') ? url : base + url, { method: method, redirect: 'manual',
+              headers: Object.assign({ cookie: [...jar].map((e) => e[0] + '=' + e[1]).join('; ') },
+                body ? { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
+              body: body ? (form ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined });
+            for (const h of res.headers.getSetCookie()) { const kv = h.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
+            const t = await res.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+            return { status: res.status, json: j, location: res.headers.get('location') };
+          };
+        }
+        // Experience-API password sign-in, stopping before submit.
+        async function signIn(base, clientId, redirectUri, username, password, extra) {
+          const call = client(base); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams(Object.assign({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+            scope: 'openid offline_access', state: 's', prompt: 'login consent',
+            code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' }, extra || {}));
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'SignIn' });
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (!p.json.verificationId) throw new Error('password ' + p.status + ' ' + p.json.code);
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) throw new Error('identification ' + i.status + ' ' + i.json.code);
+          return { call: call, verifier: v, base: base, redirectUri: redirectUri };
+        }
+        // Submit, follow the OIDC redirects (granting consent) to the redirect_uri; returns the code or an error.
+        async function finish(s) {
+          const r0 = await s.call('POST', '/api/experience/submit');
+          if (r0.status >= 400) return { error: r0.status + ' ' + r0.json.code };
+          let loc = r0.json.redirectTo;
+          for (let n = 0; n < 8 && loc && !loc.startsWith(s.redirectUri); n++) {
+            const r = await s.call('GET', loc);
+            if (r.status === 200 || !r.location) { const c = await s.call('POST', '/api/interaction/consent', {}); loc = c.json.redirectTo; continue; }
+            loc = new URL(r.location, s.base).toString();
+          }
+          if (!loc || !loc.startsWith(s.redirectUri)) return { error: 'no code; stopped at ' + loc };
+          return { code: new URL(loc).searchParams.get('code') };
+        }
+        async function token(base, clientId, secret, body) {
+          const r = await fetch(base + '/oidc/token', { method: 'POST', headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' },
+            secret ? { authorization: 'Basic ' + Buffer.from(clientId + ':' + secret).toString('base64') } : {}),
+            body: new URLSearchParams(secret ? body : Object.assign({ client_id: clientId }, body)) });
+          return { status: r.status, json: await r.json().catch(() => ({})) };
+        }
+        // The admin's Management API token, the way the Console gets one.
+        const mg = 'https://default.logto.app/api';
+        const as = await signIn(admin, 'admin-console', admin + '/console/callback', '{admin_user}', '{admin_password}', { resource: mg, scope: 'openid offline_access all' });
+        const af = await finish(as);
+        if (!af.code) throw new Error('admin sign-in ' + af.error);
+        const at = (await token(admin, 'admin-console', null, { grant_type: 'authorization_code', code: af.code,
+          redirect_uri: admin + '/console/callback', code_verifier: as.verifier, resource: mg })).json.access_token;
+        if (!at) throw new Error('no management token');
+        const api = async (method, path, body) => {
+          const r = await fetch(core + '/api' + path, { method: method, headers: Object.assign({ authorization: 'Bearer ' + at },
+            body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+          if (r.status >= 400) throw new Error('api ' + method + ' ' + path + ' ' + r.status + ' ' + j.code);
+          return j;
+        };
+        const cleanup = [];
+        const app = await api('POST', '/applications', { name: 'e2e-app-' + rnd(), type: 'Traditional',
+          oidcClientMetadata: { redirectUris: [redirect], postLogoutRedirectUris: [] } });
+        cleanup.push(() => api('DELETE', '/applications/' + app.id));
+        const appSecret = (await api('POST', '/applications/' + app.id + '/secrets', { name: 'e2e' })).value;
+        const pw = rnd(12) + 'Aa9!';
+        const newUser = async (prefix) => { const u = await api('POST', '/users', { username: prefix + rnd(), password: pw });
+          cleanup.push(() => api('DELETE', '/users/' + u.id)); return u; };
+        const tryIn = async (u) => { try { const f = await finish(await signIn(core, app.id, redirect, u.username, pw)); return f.code ? 'SIGNED_IN' : f.error; }
+          catch (e) { return e.message; } };
+        try {
+          const u = await newUser('e2e_sus_');
+          await api('PATCH', '/users/' + u.id + '/is-suspended', { isSuspended: true });
+          console.log('SUSPENDED ' + await tryIn(u));
+          await api('PATCH', '/users/' + u.id + '/is-suspended', { isSuspended: false });
+          console.log('UNSUSPENDED ' + await tryIn(u));
+        } finally {
+          for (const c of cleanup.reverse()) await c().catch(() => {});
+        }
+        EOF
+        node /tmp/e2e.mjs
+    expect:
+      stdout: "(?s)^SUSPENDED .*user.suspended\\nUNSUSPENDED SIGNED_IN$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 240
+
+  - id: custom-jwt-claims
+    description: >-
+      Custom JWT claims: an access-token customizer script (run by Logto OSS itself) adds a claim built from an environment variable and the user; removing the script removes the claim.
+    exec:
+      workload: "{release}-logto"
+      container: logto
+      script: |
+        cat > /tmp/e2e.mjs <<'EOF'
+        import { createHash, createHmac, randomBytes } from 'node:crypto';
+        const core = process.env.CPLN_GLOBAL_ENDPOINT;
+        const admin = core.replace('//{release}-logto-', '//{release}-logto-admin-');
+        const redirect = 'https://e2e.invalid/callback';
+        const rnd = (n) => randomBytes(n || 4).toString('hex');
+        const jwt = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url'));
+        function client(base) {
+          const jar = new Map();
+          return async (method, url, body, form) => {
+            const res = await fetch(url.startsWith('http') ? url : base + url, { method: method, redirect: 'manual',
+              headers: Object.assign({ cookie: [...jar].map((e) => e[0] + '=' + e[1]).join('; ') },
+                body ? { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
+              body: body ? (form ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined });
+            for (const h of res.headers.getSetCookie()) { const kv = h.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
+            const t = await res.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+            return { status: res.status, json: j, location: res.headers.get('location') };
+          };
+        }
+        // Experience-API password sign-in, stopping before submit.
+        async function signIn(base, clientId, redirectUri, username, password, extra) {
+          const call = client(base); const v = randomBytes(32).toString('base64url');
+          const q = new URLSearchParams(Object.assign({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+            scope: 'openid offline_access', state: 's', prompt: 'login consent',
+            code_challenge: createHash('sha256').update(v).digest('base64url'), code_challenge_method: 'S256' }, extra || {}));
+          await call('GET', '/oidc/auth?' + q);
+          await call('PUT', '/api/experience', { interactionEvent: 'SignIn' });
+          const p = await call('POST', '/api/experience/verification/password', { identifier: { type: 'username', value: username }, password: password });
+          if (!p.json.verificationId) throw new Error('password ' + p.status + ' ' + p.json.code);
+          const i = await call('POST', '/api/experience/identification', { verificationId: p.json.verificationId });
+          if (i.status >= 400) throw new Error('identification ' + i.status + ' ' + i.json.code);
+          return { call: call, verifier: v, base: base, redirectUri: redirectUri };
+        }
+        // Submit, follow the OIDC redirects (granting consent) to the redirect_uri; returns the code or an error.
+        async function finish(s) {
+          const r0 = await s.call('POST', '/api/experience/submit');
+          if (r0.status >= 400) return { error: r0.status + ' ' + r0.json.code };
+          let loc = r0.json.redirectTo;
+          for (let n = 0; n < 8 && loc && !loc.startsWith(s.redirectUri); n++) {
+            const r = await s.call('GET', loc);
+            if (r.status === 200 || !r.location) { const c = await s.call('POST', '/api/interaction/consent', {}); loc = c.json.redirectTo; continue; }
+            loc = new URL(r.location, s.base).toString();
+          }
+          if (!loc || !loc.startsWith(s.redirectUri)) return { error: 'no code; stopped at ' + loc };
+          return { code: new URL(loc).searchParams.get('code') };
+        }
+        async function token(base, clientId, secret, body) {
+          const r = await fetch(base + '/oidc/token', { method: 'POST', headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' },
+            secret ? { authorization: 'Basic ' + Buffer.from(clientId + ':' + secret).toString('base64') } : {}),
+            body: new URLSearchParams(secret ? body : Object.assign({ client_id: clientId }, body)) });
+          return { status: r.status, json: await r.json().catch(() => ({})) };
+        }
+        // The admin's Management API token, the way the Console gets one.
+        const mg = 'https://default.logto.app/api';
+        const as = await signIn(admin, 'admin-console', admin + '/console/callback', '{admin_user}', '{admin_password}', { resource: mg, scope: 'openid offline_access all' });
+        const af = await finish(as);
+        if (!af.code) throw new Error('admin sign-in ' + af.error);
+        const at = (await token(admin, 'admin-console', null, { grant_type: 'authorization_code', code: af.code,
+          redirect_uri: admin + '/console/callback', code_verifier: as.verifier, resource: mg })).json.access_token;
+        if (!at) throw new Error('no management token');
+        const api = async (method, path, body) => {
+          const r = await fetch(core + '/api' + path, { method: method, headers: Object.assign({ authorization: 'Bearer ' + at },
+            body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+          if (r.status >= 400) throw new Error('api ' + method + ' ' + path + ' ' + r.status + ' ' + j.code);
+          return j;
+        };
+        const cleanup = [];
+        const app = await api('POST', '/applications', { name: 'e2e-app-' + rnd(), type: 'Traditional',
+          oidcClientMetadata: { redirectUris: [redirect], postLogoutRedirectUris: [] } });
+        cleanup.push(() => api('DELETE', '/applications/' + app.id));
+        const appSecret = (await api('POST', '/applications/' + app.id + '/secrets', { name: 'e2e' })).value;
+        const pw = rnd(12) + 'Aa9!';
+        const newUser = async (prefix) => { const u = await api('POST', '/users', { username: prefix + rnd(), password: pw });
+          cleanup.push(() => api('DELETE', '/users/' + u.id)); return u; };
+        try {
+          const ind = 'https://e2e-' + rnd() + '.invalid/api';
+          const res = await api('POST', '/resources', { name: 'e2e-api-' + rnd(), indicator: ind });
+          cleanup.push(() => api('DELETE', '/resources/' + res.id));
+          const u = await newUser('e2e_jwt_');
+          const claim = async () => {
+            const s = await signIn(core, app.id, redirect, u.username, pw, { resource: ind, scope: 'openid' });
+            const f = await finish(s);
+            const t = f.code ? await token(core, app.id, appSecret, { grant_type: 'authorization_code', code: f.code, redirect_uri: redirect, code_verifier: s.verifier, resource: ind }) : null;
+            const c = t && t.json.access_token ? jwt(t.json.access_token) : null;
+            return c ? String(c.e2e_claim) : 'ERR ' + (f.error || (t && t.status));
+          };
+          await api('PUT', '/configs/jwt-customizer/access-token', { script:
+            "const getCustomJwtClaims = async ({ token, context, environmentVariables }) => ({ e2e_claim: environmentVariables.E2E + '-' + context.user.username });",
+            environmentVariables: { E2E: 'custom' } });
+          console.log('WITH_SCRIPT ' + ((await claim()) === 'custom-' + u.username ? 'CLAIM_OK' : 'CLAIM_BAD'));
+          await api('DELETE', '/configs/jwt-customizer/access-token');
+          console.log('WITHOUT_SCRIPT ' + await claim());
+        } finally {
+          await api('DELETE', '/configs/jwt-customizer/access-token').catch(() => {});
+          for (const c of cleanup.reverse()) await c().catch(() => {});
+        }
+        EOF
+        node /tmp/e2e.mjs
+    expect:
+      stdout: "(?s)^WITH_SCRIPT CLAIM_OK\\nWITHOUT_SCRIPT undefined$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 240
+
   - id: single-admin
     # Runs in the HA database container: every logto baseline uses postgresHA (a single-postgres baseline needs its own check).
     description: The bootstrap created exactly one admin-tenant account and switched the admin tenant to sign-in only.

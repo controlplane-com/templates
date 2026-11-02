@@ -1,3 +1,10 @@
+# Release Notes - Version 4.4.1
+
+## What's New
+
+- **Kafka Connect workers on `apache/kafka:3.x` images no longer fill ephemeral storage with `connect.log`**: the worker log goes to stdout only (`cpln logs`), as the broker log does since 4.2.0. Earlier versions also wrote it to `/opt/kafka/logs/connect.log`, rolled every hour and never deleted, until the worker was evicted.
+- Upgrading restarts the Kafka Connect replicas (and, as with any chart version change, the brokers).
+
 # Release Notes - Version 4.4.0
 
 ## What's New

@@ -50,6 +50,9 @@ pickInsteadIf:
     template: pocketbase
 
 related:
+  - template: postgres
+    relation: companion
+    note: The bundled database; Constructive deploys it with a PostGIS + pgvector image
   - template: pgvector
     relation: alternative
     note: PostgreSQL with pgvector only, for vector search without a generated API

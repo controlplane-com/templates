@@ -113,8 +113,8 @@ Liveness checks only the process, so a database outage does not restart the serv
 {{- end -}}
 {{- end -}}
 {{- if eq $m.source "git" -}}
-{{- if not (regexMatch "^https://[^\\s]+$" (toString $m.git.url)) -}}
-{{- fail "constructive: modules.git.url must be the https:// URL of a public git repository when modules.source is git" -}}
+{{- if not (regexMatch "^https://[^\\s$@/]+(/[^\\s$]*)?$" (toString $m.git.url)) -}}
+{{- fail "constructive: modules.git.url must be the https:// URL of a public git repository, without credentials or `$`, when modules.source is git" -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._/-]*$" (toString $m.git.ref)) -}}
 {{- fail "constructive: modules.git.ref must be a tag or full commit SHA (letters, digits, . _ / -) when modules.source is git" -}}

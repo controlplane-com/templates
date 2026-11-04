@@ -178,10 +178,9 @@ curl -s http://RELEASE_NAME-constructive.GVC_NAME.cpln.local:3000/graphql \
 
 - `X-Actor-Id` is trusted as sent, and `X-Schemata` can name any schema the server login can read. Allow only workloads you trust in `internalAccess`; there is no public endpoint for this reason.
 - The server login is re-created on every start. To rotate its password, edit the login secret, then run `cpln workload force-redeployment RELEASE_NAME-constructive --gvc GVC_NAME`.
-- The database credentials are read once, when the data directory is first initialized; editing that secret later changes nothing.
+- Do not edit the database credentials secret after install: PostgreSQL keeps the original credentials, and the server's boot authenticates with the secret, so a changed value stops the server from starting.
 - Keep `postgres.image` on an image with PostGIS: Constructive's base modules require it, and a backup restores only into such a server.
 - Jobs that modules enqueue are not processed: this template runs no job worker.
-- Postgres logs `relation "routing_public.database_settings" does not exist` on every request; the server expects this and the request succeeds.
 - A PostgreSQL restart interrupts the API at any replica count, and the first `helm upgrade` after an install can restart it.
 - Use a single-location GVC: the bundled database runs in one location. Uninstalling deletes the database volume.
 

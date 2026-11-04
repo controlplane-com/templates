@@ -73,7 +73,9 @@ spec:
         exec:
           command: {{- include "constructive.probe.ready" . | nindent 12 }}
         initialDelaySeconds: 10
-        periodSeconds: 15
+        # 45 s, not 15: a never-ready replica is killed after 10 + 30 x 45 = 1360 s, which must cover
+        # the boot's worst case (1110 s of bounded steps, see constructive.script.boot).
+        periodSeconds: 45
         failureThreshold: 3
         successThreshold: 1
         timeoutSeconds: 10

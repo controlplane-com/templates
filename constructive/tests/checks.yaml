@@ -129,15 +129,16 @@ checks:
 
   - id: platform-metadata-refused
     description: >-
-      The platform metadata schemas cannot be exposed through X-Schemata, even as an authenticated user, while
-      the fixture schema can (the control in the same request flow).
+      The platform metadata schemas and the job queue cannot be exposed through X-Schemata, even as an
+      authenticated user, and no request role may execute the job-queue functions, while the fixture schema
+      can be exposed (the control in the same request flow).
     exec:
       workload: "{release}-constructive"
       container: constructive
       shell: bash
       script: |
         A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaa11c
-        for s in metaschema_public metaschema_modules_public notes_public; do
+        for s in metaschema_public metaschema_modules_public metaschema_private app_jobs notes_public; do
           out=$(curl -sS -m 10 http://127.0.0.1:3000/graphql -H 'content-type: application/json' \
             -H "X-Schemata: $s" -H 'X-Database-Id: {database_id}' -H "X-Actor-Id: $A" \
             --data '{"query":"query { __typename }"}')
@@ -147,8 +148,9 @@ checks:
             *) echo "$s OTHER" ;;
           esac
         done
+        PGUSER='{pg_user}' PGPASSWORD='{pg_password}' psql -XAtq -c "select 'JOB_FUNCS_EXECUTABLE ' || count(*) filter (where has_function_privilege('authenticated', p.oid, 'EXECUTE') or has_function_privilege('anonymous', p.oid, 'EXECUTE')) || ' of ' || count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname in ('app_jobs', 'metaschema_private')"
     expect:
-      stdout: "(?s)^metaschema_public REFUSED\\nmetaschema_modules_public REFUSED\\nnotes_public EXPOSED$"
+      stdout: "(?s)^metaschema_public REFUSED\\nmetaschema_modules_public REFUSED\\nmetaschema_private REFUSED\\napp_jobs REFUSED\\nnotes_public EXPOSED\\nJOB_FUNCS_EXECUTABLE 0 of [1-9]\\d*$"
 
   - id: postgis-present
     description: The bundled PostgreSQL runs the postgres-plus image, with PostGIS and pgvector installed by the base modules.

@@ -9,6 +9,14 @@ lock so concurrent replicas take turns:
   4. the user's pgpm modules (skipped when the module config is unchanged);
 then it drops the superuser credentials from the environment and execs the server.
 Env: PG* (the login), DEPLOY_PGUSER/DEPLOY_PGPASSWORD (the superuser), CONSTRUCTIVE_*.
+
+Time budget. Every step that can wait is bounded, and the bounds run one after another:
+  database gate 90 + deploy lock 240 + platform install 240 + platform deploy 120
+  + git fetch 120 + git checkout 60 + module deploys 240 (all packages together) = 1110 s.
+Each psql connection gives up after PGCONNECT_TIMEOUT (10 s). The readiness probe kills a replica
+that never became ready after initialDelaySeconds + 30 x periodSeconds = 10 + 30 x 45 = 1360 s
+(failureThreshold does not count), so every timeout here fires first, with 250 s to spare for the
+short SQL steps. Change a bound here and re-check that sum against workload.yaml.
 */}}
 {{- define "constructive.script.boot" -}}
 set -euo pipefail
@@ -18,16 +26,20 @@ fatal() { echo "constructive-boot: FATAL: $*" >&2; exit 1; }
 
 [ -n "${DEPLOY_PGUSER:-}" ] && [ -n "${PGUSER:-}" ] || fatal "database or login credentials are missing"
 [ "$DEPLOY_PGUSER" != "$PGUSER" ] || fatal "server login must differ from the database superuser (server.loginSecretName username = postgres.config.credentialsSecretName username)"
+case "$PGUSER" in
+  anonymous|authenticated|administrator|pg_*)
+    fatal "server login username '$PGUSER' is reserved (anonymous, authenticated, administrator and pg_* are not allowed)" ;;
+esac
 export LOGIN_USER="$PGUSER" LOGIN_PASSWORD="$PGPASSWORD"
 export PGOPTIONS='-c client_min_messages=warning'
+export PGCONNECT_TIMEOUT=10
 
-for i in $(seq 1 60); do
-  if PGUSER="$DEPLOY_PGUSER" PGPASSWORD="$DEPLOY_PGPASSWORD" psql -XAtqc 'select 1' >/dev/null 2>&1; then
-    log "database reachable"; break
-  fi
-  [ "$i" -lt 60 ] || fatal "database ${PGHOST}:${PGPORT} not reachable after 180 s"
+deadline=$((SECONDS + 90))
+until PGUSER="$DEPLOY_PGUSER" PGPASSWORD="$DEPLOY_PGPASSWORD" psql -XAtqc 'select 1' >/dev/null 2>&1; do
+  [ "$SECONDS" -lt "$deadline" ] || fatal "database ${PGHOST}:${PGPORT} not reachable after 90 s"
   sleep 3
 done
+log "database reachable"
 
 cat > /tmp/constructive-deploy.sh <<'CONSTRUCTIVE_DEPLOY_EOF'
 #!/bin/bash
@@ -40,7 +52,14 @@ log "deploy lock acquired"
 
 # (a) Roles, attribute for attribute what `pgpm admin-users bootstrap` creates, and the server's
 # login (`pgpm admin-users add`), re-applied every boot so a password rotation takes effect.
-q -v login="$LOGIN_USER" -v pw="$LOGIN_PASSWORD" <<'SQL'
+# The password reaches psql through the environment (\getenv), never its command line, and this
+# session never logs a statement, so a failed ALTER ROLE cannot write the password to the log.
+q <<'SQL'
+\getenv login LOGIN_USER
+\getenv pw LOGIN_PASSWORD
+SET log_statement = 'none';
+SET log_min_error_statement = panic;
+SET log_min_duration_statement = -1;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anonymous') THEN CREATE ROLE anonymous; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
@@ -72,9 +91,9 @@ if [ "$(state platform)" != "$PLATFORM_HASH" ]; then
   log "platform: deploying $PLATFORM_PKG@$PLATFORM_VERSION"
   rm -rf /tmp/constructive-platform && mkdir -p /tmp/constructive-platform
   printf '{"packages":["packages/*"],"dependencies":{"%s":"%s"}}' "$PLATFORM_PKG" "$PLATFORM_VERSION" > /tmp/constructive-platform/pgpm.json
-  (cd /tmp/constructive-platform && timeout 300 $PGPM install -W </dev/null >/tmp/constructive-platform-install.log 2>&1) \
+  (cd /tmp/constructive-platform && timeout 240 $PGPM install -W </dev/null >/tmp/constructive-platform-install.log 2>&1) \
     || { tail -n 40 /tmp/constructive-platform-install.log; log "platform: install failed"; exit 1; }
-  (cd /tmp/constructive-platform && $PGPM deploy --yes --recursive --package pgpm-function-resolution </dev/null >/tmp/constructive-platform-deploy.log 2>&1) \
+  (cd /tmp/constructive-platform && timeout 120 $PGPM deploy --yes --recursive --package pgpm-function-resolution </dev/null >/tmp/constructive-platform-deploy.log 2>&1) \
     || { tail -n 40 /tmp/constructive-platform-deploy.log; log "platform: deploy failed"; exit 1; }
   q -c "insert into metaschema_public.database (id, platform) values ('$CONSTRUCTIVE_DATABASE_ID', true) on conflict (id) do update set platform = true"
   record platform "$PLATFORM_HASH"
@@ -85,7 +104,9 @@ fi
 
 # (c) Every boot: CONNECT (@pgpm/defaults revokes it from PUBLIC), EXECUTE on the function_resolution
 # entry points the server's middleware calls (granted to the login only: after SET ROLE a request
-# no longer holds them), and no request role may read the platform metadata schemas.
+# no longer holds them), and no request role may use the platform metadata schemas or the job
+# queue. The schemas user modules build on (ctx, jwt_*, public, errors, inflection*, and
+# function_resolution, which the server needs) stay open.
 q -v login="$LOGIN_USER" <<'SQL'
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'login') \gexec
 SELECT format('GRANT EXECUTE ON FUNCTION %s TO %I', p.oid::regprocedure, :'login')
@@ -94,7 +115,10 @@ SELECT format('GRANT EXECUTE ON FUNCTION %s TO %I', p.oid::regprocedure, :'login
    AND p.proname IN ('api_by_name', 'api_hostnames', 'cors_origins', 'database_features', 'database_standing',
                      'pubkey_entry', 'request_protection', 'service_principal', 'tenant_auth_entry', 'webauthn_entry') \gexec
 SELECT format('REVOKE ALL ON SCHEMA %I FROM anonymous, authenticated', nspname)
-  FROM pg_namespace WHERE nspname IN ('metaschema_public', 'metaschema_modules_public') \gexec
+  FROM pg_namespace
+ WHERE nspname IN ('metaschema_public', 'metaschema_modules_public', 'metaschema_private', 'app_jobs') \gexec
+SELECT format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, anonymous, authenticated', nspname)
+  FROM pg_namespace WHERE nspname IN ('metaschema_private', 'app_jobs') \gexec
 SQL
 log "login grants ok"
 
@@ -108,16 +132,19 @@ if [ "$CONSTRUCTIVE_MODULES_SOURCE" != none ]; then
       git -C "$root" init -q
       git -C "$root" remote add origin "$CONSTRUCTIVE_MODULES_GIT_URL"
       if [ "$CONSTRUCTIVE_MODULES_PATH" != . ]; then git -C "$root" sparse-checkout set "$CONSTRUCTIVE_MODULES_PATH"; fi
-      timeout 300 git -C "$root" fetch -q --depth 1 --filter=blob:none origin "$CONSTRUCTIVE_MODULES_GIT_REF"
-      timeout 300 git -C "$root" -c advice.detachedHead=false checkout -q FETCH_HEAD
+      timeout 120 git -C "$root" fetch -q --depth 1 --filter=blob:none origin "$CONSTRUCTIVE_MODULES_GIT_REF"
+      timeout 60 git -C "$root" -c advice.detachedHead=false checkout -q FETCH_HEAD
       ws="$root/$CONSTRUCTIVE_MODULES_PATH"
     else
       ws="$CONSTRUCTIVE_MODULES_PATH"
     fi
     [ -d "$ws" ] || { log "modules: workspace $ws does not exist"; exit 1; }
+    modules_deadline=$((SECONDS + 240)) # one bound for all packages together
     for pkg in $CONSTRUCTIVE_MODULES_PACKAGES; do
+      left=$((modules_deadline - SECONDS))
+      [ "$left" -gt 0 ] || { log "modules: deploys did not finish within 240 s"; exit 1; }
       log "modules: deploying $pkg"
-      (cd "$ws" && $PGPM deploy --yes --recursive --package "$pkg" </dev/null >/tmp/constructive-modules-deploy.log 2>&1) \
+      (cd "$ws" && timeout "$left" $PGPM deploy --yes --recursive --package "$pkg" </dev/null >/tmp/constructive-modules-deploy.log 2>&1) \
         || { tail -n 40 /tmp/constructive-modules-deploy.log; log "modules: deploy of $pkg failed"; exit 1; }
     done
     record modules "$CONSTRUCTIVE_MODULES_HASH"
@@ -130,11 +157,24 @@ CONSTRUCTIVE_DEPLOY_EOF
 
 rm -f /tmp/constructive-deploy.rc
 log "waiting for the deploy lock"
-PGUSER="$DEPLOY_PGUSER" PGPASSWORD="$DEPLOY_PGPASSWORD" psql -X -v ON_ERROR_STOP=1 -q <<'CONSTRUCTIVE_LOCK_EOF'
-SELECT pg_advisory_lock(hashtext('constructive-deploy')) \gset
+# A session-level advisory lock, tried for at most 240 s: a replica that cannot get it (another one
+# is still deploying) stops and retries on its restart, where the finished deploy is skipped.
+if ! PGUSER="$DEPLOY_PGUSER" PGPASSWORD="$DEPLOY_PGPASSWORD" psql -X -v ON_ERROR_STOP=1 -q <<'CONSTRUCTIVE_LOCK_EOF'; then
+DO $$
+DECLARE deadline timestamptz := clock_timestamp() + interval '240 seconds';
+BEGIN
+  WHILE NOT pg_try_advisory_lock(hashtext('constructive-deploy')) LOOP
+    IF clock_timestamp() > deadline THEN
+      RAISE EXCEPTION 'constructive-boot: deploy lock not acquired within 240 s';
+    END IF;
+    PERFORM pg_sleep(2);
+  END LOOP;
+END $$;
 \! bash /tmp/constructive-deploy.sh; echo $? > /tmp/constructive-deploy.rc
 SELECT pg_advisory_unlock(hashtext('constructive-deploy')) \gset
 CONSTRUCTIVE_LOCK_EOF
+  fatal "deploy lock not acquired within 240 s (another replica is still deploying; this one retries on restart) or the database session failed"
+fi
 rc=$(cat /tmp/constructive-deploy.rc 2>/dev/null || echo 99)
 [ "$rc" = 0 ] || fatal "deploy failed (rc=$rc); the error is in the lines above"
 log "deploy lock released"

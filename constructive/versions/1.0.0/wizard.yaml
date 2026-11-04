@@ -196,10 +196,10 @@ steps:
         mirrors: constructive.validateModules
         paths: [modules.packages]
         message: Use pgpm package names (letters, digits, `.`, `_`, `@`, `/`, `-`), not starting with `-` or `.`.
-      - rule: self.modules.source != 'git' || self.modules.git.url.matches('^https://[^\\s]+$')
+      - rule: self.modules.source != 'git' || self.modules.git.url.matches('^https://[^\\s$@/]+(/[^\\s$]*)?$')
         mirrors: constructive.validateModules
         paths: [modules.git.url]
-        message: Enter the https:// URL of a public git repository.
+        message: Enter the https:// URL of a public git repository, without credentials (`user@`) or `$`.
       - rule: self.modules.source != 'git' || self.modules.git.ref.matches('^[A-Za-z0-9][A-Za-z0-9._/-]*$')
         mirrors: constructive.validateModules
         paths: [modules.git.ref]

@@ -41,7 +41,7 @@ values:
     git:
       url: https://github.com/controlplane-com/templates.git
       # A commit of this repo that contains constructive/tests/fixtures/notes-rls.
-      ref: FIXTURE-COMMIT-SHA-SET-AFTER-PUSH
+      ref: 755c912ebcfd7e31006d0bb493720ffcab37a8ac
     path: constructive/tests/fixtures/notes-rls
     packages: [notes-rls]
 

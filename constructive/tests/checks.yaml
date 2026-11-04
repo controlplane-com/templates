@@ -1,0 +1,163 @@
+# Feature checks for the constructive template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, login_user, database_id).
+#
+# The checks run in the GraphQL server's container, which has bash, curl and psql (PGHOST/PGDATABASE are
+# set there). The baseline deploys the notes-rls fixture (constructive/tests/fixtures/notes-rls): table
+# notes_public.notes with RLS policies keyed on jwt.claims.user_id, which the server sets from X-Actor-Id.
+# The runner reads any brace-wrapped word as a placeholder, so the scripts use $VAR, never the braced form,
+# and every GraphQL selection keeps a space after its opening brace.
+checks:
+  - id: graphql-over-service-dns
+    description: A GraphQL request to the server's fully qualified internal name is answered by the server (not just a TCP accept).
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        curl -sS -m 10 http://{release}-constructive.{gvc}.cpln.local:3000/graphql \
+          -H 'content-type: application/json' -H 'X-Schemata: public' -H 'X-Database-Id: {database_id}' \
+          --data '{"query":"query { __typename }"}'
+    expect:
+      stdout: '"__typename":"Query"'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: login-least-privilege
+    description: >-
+      The server connects as the login from the login secret, which is neither superuser nor allowed to bypass
+      row-level security, and the server process no longer holds the superuser credentials.
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        export PGUSER='{pg_user}' PGPASSWORD='{pg_password}'
+        attrs=$(psql -XAtq -c "select rolsuper::text || '|' || rolbypassrls::text from pg_roles where rolname = '{login_user}'")
+        conns=$(psql -XAtq -c "select count(*) from pg_stat_activity where usename = '{login_user}'")
+        echo "ATTRS $attrs"
+        [ "$conns" -ge 1 ] && echo "SERVER_CONNECTED_AS_LOGIN" || echo "NO_LOGIN_CONNECTIONS"
+        pid=""
+        for d in /proc/[0-9]*; do
+          case "$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)" in "node /app/graphql/server/dist/run.js"*) pid=$(basename "$d"); break ;; esac
+        done
+        if [ -n "$pid" ] && tr '\0' '\n' < /proc/$pid/environ | grep -q '^PGUSER={login_user}$'; then
+          tr '\0' '\n' < /proc/$pid/environ | grep -q '^DEPLOY_PG' && echo "SUPERUSER_ENV_PRESENT" || echo "SUPERUSER_ENV_SCRUBBED"
+        else
+          echo "SERVER_PROCESS_NOT_FOUND"
+        fi
+    expect:
+      stdout: "(?s)^ATTRS false\\|false\\nSERVER_CONNECTED_AS_LOGIN\\nSUPERUSER_ENV_SCRUBBED$"
+
+  - id: module-deployed
+    description: The fixture package from the git source is deployed and recorded by pgpm.
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        export PGUSER='{pg_user}' PGPASSWORD='{pg_password}'
+        psql -XAtq -c "select to_regclass('notes_public.notes')"
+        psql -XAtq -c "select 'CHANGES ' || count(*) from pgpm_migrate.changes where package = 'notes-rls'"
+    expect:
+      stdout: "(?s)^notes_public\\.notes\\nCHANGES [1-9]"
+
+  - id: rls-alice-only
+    description: >-
+      The headline flow: with X-Actor-Id alice, GraphQL returns alice's note and never bob's, though both rows
+      exist (the superuser count is the control). After an upgrade, alice's row from {installed_version} is
+      still returned.
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaa11c; B=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbb0b0
+        PGUSER='{pg_user}' PGPASSWORD='{pg_password}' psql -XAtq -v ON_ERROR_STOP=1 \
+          -c "insert into notes_public.notes (owner_id, title) select '$A', 'alice-{version}' where not exists (select 1 from notes_public.notes where title = 'alice-{version}')" \
+          -c "insert into notes_public.notes (owner_id, title) select '$B', 'bob-{version}' where not exists (select 1 from notes_public.notes where title = 'bob-{version}')" \
+          -c "select 'BOTH_ROWS ' || count(*) from notes_public.notes where title in ('alice-{version}', 'bob-{version}')"
+        out=$(curl -sS -m 10 http://127.0.0.1:3000/graphql -H 'content-type: application/json' \
+          -H 'X-Schemata: notes_public' -H 'X-Database-Id: {database_id}' -H "X-Actor-Id: $A" \
+          --data '{"query":"query { notes { nodes { ownerId title } } }"}')
+        echo "$out"
+        case "$out" in *'"title":"alice-{installed_version}"'*) echo "ALICE_ROW_FROM_INSTALLED_VERSION" ;; esac
+    expect:
+      stdout: "(?s)^BOTH_ROWS 2$.*^ALICE_ROW_FROM_INSTALLED_VERSION$"
+      notStdout: "bob-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: rls-insert-refused
+    description: >-
+      Alice cannot create a note owned by bob (row-level security refuses it and no row is added), while
+      creating her own note succeeds (the must-succeed control).
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaa11c; B=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbb0b0
+        M="e2e-$(date +%s%N)"
+        count() { PGUSER='{pg_user}' PGPASSWORD='{pg_password}' psql -XAtq -c "select count(*) from notes_public.notes where title like '$M%'"; }
+        gql() {
+          curl -sS -m 10 http://127.0.0.1:3000/graphql -H 'content-type: application/json' \
+            -H 'X-Schemata: notes_public' -H 'X-Database-Id: {database_id}' -H "X-Actor-Id: $A" \
+            --data "{\"query\":\"mutation { createNote(input: { note: { ownerId: \\\"$1\\\", title: \\\"$2\\\" } }) { note { title } } }\"}"
+        }
+        gql "$B" "$M-forged" | grep -q 'violates row-level security policy' && echo "FORGED_REFUSED" || echo "FORGED_NOT_REFUSED"
+        echo "AFTER_FORGED $(count)"
+        gql "$A" "$M-own" | grep -q "\"title\":\"$M-own\"" && echo "OWN_CREATED" || echo "OWN_NOT_CREATED"
+        echo "AFTER_OWN $(count)"
+    expect:
+      stdout: "(?s)^FORGED_REFUSED\\nAFTER_FORGED 0\\nOWN_CREATED\\nAFTER_OWN 1$"
+
+  - id: rls-anonymous-refused
+    description: Without X-Actor-Id the request runs as anonymous, which has no grant on the fixture table.
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        curl -sS -m 10 http://127.0.0.1:3000/graphql -H 'content-type: application/json' \
+          -H 'X-Schemata: notes_public' -H 'X-Database-Id: {database_id}' \
+          --data '{"query":"query { notes { nodes { title } } }"}'
+    expect:
+      stdout: "permission denied for table notes"
+      notStdout: "alice-|bob-"
+
+  - id: platform-metadata-refused
+    description: >-
+      The platform metadata schemas cannot be exposed through X-Schemata, even as an authenticated user, while
+      the fixture schema can (the control in the same request flow).
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaa11c
+        for s in metaschema_public metaschema_modules_public notes_public; do
+          out=$(curl -sS -m 10 http://127.0.0.1:3000/graphql -H 'content-type: application/json' \
+            -H "X-Schemata: $s" -H 'X-Database-Id: {database_id}' -H "X-Actor-Id: $A" \
+            --data '{"query":"query { __typename }"}')
+          case "$out" in
+            *'"__typename":"Query"'*) echo "$s EXPOSED" ;;
+            *'No valid schemas found'*) echo "$s REFUSED" ;;
+            *) echo "$s OTHER" ;;
+          esac
+        done
+    expect:
+      stdout: "(?s)^metaschema_public REFUSED\\nmetaschema_modules_public REFUSED\\nnotes_public EXPOSED$"
+
+  - id: postgis-present
+    description: The bundled PostgreSQL runs the postgres-plus image, with PostGIS and pgvector installed by the base modules.
+    exec:
+      workload: "{release}-constructive"
+      container: constructive
+      shell: bash
+      script: |
+        PGUSER='{pg_user}' PGPASSWORD='{pg_password}' psql -XAtq \
+          -c "select extname || ' ' || extversion from pg_extension where extname in ('postgis', 'vector') order by extname"
+    expect:
+      stdout: "(?s)^postgis 3\\.6\\.\\d+\\nvector 0\\.8\\.\\d+$"

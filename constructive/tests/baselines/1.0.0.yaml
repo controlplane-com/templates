@@ -1,0 +1,48 @@
+# constructive 1.0.0 — production shape: two GraphQL server replicas (both boot at once, so the deploy
+# lock is exercised on every run) on the bundled single PostgreSQL with the postgres-plus image, one
+# location, at the chart's default sizes. Modules come from the notes-rls fixture in this repo
+# (constructive/tests/fixtures/notes-rls), pinned to a commit. The database credentials and the
+# server login are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  loginpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: constructive
+      password: "{gen.pgpw}"
+      database: constructive
+  login:
+    type: dictionary
+    entries:
+      username: constructive_app
+      password: "{gen.loginpw}"
+
+vars:
+  pg_user: constructive
+  pg_password: "{gen.pgpw}"
+  login_user: constructive_app
+  database_id: 00000000-0000-4000-8000-000000000c01
+
+values:
+  replicas: 2
+  server:
+    loginSecretName: "{secrets.login.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  modules:
+    source: git
+    git:
+      url: https://github.com/controlplane-com/templates.git
+      # A commit of this repo that contains constructive/tests/fixtures/notes-rls.
+      ref: FIXTURE-COMMIT-SHA-SET-AFTER-PUSH
+    path: constructive/tests/fixtures/notes-rls
+    packages: [notes-rls]
+
+# New template: no earlier version to upgrade from.

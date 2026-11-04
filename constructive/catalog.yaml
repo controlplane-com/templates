@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Constructive
+category: database
+topology: single
+
+summary: >-
+  Constructive pgpm, a package manager for versioned Postgres modules (schemas, row-level security
+  policies, functions), with a GraphQL API generated from the database, on a bundled PostgreSQL 18
+  with PostGIS and pgvector. Modules deploy at boot from a pinned git ref or your own image; the API
+  is internal-only, callers name the acting user in a header, and Postgres row-level security decides
+  what each user sees. Pick it to give internal services or AI agents a typed GraphQL API over
+  schema-as-code Postgres with per-user isolation enforced in the database.
+
+keywords:
+  - graphql
+  - graphql api
+  - postgraphile
+  - pgpm
+  - postgres modules
+  - postgresql
+  - row-level security
+  - rls
+  - generated api
+  - database migrations
+  - schema as code
+  - pgvector
+  - postgis
+  - ai agents
+
+useCases:
+  - Give internal services and AI agents a GraphQL API over Postgres
+  - Deploy versioned database modules from a git tag
+  - Enforce per-user data isolation in the database with row-level security
+  - Keep vector embeddings and geospatial data next to relational data
+
+alternativeTo:
+  - Hasura
+  - PostGraphile
+  - AWS AppSync
+
+pickInsteadIf:
+  - need: a public app backend with end-user auth, REST, realtime and file storage
+    template: supabase
+  - need: just a PostgreSQL database
+    template: postgres
+  - need: a small app backend in one binary with built-in auth and a REST API
+    template: pocketbase
+
+related:
+  - template: pgvector
+    relation: alternative
+    note: PostgreSQL with pgvector only, for vector search without a generated API
+  - template: supabase
+    relation: alternative
+    note: Postgres app backend with auth, REST, realtime and storage
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: PostgreSQL superuser and database the bundled PostgreSQL initializes with; the boot deploys modules with it. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: server.loginSecretName
+    required: true
+    description: The GraphQL server's non-superuser, RLS-bound login, created at every boot; its username must differ from the database username. Missing, the deployment waits with no logs.
+  - kind: other
+    valuesPath: [modules.git.url, modules.git.ref]
+    required: false
+    when: modules.source is git
+    description: A public git repository holding a pgpm workspace with its dependencies committed, pinned to a tag or commit SHA.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (postgres.backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: postgres.backup.minio.credentialsSecretName
+    required: false
+    when: postgres.backup.enabled with postgres.backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

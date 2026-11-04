@@ -1,0 +1,3 @@
+BEGIN;
+DROP SCHEMA notes_public;
+COMMIT;

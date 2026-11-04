@@ -1,0 +1,79 @@
+image: constructiveio/constructive:08e422d # upstream release build of commit 08e422d (upstream publishes no semver tags)
+
+# GraphQL server replicas. All state lives in PostgreSQL, so replicas are interchangeable;
+# 2 keeps the API up through restarts and upgrades. Allowed: 1-4.
+replicas: 1
+
+resources: # per GraphQL server replica
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
+
+# ─── Server Login ─────────────────────────────────────────────────────────────
+server:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary` secret with
+  # `username` and `password`. The chart creates this NOSUPERUSER, NOBYPASSRLS Postgres login on
+  # every start and the GraphQL server connects as it, so row-level security always applies.
+  # The username must differ from the database superuser. If it is missing the deployment WEDGES silently.
+  loginSecretName: my-constructive-login
+
+# ─── pgpm Modules ─────────────────────────────────────────────────────────────
+modules:
+  source: none # none | git (public repo) | image (workspace baked into your own `image`)
+  git:
+    url: ""  # https URL of a public repo holding a pgpm workspace, e.g. https://git.example.com/acme/db.git
+    ref: ""  # tag or full commit SHA to deploy; change it and `helm upgrade` to deploy a new version
+  path: "."  # workspace directory: relative to the repo root (git) or absolute inside the image (image)
+  packages: [] # pgpm packages to deploy, in order, e.g. [my-app]
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+internalAccess: # which workloads can call the GraphQL API (there is no public access: callers assert X-Actor-Id)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: PostgreSQL with PostGIS and pgvector ───────────────────────────
+# Deploys the postgres template with Constructive's postgres-plus image (Postgres 18 +
+# PostGIS + pgvector), which Constructive's modules require.
+postgres:
+  image: constructiveio/postgres-plus@sha256:3708b89b001fbc7ca0f5fb5c7818135a6f1c1d4aae0d63cb7ca38aa0fe85a28e # tag 57d7be6: Postgres 18, PostGIS 3.6.4, pgvector 0.8.2
+  config:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary` secret with
+    # `username`, `password` and `database`. PostgreSQL initializes its superuser and database from
+    # it once; Constructive deploys modules with it. If it is missing the deployment WEDGES silently.
+    credentialsSecretName: my-constructive-db
+  resources:
+    minCpu: 250m
+    minMemory: 256Mi
+    maxCpu: 1000m
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # pass-through to the postgres template's backup feature
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *" # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # Options: aws, gcp, or minio
+    aws:
+      bucket: my-constructive-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-constructive-backup-cloudaccount
+      policyName: my-constructive-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-constructive-backup-bucket
+      cloudAccountName: my-constructive-backup-cloudaccount
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-constructive-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio.
+      credentialsSecretName: my-constructive-minio-credentials
+      prefix: postgres/backups

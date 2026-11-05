@@ -83,6 +83,7 @@ HOST PORT POSTGRES_HOST POSTGRES_PORT POSTGRES_USER POSTGRES_PASSWORD POSTGRES_D
 {{- include "aegra.validateRedisMode" . -}}
 {{- include "aegra.validateRedisPassword" . -}}
 {{- include "aegra.validateRedisSecret" . -}}
+{{- include "aegra.validateRedisPublic" . -}}
 {{- end }}
 
 {{- define "aegra.validateDatabase" -}}
@@ -194,6 +195,16 @@ templates/validate/redis/auth.yaml so its message wins over the subchart's.
 {{- end -}}
 {{- end }}
 
+
+{{/*
+Public access moves Redis to per-replica ports (6380+) behind a domain; Aegra's REDIS_URL
+points at :6379 inside the GVC. Runs from templates/validate/redis/auth.yaml too.
+*/}}
+{{- define "aegra.validateRedisPublic" -}}
+{{- if dig "publicAccess" "enabled" false .Values.redis.redis -}}
+{{- fail "aegra: redis.redis.publicAccess.enabled must stay false — Aegra connects to the bundled Redis on port 6379 inside the GVC, and public access moves Redis to other ports behind a domain, so Aegra could not connect." -}}
+{{- end -}}
+{{- end }}
 
 {{/* Labeling */}}
 

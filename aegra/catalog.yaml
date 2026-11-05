@@ -95,3 +95,32 @@ prerequisites:
     required: false
     when: redis.redis.auth.fromSecret.enabled
     description: URL-safe password the bundled Redis requires and Aegra connects with.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

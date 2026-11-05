@@ -6,3 +6,4 @@ setting, are the ones users see.
 */ -}}
 {{- include "aegra.validateRedisMode" . }}
 {{- include "aegra.validateRedisPassword" . }}
+{{- include "aegra.validateRedisPublic" . }}

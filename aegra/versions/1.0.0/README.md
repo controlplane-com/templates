@@ -25,6 +25,8 @@ Secret names are org-wide, so give each release its own secret.
 
 **If a secret the release names does not exist at install time, the deployment waits silently**: `cpln logs` returns nothing. The only signal is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-aegra --gvc GVC_NAME -o yaml`. Create the secret and it recovers on its own within about 10 minutes, or right away with `cpln workload force-redeployment RELEASE_NAME-aegra --gvc GVC_NAME`.
 
+**Backups (optional)**: a bucket and a Control Plane cloud account (on AWS also a bucket-scoped IAM policy), set up as in the [postgres](https://docs.controlplane.com/template-catalog/templates/postgres) or [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available) template; MinIO needs a dictionary secret with `accessKey` and `secretKey`.
+
 **Optional secrets**, each a dictionary created the same way: agent secrets (any keys your agent reads, such as `OPENAI_API_KEY`), Langfuse keys (`publicKey`, `secretKey`), and a Redis password (`password`, URL-safe: letters, digits, `-`, `_`, `.`).
 
 ## Bring your own agent
@@ -97,7 +99,7 @@ langfuse:
 ### Database
 
 ```yaml
-postgres:                       # every knob of the postgres template, incl. backup.*
+postgres:                       # every knob of the postgres template
   enabled: true
   image: pgvector/pgvector:0.8.7-pg18
   config:
@@ -109,8 +111,31 @@ postgres:                       # every knob of the postgres template, incl. bac
     maxMemory: 1Gi
   volumeset:
     capacity: 10                # GiB (minimum 10)
+  backup:                       # scheduled backups to object storage (postgres template)
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"       # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-aegra-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-aegra-backup-cloudaccount
+      policyName: my-aegra-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-aegra-backup-bucket
+      cloudAccountName: my-aegra-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint
+      endpoint: http://my-minio-workload:9000
+      bucket: my-aegra-backup-bucket
+      credentialsSecretName: my-aegra-minio-credentials   # dictionary: accessKey, secretKey
+      prefix: postgres/backups
 
-postgresHA:                     # every knob of the postgres-highly-available template, incl. backup.*
+postgresHA:                     # every knob of the postgres-highly-available template
   enabled: false                # enable exactly one of postgres / postgresHA
   image: controlplanecorporation/patroni-postgres:0.8
   config:
@@ -123,6 +148,17 @@ postgresHA:                     # every knob of the postgres-highly-available te
     maxMemory: 2Gi
   volumeset:
     capacity: 10                # GiB per replica (minimum 10)
+  backup:                       # provider, aws, gcp, minio: same keys and defaults as postgres.backup
+    enabled: false
+    mode: logical               # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"     # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600    # every 6 hours
 ```
 
 ### Redis
@@ -158,6 +194,7 @@ Point the LangGraph SDK (`langgraph_sdk.get_client(url=...)`) or Agent Chat UI a
 ## Important Notes
 
 - Aegra has no authentication unless your image configures an auth handler in `aegra.json`. Keep `publicAccess` off without one: anyone with the URL could run your agents and read every thread.
+- Langfuse in another GVC: set that Langfuse release's `internalAccess` to `same-org`, or Aegra cannot reach it.
 - Rotating a secret does not restart Aegra; run `cpln workload force-redeployment RELEASE_NAME-aegra --gvc GVC_NAME` afterwards.
 - Aegra does not drain runs on shutdown: a run on a replica that stops is picked up again by a live replica once its lease expires, and retried.
 - The first `helm upgrade` after an install can restart the bundled database and Redis, which briefly interrupts the API.

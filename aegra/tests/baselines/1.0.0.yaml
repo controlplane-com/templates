@@ -27,6 +27,7 @@ secrets:
       E2E_PROBE: "{gen.probe}"
 
 vars:
+  aegra_version: "0.11.0"          # the Aegra version the image reports on /info; bump with the image tag
   redis_password: "{gen.redispw}"
   probe: "{gen.probe}"
 

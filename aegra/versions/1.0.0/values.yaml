@@ -43,16 +43,15 @@ langfuse:
   baseUrl: http://my-langfuse-langfuse-web.my-gvc.cpln.local:3000   # or https://cloud.langfuse.com
 
 # ─── Database: single PostgreSQL with pgvector (default) ─────────────────────
-# Every knob of the `postgres` template is available under this key, including scheduled
-# backups (postgres.backup.*; see the postgres template README).
+# Every knob of the `postgres` template is available under this key.
 # Enable exactly one of postgres / postgresHA.
 postgres:
   enabled: true
   image: pgvector/pgvector:0.8.7-pg18
   config:
     # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not exist the
-    # deployment WEDGES silently. A `dictionary` secret with exactly three URL-safe keys:
-    # username, password, database. See README Prerequisites for the command.
+    # deployment WEDGES silently. A `dictionary` secret with exactly three keys: username and
+    # database (letters, digits, _) and password (any characters). See README Prerequisites.
     credentialsSecretName: my-aegra-db-credentials
   resources:
     minCpu: 250m
@@ -61,10 +60,35 @@ postgres:
     maxMemory: 1Gi
   volumeset:
     capacity: 10                # GiB (minimum 10)
+  backup: # pass-through to the postgres template's backup feature (Postgres 17+)
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"       # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-aegra-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-aegra-backup-cloudaccount
+      policyName: my-aegra-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-aegra-backup-bucket
+      cloudAccountName: my-aegra-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-aegra-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres template docs).
+      credentialsSecretName: my-aegra-minio-credentials
+      prefix: postgres/backups
 
 # ─── Database: highly available PostgreSQL ───────────────────────────────────
 # 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint; every knob of the
-# `postgres-highly-available` template (incl. backup.*) is available under this key.
+# `postgres-highly-available` template is available under this key.
 postgresHA:
   enabled: false
   image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
@@ -79,6 +103,35 @@ postgresHA:
     maxMemory: 2Gi
   volumeset:
     capacity: 10                # GiB per replica (minimum 10)
+  backup: # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical               # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"     # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600    # every 6 hours
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-aegra-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-aegra-backup-cloudaccount
+      policyName: my-aegra-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-aegra-backup-bucket
+      cloudAccountName: my-aegra-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-aegra-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres-highly-available docs).
+      credentialsSecretName: my-aegra-minio-credentials
+      prefix: postgres/backups
 
 # ─── Redis (job queue and run event streams) ─────────────────────────────────
 # One Redis node: Aegra connects to a single Redis URL and cannot use Sentinel. Runs are

@@ -71,6 +71,8 @@ imports:
       # Redis authentication is chosen in the Redis step; a password in values is refused (aegra.validateRedisPassword).
       - redisAuth
       - redis.auth.fromSecret
+      # Aegra reaches Redis on :6379 inside the GVC; public access moves it to other ports (aegra.validateRedisPublic).
+      - redis.publicAccess
 
 steps:
   - id: agent
@@ -484,6 +486,12 @@ steps:
         message: >-
           redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove
           it and turn on Require a Redis password with a secret instead.
+      - rule: "!has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+        mirrors: aegra.validateRedisPublic
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          Redis public access is not supported: Aegra connects to Redis on port 6379 inside the GVC, and public
+          access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
 
   - id: tracing
     title: Tracing
@@ -555,3 +563,5 @@ yamlOnly:
     reason: Aegra connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
   - path: redis.redis.auth.password.enabled
     reason: The chart refuses a plaintext Redis password (it would land in the release); use Require a Redis password with a secret.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (aegra.validateRedisPublic); Aegra connects to Redis on port 6379 inside the GVC.

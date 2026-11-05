@@ -268,6 +268,20 @@ def apply(manifest):
         os.unlink(f.name)
 
 
+def generate_pkcs12(passphrase):
+    """A throwaway self-signed certificate as the base64 text of a PKCS#12 file (openssl's default
+    `pkcs12 -export` encryption), for templates that sign with a user-supplied .p12."""
+    with tempfile.TemporaryDirectory() as d:
+        key, crt, p12 = (os.path.join(d, n) for n in ("key.pem", "crt.pem", "cert.p12"))
+        run = lambda *args: subprocess.run(["openssl", *args], check=True, capture_output=True,
+                                           env={**os.environ, "E2E_P12_PASS": passphrase})
+        run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+            "-days", "30", "-subj", "/CN=templates-ci")
+        run("pkcs12", "-export", "-out", p12, "-inkey", key, "-in", crt, "-passout", "env:E2E_P12_PASS")
+        with open(p12, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+
+
 def generate(kind):
     if kind == "kraft-cluster-id":  # a KRaft cluster id is a base64url UUID without padding
         return base64.urlsafe_b64encode(pysecrets.token_bytes(16)).decode().rstrip("=")
@@ -281,7 +295,12 @@ def prepare(t, base, ctx, version):
     them (its policies only reach resources tagged with a templates-ci-* GVC)."""
     for key, kind in (base.get("generated") or {}).items():
         if f"gen.{key}" not in ctx:
-            ctx[f"gen.{key}"] = generate(kind)
+            if kind == "pkcs12":  # {gen.KEY} = base64 .p12, {gen.KEY.passphrase} = its password
+                ctx[f"gen.{key}.passphrase"] = generate("hex")
+                mask(ctx[f"gen.{key}.passphrase"])
+                ctx[f"gen.{key}"] = generate_pkcs12(ctx[f"gen.{key}.passphrase"])
+            else:
+                ctx[f"gen.{key}"] = generate(kind)
             mask(ctx[f"gen.{key}"])
     for key, spec in (base.get("secrets") or {}).items():
         if f"secrets.{key}.name" in ctx:  # an upgrade keeps the secrets the install created

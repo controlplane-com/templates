@@ -1,0 +1,312 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Constructive
+
+# The bundled PostgreSQL is one stateful replica with no location handling: on a multi-location GVC
+# every location would get its own separate database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: PostgreSQL (PostGIS + pgvector)
+    after: network
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # The GraphQL server holds LISTEN sessions that a transaction pooler breaks (yamlOnly below).
+      - pgbouncer
+      # Asked on the first step, next to the server login secret (both are prerequisites).
+      - config.credentialsSecretName
+    override:
+      image:
+        label: PostgreSQL image
+        help: >-
+          Keep `constructiveio/postgres-plus` or another image that carries PostGIS; Constructive's base
+          modules require it.
+      internalAccess.type:
+        description: >-
+          The GraphQL server connects to its database like any other workload: keep Same GVC, or add the
+          Constructive workload under Allowed workloads.
+
+steps:
+  - id: server
+    title: Constructive server
+    description: The two prerequisite secrets, then the GraphQL server image, its compute and replica count.
+    sections:
+      - title: Prerequisite secrets
+        docs: "#server-login"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes its
+              superuser and database from it, and the Constructive boot deploys modules with it.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, so do not edit
+              this secret after install: the boot authenticates with it and a changed value stops the server.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-constructive-db'"
+          - path: server.loginSecretName
+            type: ref
+            label: Server login secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username` and `password`. The username must differ from the
+              database credentials' username.
+            help: >-
+              Every boot creates or updates this login without superuser or row-level security bypass, and the
+              GraphQL server connects as it. To rotate the password, edit the secret and force a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-constructive-login'"
+        rules:
+          - rule: has(self.postgres.config.credentialsSecretName) && self.postgres.config.credentialsSecretName != ''
+            mirrors: constructive.validateDatabase
+            paths: [postgres.config.credentialsSecretName]
+            message: The database credentials secret is required.
+          - rule: oldSelf == null || self.postgres.config.credentialsSecretName == oldSelf.postgres.config.credentialsSecretName
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            message: PostgreSQL keeps the credentials it was initialized with; pointing at another secret stops the server from starting.
+          - rule: has(self.server.loginSecretName) && self.server.loginSecretName != ''
+            mirrors: constructive.validateLogin
+            paths: [server.loginSecretName]
+            message: The server login secret is required.
+          - rule: self.server.loginSecretName != self.postgres.config.credentialsSecretName
+            mirrors: constructive.validateLogin
+            paths: [server.loginSecretName, postgres.config.credentialsSecretName]
+            message: Use a different secret from the database credentials; the server login must be a separate, non-superuser account.
+      - title: Server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Constructive image
+            required: true
+            help: >-
+              Upstream tags each release build with a commit SHA. To deploy modules baked into an image, build
+              yours `FROM constructiveio/constructive:08e422d` and set it here.
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 4
+            suggestions: [1, 2]
+            description: >-
+              All state lives in PostgreSQL, so replicas are interchangeable. 2 keeps the API up through restarts
+              and upgrades.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per GraphQL server replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.replicas >= 1 && self.replicas <= 4
+            mirrors: constructive.validateReplicas
+            paths: [replicas]
+            message: Use between 1 and 4 replicas; each replica holds its own database connection pool.
+
+  - id: modules
+    title: pgpm modules
+    description: Where your pgpm workspace comes from and which packages every boot deploys.
+    docs: "#deploying-modules"
+    sections:
+      - fields:
+          - path: modules.source
+            type: enum
+            label: Module source
+            widget: cards
+            required: true
+            options:
+              - value: none
+                label: None
+                description: Deploy only Constructive's base modules; add your own later.
+              - value: git
+                label: Public git repository
+                description: A pgpm workspace in a public repository, pinned to a tag or commit SHA.
+              - value: image
+                label: Your image
+                description: A pgpm workspace copied into your own image built from the Constructive image.
+      - id: git
+        title: Git repository
+        when: self.modules.source == 'git'
+        fields:
+          - path: modules.git.url
+            type: string
+            label: Repository URL
+            required: true
+            placeholder: https://git.example.com/acme/db.git
+            description: The https URL of a public repository.
+          - path: modules.git.ref
+            type: string
+            label: Tag or commit SHA
+            required: true
+            placeholder: v1.0.0
+            description: >-
+              A restart with the same settings skips the deploy, so use a tag or a full commit SHA, and change it
+              to deploy a new version.
+      - id: image
+        title: Workspace in your image
+        when: self.modules.source == 'image'
+        fields:
+          - type: note
+            severity: info
+            text: >-
+              Set the Constructive image in the first step to your image built `FROM constructiveio/constructive:08e422d`
+              with the workspace copied in.
+      - id: workspace
+        title: Workspace
+        when: self.modules.source != 'none'
+        fields:
+          - path: modules.path
+            type: string
+            label: Workspace path
+            required: true
+            description: >-
+              The directory holding `pgpm.json`: relative to the repository root for git, absolute inside the image
+              for an image.
+          - path: modules.packages
+            type: list
+            label: Packages
+            widget: tags
+            description: >-
+              pgpm package names, deployed in this order. The workspace must include everything they require.
+            item:
+              type: string
+    rules:
+      - rule: self.modules.source in ['none', 'git', 'image']
+        mirrors: constructive.validateModules
+        paths: [modules.source]
+        message: Choose None, Public git repository or Your image.
+      - rule: self.modules.packages.all(p, p.matches('^[A-Za-z0-9][A-Za-z0-9._@/-]*$'))
+        mirrors: constructive.validateModules
+        paths: [modules.packages]
+        message: Use pgpm package names (letters, digits, `.`, `_`, `@`, `/`, `-`), not starting with `-` or `.`.
+      - rule: self.modules.source != 'git' || self.modules.git.url.matches('^https://[^\\s$@/]+(/[^\\s$]*)?$')
+        mirrors: constructive.validateModules
+        paths: [modules.git.url]
+        message: Enter the https:// URL of a public git repository, without credentials (`user@`) or `$`.
+      - rule: self.modules.source != 'git' || self.modules.git.ref.matches('^[A-Za-z0-9][A-Za-z0-9._/-]*$')
+        mirrors: constructive.validateModules
+        paths: [modules.git.ref]
+        message: Enter a tag or a full commit SHA.
+      - rule: >-
+          self.modules.source != 'git' ||
+          (!self.modules.path.startsWith('/') && !self.modules.path.startsWith('-') && !self.modules.path.contains('..'))
+        mirrors: constructive.validateModules
+        paths: [modules.path]
+        message: Use a path relative to the repository root, such as `.` or `db/workspace`, without `..`.
+      - rule: self.modules.source != 'image' || self.modules.path.startsWith('/')
+        mirrors: constructive.validateModules
+        paths: [modules.path]
+        message: Use the absolute path of the workspace inside your image, such as `/modules`.
+      - rule: self.modules.source == 'none' || size(self.modules.packages) > 0
+        mirrors: constructive.validateModules
+        paths: [modules.packages]
+        message: List at least one pgpm package to deploy.
+      - rule: self.modules.source != 'none' || size(self.modules.packages) == 0
+        mirrors: constructive.validateModules
+        paths: [modules.source, modules.packages]
+        message: Packages are listed but the module source is None; choose a source or clear the packages.
+
+  - id: network
+    title: Access
+    description: Which workloads inside Control Plane can call the GraphQL API.
+    docs: "#connecting"
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              There is no public access. Callers name the acting user in the `X-Actor-Id` header and the schemas in
+              `X-Schemata`, and both are trusted as sent, so allow only workloads you trust.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no other workload inside Control Plane can connect.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: "!has(self.postgres.pgbouncer) || !has(self.postgres.pgbouncer.enabled) || dyn(self.postgres)['pgbouncer']['enabled'] != true"
+    mirrors: constructive.validateDatabase
+    paths: [postgres.config.credentialsSecretName]
+    message: postgres.pgbouncer.enabled must stay false; the GraphQL server holds LISTEN sessions that a transaction pooler breaks.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks the GraphQL server, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-constructive') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-constructive, or the GraphQL server cannot reach its database.'"
+    message: Add the Constructive workload to the list, or the GraphQL server cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: The GraphQL server holds LISTEN sessions that a transaction pooler breaks, so the chart refuses PgBouncer.

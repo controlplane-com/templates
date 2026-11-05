@@ -1,0 +1,120 @@
+{{- include "constructive.validate" . }}
+kind: workload
+name: {{ include "constructive.name" . }}
+description: Constructive GraphQL server
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "constructive.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "constructive.identity.name" . }}
+  containers:
+    - name: constructive
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{- include "constructive.inlineScript" (include "constructive.script.boot" .) | nindent 10 }}
+      env:
+        - name: NODE_ENV
+          value: production
+        # PORT equals the workload's first port, so the platform's injected PORT agrees.
+        - name: PORT
+          value: "3000"
+        - name: SERVER_HOST
+          value: 0.0.0.0
+        - name: SERVER_TRUST_PROXY
+          value: "true"
+        # Private surface: X-Schemata / X-Database-Id / X-Actor-Id headers, no routing plane.
+        - name: API_IS_PUBLIC
+          value: "false"
+        - name: GRAPHQL_DEBUG_SAMPLER_ENABLED
+          value: "false"
+        - name: PGPM_SKIP_UPDATE_CHECK
+          value: "1"
+        - name: PGHOST
+          value: {{ include "constructive.db.host" . }}
+        - name: PGPORT
+          value: "5432"
+        - name: PGDATABASE
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.database'
+        # The RLS-bound login the server connects as.
+        - name: PGUSER
+          value: 'cpln://secret/{{ .Values.server.loginSecretName }}.username'
+        - name: PGPASSWORD
+          value: 'cpln://secret/{{ .Values.server.loginSecretName }}.password'
+        # The superuser, used by the boot steps only; the start script unsets it before the server starts.
+        - name: DEPLOY_PGUSER
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.username'
+        - name: DEPLOY_PGPASSWORD
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.password'
+        - name: CONSTRUCTIVE_DATABASE_ID
+          value: {{ include "constructive.databaseId" . }}
+        - name: CONSTRUCTIVE_MODULES_SOURCE
+          value: {{ .Values.modules.source | quote }}
+        - name: CONSTRUCTIVE_MODULES_GIT_URL
+          value: {{ .Values.modules.git.url | quote }}
+        - name: CONSTRUCTIVE_MODULES_GIT_REF
+          value: {{ .Values.modules.git.ref | quote }}
+        - name: CONSTRUCTIVE_MODULES_PATH
+          value: {{ .Values.modules.path | quote }}
+        - name: CONSTRUCTIVE_MODULES_PACKAGES
+          value: {{ join " " .Values.modules.packages | quote }}
+        - name: CONSTRUCTIVE_MODULES_HASH
+          value: {{ include "constructive.modules.hash" . | quote }}
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        exec:
+          command: {{- include "constructive.probe.ready" . | nindent 12 }}
+        initialDelaySeconds: 10
+        # 20 s: a never-ready replica is killed after 10 + 30 x 20 = 610 s, which must cover the
+        # boot's worst case (480 s of bounded steps, see constructive.script.boot).
+        periodSeconds: 20
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 10
+      livenessProbe:
+        exec:
+          command: {{- include "constructive.probe.live" . | nindent 12 }}
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 10
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      # No public access: callers assert the acting user with X-Actor-Id.
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      # Outbound for the pgpm module fetch (npm registry) and the git module source.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

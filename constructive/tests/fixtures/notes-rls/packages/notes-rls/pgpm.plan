@@ -1,0 +1,6 @@
+%syntax-version=1.0.0
+%project=notes-rls
+%uri=notes-rls
+
+schemas/notes_public/schema 2026-11-04T00:00:00Z spike <spike@example.com> # notes schema
+schemas/notes_public/tables/notes/table [schemas/notes_public/schema] 2026-11-04T00:00:00Z spike <spike@example.com> # notes table with RLS

@@ -154,7 +154,7 @@ postgres:
 | Who | Endpoint | Notes |
 |---|---|---|
 | Workloads allowed by `internalAccess` | `http://RELEASE_NAME-constructive.GVC_NAME.cpln.local:3000/graphql` | POST GraphQL with the headers below. |
-| You, in a browser | `cpln port-forward RELEASE_NAME-constructive 3000:3000 --gvc GVC_NAME`, then `http://localhost:3000/graphiql` | GraphiQL; add the same headers in its headers pane. |
+| You, from your machine | `cpln port-forward RELEASE_NAME-constructive 3000:3000 --gvc GVC_NAME`, then POST to `http://localhost:3000/graphql` | Use `curl` or a GraphQL client that sets request headers; a plain browser tab cannot send them, so `/graphiql` returns 404. |
 | PostgreSQL (superuser) | `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432` | The database credentials secret. |
 
 Every request sends these headers:
@@ -177,7 +177,7 @@ curl -s http://RELEASE_NAME-constructive.GVC_NAME.cpln.local:3000/graphql \
 ## Important Notes
 
 - `X-Actor-Id` is trusted as sent, and `X-Schemata` can name any schema the server login can read. Allow only workloads you trust in `internalAccess`; there is no public endpoint for this reason.
-- The server login is re-created on every start. To rotate its password, edit the login secret, then run `cpln workload force-redeployment RELEASE_NAME-constructive --gvc GVC_NAME`.
+- The server login is re-created on every start. To rotate its password, change `password` with `cpln secret edit LOGIN_SECRET_NAME`, then run `cpln workload force-redeployment RELEASE_NAME-constructive --gvc GVC_NAME`.
 - Do not edit the database credentials secret after install: PostgreSQL keeps the original credentials, and the server's boot authenticates with the secret, so a changed value stops the server from starting.
 - Keep `postgres.image` on an image with PostGIS: Constructive's base modules require it, and a backup restores only into such a server.
 - Jobs that modules enqueue are not processed: this template runs no job worker.

@@ -40,6 +40,7 @@
 - **Not in v1:** public API and end-user login tokens, file uploads, the job worker (queued jobs are not processed), AI embeddings, functions runtime.
 - **Single-location GVC only.** More locations would give each its own separate database.
 
-## Needs live verification
-- Cold npm fetch time on cpln vs. probe and resource sizing; GitHub fetch of a SHA; postgres-plus on a volumeset; 2 replicas booting at once; `/graphiql` via port-forward; image source path; missing-secret wedge message; rotation; drift.
-- E2E baseline `modules.git.ref` is a placeholder until the fixture commit is on GitHub.
+## Verified live (2026-11-04, test-gvc in aws-us-west-2)
+- RLS through GraphQL, platform schemas revoked, 2-replica boot + `replica stop` availability, every `internalAccess` value, `modules.source` git/image/none incl. ref-change upgrade and bad-ref crash-loop (old replicas keep serving), login rotation, reserved username, missing-secret wedge (needs `force-redeployment`), DB down at boot (FATAL at 120 s, self-recovers), uninstall clean.
+- Not proven: the 610 s readiness kill, `same-org` from another GVC, a user-built image with its own workspace, GraphiQL in a browser (it needs the request headers; not offered).
+- Bundled `postgres` workload drifts on 5 fields (autoscaling.maxConcurrency/scaleToZeroDelay/target, timeoutSeconds, rolloutOptions.minReadySeconds) — the postgres chart's, not this chart's.

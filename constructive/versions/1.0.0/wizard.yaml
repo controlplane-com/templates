@@ -13,12 +13,9 @@ imports:
   - template: postgres
     version: 3.4.1
     title: PostgreSQL (PostGIS + pgvector)
-    after: modules
+    after: network
     steps:
       - { id: server, title: Database server }
-      - id: credentials
-        title: Database credentials
-        description: The prerequisite secret with the PostgreSQL superuser, its password and the database name.
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
@@ -27,19 +24,14 @@ imports:
     exclude:
       # The GraphQL server holds LISTEN sessions that a transaction pooler breaks (yamlOnly below).
       - pgbouncer
+      # Asked on the first step, next to the server login secret (both are prerequisites).
+      - config.credentialsSecretName
     override:
       image:
         label: PostgreSQL image
         help: >-
           Keep `constructiveio/postgres-plus` or another image that carries PostGIS; Constructive's base
           modules require it.
-      config.credentialsSecretName:
-        description: >-
-          A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes its
-          superuser and database from it, and the Constructive boot deploys modules with it.
-        help: >-
-          PostgreSQL reads these values only when its data directory is first initialized. The username must
-          differ from the server login's username.
       internalAccess.type:
         description: >-
           The GraphQL server connects to its database like any other workload: keep Same GVC, or add the
@@ -48,8 +40,73 @@ imports:
 steps:
   - id: server
     title: Constructive server
-    description: The GraphQL server image, its compute and replica count, and the prerequisite login secret.
+    description: The two prerequisite secrets, then the GraphQL server image, its compute and replica count.
     sections:
+      - title: Prerequisite secrets
+        docs: "#server-login"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. PostgreSQL initializes its
+              superuser and database from it, and the Constructive boot deploys modules with it.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, so do not edit
+              this secret after install: the boot authenticates with it and a changed value stops the server.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-constructive-db'"
+          - path: server.loginSecretName
+            type: ref
+            label: Server login secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username` and `password`. The username must differ from the
+              database credentials' username.
+            help: >-
+              Every boot creates or updates this login without superuser or row-level security bypass, and the
+              GraphQL server connects as it. To rotate the password, edit the secret and force a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-constructive-login'"
+        rules:
+          - rule: has(self.postgres.config.credentialsSecretName) && self.postgres.config.credentialsSecretName != ''
+            mirrors: constructive.validateDatabase
+            paths: [postgres.config.credentialsSecretName]
+            message: The database credentials secret is required.
+          - rule: oldSelf == null || self.postgres.config.credentialsSecretName == oldSelf.postgres.config.credentialsSecretName
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            message: PostgreSQL keeps the credentials it was initialized with; pointing at another secret stops the server from starting.
+          - rule: has(self.server.loginSecretName) && self.server.loginSecretName != ''
+            mirrors: constructive.validateLogin
+            paths: [server.loginSecretName]
+            message: The server login secret is required.
+          - rule: self.server.loginSecretName != self.postgres.config.credentialsSecretName
+            mirrors: constructive.validateLogin
+            paths: [server.loginSecretName, postgres.config.credentialsSecretName]
+            message: Use a different secret from the database credentials; the server login must be a separate, non-superuser account.
       - title: Server
         fields:
           - path: image
@@ -82,43 +139,6 @@ steps:
             mirrors: constructive.validateReplicas
             paths: [replicas]
             message: Use between 1 and 4 replicas; each replica holds its own database connection pool.
-      - title: Server login
-        docs: "#server-login"
-        fields:
-          - type: note
-            severity: warning
-            text: >-
-              The login secret must exist **before** you install. If it is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
-          - path: server.loginSecretName
-            type: ref
-            label: Server login secret
-            required: true
-            description: >-
-              A dictionary secret with the keys `username` and `password`. The username must differ from the
-              database credentials' username.
-            help: >-
-              Every boot creates or updates this login without superuser or row-level security bypass, and the
-              GraphQL server connects as it. To rotate the password, edit the secret and force a redeployment.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password]
-              create:
-                secretType: dictionary
-                suggestName: "context.releaseName + '-constructive-login'"
-        rules:
-          - rule: has(self.server.loginSecretName) && self.server.loginSecretName != ''
-            mirrors: constructive.validateLogin
-            paths: [server.loginSecretName]
-            message: The server login secret is required.
-          - rule: self.server.loginSecretName != self.postgres.config.credentialsSecretName
-            mirrors: constructive.validateLogin
-            paths: [server.loginSecretName]
-            message: Use a different secret from the database credentials; the server login must be a separate, non-superuser account.
 
   - id: modules
     title: pgpm modules
@@ -220,7 +240,7 @@ steps:
         message: List at least one pgpm package to deploy.
       - rule: self.modules.source != 'none' || size(self.modules.packages) == 0
         mirrors: constructive.validateModules
-        paths: [modules.packages]
+        paths: [modules.source, modules.packages]
         message: Packages are listed but the module source is None; choose a source or clear the packages.
 
   - id: network
@@ -273,10 +293,6 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
-  - rule: has(self.postgres.config.credentialsSecretName) && self.postgres.config.credentialsSecretName != ''
-    mirrors: constructive.validateDatabase
-    paths: [postgres.config.credentialsSecretName]
-    message: The database credentials secret is required.
   - rule: "!has(self.postgres.pgbouncer) || !has(self.postgres.pgbouncer.enabled) || dyn(self.postgres)['pgbouncer']['enabled'] != true"
     mirrors: constructive.validateDatabase
     paths: [postgres.config.credentialsSecretName]

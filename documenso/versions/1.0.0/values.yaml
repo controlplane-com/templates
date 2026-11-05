@@ -21,8 +21,8 @@ location: aws-us-east-1
 documenso:
   # UI + REST API + background-job runner in one image on :3000. Runs
   # `prisma migrate deploy` on every boot. Published tags carry the leading
-  # `v` — there is no bare `2.17.0` tag. Pin a release; never `latest`.
-  image: documenso/documenso:v2.17.0
+  # `v` — there is no bare `2.21.1` tag. Pin a release; never `latest`.
+  image: documenso/documenso:v2.21.1
   # Stateless tier: every replica shares PostgreSQL. 1 is the tested default;
   # 2+ keeps the UI serving through a rolling restart.
   replicas: 1
@@ -107,7 +107,7 @@ smtp:
     secretName: ""
 
 # ─── Telemetry ────────────────────────────────────────────────────────────────
-# The published v2.17.0 image ships live PostHog credentials baked in, so
+# The published image ships live PostHog credentials baked in, so
 # upstream's default is ON: a startup event plus an hourly heartbeat carrying
 # app version, installation ID and node ID. Off here — turn it on deliberately.
 telemetry:

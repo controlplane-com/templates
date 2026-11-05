@@ -30,8 +30,8 @@ spec:
       memory: {{ .Values.documenso.resources.maxMemory | quote }}
       env:
         # ── Runtime mode ──
-        # The published v2.17.0 image sets NO NODE_ENV (verified with
-        # `docker inspect documenso/documenso:v2.17.0`), and four behaviours key
+        # The published v2.21.1 image sets NO NODE_ENV (verified with
+        # `docker buildx imagetools inspect documenso/documenso:v2.21.1`), and four behaviours key
         # off it. Without this the session cookie loses its `__Secure-` prefix
         # on an HTTPS endpoint (packages/lib/constants/auth.ts: useSecureCookies
         # = NODE_ENV === 'production' && url starts https), the language cookie
@@ -44,7 +44,7 @@ spec:
         # it as a bind address then listens on the pod IP only and never on
         # loopback, which breaks `cpln port-forward` with `502 Unable to connect
         # to upstream workload` (measured on langfuse). The image's own
-        # docker/start.sh forces `HOSTNAME=0.0.0.0` at v2.17.0, so this is a
+        # docker/start.sh forces `HOSTNAME=0.0.0.0` at v2.21.1, so this is a
         # second layer that survives an entrypoint change — and loopback is also
         # the operator's only route in when publicAccess is turned off.
         - name: HOSTNAME
@@ -109,11 +109,9 @@ spec:
         - name: NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY
           value: cpln://secret/{{ .Values.secrets.name }}.encryptionSecondaryKey
         # ── Signing certificate ──
-        # NEXT_PRIVATE_SIGNING_TRANSPORT is declared rather than left to its
-        # default because cert-status.ts short-circuits to
-        # `{isAvailable: true}` for ANY value that is not exactly `local` —
-        # including unset. Leaving it out makes /api/certificate-status report
-        # a certificate that is not there.
+        # Declared explicitly (v2.21.1 defaults an unset transport to `local`
+        # too). With `local`, /api/certificate-status opens the .p12 with the
+        # passphrase and checks its validity period (cert-status.ts).
         - name: NEXT_PRIVATE_SIGNING_TRANSPORT
           value: local
         # packages/signing/transports/local.ts does Buffer.from(contents,
@@ -212,8 +210,9 @@ spec:
         # Deliberately NOT /api/health: that endpoint returns 500 when Postgres
         # is unreachable, so using it here would restart a perfectly healthy app
         # every time the database blipped. /api/certificate-status touches no
-        # database and its getCertificateStatus() swallows errors, so it is a
-        # pure "is this process still serving HTTP" signal.
+        # database and its getCertificateStatus() swallows errors (a bad
+        # certificate answers 200 with isAvailable: false), so it is a pure
+        # "is this process still serving HTTP" signal.
         httpGet:
           path: /api/certificate-status
           port: 3000

@@ -182,7 +182,7 @@ The server ships GraphiQL at `/graphiql`, but the page itself needs `X-Database-
 2. Add `X-Database-Id: 00000000-0000-4000-8000-000000000c01` and `X-Schemata: <your schemas>` to every request to `localhost:3000`, with a browser extension that sets request headers or a local proxy that adds them.
 3. Open `http://localhost:3000/graphiql` (or the proxy's address), and set `{"X-Actor-Id": "<user UUID>"}` in its Headers pane to query as that user; leave it empty to query as `anonymous`.
 
-The Docs pane lists the types and mutations generated from your modules.
+The Docs pane lists the types and mutations generated from your modules. If the page stops loading after a while, restart the `cpln port-forward`; browsers can stall a long-lived tunnel.
 
 ## Important Notes
 

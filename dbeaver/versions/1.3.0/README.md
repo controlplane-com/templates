@@ -50,7 +50,13 @@ internalAccess:
   workloads: []               # used with workload-list, e.g. //gvc/GVC_NAME/workload/NAME
 ```
 
-`publicAccess.enabled: false` is the default because this is a database administration console: with it off, the UI is reachable only from inside the GVC. Turn it on only if you accept a login form on the public internet, and give the admin account a strong password first.
+`publicAccess.enabled: false` is the default because this is a database administration console. With it off, reach the UI through a tunnel. First run:
+
+1. Install with `publicAccess.enabled: false`.
+2. Run `cpln port-forward RELEASE_NAME-dbeaver 8978:8978 --gvc GVC_NAME`, open `http://localhost:8978` and sign in with the admin login.
+3. Only if you need it, upgrade the release with `publicAccess.enabled: true` and allow a few minutes for the firewall change.
+
+Turn it on only if you accept a login form on the public internet, and give the admin account a strong password first.
 
 ### Resources and storage
 
@@ -67,21 +73,28 @@ volumeset:
 
 | Path | Address | Notes |
 |---|---|---|
-| Public UI | `https://<canonical-endpoint>` | Only when `publicAccess.enabled: true`. Read it from `status.canonicalEndpoint` in `cpln workload get <release>-dbeaver -o yaml`. |
-| Internal UI / API | `http://<release>-dbeaver.<gvc>.cpln.local:8978` | Subject to `internalAccess.type`. |
+| Public UI | the canonical endpoint | Only when `publicAccess.enabled: true`. Read `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-dbeaver --gvc GVC_NAME -o yaml`. |
+| Internal UI / API | `http://RELEASE_NAME-dbeaver.GVC_NAME.cpln.local:8978` | Subject to `internalAccess.type`. |
 | Admin credentials | `admin.name` (values) + the payload of your `admin.passwordSecretName` secret | The password is never stored in the Helm release. |
 
-Add database connections from the UI after logging in. Point them at in-GVC hosts using internal DNS, e.g. `my-postgres.<gvc>.cpln.local:5432`.
+Add database connections from the UI after logging in. Point them at in-GVC hosts using internal DNS, e.g. `WORKLOAD_NAME.GVC_NAME.cpln.local:5432`.
+
+## Upgrading from 1.2.1 or earlier
+
+- **The inline password is dropped.** `admin.password` no longer exists; create the opaque secret from Prerequisites and set `admin.passwordSecretName`.
+- **The chart's `RELEASE_NAME-dbeaver-admin-config` secret is deleted by the upgrade.** To reuse the current password, read it first with `cpln secret reveal RELEASE_NAME-dbeaver-admin-config -o yaml` (key `admin_password`), and give the new secret a different name.
+- **The login is kept from the original setup.** You still sign in with the old name and password (by default `adminusername` / `Password123`); keep the old `admin.name`, and if the password is still the published default, change it in the UI right after the upgrade.
+- **The console becomes private.** Earlier versions were always public; set `publicAccess.enabled: true` only if you still need the internet-facing address, otherwise use `cpln port-forward`.
 
 ## Important Notes
 
 - **Create the admin-password secret before installing** — the workload wedges waiting on a secret that does not exist.
 - **The admin password is only read at first boot.** Rotating the secret afterwards does nothing; change the password in the CloudBeaver UI, or uninstall (which deletes the volume set) and reinstall to re-bootstrap.
 - **`publicAccess.enabled: true` puts a database console on the internet.** Anyone reaching it needs only the admin password to query every connected database. Prefer leaving it off and reaching the UI from inside the GVC.
-- **Egress is closed.** The workload's outbound firewall is empty, so CloudBeaver can only connect to databases inside its own GVC — external or managed databases (RDS, Cloud SQL) are not reachable without editing the workload's firewall.
+- **Egress is closed.** The workload's outbound firewall is empty and this template has no setting to open it, so CloudBeaver can only connect to databases inside its own GVC — external or managed databases (RDS, Cloud SQL) are not reachable.
 - **CloudBeaver logs the submitted password hash, and that hash is enough to log in.** At its default log level the hash appears in `cpln logs`, and the API accepts it in place of the password — so anyone who can read this workload's logs can authenticate as the admin. This is upstream behaviour, not something the chart sets; treat log access to this workload as equivalent to database access.
-- **Access changes take up to a couple of minutes** to propagate after a `publicAccess` or `internalAccess` change (measured: 107-129 s).
-- **The first `helm upgrade` after an install restarts the workload**, taking the UI down for roughly 30-60 seconds even when nothing about it changed. Later upgrades that change nothing do not.
+- **Access changes take a few minutes** to propagate after a `publicAccess` or `internalAccess` change; re-check before concluding the setting did not apply.
+- **The first `helm upgrade` after an install can restart the workload**, briefly taking the UI down even when nothing about it changed.
 - **Connections and users live on the volume set** and survive redeploys; `cpln helm uninstall` deletes it, taking every saved connection with it. There is no scheduled-backup feature — the only snapshot is the one taken on delete, kept 7 days.
 
 ## Links

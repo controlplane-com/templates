@@ -105,11 +105,11 @@ redis:
 
 | Target | Address | Credentials |
 |---|---|---|
-| Public API + Admin UI | `https://<canonical>.cpln.app` (UI at `/ui`) | `LITELLM_MASTER_KEY` (Bearer token / UI login) |
+| Public API + Admin UI | the canonical endpoint (UI at `/ui`) — read `status.canonicalEndpoint` (below) | `LITELLM_MASTER_KEY` (Bearer token / UI login) |
 | Internal (same GVC) | `http://{release}-litellm.{gvc}.cpln.local:4000` | `LITELLM_MASTER_KEY` |
 | OpenAI-compatible calls | `POST /chat/completions` with `Authorization: Bearer <key>` | master key or a minted virtual key |
 
-The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-litellm -o yaml`).
+The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-litellm --gvc {gvc} -o yaml`).
 
 ## Upgrading from 1.0.0
 
@@ -139,7 +139,7 @@ Enabling it adds one `cron` workload that runs `pg_dumpall` and uploads a gzippe
 bundled database's identity picks up the bucket-scoped policy automatically.
 
 For the bucket, cloud account and IAM policy setup — including the exact policy JSON per
-provider — follow the Storage setup section of the [`postgres` template README](../../../postgres).
+provider — follow the Backup Prerequisites section of the [`postgres` template docs](https://docs.controlplane.com/template-catalog/templates/postgres#backup-prerequisites).
 
 **A zero-length backup object is a failed run, not a backup.** If the dump cannot reach the
 database, the upload still writes a ~20-byte empty gzip under a normal timestamped filename.

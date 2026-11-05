@@ -1,0 +1,123 @@
+kind: workload
+name: {{ include "neo4j.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Neo4j Community graph database
+tags: {{- include "neo4j.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "neo4j.identity.name" . }}
+  containers:
+    - name: neo4j
+      image: {{ .Values.image | quote }}
+      # The official entrypoint still does the work (chown /data, drop to uid 7474,
+      # env → neo4j.conf); the inline wrapper only decides whether to pass NEO4J_AUTH.
+      command: tini
+      args:
+        - "-g"
+        - "--"
+        - "/bin/bash"
+        - "-c"
+        - {{- include "neo4j.inlineScript" (include "neo4j.script.start" .) | nindent 10 }}
+      env:
+        # Not NEO4J_-prefixed: the entrypoint turns every NEO4J_* variable into a
+        # setting, and Neo4j refuses to start on an unknown one.
+        - name: ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.auth.credentialsSecretName }}.password
+        {{- if .Values.neo4j.apoc }}
+        - name: NEO4J_PLUGINS
+          value: '["apoc"]'
+        {{- end }}
+        # No anonymous usage data to Neo4j, from the server or from Neo4j Browser.
+        - name: NEO4J_client_allow__telemetry
+          value: "false"
+        - name: NEO4J_dbms_usage__report_enabled
+          value: "false"
+        - name: NEO4J_server_memory_heap_initial__size
+          value: {{ .Values.neo4j.heapSize | quote }}
+        - name: NEO4J_server_memory_heap_max__size
+          value: {{ .Values.neo4j.heapSize | quote }}
+        - name: NEO4J_server_memory_pagecache_size
+          value: {{ .Values.neo4j.pageCacheSize | quote }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      ports:
+        - number: 7474
+          protocol: http
+        - number: 7687
+          protocol: tcp
+      volumes:
+        - path: /data
+          uri: cpln://volumeset/{{ include "neo4j.volume.name" . }}
+      # Startup window ≈ initialDelaySeconds + 30 × periodSeconds (~615 s), so a long
+      # store recovery is not killed; failureThreshold keeps a hung server in
+      # rotation for only ~60 s.
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 7474
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        timeoutSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 7474
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        timeoutSeconds: 10
+        failureThreshold: 5
+        successThreshold: 1
+  {{- /* The full blocks are declared: the API fills in any field a partial block omits, which shows as drift. */}}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload. 120 s lets Neo4j checkpoint on shutdown.
+    */}}
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 120
+  firewallConfig:
+    {{- /* Every field is declared: the API backfills them, so omitting one drifts. */}}
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      # Outbound stays open for LOAD CSV from URLs and APOC HTTP procedures.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and .Values.internalAccess.workloads (has .Values.internalAccess.type (list "same-gvc" "workload-list")) }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}

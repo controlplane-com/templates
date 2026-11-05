@@ -124,6 +124,9 @@
   normal and not a failure to wait on.
 - **(1.x only) The GVC is created unconditionally and Helm will adopt one that already exists — then
   delete it on uninstall**, taking unrelated workloads with it. Fixed in 2.0.0, which creates none.
+- **In-place 1.1.1 → 2.0.0, keeping the GVC (5434):** README "Upgrading in place from 1.1.1" — `scripts/keep-gvc.py`,
+  `--gvc` = the 1.x GVC, `global.gvc.locations` → `global.locations`. The subchart bumps (postgresML 2.0.0, redisML
+  3.0.0) keep every resource name, secret and Patroni scope. Render-verified only, not live-proven.
 
 ## Measured behaviour (test rounds 1-2, 2026-08-11)
 | Event | Result |

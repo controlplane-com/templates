@@ -64,7 +64,7 @@ storage:
   s3:
     bucket: my-docmost-bucket
     region: us-east-1
-    endpoint: ""              # set for S3-compatible servers (e.g. http://my-minio:9000)
+    endpoint: ""              # set for S3-compatible servers (e.g. http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000)
     forcePathStyle: false     # true for most S3-compatible servers (MinIO)
     cloudAccountName: my-s3-cloud-account   # keyless auth (AWS) — used only when auth.secretName is empty
     policyName: my-docmost-s3-policy        # your pre-created IAM policy (JSON below)
@@ -156,7 +156,7 @@ Only needed for `storage.type: s3` (required for `replicas > 1`); the default lo
 
 ### MinIO / S3-compatible (static keys)
 
-1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME:9000`).
+1. Create the bucket on your server (for the in-catalog `minio` template in the same GVC: `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`).
 2. Set `storage.s3.endpoint` to the S3 API address (with scheme and port) and `storage.s3.forcePathStyle: true`.
 3. Create a static-key dictionary secret with the server's access/secret keys (for the MinIO template: its `admin.username`/`admin.password`) and set `storage.s3.auth.secretName` to its name:
 
@@ -169,12 +169,12 @@ cpln secret create-dictionary --name my-docmost-s3-keys \
 
 | Target | Address | Credentials |
 |---|---|---|
-| Public UI | `https://<canonical>.cpln.app` | first visit creates the admin account + workspace |
+| Public UI | the canonical endpoint — read `status.canonicalEndpoint` (below) | first visit creates the admin account + workspace |
 | Internal (same GVC) | `http://{release}-docmost.{gvc}.cpln.local:3000` | account login |
 | Health | `GET /api/health` (readiness), `GET /api/health/live` | none |
 | PostgreSQL (same GVC) | `{release}-postgres.{gvc}.cpln.local:5432` | the `username` / `password` / `database` keys of the secret named by `postgres.config.credentialsSecretName` |
 
-The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-docmost -o yaml`).
+The canonical `*.cpln.app` hostname appears under `status.canonicalEndpoint` (`cpln workload get {release}-docmost --gvc {gvc} -o yaml`).
 
 ## Upgrading from 1.0.0
 
@@ -216,7 +216,7 @@ Enabling it adds one `cron` workload that runs `pg_dumpall` and uploads a gzippe
 bundled database's identity picks up the bucket-scoped policy automatically.
 
 For the bucket, cloud account and IAM policy setup — including the exact policy JSON per
-provider — follow the Storage setup section of the [`postgres` template README](../../../postgres).
+provider — follow the Storage setup section of the [`postgres` template README](https://github.com/controlplane-com/templates/blob/main/postgres/versions/3.4.1/README.md).
 
 **A zero-length backup object is a failed run, not a backup.** If the dump cannot reach the
 database, the upload still writes a ~20-byte empty gzip under a normal timestamped filename.

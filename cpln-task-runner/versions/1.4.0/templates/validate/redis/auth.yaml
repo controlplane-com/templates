@@ -1,0 +1,7 @@
+{{- /*
+Renders nothing. It lives two directories deep on purpose: Helm renders the
+deepest template paths first, so the parent's validation — which names the
+removed 1.3.0 keys and the replacement secret — runs before the redis subchart's
+own templates and is the message users see.
+*/ -}}
+{{- include "cpln-task-runner.validate" . }}

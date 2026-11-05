@@ -1,0 +1,321 @@
+{{/*
+Startup script, passed to the container inline (sh -c) rather than mounted from a
+secret: it holds no credentials, and a secret the workload must reveal is what
+stalled 2.x -> 3.0.0 upgrades (the new reveal permission was not yet visible to
+the new workload). Rendered through "pgedge.inlineScript", which doubles every $
+because the platform expands $(VAR) and collapses $$ in container args.
+*/}}
+{{- define "pgedge.script.backup" -}}
+#!/usr/bin/env bash
+# pgEdge backup + restore, run by the backup cron. The image supplies only the
+# tools (pg_dump/pg_restore/psql, aws, gsutil); this script is the procedure.
+#
+#   scheduled run / `cron start`            -> backup
+#   `cron start --env PGEDGE_ACTION=restore` -> restore (latest, or RESTORE_FILE)
+#
+# Backup = ONE database (the credentials secret's), pg_dump custom format, no
+# roles, no Spock objects, no large objects. Restore = schema on EVERY node (DDL
+# does not replicate), tables added to a replication set, data loaded ONCE on
+# one node so Spock replicates it, sequences and materialized views on every
+# node, then row counts verified on every node.
+set -Eeuo pipefail
+export HOME=/tmp
+
+STEP="startup"
+log()  { echo "[pgedge-backup] $*"; }
+die()  { echo "[pgedge-backup] FATAL: $*" >&2; exit 1; }
+on_err() {
+  local rc=$?
+  # Report once, from the main shell: a failure inside $(...) or a pipeline is
+  # either handled by its caller or surfaces there.
+  [ "${BASH_SUBSHELL}" -eq 0 ] || exit "${rc}"
+  echo "[pgedge-backup] FATAL: step '${STEP}' failed (exit ${rc})." >&2
+  if [ "${ACTION:-backup}" = "restore" ] && [ "${SCHEMA_TOUCHED:-0}" = "1" ]; then
+    echo "[pgedge-backup] The restore stopped part-way; some nodes already hold restored objects." >&2
+    echo "[pgedge-backup] To retry: on EVERY node (connect to each directly) drop what the restore created -- tables (DROP TABLE ... CASCADE), views, sequences, functions, types and any non-public schemas -- then run the restore again. Do not drop the public schema." >&2
+  fi
+  exit "${rc}"
+}
+trap on_err ERR
+# PID 1 ignores SIGTERM unless trapped; exiting runs the EXIT cleanup.
+trap 'exit 143' TERM
+
+ACTION="${PGEDGE_ACTION:-backup}"
+for v in PG_USER PG_PASSWORD PG_DATABASE BACKUP_PROVIDER BACKUP_BUCKET BACKUP_PREFIX \
+         PGEDGE_LOCATIONS PGEDGE_REPLICAS PGEDGE_WORKLOAD; do
+  [ -n "${!v:-}" ] || die "${v} is empty"
+done
+PREFIX="${BACKUP_PREFIX%/}"
+GVC={{ .Values.global.cpln.gvc | quote }}
+RELEASE={{ .Release.Name | quote }}
+export PGUSER="${PG_USER}" PGPASSWORD="${PG_PASSWORD}" PGPORT=5432 PGCONNECT_TIMEOUT=10
+
+# Every node, location order; NODES[0] is replica-0 of locations[0].
+read -r -a LOCS <<< "${PGEDGE_LOCATIONS}"
+read -r -a REPS <<< "${PGEDGE_REPLICAS}"
+NODES=()
+for i in "${!LOCS[@]}"; do
+  for ((j = 0; j < REPS[i]; j++)); do
+    NODES+=("replica-${j}.${PGEDGE_WORKLOAD}.${LOCS[i]}.${GVC}.cpln.local")
+  done
+done
+
+store_put() {   # stdin -> object $1
+  case "${BACKUP_PROVIDER}" in
+    aws) aws s3 cp --only-show-errors - "s3://${BACKUP_BUCKET}/$1" ;;
+    gcp) gsutil -q cp - "gs://${BACKUP_BUCKET}/$1" ;;
+    *)   die "unsupported BACKUP_PROVIDER ${BACKUP_PROVIDER}" ;;
+  esac
+}
+store_mv() {    # object $1 -> object $2 (server-side)
+  case "${BACKUP_PROVIDER}" in
+    aws) aws s3 mv --only-show-errors "s3://${BACKUP_BUCKET}/$1" "s3://${BACKUP_BUCKET}/$2" ;;
+    gcp) gsutil -q mv "gs://${BACKUP_BUCKET}/$1" "gs://${BACKUP_BUCKET}/$2" ;;
+  esac
+}
+store_rm() {    # best effort
+  case "${BACKUP_PROVIDER}" in
+    aws) aws s3 rm --only-show-errors "s3://${BACKUP_BUCKET}/$1" ;;
+    gcp) gsutil -q rm "gs://${BACKUP_BUCKET}/$1" ;;
+  esac >/dev/null 2>&1 || true
+}
+store_get() {   # object $1 -> file $2
+  case "${BACKUP_PROVIDER}" in
+    aws) aws s3 cp --only-show-errors "s3://${BACKUP_BUCKET}/$1" "$2" ;;
+    gcp) gsutil -q cp "gs://${BACKUP_BUCKET}/$1" "$2" ;;
+  esac
+}
+store_list() {  # object names directly under the prefix; empty prefix = no output, rc 0
+  local out
+  case "${BACKUP_PROVIDER}" in
+    aws)
+      # `aws s3 ls` exits 1 with no output for an empty prefix.
+      if out="$(aws s3 ls "s3://${BACKUP_BUCKET}/${PREFIX}/" 2>&1)"; then
+        printf '%s\n' "${out}" | awk 'NF >= 4 {print $4}'; return 0
+      fi
+      [ -z "${out}" ] && return 0 ;;
+    gcp)
+      if out="$(gsutil ls "gs://${BACKUP_BUCKET}/${PREFIX}/" 2>&1)"; then
+        printf '%s\n' "${out}" | sed 's#.*/##'; return 0
+      fi
+      case "${out}" in *"matched no objects"*) return 0 ;; esac ;;
+  esac
+  printf '%s\n' "${out}" >&2
+  return 1
+}
+alive() { pg_isready -q -t 5 -h "$1" -d "${PG_DATABASE}"; }
+q() { psql -h "$1" -d "${PG_DATABASE}" -v ON_ERROR_STOP=1 -X -qtA -c "$2"; }
+
+# ─── backup ──────────────────────────────────────────────────────────────
+if [ "${ACTION}" = "backup" ]; then
+  KEY="${PREFIX}/pgedge-${RELEASE}-$(date -u +%Y-%m-%dT%H-%M-%SZ).dump"
+  # Upload under a temporary name and rename only after pg_dump succeeded, so
+  # a dump that dies mid-stream never appears as a restorable backup.
+  PART="${KEY}.partial"
+  trap 'store_rm "${PART}"' EXIT
+  # Every node holds a full copy: dump from the first node that accepts a
+  # login, and move on to the next one if a dump fails part-way.
+  # Spock's schema/extension and the chart's auto-replicate trigger are
+  # recreated by every node at boot, so they are left out of the dump. Large
+  # objects are left out because Spock does not replicate them.
+  DONE=""
+  for n in "${NODES[@]}"; do
+    if ! q "${n}" "SELECT 1" >/dev/null 2>&1; then
+      log "node ${n} does not accept a login, trying the next one"
+      continue
+    fi
+    STEP="dump ${n}"
+    log "dumping database '${PG_DATABASE}' from ${n} to ${BACKUP_PROVIDER}://${BACKUP_BUCKET}/${KEY}"
+    if pg_dump -h "${n}" -d "${PG_DATABASE}" -Fc --no-owner --no-privileges --no-large-objects \
+         --exclude-extension=spock --exclude-schema=spock | store_put "${PART}"; then
+      DONE=1; break
+    fi
+    log "dump from ${n} failed, trying the next node"
+    store_rm "${PART}"
+  done
+  [ -n "${DONE}" ] || die "no node produced a complete dump; nothing was published"
+  STEP="publish ${KEY}"
+  store_mv "${PART}" "${KEY}"
+  trap - EXIT
+  log "backup complete: ${KEY}"
+  exit 0
+fi
+
+[ "${ACTION}" = "restore" ] || die "PGEDGE_ACTION must be 'backup' or 'restore' (got '${ACTION}')"
+
+# ─── restore ─────────────────────────────────────────────────────────────
+WORK=/tmp/pgedge-restore
+rm -rf "${WORK}"; mkdir -p "${WORK}"
+FILE="${RESTORE_FILE:-}"
+STEP="choose backup"
+if [ -z "${FILE}" ]; then
+  LISTING="$(store_list)" || die "could not list ${BACKUP_PROVIDER}://${BACKUP_BUCKET}/${PREFIX}/ -- check the bucket, prefix and the cloud account's access"
+  FILE="$(printf '%s\n' "${LISTING}" | grep -E "^pgedge-${RELEASE}-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z\.dump$" | sort | tail -n 1 || true)"
+  [ -n "${FILE}" ] || die "no backups of release '${RELEASE}' (pgedge-${RELEASE}-*.dump) under ${BACKUP_PROVIDER}://${BACKUP_BUCKET}/${PREFIX}/ -- set RESTORE_FILE to restore another release's backup"
+fi
+case "${FILE}" in */*) KEY="${FILE}" ;; *) KEY="${PREFIX}/${FILE}" ;; esac
+log "restoring ${BACKUP_PROVIDER}://${BACKUP_BUCKET}/${KEY} into database '${PG_DATABASE}' on ${#NODES[@]} node(s)"
+STEP="download ${KEY}"
+store_get "${KEY}" "${WORK}/backup.dump" || die "could not download ${KEY}"
+STEP="read archive"
+pg_restore -l "${WORK}/backup.dump" > "${WORK}/toc.all" 2>/dev/null \
+  || die "${KEY} is not a pg_dump custom-format archive written by this chart"
+if [ -z "${RESTORE_FILE:-}" ] && ! grep -q ' TABLE DATA ' "${WORK}/toc.all"; then
+  die "the newest backup (${KEY}) contains no table data -- it was probably taken of an empty database. Set RESTORE_FILE to the backup you want."
+fi
+# Drop Spock's schema and the chart's own helpers if an archive carries them
+# (every node already has them). Materialized view contents are refreshed at
+# the end, once the data is on every node -- not during the schema pass,
+# where the tables are still empty.
+grep -v -E ' (SCHEMA - spock|EVENT TRIGGER - spock_auto_replicate|FUNCTION public spock_auto_add_table\(\))( |$)' \
+  "${WORK}/toc.all" > "${WORK}/toc.base"
+grep -v ' MATERIALIZED VIEW DATA ' "${WORK}/toc.base" > "${WORK}/toc.restore"
+grep ' MATERIALIZED VIEW DATA ' "${WORK}/toc.base" > "${WORK}/toc.mv" || true
+grep -E ' SEQUENCE SET ' "${WORK}/toc.restore" > "${WORK}/toc.seq" || true
+
+# Preflight: every node reachable, and the target database holds no user
+# objects on ANY node -- a restore never merges into or overwrites data.
+STEP="preflight"
+USER_OBJECTS="SELECT
+    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r','p','v','m','S','f')
+        AND n.nspname NOT IN ('pg_catalog','information_schema','spock')
+        AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%')
+  + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname NOT IN ('pg_catalog','information_schema','spock')
+        AND p.proname <> 'spock_auto_add_table'
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e'))
+  + (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE n.nspname NOT IN ('pg_catalog','information_schema','spock')
+        AND n.nspname NOT LIKE 'pg_toast%'
+        AND t.typtype IN ('e','d','r','m','c') AND t.typelem = 0
+        AND (t.typtype <> 'c' OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.deptype = 'e'))
+  + (SELECT count(*) FROM pg_namespace n
+      WHERE n.nspname NOT IN ('public','pg_catalog','information_schema','spock')
+        AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%')"
+for n in "${NODES[@]}"; do
+  alive "${n}" || die "node ${n} is not reachable -- every node must be up for a restore (the schema is applied per node)"
+  cnt="$(q "${n}" "${USER_OBJECTS}")" || die "could not inspect database '${PG_DATABASE}' on ${n}"
+  [ "${cnt}" = "0" ] || die "node ${n} already has ${cnt} object(s) (tables, views, sequences, functions, types or schemas) in '${PG_DATABASE}'. Restore only into an empty database: install a new release, or drop them on EVERY node first."
+done
+log "preflight OK: ${#NODES[@]} node(s) reachable, database empty on all"
+
+# 1. Schema on EVERY node. session_replication_role=replica keeps the chart's
+#    auto-add trigger quiet while tables are created before their primary keys.
+SCHEMA_TOUCHED=1
+for n in "${NODES[@]}"; do
+  STEP="schema on ${n}"
+  log "schema -> ${n}"
+  PGOPTIONS='-c session_replication_role=replica' pg_restore -h "${n}" -d "${PG_DATABASE}" \
+    --section=pre-data --section=post-data -L "${WORK}/toc.restore" \
+    --no-owner --no-privileges --single-transaction --exit-on-error "${WORK}/backup.dump"
+done
+
+# 2. Every restored table into a replication set on every node: tables with a
+#    primary key replicate fully; any without one replicate inserts only.
+REPSET_SQL="DO \$\$ DECLARE t regclass; BEGIN
+  FOR t IN SELECT c.oid::regclass FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relkind IN ('r','p') AND NOT c.relispartition
+             AND n.nspname NOT IN ('pg_catalog','information_schema','spock')
+             AND n.nspname NOT LIKE 'pg_toast%'
+             AND NOT EXISTS (SELECT 1 FROM spock.replication_set_table r WHERE r.set_reloid = c.oid)
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = t AND i.indisprimary) THEN
+      PERFORM spock.repset_add_table('default', t);
+    ELSE
+      PERFORM spock.repset_add_table('default_insert_only', t);
+      RAISE WARNING 'table % has no primary key: only INSERTs replicate', t;
+    END IF;
+  END LOOP; END \$\$;"
+for n in "${NODES[@]}"; do
+  STEP="replication set on ${n}"
+  log "replication set -> ${n}"
+  q "${n}" "${REPSET_SQL}" >/dev/null
+done
+
+# 3. Data ONCE, on the first node, replicated by Spock to the rest. One
+#    transaction per table (not one for the whole restore) keeps what Spock has
+#    to decode -- and spill to disk -- per transaction to one table's worth.
+PRIMARY="${NODES[0]}"
+STEP="data on ${PRIMARY}"
+log "data -> ${PRIMARY} (Spock replicates it to the other nodes)"
+pg_restore -h "${PRIMARY}" -d "${PG_DATABASE}" --data-only -L "${WORK}/toc.restore" \
+  --disable-triggers --no-owner --no-privileges --exit-on-error "${WORK}/backup.dump"
+
+# 4. Sequences are not replicated: set them on every other node.
+if [ -s "${WORK}/toc.seq" ]; then
+  for n in "${NODES[@]:1}"; do
+    STEP="sequences on ${n}"
+    log "sequences -> ${n}"
+    pg_restore -h "${n}" -d "${PG_DATABASE}" --data-only -L "${WORK}/toc.seq" \
+      --single-transaction --exit-on-error "${WORK}/backup.dump"
+  done
+fi
+
+# 5. Verify: every node's row count equals the first node's for every table.
+COUNTS="DO \$\$ DECLARE r record; c bigint; BEGIN
+  FOR r IN SELECT c.oid::regclass AS t FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog','information_schema','spock')
+             AND n.nspname NOT LIKE 'pg_toast%' ORDER BY c.oid::regclass::text
+  LOOP EXECUTE format('SELECT count(*) FROM %s', r.t) INTO c; RAISE NOTICE '%=%', r.t, c; END LOOP; END \$\$;"
+counts() {
+  PGOPTIONS='-c statement_timeout=300s' psql -h "$1" -d "${PG_DATABASE}" -X -qtA -c "${COUNTS}" 2>&1 \
+    | sed -n 's/^NOTICE:  //p'
+}
+STEP="verify"
+WANT="$(counts "${PRIMARY}")"
+log "restored row counts on ${PRIMARY}:"; printf '%s\n' "${WANT}" | sed 's/^/[pgedge-backup]     /'
+VERIFY_MINUTES="${RESTORE_VERIFY_MINUTES:-30}"
+for n in "${NODES[@]:1}"; do
+  ok=""
+  for _ in $(seq 1 $(( VERIFY_MINUTES * 6 ))); do
+    if [ "$(counts "${n}" || true)" = "${WANT}" ]; then ok=1; break; fi
+    sleep 10
+  done
+  [ -n "${ok}" ] || die "node ${n} did not reach the restored row counts within ${VERIFY_MINUTES} minutes -- check replication with SELECT * FROM spock.sub_show_status(); (keep applications from writing during a restore)"
+  log "verified ${n}"
+done
+
+# 6. Sequences come from whichever node was dumped, which may be behind the
+#    rows another node inserted: move every column's sequence up to at least
+#    the column's max, on every node, so the next insert cannot reuse a value.
+SEQ_ALIGN_SQL="DO \$\$ DECLARE r record; m bigint; cur bigint; BEGIN
+    FOR r IN
+      SELECT DISTINCT a.attrelid::regclass AS tbl, a.attname AS col,
+             COALESCE(pg_get_serial_sequence(a.attrelid::regclass::text, a.attname),
+                      substring(pg_get_expr(d.adbin, d.adrelid) from 'nextval\\(''([^'']+)''')) AS seq
+      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+      WHERE c.relkind IN ('r','p') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
+        AND n.nspname NOT IN ('pg_catalog','information_schema','spock')
+        AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%')
+    LOOP
+      CONTINUE WHEN r.seq IS NULL;
+      EXECUTE format('SELECT max(%I)::bigint FROM %s', r.col, r.tbl) INTO m;
+      CONTINUE WHEN m IS NULL;
+      EXECUTE format('SELECT last_value FROM %s', r.seq::regclass) INTO cur;
+      IF m >= cur THEN   -- >=: a never-called sequence reads last_value = 1 with is_called = false
+        PERFORM setval(r.seq::regclass, m);
+        RAISE NOTICE 'sequence % advanced to % (max of %.%)', r.seq, m, r.tbl, r.col;
+      END IF;
+    END LOOP; END \$\$;"
+for n in "${NODES[@]}"; do
+  STEP="sequence alignment on ${n}"
+  psql -h "${n}" -d "${PG_DATABASE}" -v ON_ERROR_STOP=1 -X -q -c "${SEQ_ALIGN_SQL}" 2>&1 \
+    | sed -n -e "s/^NOTICE:  /[pgedge-backup]     ${n%.${GVC}.cpln.local}: /p" -e '/ERROR/p' 
+done
+
+# 7. Materialized views: refresh on every node now that every node has the data.
+if [ -s "${WORK}/toc.mv" ]; then
+  for n in "${NODES[@]}"; do
+    STEP="materialized views on ${n}"
+    log "materialized views -> ${n}"
+    pg_restore -h "${n}" -d "${PG_DATABASE}" -L "${WORK}/toc.mv" \
+      --no-owner --no-privileges --single-transaction --exit-on-error "${WORK}/backup.dump"
+  done
+fi
+rm -rf "${WORK}"
+log "restore complete: ${KEY} -> '${PG_DATABASE}' on all ${#NODES[@]} node(s)"
+{{- end -}}

@@ -49,6 +49,9 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   "upgraded successfully". The chart refuses at render if the old `gvc` key is present, but an upgrade run
   with **no values at all** slips past the guard. Migration is: existing GVC → new release → reload data →
   uninstall the old release **against the GVC you originally installed it into**.
+- **In-place 2.8.0 → 3.0.0, keeping the GVC (5434):** README "Upgrading in place from 2.8.0" — `scripts/keep-gvc.py`,
+  `--gvc` = the 2.x GVC, `locations` in the SAME order (shard numbers, Keeper ids), `internal_access` → `internalAccess`.
+  Render-verified only (same resource names, same macros/Keeper config), not live-proven.
 - **Prerequisite secret missing = silent wedge.** `cpln logs` returns **zero lines** (the container never
   starts). The only honest diagnostic is `status.versions[].message` from
   `cpln workload get-deployments {rel}-clickhouse-server` — note `get-deployments`, not `get`. Self-heals in
@@ -75,8 +78,10 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   upgrade rather than a rolling one. The chart renders no `rolloutOptions`, so no availability claim rests
   on that field.
 - **The credentials secret has no `username`** — ClickHouse authenticates as its built-in `default` user.
-  Credentials apply on **first initialisation only**; rotate inside ClickHouse first, then update the
-  secret, then force a redeployment (a `cpln://` secret rotation does **not** redeploy by itself).
+  To rotate: update the secret's value, `cpln workload force-redeployment` the server workload, then update
+  clients. The startup script regenerates `users.xml` with `<password>${CLICKHOUSE_PASSWORD}</password>` on
+  **every** start, so the new value applies at the redeploy; `ALTER USER` cannot change a user defined in
+  `users.xml` (a `cpln://` secret rotation does **not** redeploy by itself).
 - **An identity's cloud binding is never removed once set** (the API merges on update), so switching
   `provider` on an existing release leaves the old cloud-account binding attached. Switch providers with a
   fresh install.

@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis Cluster
+# Six stateful replicas and no location handling: every GVC location would run its
+# own six-node cluster, each with its own volumes, behind one internal name.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The size of each of the six nodes.
+    sections:
+      - title: Nodes
+        fields:
+          - type: note
+            severity: info
+            text: >-
+              In this version a peer name that briefly fails to resolve while the cluster is first created
+              restarts the node instead of retrying, which can delay a new cluster by several restarts. 1.6.0
+              retries in place.
+          - path: replicas
+            type: integer
+            label: Nodes
+            required: true
+            min: 6
+            max: 6
+            description: >-
+              Three primaries that split the hash slots, each with one replica. 6 is the size this template is
+              built and documented for.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU per node
+            required: true
+            min: 25m
+            suggestions: ["200m", "500m", "1000m", "2000m"]
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory per node
+            required: true
+            min: 64Mi
+            description: The default is a floor; a cache at 250Mi starts evicting soon under real load.
+            suggestions: [250Mi, 512Mi, 1Gi, 1600Mi]
+          - type: note
+            text: >-
+              Every node keeps its data on its own 20 GiB volume, a size this version fixes. Uninstalling the
+              release deletes the volumes, and the data with them.
+        rules:
+          - rule: string(self.cpu).matches('m$')
+            paths: [cpu]
+            message: >-
+              Give the CPU in millicores, such as 500m or 1000m. This version writes it unquoted, so a whole or
+              decimal number of cores reaches the platform as a number and the workload is rejected.
+          - rule: string(self.memory).matches('[A-Za-z]$')
+            paths: [memory]
+            message: >-
+              Give the memory a unit, such as 512Mi or 1Gi. This version writes it unquoted, so a bare number
+              reaches the platform as a number and the workload is rejected.
+          - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+            paths: [memory]
+            message: >-
+              The platform refuses more than 8Mi of memory per millicore of CPU, for example 2Gi needs at least
+              256m. Raise the CPU or lower the memory.
+
+  - id: network
+    title: Network
+    description: Who can connect to the cluster, and on which port.
+    sections:
+      - title: Cluster access
+        fields:
+          - path: firewallConfig.internal.inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              The cluster is never published to the internet by this template. The nodes reach each other
+              through this setting too. Access changes take up to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect, and the nodes cannot reach each other to form the cluster.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: This version always writes an empty workload list, so no workload can connect.
+        rules:
+          - rule: "!(self.firewallConfig.internal.inboundAllowType in ['none', 'workload-list'])"
+            severity: warning
+            paths: [firewallConfig.internal.inboundAllowType]
+            message: >-
+              With this setting no workload can connect, not even the nodes to each other, so the cluster never
+              forms. This version cannot list allowed workloads; choose Same GVC or Same org.
+      - title: Port
+        fields:
+          - path: port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 55535
+            description: The cluster bus stays on 16379 in this version.
+        rules:
+          - rule: "!(self.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [port]
+            message: >-
+              The platform reserves 8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and 41000.
+              Choose another port.
+          - rule: self.port == 6379 || (oldSelf != null && self.port == oldSelf.port)
+            severity: warning
+            paths: [port]
+            message: >-
+              Keep 6379. In this version the health check and the cluster setup always use 6379 and the cluster
+              bus stays on 16379, so any other port leaves every node restarting. 1.6.0 fixes it.
+
+yamlOnly:
+  - path: diskCapacity
+    reason: Not read by this version; every volume is a fixed 20 GiB.
+

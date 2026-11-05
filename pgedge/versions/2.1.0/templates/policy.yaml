@@ -1,0 +1,19 @@
+---
+kind: policy
+name: {{ include "pgedge.policy.name" . }}
+description: pgEdge policy
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "pgedge.secretStartup.name" . }}
+  - //secret/{{ include "pgedge.secretPgcatConfig.name" . }}
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.postgres.credentialsSecretName }}
+  {{- if .Values.backup.enabled }}
+  - //secret/{{ include "pgedge.secretConfig.name" . }}
+  {{- end }}

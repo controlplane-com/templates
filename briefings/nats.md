@@ -8,6 +8,10 @@ clustering, gateways and JetStream are all in the free product, nothing is enter
 into and refuses to render if the 2.x `gvc` key is still present. It is standalone — nothing vendors it,
 and it vendors nothing.
 
+**3.1.0 adds optional authentication** (`auth.credentialsSecretName`, default off). One username/password
+from a user-created dictionary secret guards clients, WebSocket, routes and gateways; the credential never
+reaches the Helm release. Auth off renders byte-identical to 3.0.0 apart from the chart-version tags.
+
 **Common use cases.** Low-latency service-to-service messaging, request/reply between services, and
 durable streams via JetStream where a full Kafka deployment is more than the workload needs.
 
@@ -19,7 +23,7 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
 | `volumeset` `{release}-nats-vs` | `/data/nats` JetStream store, per replica. Only when `jetstream.enabled` |
 | `secret` `{release}-nats-secret` | `start.sh` — generates each server's `nats.conf` at boot |
 | `secret` `{release}-nats-extra-data` | Only when `nats_extra_config` is non-empty |
-| `identity` + `policy` `{release}-nats-policy` | `reveal` on this release's secrets, nothing else |
+| `identity` + `policy` `{release}-nats-policy` | `reveal` on this release's secrets, plus the user's credentials secret when auth is on |
 | `policy` `{release}-nats-gvc-policy` | **New in 3.0.0.** `view` on exactly the one install GVC, for the boot-time location check. Never `target: all` |
 
 - **No `kind: gvc`.** `createsGvc: false`; every resource lands in `.Values.global.cpln.gvc`.
@@ -38,10 +42,11 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
 | `image` | `nats:2.11.6-alpine` | Pinned. **No curl in this image** — the boot GVC check uses busybox wget |
 | `resources` | `100m` / `256Mi` | Small; raise for real throughput |
 | `nats_defaults.*.port` | 4222 / 6222 / 7222 / 8080 | Validated at render against reserved ports and collisions |
-| `allowCIDR` | `0.0.0.0/0` | Public WebSocket exposure. See the security note below |
+| `allowCIDR` | `[]` | Closed by default — no public WebSocket exposure until ranges are added. See the security note below |
 | `jetstream.enabled` | `false` | Off means in-flight only; an unsubscribed message is gone |
 | `volumeset.capacity` | `10` GiB per replica | Only used when JetStream is on |
-| `nats_extra_config` | `""` | Injected verbatim into the generated config |
+| `auth.credentialsSecretName` | `""` | Off. A dictionary secret with `username`, `password`; prerequisite, created by the user |
+| `nats_extra_config` | `""` | Injected verbatim; stored in the release, so never credentials |
 | `internalAccess.type` | `same-gvc` | Also governs how servers reach each other |
 
 ## The three-layer GVC defence (3.0.0)
@@ -52,11 +57,34 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
 3. **Boot-time GVC read** (`$CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`) for the direction the platform
    does not validate at all — a `localOptions` location the GVC lacks is stored and inert.
 
+## How authentication is wired (3.1.0)
+
+- The secret's keys arrive as env vars `NATS_AUTH_USER`/`NATS_AUTH_PASSWORD` (`cpln://secret/...`); `start.sh`
+  writes them into `nats.conf` as **escaped double-quoted strings**, then unsets them. **Not `$VAR` config
+  references**: nats-server re-parses a referenced env value as config — measured on 2.11.6, `123456` and `12k`
+  crash it (nil pointer), a space or `}` fails to parse, and `#` silently truncates the password.
+- The same credential goes in the top-level, `cluster` and `gateway` `authorization` blocks, AND
+  percent-encoded into every route and gateway URL. **Routes do not fall back to the cluster block's
+  credentials** — with bare URLs every route was refused `Authentication Failure` (measured). Without route
+  auth, a rogue server dialling 6222 received published messages (measured with auth off; refused with it on).
+- WebSocket inherits the top-level authorization (no separate block needed; measured).
+- A key MISSING from the secret never reaches the script: the platform refuses the container
+  (`CreateContainerConfigError: couldn't find key password`, only in `status.versions[].message`, no logs).
+- Boot refuses (FATAL) an empty key, a newline, or a bcrypt-looking (`$2…$`) password — servers must
+  present the plain password to each other.
+- Render-time `fail` (`nats.validateAuth`) refuses an `authorization`/`accounts` block in `nats_extra_config`
+  while auth is on, case-insensitively (nats-server
+  reads `AUTHORIZATION {}` as `authorization {}` — measured overriding the chart's credentials). With auth off such a block still works (pre-3.1.0 behaviour) — the wizard only advises.
+- Single user by design for v1: one shared credential, full permissions. Per-user permissions/accounts (or
+  nkeys/JWT) would be the next step and need an accounts design, not a list knob.
+
 ## Troubleshooting traps
 
 - **Never `helm upgrade` a 2.x release onto 3.0.0.** The upgrade drops `kind: gvc` and Helm prunes it,
   destroying the GVC and everything in it — measured at 6 s on a sibling template, while printing
   `upgraded successfully`. The render-time guard blocks the normal path; migrate to a new release instead.
+- **In-place path (2026-10-29, proven live 2.0.0 → 3.1.0):** `scripts/keep-gvc.py` marks the GVC `keep`, then
+  `helm upgrade --gvc <old GVC>` with the translated values updates every resource in place; README "Upgrading in place from 2.0.0".
 - **`internalAccess` governs route and gateway traffic, not just clients.** A `workload-list` naming only
   clients cuts the cluster off from itself: routes never establish, JetStream loses its meta group, and
   every replica still reports `ready: true`. The chart adds its own workload to the list automatically.
@@ -69,16 +97,23 @@ durable streams via JetStream where a full Kafka deployment is more than the wor
   location and an *initialised* one only warns. With JetStream OFF it only ever warns — a stateless server
   is rescheduled routinely, and exiting would take a live, working bus offline the next time a replica
   moved. Check A (running in a location that is not configured at all) always exits.
-- **No authentication is configured, and `allowCIDR` defaults to `0.0.0.0/0`.** With WebSocket enabled
-  that publishes an unauthenticated message bus to the internet. This is inherited from 2.x and was left
-  alone in the conversion; see the open question below.
+- **Auth is off and `allowCIDR` is `[]` by default**, so a default install is closed. Adding ranges without
+  auth publishes an unauthenticated bus — measured handing an anonymous client the cluster name, every server
+  name and their private IPs. The wizard blocks that on install (warning) and advises on upgrade.
+- **Missing credentials secret = silent wedge** (no logs); `get-deployments` → `status.versions[].message`.
+  Turning auth on during an upgrade adds a new reveal grant, so the CLAUDE.md edge-cache stall may apply
+  (wait ~5 min, then `force-redeployment`). Measured once on nats: no stall, rollout done in 4m59s.
+- **Rotating the password needs `cpln workload force-redeployment`**; until then the old one keeps working.
+  **During that rollout the cluster is split**: new-password and old-password servers refuse each other's
+  routes (~40k `Authentication Failure` lines over 2 min, measured) and messages do not cross the split
+  until every server has restarted. A two-user overlap (NATS `users` list) would remove it; not built.
 - **`nats_extra_config` is injected verbatim.** A syntax error there is a container that will not start,
   not a render failure, so it is easy to mistake for an infrastructure problem.
 - **Cross-region gateway traffic is billed.** A single-location install is the default for that reason.
 
-## Open question for the maintainer
+## Resolved: the public-access default
 
-`allowCIDR: 0.0.0.0/0` plus no NATS authentication means a default install publishes an open message bus.
-3.0.0 documents this loudly in `values.yaml` and the README but does **not** change the default, because
-it is pre-existing behaviour rather than part of the GVC conversion. A closed default (`allowCIDR: []`)
-would be a one-line change in the same major version if you want it.
+2.x shipped `allowCIDR: [0.0.0.0/0]` with no NATS authentication, so a default install published an open
+message bus. 3.0.0 ships `allowCIDR: []` (the shipped `values.yaml`); the README and the `values.yaml`
+comment tell users to add ranges only with authentication on — since 3.1.0 via `auth.credentialsSecretName`
+(earlier versions pointed at an `authorization` block in `nats_extra_config`, which put the password in the release).

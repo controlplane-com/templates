@@ -14,7 +14,7 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 - **Temporal Web UI** (optional, default on): workload serving the UI on port 8080, internal-only (the UI has no built-in authentication).
 - **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint Temporal connects through.
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
-- **Database credentials secret** (dictionary): on the single-instance path, built by *this* template from `postgres.credentials.*` and handed to the Postgres store by name. Nothing for you to create. (Not rendered on the HA path — `postgres-highly-available` still makes its own.)
+- **Database credentials secret** (dictionary): built by *this* template from `postgres.credentials.*` in **both** database modes and handed to the active Postgres store by name (`postgresHA.config.credentialsSecretName` in HA mode, `postgres.config.credentialsSecretName` in single-instance mode). Nothing for you to create.
 - **Identity and policy**: a least-privilege policy granting the server identity `reveal` on exactly the database credentials secret.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
 
@@ -22,7 +22,7 @@ This app deploys [Temporal](https://temporal.io/) — an open-source (MIT) durab
 
 - None for a default install.
 - For optional database backups: a bucket and access setup for one of the supported providers (see [Backup storage setup](#backup-storage-setup)).
-- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` (single-instance path) or hands it to `postgres-highly-available` (HA path).
+- The database password is **not** a prerequisite — it is bundled plumbing no human types elsewhere, so this template creates that secret for you from `postgres.credentials.*` in either database mode.
 
 ## Configuration
 
@@ -72,12 +72,17 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 postgresHA:               # default: highly available PostgreSQL
   enabled: true
   config:
-    credentialsSecretName: my-temporal-db-credentials # see Prerequisites — must exist before install
+    credentialsSecretName: my-temporal-db-credentials # name of the secret this template CREATES from postgres.credentials.*; org-wide, unique per release
   replicas: 3
   volumeset:
     capacity: 10          # GiB per replica
   backup:
     enabled: false        # optional — see Backup storage setup
+postgres:
+  credentials:            # HA mode also reads these — this template builds the HA credentials secret from them
+    username: temporal
+    password: change-me-temporal-db-password # change before installing
+    database: temporal    # keep `temporal` in both modes
 ```
 
 ```yaml
@@ -88,8 +93,8 @@ postgres:                 # dev/lightweight: single-instance PostgreSQL
   credentials:            # this template builds the DB credential secret from these
     username: temporal
     password: change-me-temporal-db-password # change before installing
-    database: temporal    # the database the store initializes; Temporal creates its own
-                          # `temporal` and `temporal_visibility` stores at boot
+    database: temporal    # MUST stay `temporal` (render-enforced); auto-setup adds
+                          # `temporal_visibility` alongside it at boot
   config:
     # name of the dictionary secret this template CREATES and Postgres reads;
     # secret names are org-wide, so a second release on this name is refused at install
@@ -107,7 +112,7 @@ postgres:                 # dev/lightweight: single-instance PostgreSQL
 | gRPC frontend (workers/clients) | `{release}-temporal.{gvc}.cpln.local:7233` |
 | Namespace | `default` |
 | Web UI (internal) | `http://{release}-temporal-ui.{gvc}.cpln.local:8080` |
-| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the `{release}-postgres-config` secret |
+| Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials in the secret named by `postgresHA.config.credentialsSecretName` |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials in the secret named by `postgres.config.credentialsSecretName` |
 
 - **Always use the full `.cpln.local` FQDN** in worker/client connection config — short workload names do not resolve.
@@ -143,9 +148,9 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
 1. Create your bucket on the server. Set `backup.minio.bucket`.
-2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME:9000`.
-3. Supply credentials with access to the bucket. The two database paths differ here:
-   - **Single-instance** (`postgres.backup`): create a dictionary secret and name it in `postgres.backup.minio.credentialsSecretName`.
+2. Set `backup.minio.endpoint` to the S3 API address including port. For the `minio` marketplace template in the same GVC, this is `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
+3. Supply credentials with access to the bucket — a dictionary secret you create, on both database paths:
+   - **Single-instance** (`postgres.backup`): name it in `postgres.backup.minio.credentialsSecretName`.
 
      ```bash
      cpln secret create-dictionary --name my-temporal-minio-credentials \
@@ -153,6 +158,21 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
        --entry secretKey=SECRET_KEY
      ```
    - **HA** (`postgresHA.backup`): set `postgresHA.backup.minio.credentialsSecretName` to the same secret created above.
+
+## Upgrading from 1.1.x (HA path)
+
+The HA Postgres moved to `postgres-highly-available` 2.5.0, which no longer takes credentials
+as values. Temporal absorbed that change too — **no new prerequisite** for the database password:
+
+| Removed key | Replacement |
+|---|---|
+| `postgresHA.postgres.username` / `.password` / `.database` (removed in 1.2.0) | `postgres.credentials.username` / `.password` / `.database` — copy your existing values **unchanged**; this template builds the HA credentials secret from them, named by `postgresHA.config.credentialsSecretName` |
+| `postgresHA.backup.minio.accessKey` / `.secretKey` (removed in 1.2.1) | `postgresHA.backup.minio.credentialsSecretName` (a dictionary secret you create; MinIO backups only) |
+
+Carrying the old `postgresHA.postgres` block fails the render with `the postgres block was
+REMOVED in 2.5.0`, which tells you to create the credentials secret yourself. Ignore that
+advice here — this template creates it. Changing `postgres.credentials.password` later does not
+change the database password, so keep the value you already have.
 
 ## Upgrading from 1.0.x
 
@@ -170,13 +190,14 @@ only renames on the single-instance path:
 
 Carrying an old credentials key forward fails the render with the **Postgres template's**
 message, which tells you to create a dictionary secret yourself. Ignore that advice for the
-three credentials keys — this template creates that secret. The `postgresHA` path is
-completely unchanged, including its MinIO backup keys.
+three credentials keys — this template creates that secret. (The `postgresHA` path changed
+later, in 1.2.0 and 1.2.1 — see above.)
 
 ## Important Notes
 
-- **Change the database password (`postgres.credentials.password`) before installing.**
-- **Give each temporal release its own `postgres.config.credentialsSecretName`** (single-instance path). Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
+- **Change the database password (`postgres.credentials.password`) before installing** — it feeds whichever database mode is enabled. Changing it on an existing release does not change the database password: it only rewrites the secret, so the server can no longer connect. The password is set once, when the database volume is first initialised.
+- **Keep `postgres.credentials.database` as `temporal`** — the server's main store is the literal `temporal` database. The chart refuses any other value in single-instance mode; in HA mode nothing checks it, so do not change it there either.
+- **Give each temporal release its own `postgresHA.config.credentialsSecretName` (HA) or `postgres.config.credentialsSecretName` (single-instance).** Secret names are org-wide, so a second release left on the default name is **refused at install** — `The resource '…' cannot be updated because it is being managed by a different release` — and creates nothing. Nothing is shared or overwritten, and the first release is unaffected.
 - **`historyShards` is permanent** — the shard count is fixed at the cluster's first boot and can never be changed; the server refuses a different value later. Size it before installing (512 suits most deployments).
 - **Never expose the Web UI publicly** — it has no built-in authentication. To offer browser access from outside the internal scope, put your own authenticating proxy in front of it.
 - **Temporal connects and runs schema setup as the database superuser** provisioned by the Postgres subchart — it needs `CREATE DATABASE` and DDL rights at every version upgrade.

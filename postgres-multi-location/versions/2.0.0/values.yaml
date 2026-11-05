@@ -90,7 +90,7 @@ pgbouncer:
   poolMode: transaction # options: session, transaction, statement
   defaultPoolSize: 25 # real Postgres connections PgBouncer keeps per replica
   maxClientConn: 1000 # client connections PgBouncer accepts per replica
-  maxDbConnections: 100 # cap on Postgres connections PER PgBouncer pod — multiply by maxReplicas
+  maxDbConnections: 100 # cap on Postgres connections PER PgBouncer pod — multiply by maxReplicas and by locations
   minReplicas: 2
   maxReplicas: 4
   resources:

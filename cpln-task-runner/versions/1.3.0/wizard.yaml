@@ -1,0 +1,536 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Control Plane Task Runner
+
+# The API and Worker are serverless, but the bundled Redis and Sentinel are stateful workloads with no
+# location handling: every extra GVC location would run its own, separate Redis cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: secrets
+    title: Admin API key
+    description: The admin API key secret, which must exist before you install.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The admin API key secret must exist **before** you install or upgrade. If it is missing, the API
+          deployment waits and `cpln logs` shows nothing at all.
+      - path: api.admin.apiKeySecretName
+        type: ref
+        label: Admin API key secret
+        description: >-
+          An opaque secret whose payload is the key for `/admin/*` (the `X-Admin-Key` header). Empty is
+          allowed only while the API is not public, and leaves the admin endpoints unauthenticated.
+        help: >-
+          Create the payload with `printf`, not `echo`, or the trailing newline becomes part of the key. After
+          changing the key, force a redeployment of the API workload.
+        docs: "#rotating-the-admin-key"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-task-runner-admin-key'"
+            hint: "Generate the content with: openssl rand -hex 32"
+      - type: note
+        severity: warning
+        when: self.api.enabled && self.api.admin.apiKeySecretName == ''
+        text: >-
+          No admin API key secret: anything in this GVC can create, edit and delete clients and rate-limit tiers
+          through `/admin/*`. Choose one unless that is acceptable.
+      # Upgrades from 1.2.x: the admin key was a value (api.env.adminApiKey), stored in the chart-created secret
+      # under admin-api-key (createSecret true) or read from redis.admin.fromSecret (createSecret false).
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.3.0') < 0
+        text: >-
+          The admin API key is no longer a value. If the previous version had one, put the SAME key in the
+          opaque secret chosen here so admin callers keep working: it is under the key `admin-api-key` of
+          `task-runner-secrets` (or your previous `secretName`, or your own secret when createSecret was false);
+          read it with `cpln secret reveal NAME -o yaml`. The previous default was empty, which left `/admin/*`
+          unauthenticated.
+    rules:
+      - rule: "!has(self.api.env.adminApiKey) && !has(self.redis.admin)"
+        mirrors: cpln-task-runner.validateAdmin
+        paths: [api.admin.apiKeySecretName]
+        message: >-
+          api.env.adminApiKey and redis.admin were removed in 1.3.0: the admin key is an opaque secret chosen
+          here. Remove them from the values.
+      - when: self.api.public.enabled
+        rule: self.api.admin.apiKeySecretName != ''
+        mirrors: cpln-task-runner.validateAdmin
+        paths: [api.admin.apiKeySecretName, api.public.enabled]
+        message: >-
+          With public access on, an admin API key secret is required; without one, anyone could manage clients
+          and rate-limit tiers.
+
+  - id: redis-credentials
+    title: Redis credentials
+    description: The passwords of the bundled Redis and Sentinel, which only the API and Worker use.
+    sections:
+      - title: Secret
+        fields:
+          - path: createSecret
+            type: boolean
+            label: Create the secret from passwords entered here
+            description: >-
+              On, the chart creates a dictionary secret holding both passwords. Off, the passwords come from a
+              dictionary secret you create first.
+          - type: note
+            severity: warning
+            when: oldSelf != null && oldSelf.createSecret != self.createSecret
+            text: >-
+              The secret Redis, Sentinel, the API and Worker read after this change must hold the passwords the
+              release runs with today. A secret the chart created is deleted when the chart stops creating it.
+          - path: secretName
+            type: string
+            label: Name of the secret the chart creates
+            required: true
+            when: self.createSecret
+            description: >-
+              Secret names are org-wide and this one is not prefixed with the release name, so a second install in
+              the same org needs a different name. Use one no other secret has.
+            help: >-
+              The Redis and Sentinel secret names below must be this same name, and their password keys
+              `redis-password` and `redis-sentinel-password`.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.secretName == self.secretName) ||
+                  (self.secretName.size() <= 64 && self.secretName.matches('^[a-z]([-a-z0-9])*[a-z0-9]$'))
+                message: >-
+                  Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or
+                  digit, at most 64 characters; Control Plane refuses other secret names.
+          - type: note
+            severity: warning
+            when: self.createSecret
+            text: >-
+              The passwords below are stored in the Helm release values. Version 1.4.0 and later take them from
+              prerequisite secrets instead.
+          - path: redis.redisPassword
+            type: string
+            label: Redis password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            when: self.createSecret
+            help: >-
+              Choose it now: Sentinel keeps the Redis password it started with, so changing it on a running
+              release locks the API and Worker out.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.redisPassword == self.redis.redisPassword) ||
+                  self.redis.redisPassword.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled Redis writes the password into a
+                  configuration line.
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.redisPassword == self.redis.redisPassword) ||
+                  self.redis.redisPassword != 'mypassword'
+                severity: warning
+                message: mypassword is the password earlier versions published. Choose your own.
+          - path: redis.sentinelPassword
+            type: string
+            label: Sentinel password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            when: self.createSecret
+            help: >-
+              Choose it now: with Sentinel persistence on, Sentinel keeps the password it started with, so changing
+              it on a running release locks the API and Worker out.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.sentinelPassword == self.redis.sentinelPassword) ||
+                  self.redis.sentinelPassword.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled Sentinel writes the password into a
+                  configuration line.
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.sentinelPassword == self.redis.sentinelPassword) ||
+                  self.redis.sentinelPassword != 'mypassword'
+                severity: warning
+                message: mypassword is the password earlier versions published. Choose your own.
+          - type: note
+            severity: warning
+            when: "!self.createSecret"
+            text: >-
+              The secret named below must exist **before** you install, holding both passwords under the keys
+              named below. If it is missing, the deployment waits and `cpln logs` shows nothing at all.
+      - title: Where Redis and Sentinel read the passwords
+        fields:
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: >-
+              With the chart creating the secret, the name above. Otherwise a dictionary secret you created.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: "off"
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Redis password key
+            required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+            description: >-
+              The key holding the Redis password. With the chart creating the secret, `redis-password`.
+          - path: redis.sentinel.auth.fromSecret.name
+            type: ref
+            label: Sentinel password secret
+            required: true
+            description: >-
+              With the chart creating the secret, the name above. Otherwise a dictionary secret you created; it
+              can be the same secret as Redis.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: "off"
+              requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
+          - path: redis.sentinel.auth.fromSecret.passwordKey
+            type: string
+            label: Sentinel password key
+            required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+            description: >-
+              The key holding the Sentinel password. With the chart creating the secret,
+              `redis-sentinel-password`.
+        rules:
+          # createSecret true: the chart creates secretName with the keys redis-password and redis-sentinel-password
+          # and points the API and Worker at it, while the bundled Redis and Sentinel read the fromSecret values.
+          - when: self.createSecret
+            rule: >-
+              self.redis.redis.auth.fromSecret.name == self.secretName &&
+              self.redis.sentinel.auth.fromSecret.name == self.secretName
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+            message: >-
+              With the chart creating the secret, Redis and Sentinel must read that secret: set both names to the
+              secret name above. Otherwise they read a different secret than the API and Worker.
+          - when: self.createSecret
+            rule: >-
+              self.redis.redis.auth.fromSecret.passwordKey == 'redis-password' &&
+              self.redis.sentinel.auth.fromSecret.passwordKey == 'redis-sentinel-password'
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.passwordKey, redis.sentinel.auth.fromSecret.passwordKey]
+            message: >-
+              The secret the chart creates holds the keys redis-password and redis-sentinel-password; use those.
+    rules:
+      # Changing the passwords of a running release. The bundled Redis (3.2.0 and later) writes sentinel.conf
+      # (auth-pass, requirepass) only at Sentinel's first start when its persistence is on, while Redis rewrites
+      # requirepass/masterauth at every start; same rules as the redis template's own descriptor.
+      - when: oldSelf != null && oldSelf.createSecret && self.createSecret
+        rule: self.redis.redisPassword == oldSelf.redis.redisPassword
+        severity: warning
+        paths: [redis.redisPassword]
+        message: >-
+          Changing the Redis password on a running release locks the API and Worker out: restarted Redis nodes
+          cannot authenticate to the old primary, and Sentinel keeps the password it started with. Keep the
+          installed password, or reinstall.
+      - when: >-
+          oldSelf != null && oldSelf.createSecret && self.createSecret &&
+          oldSelf.redis.sentinel.persistence.enabled && self.redis.sentinel.persistence.enabled
+        rule: self.redis.sentinelPassword == oldSelf.redis.sentinelPassword
+        severity: warning
+        paths: [redis.sentinelPassword]
+        message: >-
+          Sentinel keeps the password it started with, so changing it here locks the API and Worker out. Keep the
+          installed password, or reinstall.
+
+  - id: api
+    title: API
+    description: The HTTP endpoint that accepts tasks and serves the admin endpoints.
+    sections:
+      - id: api
+        title: API workload
+        toggle: api.enabled
+        docs: "#api-workload"
+        fields:
+          - path: api.public.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              `/v1/enqueue` has no authentication and registers unknown clients, so anyone who reaches it can
+              make the workers send arbitrary HTTP requests. Keep it off unless an authenticating proxy fronts it.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              Public access now defaults to off (1.2.x defaulted to on), so this upgrade removes the public
+              endpoint unless you turn it on here. `/v1/enqueue` is unauthenticated either way.
+          - path: api.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            suggestions: [1, 2]
+          - path: api.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+          - path: api.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: api.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: api.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            description: "Leave empty to disable tracing. The built-in collector is `tracing.controlplane:4318`."
+            docs: "#opentelemetry"
+          - path: api.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: api.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: api.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.api.replicas.max >= self.api.replicas.min
+            paths: [api.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.api.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [api.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
+
+  - id: worker
+    title: Worker
+    description: The workers that deliver each task to its target URL.
+    sections:
+      - id: worker
+        title: Worker workload
+        toggle: worker.enabled
+        docs: "#worker-workload"
+        fields:
+          - path: worker.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            description: The workers pull tasks from Redis and receive no requests, so at least one must run.
+            suggestions: [1, 2]
+          - path: worker.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [5, 10]
+          - path: worker.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: worker.env.concurrency
+            type: integer
+            label: Concurrent tasks per replica
+            required: true
+            min: 1
+          - path: worker.env.taskTimeoutSec
+            type: integer
+            label: Task timeout
+            unit: seconds
+            required: true
+            min: 1
+          - path: worker.env.maxRetry
+            type: integer
+            label: Delivery attempts before a task is archived
+            required: true
+            min: 0
+          - path: worker.env.allowPrivateUrls
+            type: boolean
+            label: Allow tasks to target private URLs
+            description: >-
+              On, any enqueued task can reach anything the worker can route to, including internal addresses.
+          - path: worker.env.cbFailureThreshold
+            type: integer
+            label: Circuit breaker failure threshold
+            required: true
+            min: 1
+            advanced: true
+            description: Failures before the circuit opens.
+          - path: worker.env.cbTimeoutSec
+            type: integer
+            label: Circuit breaker timeout
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+            description: How long the circuit stays open before retrying.
+          - path: worker.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            advanced: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: worker.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            advanced: true
+            description: Leave empty to disable tracing.
+          - path: worker.port
+            type: integer
+            label: Health check port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: worker.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: worker.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.worker.replicas.max >= self.worker.replicas.min
+            paths: [worker.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.worker.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [worker.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
+
+  - id: redis
+    title: Redis
+    description: The bundled Redis with Sentinel failover that stores the queues.
+    sections:
+      - title: Persistence
+        fields:
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Keep Redis data on a volume
+            description: >-
+              Off, queued tasks are lost whenever a Redis node restarts. Choose now: changing it after install
+              replaces the storage and can lose queued tasks.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Keep Sentinel state on a volume
+            description: >-
+              Lets Sentinel remember the current primary across restarts. Choose now: changing it after install
+              replaces the storage.
+        rules:
+          - rule: >-
+              oldSelf == null ||
+              (self.redis.redis.persistence.enabled == oldSelf.redis.redis.persistence.enabled &&
+              self.redis.sentinel.persistence.enabled == oldSelf.redis.sentinel.persistence.enabled)
+            severity: warning
+            paths: [redis.redis.persistence.enabled, redis.sentinel.persistence.enabled]
+            message: >-
+              Changing persistence on a running release replaces the Redis and Sentinel workloads' storage;
+              queued tasks can be lost. Keep the installed setting.
+
+
+# 1.0.0 bundles redis 3.0.2; 1.1.0 and later bundle redis 3.1.1 or later, which renamed the volume sets
+# ({release}-redis → {release}-redis-vs, {release}-sentinel → {release}-sentinel-vs), so an in-place upgrade from
+# 1.0.0 deletes the volume sets the release runs on. Same rule as the redis template's own descriptor.
+rules:
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
+      semverCompare(context.fromVersion, '1.1.0') >= 0 ||
+      (!oldSelf.redis.redis.persistence.enabled && !oldSelf.redis.sentinel.persistence.enabled)
+    message: >-
+      Do not upgrade a 1.0.0 release in place: its bundled Redis (3.0.2) names the volume sets differently
+      (RELEASE-redis and RELEASE-sentinel; later versions use RELEASE-redis-vs and RELEASE-sentinel-vs), so the
+      upgrade deletes the volume sets this release runs on, with the queued tasks. Install this version as a new
+      release, move producers and drain the old queue, then uninstall the old release.
+    messageExpression: >-
+      'Do not upgrade a 1.0.0 release in place: its bundled Redis (3.0.2) names the volume sets ' +
+      context.releaseName + '-redis and ' + context.releaseName + '-sentinel, and this version names them ' +
+      context.releaseName + '-redis-vs and ' + context.releaseName + '-sentinel-vs, so the upgrade deletes the ' +
+      'volume sets this release runs on, with the queued tasks. Install this version as a new release, move ' +
+      'producers and drain the old queue, then uninstall the old release.'
+
+yamlOnly:
+  - path: image
+    reason: One image serves both workloads and is pinned to the version this chart was built for.
+  - path: api.public.pathPrefix
+    reason: Has no routing effect in this chart version.
+  - path: redis.redis.auth.fromSecret.enabled
+    reason: Leave true; the API and Worker always authenticate to Redis.
+  - path: redis.sentinel.auth.fromSecret.enabled
+    reason: Leave true; the API and Worker always authenticate to Sentinel.
+
+migrations:
+  - fromVersions: "<1.3.0"
+    from: api.env.adminApiKey
+    note: >-
+      The admin API key is now an opaque secret chosen under Admin API key. Put the key the release uses today
+      in it (read it with `cpln secret reveal NAME -o yaml`, key `admin-api-key`) so admin callers keep working.
+      An empty key, the previous default, left `/admin/*` unauthenticated.
+  - fromVersions: "<1.3.0"
+    from: redis.admin.fromSecret.name
+    note: The admin API key now comes from its own opaque secret, chosen under Admin API key.
+  - fromVersions: "<1.3.0"
+    from: redis.admin.fromSecret.apiKeyKey
+    note: The admin API key now comes from its own opaque secret, whose whole payload is the key.
+  # 1.0.0-1.2.x defaulted both passwords to mypassword, 1.3.0 to change-me- placeholders. Redis and Sentinel keep
+  # the passwords they started with, so a release that kept the old default must keep it.
+  - fromVersions: "<1.3.0"
+    to: redis.redisPassword
+    valueExpr: self.redis.redisPassword
+    note: The release keeps the Redis password it runs with; Redis and Sentinel keep it across upgrades.
+  - fromVersions: "<1.3.0"
+    to: redis.sentinelPassword
+    valueExpr: self.redis.sentinelPassword
+    note: The release keeps the Sentinel password it runs with.

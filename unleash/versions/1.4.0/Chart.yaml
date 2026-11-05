@@ -21,6 +21,5 @@ dependencies:
 
 annotations:
   created: "2026-07-23"
-  lastModified: "2026-08-23"
-  category: "feature-flags"
+  lastModified: "2026-10-01"
   createsGvc: false

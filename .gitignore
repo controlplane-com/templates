@@ -11,6 +11,10 @@ CLAUDE.md
 # Namespaced per-template forms (proposal-{service}.md etc.), in-flight briefings,
 # and spike reports are working artifacts; the PERMANENT homes stay tracked:
 # briefings/ (maintainer briefings) and CHANGELOG.md.
+# stray test/debug artifacts that must never be committed (session cookies from
+# UI probes, ad-hoc investigation write-ups) — findings that matter live in the briefing.
+cookies.json
+investigation-*.md
 proposal.md
 proposal-*.md
 architecture.md

@@ -24,7 +24,8 @@ admin:
 cloud:
   enabled: true                # false = no cloud is configured; builds have nowhere to run
   # REQUIRED prerequisite `opaque` secret holding a Control Plane API key, with
-  # create/delete/view on workloads in the target GVC. See the README.
+  # create/delete/view on workloads in the target GVC plus view on GVCs,
+  # identities and volume sets. See the README.
   apiKeySecretName: my-jenkins-cpln-api-key
   # GVC the agents run in. Empty = the GVC Jenkins itself runs in. It MUST have
   # exactly ONE location — the plugin rejects multi-location GVCs.

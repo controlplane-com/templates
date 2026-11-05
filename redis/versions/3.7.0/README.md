@@ -336,15 +336,12 @@ For the backup cron job to access a GCS bucket, complete the following in your G
 
 ### Restoring a Backup
 
-Run the following command from a client with access to the bucket (replace `aws s3 cp` with `gsutil cp` for GCS):
+**There is no verified procedure for restoring one of these backups into a running release of this template.** Two things that look like they should work do not:
 
-```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.rdb /tmp/dump.rdb
-redis-cli \
-  -h RELEASE_NAME-redis.GVC_NAME.cpln.local \
-  -p 6379 \
-  --rdb /tmp/dump.rdb
-```
+- Copying the file into the data directory as `dump.rdb` and restarting does nothing. The chart runs with `appendonly yes`, and when both AOF and RDB persistence are enabled Redis rebuilds the dataset from the AOF at startup and ignores `dump.rdb`.
+- `redis-cli --rdb FILE` *downloads* an RDB from a server; it does not load one. Running it against the cluster overwrites your downloaded backup with the live dataset.
+
+What the backup is: a standard, gzipped RDB file (`redis-TIMESTAMP.rdb.gz`), and RDB files are portable. The upstream-documented way to read one is to start a standalone Redis or Valkey server with AOF disabled and the decompressed file in place as its `dump.rdb` — for example on a local machine with Docker — and from there inspect the data or replay it into your cluster with your own tooling. Loading the file into this template's cluster in place has not been tested; if you need that path, rehearse it on a throwaway release before relying on it.
 
 ### Supported External Services
 - [Redis Documentation](https://redis.io/docs/)

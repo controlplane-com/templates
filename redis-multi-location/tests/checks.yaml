@@ -1,0 +1,88 @@
+# Feature checks for the redis-multi-location template. Each runs after install (and after each upgrade)
+# on every version in its since/until range. Add a check with `since: <new version>` for every change you
+# ship. Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (redis_password, sentinel_password).
+#
+# The checks run in a Sentinel container, ask its own Sentinel (127.0.0.1) for the master, and then talk
+# to Redis across workloads and locations the way a client does. The expected counts assume the
+# baseline's three locations with one Redis instance in each.
+checks:
+  - id: sentinel-quorum
+    description: One Sentinel per location agrees on a master, with a majority able to fail over.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: redis-cli -p 26379 --no-auth-warning -a '{sentinel_password}' SENTINEL ckquorum mymaster
+    expect:
+      stdout: "^OK 3 usable Sentinels"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: replicas-in-every-location
+    description: The master has a streaming replica in each of the other two locations.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        M=$(redis-cli -p 26379 --no-auth-warning -a '{sentinel_password}' SENTINEL get-master-addr-by-name mymaster | head -1)
+        info=$(redis-cli -h "$M" -p 6379 --no-auth-warning -a '{redis_password}' INFO replication | tr -d '\r')
+        locs=$(echo "$info" | sed -n 's/^slave[0-9]*:ip=[^.]*\.[^.]*\.\([^.]*\)\..*state=online.*/\1/p' | sort -u | wc -l | tr -d ' ')
+        echo "$info" | grep '^connected_slaves:'
+        echo "ONLINE_REPLICA_LOCATIONS $locs"
+    expect:
+      stdout: "^connected_slaves:2$(.|\\n)*^ONLINE_REPLICA_LOCATIONS 2$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: write-replicates-across-locations
+    description: A write on the master is acknowledged by both replicas and reads back from another location.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        M=$(redis-cli -p 26379 --no-auth-warning -a '{sentinel_password}' SENTINEL get-master-addr-by-name mymaster | head -1)
+        r() { h=$1; shift; redis-cli -h "$h" -p 6379 --no-auth-warning -a '{redis_password}' "$@"; }
+        V="e2e-$(date +%s%N)"
+        r "$M" SET e2e:last "$V" >/dev/null
+        r "$M" SET "e2e:{version}" "$V" >/dev/null
+        echo "REPLICATED $(r "$M" WAIT 2 10000)"
+        # Read from the instance in a location other than the master's.
+        for loc in aws-us-west-2 aws-us-east-1; do
+          H="replica-0.{release}-redis.$loc.{gvc}.cpln.local"
+          [ "$H" = "$M" ] && continue
+          [ "$(r "$H" GET e2e:last)" = "$V" ] && echo "READ $V from $loc"
+          break
+        done
+    expect:
+      stdout: "^REPLICATED 2$(.|\\n)*^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: rejects-bad-password
+    description: Redis and Sentinel both refuse a wrong password (the control for the checks above).
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        M=$(redis-cli -p 26379 --no-auth-warning -a '{sentinel_password}' SENTINEL get-master-addr-by-name mymaster | head -1)
+        echo "REDIS $(redis-cli -h "$M" -p 6379 --no-auth-warning -a wrong-password PING 2>&1)"
+        echo "SENTINEL $(redis-cli -p 26379 --no-auth-warning -a wrong-password PING 2>&1)"
+    expect:
+      stdout: "^REDIS .*(WRONGPASS|invalid password)(.|\\n)*^SENTINEL .*(WRONGPASS|invalid password)"
+      notStdout: "PONG"
+
+  - id: data-survives-upgrade
+    description: >-
+      The key written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data carried over.
+    exec:
+      workload: "{release}-sentinel"
+      container: sentinel
+      script: |
+        M=$(redis-cli -p 26379 --no-auth-warning -a '{sentinel_password}' SENTINEL get-master-addr-by-name mymaster | head -1)
+        n=$(redis-cli -h "$M" -p 6379 --no-auth-warning -a '{redis_password}' EXISTS "e2e:{installed_version}")
+        [ "$n" = 1 ] && echo PERSISTED || echo "MISSING (EXISTS e2e:{installed_version} = $n)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

@@ -1,0 +1,18 @@
+# rabbitmq 1.1.1 — a customer install as it looks today (the default user inline in rabbitmq_conf).
+# Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  rmqpw: hex
+
+vars:
+  rmq_workload: "{release}-rabbitmq"
+  rmq_user: e2e
+  rmq_password: "{gen.rmqpw}"
+
+values:
+  rabbitmq_conf:
+    listeners_tcp_default: 5672
+    default_user: e2e
+    default_pass: "{gen.rmqpw}"

@@ -1,0 +1,21 @@
+kind: volumeset
+name: {{ include "openclaw.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: OpenClaw state (config, SQLite, channel sessions, plugins, workspace)
+tags: {{- include "openclaw.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.backup.retention | quote }}
+    {{- if .Values.backup.enabled }}
+    schedule: {{ .Values.backup.schedule | quote }}
+    {{- end }}

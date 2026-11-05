@@ -1,0 +1,58 @@
+# nocodb 1.4.0 — the highly available database path (three Patroni members, three etcd members, two
+# HAProxy replicas) with one NocoDB replica, the bundled Redis, local attachment storage, one location,
+# and every prerequisite secret created by CI (the optional super-admin one too, so the checks can log in).
+# HA rather than the single-instance default, so the upgrade into 1.4.1 exercises the HA image change.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before NocoDB can run its migrations (about 5-7 minutes).
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  redispw: hex
+  jwt: hex
+  enc: hex
+  adminpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: nocodb
+      password: "{gen.pgpw}"
+      database: nocodb
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  keys:
+    type: dictionary
+    entries:
+      NC_AUTH_JWT_SECRET: "{gen.jwt}"
+      NC_CONNECTION_ENCRYPT_KEY: "{gen.enc}"
+  admin:
+    type: dictionary
+    entries:
+      NC_ADMIN_EMAIL: e2e-admin@example.com
+      # NocoDB's password policy: 8+ characters with an uppercase letter, a digit and a special character.
+      NC_ADMIN_PASSWORD: "Aa1!{gen.adminpw}"
+
+vars:
+  pg_user: nocodb
+  pg_password: "{gen.pgpw}"
+  pg_db: nocodb
+  admin_email: e2e-admin@example.com
+  admin_password: "Aa1!{gen.adminpw}"
+
+values:
+  secrets:
+    name: "{secrets.keys.name}"
+  admin:
+    secretName: "{secrets.admin.name}"
+  redis:
+    credentialsSecretName: "{secrets.redis.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"

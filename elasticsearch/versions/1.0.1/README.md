@@ -137,7 +137,7 @@ For the workload to have access to a GCS bucket, ensure the following prerequisi
 
 | Value | Description | Default |
 |---|---|---|
-| `backup.enabled` | Enable automated backups | `true` |
+| `backup.enabled` | Enable automated backups | `false` |
 | `backup.provider` | Cloud provider: `aws` or `gcp` | `aws` |
 | `backup.schedule` | Snapshot schedule in Quartz cron format (6 fields) | `0 0 2 * * ?` |
 | `backup.retention.maxAge` | Delete snapshots older than this | `30d` |
@@ -263,7 +263,7 @@ Always use the fully-qualified internal hostname. The bare workload name is not 
 - **X-Pack security is disabled, so there is no authentication.** Anything `internal_access` admits has full admin access to every index, and there are no credentials anywhere in this template. Keep `internal_access` as narrow as your deployment allows.
 - **`replicas` must be odd**, or the cluster cannot elect a master.
 - **`jvmHeap` is not derived from `resources`.** Raising the container memory limit does not raise the heap, and setting the heap above about half the limit will get the process OOM-killed.
-- **Enabling backups on a running cluster fails for several minutes first.** The snapshot repository plugin installs at node startup, so every node must roll before the repository can be registered; the setup job retries until they have.
+- **Enabling backups on a running cluster fails for several minutes first.** Every node restarts to pick up the new identity and firewall, and the snapshot repository cannot be registered until they have; the setup job retries until then.
 - **The snapshot IAM policy needs both bucket ARNs** — `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself.
 
 ## Links

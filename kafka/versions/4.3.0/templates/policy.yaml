@@ -1,0 +1,17 @@
+kind: policy
+name: {{ include "kafka.name" . }}
+tags: {{- include "kafka.tags" . | nindent 2 }}
+origin: default
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "kafka.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "kafka.name" . }}-controller-configuration
+  - //secret/{{ include "kafka.name" . }}-init
+  - //secret/{{ include "kafka.name" . }}-secrets
+{{- if .Values.jmx_exporter }}
+  - //secret/{{ include "kafka.name" . }}-jmx-exporter-conf
+{{- end }}

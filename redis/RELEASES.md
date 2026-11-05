@@ -1,3 +1,21 @@
+# Release Notes - Version 3.9.0
+
+## What's New
+
+- **Suspend switch**: `suspend: true` stops every workload in the release (Redis, Sentinel and the backup job) while keeping its volume sets and secrets; set it back to `false` to start again. With persistence on, the data is reloaded at start.
+- **Adding persistence to a running release**: turn on `redis.persistence.enabled` (and `sentinel.persistence.enabled`) together with `suspend: true`, then set `suspend: false` in the next upgrade. Data held only in memory is lost, so turn persistence on at install when you can.
+- **README**: reorganized around how the template works and how to set it up, with all version-upgrade notes in one Upgrading section.
+
+
+# Release Notes - Version 3.8.0
+
+## What's New
+
+- **Dev mode**: `mode: dev` runs a single Redis node that boots as a plain master, with no Sentinel tier at all — for development and testing, with no failover and not for production. `redis.replicas` and the `sentinel` sizing settings are ignored in dev mode; Sentinel public access, persistence and authentication are refused at render. `mode: production` is the default and deploys the same topology as 3.7.0. Turn on `redis.persistence.enabled` at install if dev data must survive restarts. A `helm upgrade` from dev to production keeps the data and ends with one Sentinel failover to a new node.
+- **Fix: temp-file cleanup no longer races Redis**: with persistence on, the `postStart` hook that removed leftover `temp-*.rdb` / `temp-rewriteaof-*.aof` files could delete a file Redis was writing, crashing a fresh node or aborting a replica's first full sync. The cleanup now runs in the start script before the server starts, and the `preStop` hook only waits.
+- **Fix: whole-number CPU values**: `cpu`, `memory`, `minCpu` and `minMemory` are now quoted, so a value such as `redis.resources.maxCpu: 1` installs instead of being rejected by the API.
+
+
 # Release Notes - Version 3.7.0
 
 ## What's New

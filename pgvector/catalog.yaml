@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: pgvector
+category: database
+topology: single
+
+summary: >-
+  A single PostgreSQL server with the pgvector extension already created, on a persistent
+  volume, so embeddings can be stored and searched with HNSW or IVFFlat indexes using cosine,
+  L2 or inner-product distance right after install. Options: extra extensions at first boot, a
+  PgBouncer pooler, a public TCP endpoint, and scheduled backups to S3, GCS or an S3-compatible
+  endpoint. Pick it to keep vectors next to relational data and query both with SQL.
+
+keywords:
+  - vector database
+  - vector search
+  - similarity search
+  - embeddings
+  - semantic search
+  - rag
+  - retrieval-augmented generation
+  - hnsw
+  - ivfflat
+  - nearest neighbor search
+  - cosine similarity
+  - postgresql
+  - pg
+  - sql
+  - pgbouncer
+  - database backups
+
+useCases:
+  - Store and query vector embeddings for retrieval-augmented generation
+  - Semantic search over documents with SQL filters on the same rows
+  - Recommendations or similarity matching on embeddings
+  - Long-term memory store for an AI agent or chatbot
+  - Add vector search to an app that already uses Postgres
+
+alternativeTo:
+  - Pinecone
+  - Zilliz Cloud
+  - Milvus
+  - Chroma
+  - MongoDB Atlas Vector Search
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: a dedicated vector database with REST and gRPC APIs
+    template: qdrant
+  - need: hybrid keyword and vector search with built-in vectorizer modules
+    template: weaviate
+  - need: Postgres vector search with automatic failover
+    template: postgres-highly-available
+  - need: auth, a REST API, realtime and file storage on a Postgres that includes pgvector
+    template: supabase
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local embedding models that produce the vectors to store
+  - template: litellm
+    relation: companion
+    note: OpenAI-compatible gateway for calling hosted or local embedding models
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: config.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket, backup.minio.bucket]
+    required: false
+    when: backup.enabled
+    description: Object storage bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: backup.minio.credentialsSecretName
+    required: false
+    when: backup.enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

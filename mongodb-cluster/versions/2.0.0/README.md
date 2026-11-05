@@ -64,6 +64,8 @@ Every member this chart creates is a **voting** member, so the total across all 
 | 5 | 3 | 2 members | |
 | 7 | 4 | 3 members | **The maximum.** MongoDB allows at most 7 voting members |
 
+**Seven members do not fit in one location on a default org quota.** A `replicaDirect` workload is capped at 6 replicas per location by the `replicas-per-replica-direct-workload` quota, and the install is rejected at apply with `One or more containers exceed the autoscaling.maxScale of 6 (quota: replicas-per-replica-direct-workload)`. Reach 7 by splitting across locations — 4 + 3 is proven — or request a quota increase. Six in one location is fine.
+
 Totals above 7 are refused at render time: MongoDB rejects the 8th voting member, and every member past it would run a mongod that is not in the replica set while still reporting `ready: true`.
 
 Spreading members across **locations** buys survival of a whole location, at the cost of cross-region replication traffic, which is billed. Size it against the same table — 3 locations × 1 member survives losing one location; 2 locations × 2 members does not survive losing either, because 2 of 4 is not a majority.
@@ -286,6 +288,38 @@ Values that moved or were removed in 2.0.0 — the chart names each one at rende
 | backup location derived from `backup.aws.region` | `backup.location`, explicit and checked against `locations` |
 | `locations[].replicas: 0` | not allowed; remove the location instead |
 | a total above 7 members, or exactly 2 | not allowed; see the sizing table above |
+
+## Upgrading in place from 1.1.1
+
+A plain `helm upgrade` from 1.x deletes the GVC the 1.x release created, and everything in it. These steps keep that GVC, so the replica set keeps its data. They cover a 1.1.1 release (upgrade an older 1.x to 1.1.1 first) with **at most 7 members in total, never exactly 2, and at least 1 in every location**. The 1.x default of 3 locations × 3 is 9 members, which 2.0.0 refuses; for that shape, use [Migrating from 1.x](#migrating-from-1x) instead.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/mongodb-cluster --version 2.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 1.x release created (its `gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with these changes:
+
+```yaml
+# gvc: delete the whole block
+locations:                     # the old gvc.locations: same entries, same order, same replicas
+  - name: aws-us-east-1
+    replicas: 3
+backup:
+  mode: logical                # 2.0.0 refuses physical
+  location: aws-us-east-1      # with backup.enabled: true, the location the job ran in (where your bucket is); must be one of locations
+```
+
+The credentials and keyfile secrets stay as they are. Every member and HAProxy replica restarts, so expect a primary election and failed writes for a few minutes.
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
 
 ## Important Notes
 

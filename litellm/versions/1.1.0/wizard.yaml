@@ -1,0 +1,690 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: LiteLLM
+
+# The proxy is stateless, but the bundled PostgreSQL and the Redis Sentinel cluster are stateful workloads
+# with no location handling: every extra GVC location would run its own, separate database and Redis.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # LiteLLM creates this secret itself (templates/secret-db-credentials.yaml) and names it in the Database
+      # credentials step below.
+      - config.credentialsSecretName
+      # The proxy connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          The proxy connects to its database like any other workload: keep Same GVC, or add the LiteLLM
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+      volumeset.capacity:
+        max: 65536
+      volumeset.autoscaling.maxCapacity:
+        max: 65536
+
+steps:
+  - id: secrets
+    title: Keys secret
+    description: The prerequisite secret the proxy reads its keys from.
+    docs: "#prerequisite-secret"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The secret must exist **before** you install. If it is missing, the deployment waits and
+          `cpln logs` shows nothing at all.
+      - path: litellm.providerEnv
+        type: list
+        label: Provider key variables
+        widget: tags
+        description: >-
+          Environment variable names the proxy reads from the keys secret (for example `OPENAI_API_KEY`), so
+          the secret below must hold each one. Reference them in the model list as `os.environ/NAME`.
+        unique: true
+        item:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          patternMessage: Letters, digits and underscores, not starting with a digit.
+          maxLength: 120
+      - path: secrets.name
+        type: ref
+        label: Keys secret
+        required: true
+        description: >-
+          A dictionary secret with `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY` and one key per provider key
+          variable above. The master key must start with `sk-`, and it is also the Admin UI password for
+          user `admin`.
+        help: >-
+          `LITELLM_SALT_KEY` encrypts the provider keys stored in the database: never change it once models
+          or keys are stored. The master key can be rotated.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeysFrom: "['LITELLM_MASTER_KEY', 'LITELLM_SALT_KEY'] + self.litellm.providerEnv"
+          create:
+            suggestName: "context.releaseName + '-litellm-secrets'"
+    rules:
+      # Platform schema (nodelibs env.ts): names starting with CPLN_, the K_ names, and a name the container
+      # already has (the proxy's own variables, templates/workload.yaml) are refused at apply.
+      - rule: >-
+          self.litellm.providerEnv.all(n, !n.startsWith('CPLN_') &&
+          !(n in ['K_SERVICE', 'K_CONFIGURATION', 'K_REVISION', 'LITELLM_MASTER_KEY', 'LITELLM_SALT_KEY', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'DATABASE_URL', 'STORE_MODEL_IN_DB']) &&
+          !(n == 'LITELLM_REDIS_PASSWORD' && self.redis.enabled && self.redis.redis.auth.password.enabled) &&
+          !(n in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL']))
+        paths: [litellm.providerEnv]
+        message: >-
+          The platform refuses names starting with CPLN_, K_SERVICE, K_CONFIGURATION and K_REVISION, and the
+          names the proxy already sets (LITELLM_MASTER_KEY, LITELLM_SALT_KEY, POSTGRES_USER, POSTGRES_PASSWORD, DATABASE_URL, STORE_MODEL_IN_DB, and LITELLM_REDIS_PASSWORD with the Redis password on). The chart also writes the
+          names unquoted, so true, false and null are refused.
+      - rule: self.secrets.name != ''
+        mirrors: litellm.validate
+        paths: [secrets.name]
+        message: Name the prerequisite keys secret; the chart does not render without it.
+      - rule: oldSelf == null || self.secrets.name == oldSelf.secrets.name
+        severity: info
+        paths: [secrets.name]
+        message: >-
+          The new secret must hold the same LITELLM_SALT_KEY as the installed one, or the provider keys stored
+          in the database become unreadable.
+
+  - id: litellm
+    title: LiteLLM proxy
+    description: The proxy image, its replicas and compute, and the models it serves.
+    docs: "#litellm-proxy"
+    sections:
+      - title: Server
+        fields:
+          - path: litellm.image
+            type: string
+            format: image
+            label: LiteLLM image
+            required: true
+            description: Use a `litellm-database` image; it applies the database migrations on boot.
+          - path: litellm.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              The proxy is stateless. With two or more, keep Redis on so rate limits and budgets are shared
+              between replicas.
+          - path: litellm.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.litellm.replicas >= 1
+            mirrors: litellm.validate
+            paths: [litellm.replicas]
+            message: Run at least one replica.
+          - when: self.litellm.replicas >= 2
+            rule: self.redis.enabled
+            severity: info
+            paths: [litellm.replicas]
+            message: >-
+              Without Redis every replica rate-limits on its own, so the effective limit is the replica count
+              times the configured one.
+      - title: Models
+        fields:
+          - path: litellm.modelList
+            type: yaml
+            label: Model list
+            required: true
+            description: >-
+              The `model_list` of LiteLLM's config. Reference provider keys as `os.environ/NAME`, never as
+              literal keys.
+            help: "See [model configuration](https://docs.litellm.ai/docs/proxy/configs) in the LiteLLM docs."
+          - path: litellm.storeModelInDb
+            type: boolean
+            label: Manage models in the Admin UI too
+            description: Models added in the Admin UI are stored in the database, next to the list above.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach the proxy inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The API and the Admin UI on the workload's `*.cpln.app` endpoint. Every request still needs the
+          master key or a virtual key.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - { value: none, label: None, description: No workload can connect. }
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+
+  - id: redis
+    title: Redis
+    description: Shares rate-limit counters, budgets and the response cache between proxy replicas.
+    # Step-level, so it runs while the toggle below is off; the copy on the proxy step only shows there.
+    rules:
+      - when: self.litellm.replicas >= 2
+        rule: self.redis.enabled
+        severity: info
+        paths: [redis.enabled]
+        message: >-
+          Without Redis every replica rate-limits on its own, so the effective limit is the replica count
+          times the configured one.
+    sections:
+      - id: redis
+        title: Bundled Redis with Sentinel
+        toggle: redis.enabled
+        description: >-
+          A Redis primary with replicas and Sentinel failover. Without it each proxy replica rate-limits in
+          memory on its own.
+        fields:
+          - path: redis.redis.replicas
+            type: integer
+            label: Redis replicas
+            required: true
+            min: 1
+            suggestions: [1, 3]
+            description: One primary, the rest replicas.
+          - path: redis.sentinel.replicas
+            type: integer
+            label: Sentinel replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Use an odd number so the sentinels can agree on a failover.
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.redis.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU limit
+            min: 25m
+            required: true
+            advanced: true
+          - path: redis.redis.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Redis CPU reservation
+            min: 25m
+            required: true
+            advanced: true
+          - path: redis.redis.resources.memory
+            type: quantity
+            quantity: memory
+            label: Redis memory limit
+            min: 32Mi
+            required: true
+            advanced: true
+          - path: redis.redis.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Redis memory reservation
+            min: 32Mi
+            required: true
+            advanced: true
+          - path: redis.sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU limit
+            min: 25m
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Sentinel CPU reservation
+            min: 25m
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.memory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory limit
+            min: 32Mi
+            required: true
+            advanced: true
+          - path: redis.sentinel.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Sentinel memory reservation
+            min: 32Mi
+            required: true
+            advanced: true
+        rules:
+          # litellm.validate refuses Sentinel auth (an enabled flag) only with the Redis password on; without it
+          # the chart renders Sentinel auth, which LiteLLM cannot pass (1.2.1 refuses it always). Any
+          # redis.sentinel.auth block is YAML-only here.
+          # Warning on install or when Sentinel auth is new; info for a release that already runs with it.
+          - when: >-
+              !self.redis.redis.auth.password.enabled && (oldSelf == null || !has(oldSelf.redis.sentinel) ||
+              [oldSelf.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true)))))))
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            severity: warning
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends no
+              Sentinel password, so it cannot reach Redis, and a plain-text password would sit in the release.
+              Version 1.2.1 refuses it.
+          - when: >-
+              !self.redis.redis.auth.password.enabled && oldSelf != null && has(oldSelf.redis.sentinel) &&
+              !([oldSelf.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true)))))))
+            rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            severity: info
+            paths: [redis.sentinel.replicas]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends no
+              Sentinel password, so it cannot reach Redis, and a plain-text password would sit in the release.
+              Version 1.2.1 refuses it.
+          # Redis and Sentinel are stateful workloads (redis 3.4.3): the platform rejects a max:min ratio above 4:1,
+          # a minimum above its maximum, and more than 8 MiB of memory per millicore of CPU (nodelibs workload.ts).
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) >= cpuMillicores(self.redis.redis.resources.minCpu) &&
+              memoryBytes(self.redis.redis.resources.memory) >= memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minCpu, redis.redis.resources.minMemory]
+            message: The Redis CPU and memory reservations cannot exceed their limits.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) <= 4 * cpuMillicores(self.redis.redis.resources.minCpu) &&
+              memoryBytes(self.redis.redis.resources.memory) <= 4 * memoryBytes(self.redis.redis.resources.minMemory)
+            paths: [redis.redis.resources.minCpu, redis.redis.resources.minMemory]
+            message: The Redis CPU and memory limits can each be at most 4 times their reservation on a stateful workload.
+          - rule: memoryBytes(self.redis.redis.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.redis.resources.cpu)
+            paths: [redis.redis.resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the Redis CPU limit or lower its memory.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) >= cpuMillicores(self.redis.sentinel.resources.minCpu) &&
+              memoryBytes(self.redis.sentinel.resources.memory) >= memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
+            message: The Sentinel CPU and memory reservations cannot exceed their limits.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) <= 4 * cpuMillicores(self.redis.sentinel.resources.minCpu) &&
+              memoryBytes(self.redis.sentinel.resources.memory) <= 4 * memoryBytes(self.redis.sentinel.resources.minMemory)
+            paths: [redis.sentinel.resources.minCpu, redis.sentinel.resources.minMemory]
+            message: The Sentinel CPU and memory limits can each be at most 4 times their reservation on a stateful workload.
+          - rule: memoryBytes(self.redis.sentinel.resources.memory) <= 8 * 1048576 * cpuMillicores(self.redis.sentinel.resources.cpu)
+            paths: [redis.sentinel.resources.memory]
+            message: The platform allows at most 8 MiB of memory per millicore of CPU; raise the Sentinel CPU limit or lower its memory.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              cpuMillicores(self.redis.redis.resources.cpu) - cpuMillicores(self.redis.redis.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.redis.resources.memory) - memoryBytes(self.redis.redis.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.redis.resources.cpu, redis.redis.resources.memory]
+            message: The Redis CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.cpu) && string(oldSelf.redis.redis.resources.cpu) == string(self.redis.redis.resources.cpu)) ||
+              string(self.redis.redis.resources.cpu).endsWith('m')
+            paths: [redis.redis.resources.cpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minCpu) && string(oldSelf.redis.redis.resources.minCpu) == string(self.redis.redis.resources.minCpu)) ||
+              string(self.redis.redis.resources.minCpu).endsWith('m')
+            paths: [redis.redis.resources.minCpu]
+            message: Write the Redis CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.memory) && string(oldSelf.redis.redis.resources.memory) == string(self.redis.redis.resources.memory)) ||
+              string(self.redis.redis.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.memory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.resources.minMemory) && string(oldSelf.redis.redis.resources.minMemory) == string(self.redis.redis.resources.minMemory)) ||
+              string(self.redis.redis.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.redis.resources.minMemory]
+            message: Write the Redis memory with a unit, such as 256Mi or 1Gi.
+          # Stateful workloads: the platform refuses a limit more than 4 cores or 4Gi above its reservation.
+          - rule: >-
+              cpuMillicores(self.redis.sentinel.resources.cpu) - cpuMillicores(self.redis.sentinel.resources.minCpu) <= 4000 &&
+              memoryBytes(self.redis.sentinel.resources.memory) - memoryBytes(self.redis.sentinel.resources.minMemory) <= 4096 * 1048576
+            paths: [redis.sentinel.resources.cpu, redis.sentinel.resources.memory]
+            message: The Sentinel CPU limit can be at most 4 cores above its reservation, and the memory limit at most 4Gi above.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.cpu) && string(oldSelf.redis.sentinel.resources.cpu) == string(self.redis.sentinel.resources.cpu)) ||
+              string(self.redis.sentinel.resources.cpu).endsWith('m')
+            paths: [redis.sentinel.resources.cpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          # redis 3.4.3 writes the value unquoted: a whole number of cores reaches the API as a number, which it refuses.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minCpu) && string(oldSelf.redis.sentinel.resources.minCpu) == string(self.redis.sentinel.resources.minCpu)) ||
+              string(self.redis.sentinel.resources.minCpu).endsWith('m')
+            paths: [redis.sentinel.resources.minCpu]
+            message: Write the Sentinel CPU in millicores, such as 200m or 1000m.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.memory) && string(oldSelf.redis.sentinel.resources.memory) == string(self.redis.sentinel.resources.memory)) ||
+              string(self.redis.sentinel.resources.memory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.memory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.sentinel.resources.minMemory) && string(oldSelf.redis.sentinel.resources.minMemory) == string(self.redis.sentinel.resources.minMemory)) ||
+              string(self.redis.sentinel.resources.minMemory).matches('(k|Ki|M|Mi|G|Gi)$')
+            paths: [redis.sentinel.resources.minMemory]
+            message: Write the Sentinel memory with a unit, such as 256Mi or 1Gi.
+      - id: redis-auth
+        title: Redis password
+        toggle: redis.redis.auth.password.enabled
+        when: self.redis.enabled
+        description: >-
+          Off, the GVC firewall is the only boundary. On, Redis requires the password below and the proxy sends
+          it to the Redis primary; the Sentinels stay without one.
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the Redis password as a value: it is stored in the Helm release and in the secret ' +
+              (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+              '-redis-auth-password, which the bundled Redis creates. Version 1.2.0 reads it from a secret you
+              create instead.'
+            text: >-
+              This version takes the Redis password as a value: it is stored in the Helm release and in the secret
+              RELEASE_NAME-redis-auth-password, which the bundled Redis creates. Version 1.2.0 reads it from a
+              secret you create instead.
+          - path: redis.redis.auth.password.value
+            type: string
+            label: Redis password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Used as typed, so replace the published default. Leave out spaces, quotes and backslashes: the Redis
+              nodes and Sentinels write it into their config files.
+        rules:
+          - rule: self.redis.redis.auth.password.value != null && self.redis.redis.auth.password.value != ''
+            mirrors: litellm.validate
+            paths: [redis.redis.auth.password.value]
+            message: Set the Redis password.
+          - rule: >-
+              [self.redis.sentinel].all(s, !s.exists(k, k == 'auth' && s[k] != null && [s[k]].exists(a,
+              a.exists(j, j in ['password', 'fromSecret'] && a[j] != null && [a[j]].exists(p,
+              p.exists(e, e == 'enabled' && p[e] == true))))))
+            mirrors: litellm.validate
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              Keep Sentinel authentication off (remove redis.sentinel.auth from the values): LiteLLM sends only
+              the Redis password, not a Sentinel password.
+          # redis 3.4.3 writes the password unquoted into redis.conf and sentinel.conf with sh echo
+          # (templates/workload-redis.yaml, workload-sentinel.yaml): a space splits it, quotes start a quoted
+          # string, and echo turns backslash sequences into other characters.
+          - rule: >-
+              (oldSelf != null && has(oldSelf.redis.redis.auth.password.value) &&
+              self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value) ||
+              (!self.redis.redis.auth.password.value.matches('\\s') && !self.redis.redis.auth.password.value.contains('"') &&
+              !self.redis.redis.auth.password.value.contains("'") && !self.redis.redis.auth.password.value.contains('\\'))
+            severity: warning
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              Leave out spaces, quotes and backslashes: the Redis nodes and Sentinels write the password unquoted
+              into their config files, where these characters break or change it.
+          - when: >-
+              oldSelf != null && has(oldSelf.redis.redis.auth.password.enabled) && oldSelf.redis.redis.auth.password.enabled == true &&
+              [self.redis.sentinel].exists(s, s.exists(k, k == 'persistence' && s[k] != null && [s[k]].exists(p, p.exists(e, e == 'enabled' && p[e] == true))))
+            rule: self.redis.redis.auth.password.value == oldSelf.redis.redis.auth.password.value
+            severity: info
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              The Sentinels keep the Redis password they were first started with (their config lives on a volume).
+              Run SENTINEL SET mymaster auth-pass with the new password on every Sentinel first, or failover stops
+              working. The Redis nodes and the proxy restart with the new password.
+          - when: oldSelf != null
+            rule: self.redis.redis.auth.password.value != 'change-me-litellm-redis'
+            severity: info
+            paths: [redis.redis.auth.password.value]
+            message: The Redis password is still the published default.
+          - when: >-
+              oldSelf != null &&
+              (!has(oldSelf.redis.redis.auth.password.enabled) || oldSelf.redis.redis.auth.password.enabled != true)
+            rule: self.redis.redis.auth.password.value != 'change-me-litellm-redis'
+            severity: warning
+            paths: [redis.redis.auth.password.value]
+            message: Replace the published default before you turn the Redis password on.
+          # redis 3.4.3 templates/workload-sentinel.yaml: bootstrap_sentinel_conf keeps an existing sentinel.conf, which
+          # survives a restart only with sentinel.persistence on (off by default).
+          - when: >-
+              oldSelf != null && self.redis.redis.auth.password.enabled &&
+              (!has(oldSelf.redis.redis.auth.password.enabled) || oldSelf.redis.redis.auth.password.enabled != true) &&
+              [self.redis.sentinel].exists(s, s.exists(k, k == 'persistence' && s[k] != null && [s[k]].exists(p, p.exists(e, e == 'enabled' && p[e] == true))))
+            rule: "false"
+            severity: info
+            paths: [redis.redis.auth.password.value]
+            message: >-
+              The Sentinels were first started without a Redis password and keep that config on their volume, so
+              they cannot authenticate to the Redis nodes after this change. Run SENTINEL SET mymaster auth-pass
+              with the password on every Sentinel once the Redis nodes have restarted.
+
+  - id: database
+    title: Database credentials
+    description: >-
+      The user, password and database the bundled PostgreSQL is initialized with. LiteLLM creates the
+      dictionary secret named below from them, and both PostgreSQL and the proxy read them; there is nothing
+      to create first.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'These values are stored in the Helm release in plain text, and in the secrets ' +
+          (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+          '-litellm-db and the one named below, which the chart creates. Version 1.2.0 takes them from a
+          secret you create instead.'
+        text: >-
+          These values are stored in the Helm release in plain text, and in the secrets RELEASE_NAME-litellm-db
+          and the one named below, which the chart creates. Version 1.2.0 takes them from a secret you create
+          instead.
+      - path: postgres.credentials.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data is first initialized.
+        description: The proxy puts it into its database connection URL, so use letters, digits, `-`, `_`, `.` and `~` only.
+      - path: postgres.credentials.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: >-
+          Used as typed, so replace the published default. The proxy puts it into its database connection URL,
+          so use letters, digits, `-`, `_`, `.` and `~` only.
+        help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+      - path: postgres.credentials.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data is first initialized.
+      - path: postgres.config.credentialsSecretName
+        type: string
+        label: Credentials secret name
+        required: true
+        description: The dictionary secret LiteLLM creates from these values for PostgreSQL. Secret names are org-wide.
+        pattern: '^[a-z]([-a-z0-9])*[a-z0-9]$'
+        patternMessage: Use lowercase letters, digits and hyphens, starting with a letter and not ending with a hyphen.
+        maxLength: 64
+    rules:
+      # The proxy builds DATABASE_URL as postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@<host>:5432/<database>,
+      # with the database name written unquoted into the env value (templates/workload.yaml). RFC 3986 unreserved
+      # characters need no encoding anywhere in a URL.
+      - rule: >-
+          (oldSelf != null && has(oldSelf.postgres.credentials.username) &&
+          self.postgres.credentials.username == oldSelf.postgres.credentials.username) ||
+          self.postgres.credentials.username.matches('^[A-Za-z0-9._~-]+$')
+        severity: warning
+        paths: [postgres.credentials.username]
+        message: >-
+          Use only letters, digits, -, _, . and ~: the proxy puts the user unencoded into its database
+          connection URL.
+      - rule: >-
+          (oldSelf != null && has(oldSelf.postgres.credentials.password) &&
+          self.postgres.credentials.password == oldSelf.postgres.credentials.password) ||
+          self.postgres.credentials.password.matches('^[A-Za-z0-9._~-]+$')
+        severity: warning
+        paths: [postgres.credentials.password]
+        message: >-
+          Use only letters, digits, -, _, . and ~: the proxy puts the password unencoded into its database
+          connection URL, where other characters break it.
+      - rule: >-
+          (oldSelf != null && has(oldSelf.postgres.credentials.database) &&
+          self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+          self.postgres.credentials.database.matches('^[A-Za-z0-9._~-]+$')
+        severity: warning
+        paths: [postgres.credentials.database]
+        message: >-
+          Use only letters, digits, -, _, . and ~: the proxy puts the database name unencoded into its database
+          connection URL and unquoted into the YAML.
+      - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+        severity: info
+        paths: [postgres.credentials.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or the proxy loses its
+          database connection after this change.
+      - when: oldSelf != null
+        rule: self.postgres.credentials.password != 'change-me-litellm-pg'
+        severity: info
+        paths: [postgres.credentials.password]
+        message: >-
+          The password is still the published default. Change it with ALTER ROLE ... PASSWORD, then set the
+          same value here.
+      # Shown on install and on the upgrade from 1.0.0, which introduces the name.
+      - when: oldSelf == null || (context.fromVersion != null && semverCompare(context.fromVersion, '1.1.0') < 0)
+        rule: self.postgres.config.credentialsSecretName != 'my-litellm-db-credentials'
+        severity: info
+        paths: [postgres.config.credentialsSecretName]
+        messageExpression: >-
+          'Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each LiteLLM release its own name, for example ' + context.releaseName +
+          '-litellm-db-credentials.'
+        message: >-
+          Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each LiteLLM release its own name.
+      - rule: >-
+          !(self.postgres.config.credentialsSecretName in [context.releaseName + '-litellm-db',
+          context.releaseName + '-litellm-config'] +
+          (self.redis.enabled ? [context.releaseName + '-redis-config', context.releaseName + '-sentinel-config'] : []) +
+          (self.redis.enabled && self.redis.redis.auth.password.enabled ? [context.releaseName + '-redis-auth-password'] : []))
+        severity: warning
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          Choose another name: this release already creates a secret under it (<release>-litellm-db,
+          <release>-litellm-config, <release>-redis-config, <release>-sentinel-config or
+          <release>-redis-auth-password).
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  # postgres 3.4.1 refuses its 3.3.0 credential keys (pg.validateCredentials); LiteLLM 1.1.0 reads postgres.credentials.
+  - rule: >-
+      [self.postgres.config].all(m, !m.exists(k, k in ['username', 'password', 'database']))
+    paths: [postgres.credentials.username]
+    message: >-
+      postgres.config.username, password and database are not read by this version and the bundled PostgreSQL
+      refuses them: set the Database credentials step instead, and remove them from postgres.config.
+  # In 1.1.0 the proxy gets LITELLM_REDIS_PASSWORD only for redis.redis.auth.password; the redis chart's
+  # fromSecret method would require a password the proxy never sends.
+  - when: self.redis.enabled
+    rule: >-
+      [self.redis.redis].all(r, !r.exists(k, k == 'auth' && r[k] != null && [r[k]].exists(a,
+      a.exists(j, j == 'fromSecret' && a[j] != null && [a[j]].exists(f, f.exists(e, e == 'enabled' && f[e] == true))))))
+    severity: warning
+    paths: [redis.enabled]
+    message: >-
+      Turn off redis.redis.auth.fromSecret: in this version the proxy sends only the password set under Redis
+      password, so Redis would refuse it. Version 1.2.0 reads the password from a secret.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks the proxy, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-litellm') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-litellm, or the proxy cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-litellm']"
+    message: Add the LiteLLM workload to the list, or the proxy cannot reach its database.
+  # Secrets the chart creates itself: <release>-litellm-config, <release>-litellm-db, the database secret named
+  # under Database credentials, and with Redis on the redis subchart's <release>-redis-config,
+  # <release>-sentinel-config and (with the Redis password on) <release>-redis-auth-password.
+  - rule: >-
+      !(([self.secrets.name] +
+      (self.postgres.backup.enabled && self.postgres.backup.provider == 'minio' ? [self.postgres.backup.minio.credentialsSecretName] : [])).exists(n,
+      n == self.postgres.config.credentialsSecretName || n in [context.releaseName + '-litellm-config', context.releaseName + '-litellm-db'] +
+      (self.redis.enabled ? [context.releaseName + '-redis-config', context.releaseName + '-sentinel-config'] : []) +
+      (self.redis.enabled && self.redis.redis.auth.password.enabled ? [context.releaseName + '-redis-auth-password'] : [])))
+    severity: warning
+    paths: [secrets.name]
+    message: >-
+      This release creates its own secret under a name you chose for the keys secret or the backup keys secret
+      (<release>-litellm-config, <release>-litellm-db, the database credentials secret, <release>-redis-config,
+      <release>-sentinel-config or <release>-redis-auth-password). Use a different name.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: The proxy connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.1.0"
+    from: postgres.config.username
+    to: postgres.credentials.username
+  - fromVersions: "<1.1.0"
+    from: postgres.config.password
+    to: postgres.credentials.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.1.0"
+    from: postgres.config.database
+    to: postgres.credentials.database

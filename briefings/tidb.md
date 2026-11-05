@@ -14,24 +14,64 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-pd` (stateful) | PD quorum, `pdReplicas` members spread across `locations`, `replicaDirect` |
-| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].replicas` per location |
+| workload `{release}-tikv` (stateful) | Storage nodes, `locations[].tikvReplicas` per location (SQL servers: `serverReplicas`) |
 | workload `{release}-server` (standard) | MySQL front door :4000, status :10080 |
-| workload `{release}-tidb-db-init` | One-shot database/user bootstrap when `autoCreateDatabase.deployInitWorkload` |
+| workload `{release}-tidb-db-init` | Backstop that sets root's password and creates the app db/user if missing (2.2.0: the bootstrapping server does it first); when `autoCreateDatabase.deployInitWorkload` |
 | workload `{release}-tidb-backup` (cron) | Optional `br` backup to S3 or GCS, unsuspended in one location |
 | volumesets, secrets (startup scripts), identity, 2 policies | Per-tier config, secret reveal, and `view` on the ONE install GVC |
 
-## Key knobs (shipped defaults, 2.0.0)
+## Key knobs (shipped defaults, 2.2.0)
 | Knob | Default | Meaning |
 |---|---|---|
-| `locations` | one entry: `aws-us-east-1` × 3 | Must already exist in the install GVC. `replicas` = TiKV **and** tidb-server nodes there |
+| `locations` | one entry: `aws-us-east-1`, `tikvReplicas: 3`, `serverReplicas: 3` | Must already exist in the install GVC. 2.1.0 split 2.0.0's `replicas` into independent TiKV / SQL-server counts; a leftover `replicas` key is refused at render (silently ignoring it would re-size a live cluster) |
 | `pdReplicas` | `3` | `1`, `3`, `5`, `7`. Spread evenly, remainder to the first locations |
 | `images.{pd,tikv,server}` | `v8.5.7` | Bump with `backup.image` — `br` enforces a version match |
 | `resources.{pd,server,tikv}` | 2 cpu / 4-2-4 Gi | Single-value blocks, so bare `cpu`/`memory` |
 | `autoCreateDatabase.*` | on, `deployInitWorkload: true`, `credentialsSecretName: my-tidb-credentials` | Prerequisite `dictionary` secret with `rootPassword`, `user`, `password`, `db` |
 | `volumeset.{tikv,pd}.capacity` | `10` GiB | TiKV supports autoscaling; PD does not |
+| `volumeset.{tikv,pd}.snapshots.*` (2.2.0) | `schedule: "0 3 * * *"`, `retentionDuration: 7d` | `""` turns snapshots off; more often than hourly is refused at render |
 | `external_access.*_outboundAllowCIDR` | `[]` | Per-tier egress; backups force `0.0.0.0/0` on TiKV |
 | `internal_access.{server,tikv,pd}.type` | `same-gvc` | Who may reach each tier. This release's own workloads are ALWAYS included |
 | `backup.*` | off, `provider: aws`, `location: aws-us-east-1` | `location` must be one of `locations` — refused at render otherwise |
+| `proxysql.*` (2.1.0) | off, `3.0.11`, `replicas: 2`/location, 500m / 512Mi | Optional pooler tier per location → `{release}-proxysql:4000`. Requires `autoCreateDatabase.enabled` (refused at render otherwise) |
+
+## 1.1.1 (2026-10-27) — a patch for releases still on 1.1.0
+- **Why it exists:** a production 1.1.0 install (3 locations, 2 TiKV + 2 servers each) lost its whole SQL tier every time a node
+  scale-down evicted one TiKV replica. 1.1.0's server readiness required EVERY store `Up`; the workload has no liveness probe, so
+  the platform reuses readiness as liveness and restarted all servers in every location together. Reproduced here: one frozen
+  store → all 6 servers restarted within 19 s, ~100 s with no SQL endpoint.
+- **The changes** (`kind: gvc` stays in the manifest, so the upgrade prunes nothing):
+  - server readiness = `curl localhost:10080/status` (the 2.1.0+ probe), `timeoutSeconds` 3 → 5. A 131 s frozen store and an
+    unplanned gcp TiKV restart: servers ready throughout, 0 failed queries (client in aws-us-east-1 only).
+  - **PD self-hairpin pin** (`127.0.0.1 $SELF_FQDN` in `/etc/hosts`, as 2.1.0+). On 1.1.0 a node scale-down evicted the FIRST
+    location's PD and it crash-looped `ErrEtcdMemberList … error reading server preface` (own FQDN resolved to the address that
+    reset it, checked from inside); the cluster ran on 2 of 3 PDs. Upgrading to 1.1.1 brought it back in ~30 s.
+  - `tidb.tags` → `cpln-common.tags` (new dependency): CI's validate-charts refuses to publish without `cpln/marketplace*`.
+- **Upgrade cost: every workload restarts once, ~3 min of write unavailability** (3 locations × 2 TiKV, 11 timed-out probes,
+  data intact). Adding `cpln/marketplace-template-version` rolls PD and TiKV; locations roll concurrently, so all 3 PDs restart
+  together (PD quorum gap < 30 s) and each round takes down one store per location — on 1.x's non-region-aware placement some
+  regions lose 2 of 3 copies. Two rounds at 2 TiKV/location. A probe-only build measured 0 failed queries, but
+  **customer releases that were ever force-redeployed carry `cpln/deployTimestamp`, which a `helm upgrade` strips (briefing
+  note below) — so PD/TiKV roll anyway** and the tags cost nothing extra. A change to a mounted startup secret alone does NOT
+  roll the workload (measured 5 min, hash tag unchanged).
+- **Its wizard blocks INSTALL** (a warning-severity root rule; error severity would fail lint on the defaults): 1.1.1 is an upgrade
+  target only. `gvc.name` is immutable in it.
+- **1.1.0's fresh install is flaky:** 1 of 2 multi-location test installs bootstrapped with store `1` `Down` and two stores never
+  registered (the same shape as the 2.0.0 brick below). Irrelevant to existing releases; another reason new installs go to 2.x.
+
+## In-place `helm upgrade` 1.x → 2.2.0 into the chart-created GVC (measured 2026-10-27 — never tell a user to do this)
+- **Superseded 2026-10-29:** the supported in-place path (keep-gvc.py + pre-granted policies + staged server image) is in the 2.2.0 README, "Upgrading in place from 1.8.1"; the plain upgrade below is still never to be run.
+- With 1.x values the guard refuses (exit 1, nothing touched). With 2.x-style values and `--gvc <the 1.x GVC>` it RUNS: identity,
+  volumesets and workloads share names and are updated in place, the old policy is deleted, then pruning `kind: gvc` fails —
+  `GVC … cannot be deleted because it contains at least one volume set` (400). **Only that platform guard saved the data**
+  (pgedge measured a GVC delete going through in 6 s, so do not rely on it).
+- Result: `cpln` exits 1, the release is stuck `pending-upgrade`, all 3 PDs restart at once, TiKV rolls everywhere, and the SQL
+  tier was down **9 m 23 s** — mostly the new servers waiting on the reveal-authorization cache for the new credentials secret.
+  Data survived (same cluster id, identical checksum, now v8.5.7). The cluster also stays NOT region-aware: PD persisted 1.x's
+  `[replication]` (no `location-labels`) at bootstrap.
+- A release record is a standard Helm release in org secret `cpln-helm-release-{name}-{suffix}-v{n}` (gzip+base64 JSON with
+  `manifest`). Removing `kind: gvc` from the latest record's manifest is the candidate "detach" so an upgrade cannot prune it —
+  NOT YET TESTED.
 
 ## What 2.0.0 changed
 - **No `kind: gvc`.** Deploys into the install GVC; `gvc.locations` → `locations`, `gvc.pdReplicas` → `pdReplicas`, `gvc.name` gone.
@@ -43,22 +83,101 @@
 - **Complete `localOptions` blocks everywhere.** The backup cron and db-init previously sent `location` + `suspend` only; the API completes a partial entry from PLATFORM defaults, so they actually ran with `capacityAI: true`, a 5-second timeout, and (for the cron) autoscaling up to 5 concurrent pods.
 - **`location-labels = ["region"]` is now set on every shape**, not only multi-location ones. PD persists `[replication]` at bootstrap, so a cluster that starts without it can never become region-aware afterwards.
 
+## What 2.1.0 changed (multi-location "rock solid" pass — tested live on 3 AWS regions and GCP + Azure)
+2.0.0 was never deployed; 2.1.0 is the first multi-location build actually tested (3-cloud cold starts on `gcp-us-central1` / `azure-eastus2` / `gcp-us-east1`). Three fixes, all driven by that testing:
+- **PD readiness is quorum-independent: pd-server listening on :2380, checked on loopback (bug 1 + upgrade deadlock).** The platform resets ALL inbound to a `replicaDirect` replica that is not ready. A leader-gated PD probe therefore deadlocks whenever NO member is ready — a member can only become ready once a leader exists, and an election needs members to reach each other. A fresh install escapes it (the seed is ready alone and joiners dial OUT to it), so it surfaced only on a **concurrent restart of all PDs**, which is every upgrade on a multi-location install (each location's deployment rolls in parallel): measured no leader for 13+ min, then a readiness-deadline restart loop, database down throughout. With the loopback probe the same deadlocked cluster recovered quorum in ~70 s. **`cpln/publishNotReadyAddresses` is a NO-OP here** — a controlled test (tagged vs untagged not-ready stateful replicas, per-replica and service names, same- and cross-region, 5 min) found both reset; it was briefly shipped on PD/TiKV under the wrong belief that it bypassed the gate, and removed.
+- **PD's own FQDN pinned to `127.0.0.1` in `/etc/hosts` at startup (bug 1, self-hairpin).** PD's embedded-etcd health-checker dials its OWN `advertise-client-urls` (this replica's FQDN → its own mesh VIP over HTTP/2), which the mesh RESETS (`error reading server preface`), crash-looping the bootstrap PD — independent of readiness, so `publishNotReadyAddresses` does NOT fix it. `advertise-client-urls` must stay the FQDN because TiKV/tidb-server follow it, so the self-pin routes only PD's self-connection off the mesh while peers still resolve the FQDN via mesh DNS.
+- **PD join retried IN-PROCESS, not via container restart (bug 1 determinism).** The leader must reach a joining PD's peer URL (:2380) to finish the raft join — an inbound connection the platform resets until the joiner is ready and its endpoint has propagated cross-region (measured reset at +37 s, reachable at +86 s). The old `exec pd-server --join` exited on a stalled join, and the container restart reset that clock, stranding the last member (1 of 3 cold starts failed to form in 12 min). Retrying in-process keeps the container alive so a later attempt finds it reachable. **Result: 3/3 cold starts converge with 0 PD restarts.**
+- **tidb-server readiness now gates on its OWN `/status` (:10080), not cluster-wide TiKV store count (bug 2).** The old probe keyed every server off the same global PD `/stores` view, so a sustained sub-quorum TiKV shortfall would fail readiness on ALL servers at once → correlated multi-region restart. `/status` is local: a server rides through TiKV blips (query-time errors on individual statements, no restart) and recovers instantly. First-boot ordering is preserved because `/status` only returns 200 after the server bootstraps against the cluster. Matches TiDB-Operator. Note: the single-reschedule cascade never actually reproduced on 2.1.0 (3 stores, `readyStores=2` → `up_count` stays 2, and the readiness window buffers brief dips); this is defense-in-depth that removes the correlated-failure class.
+- **Server and TiKV readiness use long periods to cover a slow first boot (fixed in place 2026-10-03).** The platform derives a startup probe from readiness and kills a never-ready container after ~`initialDelaySeconds + 30 × periodSeconds`; `failureThreshold` does not count (measured: threshold 1 and 20 killed at +409 s / +398 s with 5 + 30×10). The shipped server probe (15 + 30×10 = 315 s) killed every server mid-bootstrap with **exit code 2** on a 3-location cross-cloud install (eu-central-1 / us-west-2 / gcp-us-east1): TiKV took ~6 min to come up, then system-table bootstrap ~4.5 min at ~150–200 ms PD latency; it recovered on the restart after ~12 min. Now server `periodSeconds 30 / failureThreshold 3` (915 s startup, ~90 s out of rotation) and TiKV `20 / 5` (610 s, covers its 600 s PD wait).
+- **`locations[].replicas` split into `tikvReplicas` + `serverReplicas`.** Clients only reach SQL servers in their own location (the mesh is location-pinned), so zero downtime needs ≥2 servers per location — and coupling made that double TiKV too. `tidb.totalTikvReplicas` (renamed from `totalReplicas`) feeds PD `max-replicas` from TiKV ONLY: counting servers would ask for 3 copies on a 1-store install and leave it permanently under-replicated. Dead `tidb.readyStores` helper removed (only the old server probe used it).
+- **Optional ProxySQL pooler** (`proxysql.enabled`, default off) — see Troubleshooting for the design and the latin1 trap.
+- **PD restart path no longer overrides election timing.** The existing-data config set `election-interval 20s` / `lease 15` while first boot used PD defaults (3 s), so any cluster that had ever restarted (every upgrade) failed over its PD leader several times slower. Both paths now use the defaults, which ran without a spurious election in every multi-region test.
+
+## What 2.2.0 changed (fixes only — architecture unchanged)
+- **Root is never passwordless (when `autoCreateDatabase.enabled`, the default):** the server start script writes `/tmp/tidb-init.sql` (0600) from the credentials env and starts
+  tidb-server with `--initialize-sql-file`; the bootstrapping server runs it once, **before** opening :4000 (measured v8.5.7).
+  Escaping: `'`→`''`, `\`→`\\` in strings, backtick doubled in identifiers. **Trap:** a file TiDB cannot parse is FATAL and is
+  NOT re-run on restart (root stays passwordless) — escaping makes that unreachable, and db-init stays on as the backstop
+  (also covers clusters bootstrapped by 2.1.0). `autoCreateDatabase.enabled: false` → no file → passwordless root, as before.
+  **Trap found in test:** the OTHER servers can open :4000 before the bootstrapper's `ALTER USER` reaches them (~2 s of
+  passwordless root on 2 of 6 servers, 2026-10-06). Closed by a readiness gate, `/tmp/root-guard.sh` (written by the start
+  script): a raw handshake for root with an empty password must be refused, else not ready. After 120 s of open root it
+  passes with a log WARNING, so a pre-2.2.0 cluster whose root really is passwordless keeps its SQL tier and db-init repairs it.
+  Verified round 2: 0 passwordless-root connections through the service on two fresh 3-location installs; the 120 s fallback
+  + db-init repair measured on a passwordless 2.1.0 → 2.2.0 upgrade. The guard protects FIRST BOOT only: root made
+  passwordless on an already-ready server stays routed (~90 s observed) — it is not a runtime monitor. After its first
+  DENIED the guard stops probing (`/tmp/root-guard-ok`): each refused probe is a failed root login, so probing every 30 s
+  would lock a root that has `FAILED_LOGIN_ATTEMPTS` (measured v8.5.7). Auth-switch replies (root on caching_sha2) are
+  completed with an empty password rather than misread as open.
+  **Round 4 trap (fixed):** reading a packet with `od -N1` killed `dd` early, so the rest of the greeting was parsed as the
+  login reply → false OPEN/OTHER, no marker, probing forever, root auto-locked 31 s after `FAILED_LOGIN_ATTEMPTS 2`. Packets are
+  now read whole, and a `flock` keeps the platform's two concurrent probe runs to one: 30 runs incl. 10 concurrent pairs = 1
+  refused login (`tidb_server_handshake_error_total` delta 1). WARNING for a genuinely passwordless root logs once per start.
+- **Volume snapshots actually run:** `volumeset.{pd,tikv}.snapshots.schedule` (daily 03:00 UTC; render + wizard refuse
+  more-frequent-than-hourly — the API rejects it only at apply). 2.1.0 had retention but no schedule → no snapshots ever.
+- **ProxySQL start script inline** (`tidb.inlineScript`, every `$` doubled): no secret, so enabling ProxySQL on an existing
+  release no longer stalls ~10 min on a new reveal grant. The ProxySQL secret is the only resource 2.2.0 removes.
+- **Backup reaches PD by every member's per-replica address** (comma list): the service name only reaches PD in the backup's
+  own location, which may have none.
+- **Upgrade 2.1.0 → 2.2.0 restarts EVERY workload (catalog-wide, not tidb):** the `cpln/marketplace-template-version` tag alone
+  rolls a workload (isolated 2026-10-06; `helm.sh/chart`, other tags, identity/secret/policy changes do not). Stateful tiers
+  roll one replica per location but all locations at once, so one PD + one TiKV per location = **~75 s global write stall**,
+  0 acknowledged writes lost, same volumes/cluster id/store ids, identical checksum. README and wizard say so.
+- **db-init cron now runs in ONE location** (`defaultOptions.suspend: true` + one unsuspended `localOptions` entry): a cron's
+  schedule ignores 0/0 autoscaling, so 2.0.0–2.1.0 ran it in every GVC location. Its wait loop now tries the real root
+  password first — on 2.2.0 root is never passwordless, so the old loop failed every fresh install's first run. The wait
+  is ~550 s (inside `activeDeadlineSeconds: 600`): a fresh 3-location install took up to ~7.5 min before any server served.
+- **ProxySQL `esc()` doubles `'`:** an undoubled `'` in any credential loaded NO users (ProxySQL still ready) and logged the
+  plaintext passwords in its SQLite error. Present since 2.1.0.
+- **Init-file failure modes are refused up front:** a `user` > 32 or `db` > 64 characters (or ending in a space) would fail at
+  execution, also fatally — the start script exits with a named FATAL before TiDB starts, so nothing bootstraps passwordless.
+  The db-init backstop now escapes its SQL the same way.
+- **Cross-location SQL failover is deferred** to the platform's internal-endpoint locality failover (est. Oct 2026): when it
+  ships, re-run the resilience matrix (TCP :4000, readiness-driven, new connections only, failback). A stateful/replicaDirect
+  tidb-server + HAProxy design was specced and set aside (spec "Superseded design").
+
 ## Availability posture
 - Default is **one location, 3 TiKV + 3 PD**: survives a node loss, not a location loss.
 - Location survival needs **≥3 locations with PD spread one per location**. Verified on 1.x: converged in 2 m 51 s, query-ready ~5 min, 66 regions replicated one per location.
-- tidb-server readiness requires 2 TiKV stores `Up` (1 on a single-store install) — a quorum, not all of them, so one location down does not make it unready.
+- tidb-server readiness (2.1.0) gates on the server's OWN `/status` (:10080), independent of cluster-wide TiKV state — one location down never makes a server unready, and the SQL tier cannot cascade-restart on a TiKV shortfall. (2.0.0 and earlier gated on a 2-of-N TiKV `Up` quorum via PD.)
+
+### Stress-tested 2026-10-01 (2.1.0, ProxySQL on, 3 AWS locations, continuous write+read-back load from every location, fresh connection per query, 10 s per-query timeout)
+| Event | Failed queries per stream | Notes |
+|---|---|---|
+| tidb-server crash, **1**/location | direct 21, ProxySQL 5 — that location only | ~10 s local hole; other locations 0 |
+| tidb-server crash, **2**/location | **ProxySQL 0**, direct 8 (~5 s) | ProxySQL connect-retry masks the mesh's endpoint-removal lag |
+| ProxySQL replica crash (2/location) | 2 (~1 s), that location's pooled path only | no retry layer above the client→ProxySQL hop |
+| TiKV follower frozen 90 s | 0 | |
+| TiKV **leader** store frozen 90 s | 1 everywhere (stalled ~10 s) | Raft election; requests block, not error |
+| PD follower / **leader** frozen 90 s | 0 / 1 everywhere | leader moved; all members healthy after |
+| **Whole location's PD+TiKV down 3 min** (held PD leader) | 3 everywhere, all in first ~33 s, then **0** | incl. that location's own clients (via remote storage) |
+| **Whole location FULLY dark 3 min** (PD leader + TiKV frozen, its servers + ProxySQL scaled to 0), zero-downtime shape, 60 s timeout | **0** in surviving locations | `SELECT 1` never interrupted; one write per stream stalled ~15-16 s, then committed; full recovery on restore, drift clean |
+| Rolling redeploy (servers at 1/location, ProxySQL), 2 no-op upgrades, live scale-out 1→2/location | 0 | planned restarts surge new-before-old |
+| 2 locations: lose minority location | 0 | |
+| 2 locations: lose **majority** location 2 min | 100% during (correct); recovered unaided — co-located clients +16 s, minority-side clients +159 s | `ERROR 8027 Information schema is out of date` for ~60 s after restore (schema lease expired) |
+- **The mesh is location-pinned for service names.** A client in a GVC location the release does not run in got 100% connection failures; a location-qualified name (`{workload}.{location}.{gvc}.cpln.local`) does not exist for a standard workload (resolves, then times out exactly like a bogus location). So neither ProxySQL nor anything else can fail SQL traffic over to another location's servers — in-location redundancy (`replicas ≥ 2`) is the only zero-downtime lever for the SQL tier.
+- **Zero-downtime shape (README example), verified live:** 3 locations × (`tikvReplicas: 1`, `serverReplicas: 2`) + ProxySQL — SQL-server crash in two different locations cost **0** queries via ProxySQL (direct 9-10 over 5-8 s); 3 stores, `max-replicas` 3, 0 PD restarts, drift-clean. Needs only 3 TiKV, vs 6 under 2.0.0's coupled `replicas`.
+- **Stateful tiers roll one replica at a time WITHIN a location, but locations roll CONCURRENTLY.** Single location, 3 replicas: force-redeploying PD then TiKV under load rolled them highest-ordinal-first ~2 min apart, quorum kept, 2 + 1 stalled queries, checksum identical. Multi-location, 1 PD per location: all 3 PDs restarted within ~22 s of each other — the trigger for the upgrade deadlock above. With the quorum-independent probe, that concurrent restart cost **0 failed queries** (60 s client timeout): `SELECT 1` never interrupted, one write per stream stalled ~44 s then committed.
+- **2.0.0 bricks its OWN default single-location install (2 of 2 fresh installs, 2026-10-02).** The seed PD self-hairpin-crashes once mid-bootstrap; TiKV's bootstrap races it; store 1 (the bootstrapping store) never heartbeats (`last_hb` 1970, loops `get the first region failed: RegionNotFound`) and the cluster has no first region, so tidb-server FATALs on `PD server timeout` forever — while 2.0.0's readiness reported "servers ready". **Upgrading to 2.1.0 does not repair it** (data-level); reinstall (it holds no data). 2.1.0 on the same shape: SQL in 168 s, 0 PD restarts. README "Upgrading from 2.0.0" tells users to check `pd/api/v1/stores` first.
+- Simulation technique: `SIGSTOP` on `pd-server`/`tikv-server` (children of bash) holds a store down with no reschedule; `tidb-server` and `proxysql` run as PID 1 and can't be frozen from inside — crash them with `kill -TERM 1`. Never `suspend`.
+- **`redis` (3.3.0-3.7.0) relies on the same `cpln/publishNotReadyAddresses` tag for its parallel boot** ("publishNotReadyAddresses keeps peer…"). Measured a no-op here — flagged to the maintainer, not changed (pre-existing template).
 
 ## Troubleshooting / considerations
-- **NOT YET TESTED.** 2.0.0 was built after the four merged GVC conversions and has not been deployed. Everything below carried forward from 1.x still applies; the 2.0.0-specific items are chart-level and unverified live.
+- **TESTED LIVE (2.1.0).** The multi-location path is now verified end-to-end across three clouds (`gcp-us-central1`/`azure-eastus2`/`gcp-us-east1`): deterministic 3-cloud cold-start convergence (3/3, 0 PD restarts), cross-cloud write/read, drift-clean no-op upgrade, and the bug-2 readiness decoupling. The 2.0.0-specific GVC-guard items below were chart-level; they carry into 2.1.0 unchanged and the deploy path is now exercised.
 - **`exposeServer` was REMOVED in 2.0.0** (maintainer ruling). It opened public inbound on the server workload but rendered no `loadBalancer.direct`, so TCP 4000 was never published — the only `http` port is TiDB's unauthenticated status/API port 10080, which is what the canonical endpoint would have served. Never tested in three rounds. A values file still setting it now fails at render rather than being silently ignored.
 - **db-init is a `cron`, not a `standard` workload** (2.0.0). As a standard workload it completed, was restarted, and completed again — reporting `ready: false` and `Deployment does not have minimum availability` permanently while the cluster was healthy. Re-running is harmless: the script fast-exits when the database exists, before the non-idempotent `CREATE USER`.
 - **GCS backups did not work before 1.7.0.** Two causes, both fixed: `backup.sh` never passed `--send-credentials-to-tikv=false`, and TiKV's legacy GCS backend could not use the metadata server. v8.5.7 enables `gcp_v2`, which supports ADC. AWS S3 was unaffected.
 - **The backup image version must match the cluster.** From v8.5.7 `br` enforces the check even with `--check-requirements=false`.
-- **The restore path has never been exercised** against a backup this template produced, and SST object naming differs between the S3 (`1/<name>`) and GCS (`1_<name>`) backends. The README says so rather than implying a rehearsed procedure.
+- **Restore verified on S3 AND GCS (2.2.0, 2026-10-06):** README-form `br restore full` into an empty release → identical `ADMIN CHECKSUM`. GCS needs `--send-credentials-to-tikv=false` (else `You should provide '--gcs.credentials-file'`); TiKV reads the backup with the target release's identity, so the target's `backup` must point at the same bucket/cloud account. A full restore brings the SOURCE cluster's `mysql.user` — root and app passwords become the backup's, not the target's secret.
+- **Write stalls to size client timeouts against:** PD/TiKV rolling restart ~45 s, version upgrade ~75 s (one node per location), location loss ~15 s. README advises 60 s.
+- **`KILL` across tidb-servers silently does nothing** (accepted, query runs to completion) — connections are per-server.
+- **A `helm upgrade` after `cpln workload force-redeployment` restarts that workload again** (it strips the `cpln/deployTimestamp` tag) — a second ~45 s stall for PD/TiKV.
 - **Region-aware placement was broken before 1.7.0** — store labels went to a top-level `[labels]` table TiKV ignores, under the key `zone`, which no `location-labels` entry referenced. Fixed there (`[server] labels`, key `region`) and verified: each store reports `region=<its location>`. 2.0.0 does not change the mechanism; it only extends `location-labels` to single-location installs so the option stays open later.
 - **PD reads `[replication]` only at bootstrap**, then persists it to etcd and ignores the file forever. Always check the PD API, not `pd.toml`. This is also why `max-replicas` is fixed for the life of the cluster.
-- **`db-init` completes then restarts forever** (it exits 0 and is restarted), so a healthy install never shows all-green. Known, not fixed. Set `autoCreateDatabase.deployInitWorkload: false` after first boot.
 - **The `tidb-server` image has no mysql client** — connect from another workload in the GVC.
+- **ProxySQL (2.1.0, opt-in) — why no HAProxy tier like pgEdge/postgres-multi-location.** Their HAProxy picks a specific node (Patroni primary / local node-0). TiDB's SQL tier is symmetric — any tidb-server serves any read/write and itself routes to region leaders via PD — so ProxySQL has ONE backend, the tidb-server mesh VIP, and the mesh spreads across servers. Consequences baked into the config: monitor OFF and shunning effectively OFF (shunning the single VIP after a few failed connects would black-hole everything with nowhere to fail over), connect retries ON (the mesh lands the retry on a healthy server), pooled backend connections age out at 5 min (rebalance after recovery), admin on loopback only with a random per-boot password (stock image ships `admin:admin` on `0.0.0.0:6032`), `--no-version-check` (no phone-home).
+- **ProxySQL + latin1 clients = intermittent `ERROR 1273 ... latin1_swedish_ci`.** TiDB tolerates an unsupported collation in the HANDSHAKE (silently swaps to utf8mb4_bin) but rejects it in an explicit `SET NAMES`, which is exactly how ProxySQL honours a client's charset. ~50% of a latin1 client's queries fail (depends which pooled backend connection it lands on); utf8mb4 clients measured 70/70. The usual latin1 client is the `mysql` CLI under a POSIX locale (`default-character-set=auto`) — pass `--default-character-set=utf8mb4`. Direct-to-server is unaffected, so "works direct, flaky via pooler" points straight here.
 - **A missing credentials secret wedges the deployment silently.** `cpln logs` returns zero lines; read `status.versions[].message` via `get-deployments`. Self-heals in ~5.5–10.5 min once created.
 - Spec/reports: archived under `.pipeline-archive/tidb/`. Adjacent: `mysql` (single-instance MySQL), `cockroach` (other distributed SQL, and the closest reference for this conversion).
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 1.8.1.** It granted read on every bucket in the account and no write actions. The documented IAM policy was widened to ten actions at the same time; an upgrading user must update their IAM policy first.

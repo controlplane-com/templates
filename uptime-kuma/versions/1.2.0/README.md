@@ -5,8 +5,12 @@
 > is the limit. Rename those two keys in your values; an upgrade that still carries the old names is
 > refused at render. Blocks that expose only a limit keep the bare `cpu`/`memory` names.
 
+> **Upgrading from 1.1.0 or earlier:** `publicAccess.enabled` now defaults to `false`, so a CLI
+> upgrade whose values omit `publicAccess` makes the dashboard and status pages private. Pass
+> `--set publicAccess.enabled=true` to keep them public.
 
-This app deploys [Uptime Kuma](https://github.com/louislam/uptime-kuma), a self-hosted uptime monitoring tool — HTTP(s)/TCP/DNS checks, alerts through 90+ notification providers, and public status pages. A single stateful workload with its SQLite database on a persistent volume, served on the canonical `*.cpln.app` endpoint.
+
+This app deploys [Uptime Kuma](https://github.com/louislam/uptime-kuma), a self-hosted uptime monitoring tool — HTTP(s)/TCP/DNS checks, alerts through 90+ notification providers, and public status pages. A single stateful workload with its SQLite database on a persistent volume. It installs private; once you have claimed the admin account, public access serves the dashboard and status pages on the canonical `*.cpln.app` endpoint.
 
 ## Architecture
 
@@ -79,11 +83,10 @@ Monitors, notification providers, and status pages are all configured in the app
 
 ## Important Notes
 
-- **Open the dashboard immediately after install and create the admin account.** Upstream has no way to preset credentials, so the first visitor to the URL claims the instance — until you complete the setup wizard, anyone who can reach the endpoint can create the admin account. Once one account exists the wizard is permanently disabled.
+- **Create the admin account over `cpln port-forward` before you turn on public access** (see First run). Upstream has no way to preset credentials, so until you complete the setup wizard, anyone who can reach the dashboard can create the admin account. Once one account exists the wizard is permanently disabled.
 - **No HA / multi-replica** — upstream supports exactly one instance (no clustering), so the workload is pinned to 1 replica. A restart means a brief monitoring gap; monitors resume automatically on boot, and all data survives on the volumeset.
 - **No cloud backups in this version** — durability is the persistent volume plus a 7-day final snapshot on uninstall. Uninstalling and reinstalling starts a fresh instance.
-- **Do not switch the database to MariaDB in place** — upstream does not support migrating an existing SQLite instance; a MariaDB-backed deployment must be a fresh install.
-- **Forgot the admin password?** `cpln workload exec {release}-uptime-kuma --gvc {gvc} --container uptime-kuma -- npm run reset-password` (upstream's documented recovery).
+- **Forgot the admin password?** `cpln workload exec RELEASE_NAME-uptime-kuma --gvc GVC_NAME --container uptime-kuma --stdin --tty -- npm run reset-password`, then enter the new password twice (upstream's documented recovery).
 
 ## Links
 

@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: DBeaver CloudBeaver
+category: developer-tools
+topology: single
+
+summary: >-
+  DBeaver CloudBeaver, a browser-based SQL client and database administration console, as one
+  instance with a persistent workspace for its configuration, saved connections and users, and
+  an admin login bootstrapped from a secret. The UI is private to the GVC by default and its
+  egress is closed, so it reaches databases in the same GVC only. Pick it to browse, query and
+  edit PostgreSQL, MySQL, MariaDB and other SQL databases from a web browser without a desktop
+  client.
+
+keywords:
+  - sql client
+  - database gui
+  - web sql editor
+  - sql editor
+  - database administration
+  - database browser
+  - database console
+  - query editor
+  - data editor
+  - jdbc
+  - postgresql client
+  - mysql client
+
+useCases:
+  - Query and edit data in databases running in the same GVC from a web browser
+  - Give a team a shared database console with saved connections instead of desktop clients
+  - Run ad-hoc SQL against an internal PostgreSQL or MySQL workload
+  - Inspect and change database schemas without exposing database ports to the internet
+
+alternativeTo:
+  - pgAdmin
+  - phpMyAdmin
+  - Adminer
+  - DataGrip
+  - TablePlus
+  - MySQL Workbench
+
+pickInsteadIf:
+  - need: dashboards, charts and scheduled reports over SQL queries
+    template: metabase
+  - need: a spreadsheet-style UI over tables for non-technical users
+    template: nocodb
+  - need: internal apps with forms and buttons on top of a database
+    template: tooljet
+
+related:
+  - template: postgres
+    relation: companion
+    note: A PostgreSQL database in the same GVC to connect the console to
+  - template: mysql
+    relation: companion
+    note: A MySQL database in the same GVC to connect the console to
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.passwordSecretName
+    required: true
+    description: Admin password (8+ characters), read only when the workspace is first initialized. When it is missing the deployment waits.

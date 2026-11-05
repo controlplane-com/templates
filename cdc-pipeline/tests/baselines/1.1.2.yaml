@@ -1,0 +1,49 @@
+# cdc-pipeline 1.1.2 — the default install: highly available PostgreSQL (three Patroni members, three
+# etcd members, two HAProxy replicas), a three-broker Kafka cluster and Debezium Server, one location.
+# CI creates the single credentials secret; its name also goes into the four kafka.kafka.env references.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  kraftid: kraft-cluster-id
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [kafkaSaslPassword, kafkaAdminPassword, kafkaInterBrokerPassword, kafkaControllerPassword]
+    entries:
+      username: cdc_user
+      password: "{gen.pgpw}"
+      database: cdcdb
+      sourcePassword: "{gen.pgpw}"
+
+vars:
+  pg_user: cdc_user
+  pg_password: "{gen.pgpw}"
+  pg_db: cdcdb
+  kafka_admin_password: "{secrets.creds.kafkaAdminPassword}"
+
+values:
+  postgres-highly-available:
+    config:
+      credentialsSecretName: "{secrets.creds.name}"
+  debezium-server:
+    credentialsSecretName: "{secrets.creds.name}"
+  kafka:
+    kafka:
+      secrets:
+        kraft_cluster_id: "{gen.kraftid}"
+      env:
+        - name: CDC_KAFKA_ADMIN_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.kafkaAdminPassword"
+        - name: CDC_KAFKA_DEBEZIUM_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.kafkaSaslPassword"
+        - name: CDC_KAFKA_INTER_BROKER_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.kafkaInterBrokerPassword"
+        - name: CDC_KAFKA_CONTROLLER_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.kafkaControllerPassword"
+
+# 1.1.1 is the previous version (same values; its database still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 1.1.1

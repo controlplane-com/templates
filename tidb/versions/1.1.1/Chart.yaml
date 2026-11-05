@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tidb
+description: Distributed MySQL-compatible database
+
+type: application
+version: 1.1.1
+appVersion: "8.5.3"
+
+annotations:
+  created: "2025-09-04"
+  lastModified: "2026-10-27"
+  createsGvc: true
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

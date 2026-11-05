@@ -93,7 +93,7 @@ buckets:
   cloudAccountName: my-manticore-cloudaccount    # Name of your configured Cloud Account
   awsPolicyRefs:                        # IAM policies for S3 access
     - my-manticore-policy       # Note: if using a custom policy, omit the aws:: prefix as this is only for AWS managed policies
-  awsRegion: us-east-1                  # Region of your S3 bucket
+  awsRegion: us-east-1                  # not read by this chart version; leave as is
   sourceBucket: my-manticore-bucket               # S3 bucket containing files to import
 ```
 
@@ -209,7 +209,7 @@ orchestrator:
     resources:
       maxCpu: 250m
       minCpu: 100m
-      memory: 512Mi
+      maxMemory: 512Mi
       minMemory: 128Mi
     import:
       batchSize: 20000            # Rows per INSERT statement
@@ -314,7 +314,7 @@ The last lines are k6's end-of-test summary (`http_req_duration`, `http_req_fail
 | Web UI | `{release}-ui.{gvc}.cpln.local:3000` | Public `*.cpln.app` endpoint only when `orchestrator.ui.publicAccess.enabled` is true |
 | Custom domain | `https://{domain.name}` | `/api/*` → orchestrator API, `/*` → UI |
 
-The bearer token is whatever you stored in the secret named by `orchestrator.agent.tokenSecretName`. Read it back with `cpln secret reveal my-manticore-agent-token`.
+The bearer token is whatever you stored in the secret named by `orchestrator.agent.tokenSecretName`. Read it back with `cpln secret reveal my-manticore-agent-token -o yaml` (a bare `reveal` prints only a summary table).
 
 ## Authentication
 

@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Logto
+category: identity
+topology: stateless
+
+summary: >-
+  Logto open-source auth platform: OIDC and OAuth sign-in pages, users, roles, organizations,
+  connectors and a Management API, as two interchangeable replicas on a bundled highly available
+  PostgreSQL, or a single PostgreSQL for development. A public Admin Console signs in with an admin
+  account created from a secret you provide; custom domains and database backups are optional. Pick
+  it to add sign-in and user management to your own apps with a developer-first console.
+
+keywords:
+  - oidc
+  - openid connect
+  - oauth2
+  - oauth 2.1
+  - sso
+  - single sign-on
+  - ciam
+  - customer identity
+  - identity provider
+  - idp
+  - authentication server
+  - user management
+  - social login
+  - passwordless
+  - mfa
+  - organizations
+  - rbac
+  - jwt
+  - management api
+  - custom domain
+
+useCases:
+  - Add sign-in and sign-up to web, mobile and single-page apps
+  - Issue OIDC and OAuth tokens for your apps and APIs
+  - Give backend services machine-to-machine access tokens
+  - Offer social and passwordless login with multi-factor authentication
+  - Run B2B organizations with their own members and roles
+  - Manage users and roles through a console and a REST API
+
+alternativeTo:
+  - Auth0
+  - Okta Customer Identity
+  - Clerk
+  - Amazon Cognito
+  - Firebase Authentication
+  - Stytch
+  - Microsoft Entra External ID
+
+compatibleWith: [oidc]
+
+pickInsteadIf:
+  - need: user federation from LDAP or Active Directory, or SAML-heavy enterprise identity
+    template: keycloak
+  - need: a full app backend with Postgres, auth, REST API, realtime and file storage in one
+    template: supabase
+  - need: a small app backend in one binary with built-in auth, SQLite and a REST API
+    template: pocketbase
+
+related:
+  - template: keycloak
+    relation: alternative
+    note: Keycloak identity server with SSO, OIDC, SAML and user federation
+  - template: fusionauth
+    relation: alternative
+    note: FusionAuth identity server with OAuth2, OIDC and SAML on a bundled single PostgreSQL
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Admin Console account Logto creates on first boot (username of letters, digits and _; password of 8 or more characters). When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+    required: true
+    description: URL-safe credentials the bundled PostgreSQL initializes with and Logto connects with; set the name for the database in use. A missing secret leaves the deployment waiting with no logs.
+  - kind: domain
+    valuesPath: [customDomain.core, customDomain.adminConsole]
+    required: false
+    when: customDomain.core or customDomain.adminConsole is set
+    description: Apex domain verified in Control Plane and a CNAME from each hostname to the GVC endpoint; the chart creates the domain resources.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgresHA.backup.minio.credentialsSecretName
+      - postgres.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

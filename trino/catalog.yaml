@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Trino
+category: analytics
+topology: stateless
+
+summary: >-
+  A Trino cluster: one coordinator serving the Web UI and the JDBC and REST endpoint, plus a worker
+  tier scaled by a replica count (zero runs a single node). Catalogs connect PostgreSQL, MySQL,
+  ClickHouse, MongoDB and other connector sources with credentials from secrets, so one SQL query
+  can join across them without copying data. Optional password authentication enables a public
+  HTTPS endpoint. Pick it for federated SQL and an always-on query endpoint for BI tools.
+
+keywords:
+  - distributed sql query engine
+  - federated queries
+  - query federation
+  - cross-database joins
+  - data virtualization
+  - prestosql
+  - jdbc
+  - interactive sql
+  - ad hoc analytics
+  - mpp
+  - sql connectors
+  - sql over mongodb
+
+useCases:
+  - Join tables from PostgreSQL, MySQL and ClickHouse in one SQL query
+  - Give BI tools one JDBC endpoint over several databases
+  - Run ad hoc analytical SQL on operational databases without copying data
+  - Query MongoDB collections with standard SQL
+
+alternativeTo:
+  - Starburst Galaxy
+  - Amazon Athena
+  - Presto
+  - Dremio
+  - Denodo
+
+pickInsteadIf:
+  - need: a scheduled SQL batch job with no server running
+    template: duckdb
+  - need: a database that stores and ingests the analytical data itself
+    template: clickhouse
+  - need: an Iceberg REST catalog for lakehouse tables in object storage
+    template: polaris
+  - need: dashboards and charts for business users
+    template: metabase
+  - need: large-scale ETL with DataFrames in Python or Scala
+    template: spark
+
+related:
+  - template: polaris
+    relation: companion
+    note: Iceberg REST catalog that can be added as a Trino iceberg catalog
+  - template: metabase
+    relation: companion
+    note: BI dashboards that can use Trino as a data source
+  - template: postgres
+    relation: companion
+    note: Common data source mounted as a Trino catalog
+  - template: mysql
+    relation: companion
+    note: Common data source mounted as a Trino catalog
+  - template: clickhouse
+    relation: companion
+    note: Analytical database Trino can query and join with other sources
+  - template: mongodb
+    relation: companion
+    note: Document database Trino can query with SQL
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.passwordFileSecretName
+    required: false
+    when: auth.enabled
+    description: Bcrypt password file (htpasswd -B), one user per line. Auth requires publicAccess.enabled, and public access requires auth.
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.sharedSecretName
+    required: false
+    when: auth.enabled
+    description: Random string shared by all nodes for internal communication, required once authentication is on.
+  - kind: secret
+    secretType: opaque
+    valuesPath: catalogs
+    required: false
+    when: catalogs[].secrets has entries
+    description: Each secret named in catalogs[].secrets[].secretName holding a data-source credential; a dictionary works with secretKey. Missing ones leave the deployment waiting.

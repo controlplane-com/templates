@@ -1,22 +1,60 @@
 # FusionAuth
 
-## Overview
-FusionAuth is a modern, self-hosted identity and access management platform that provides user authentication, authorization, and secure single sign-on. It supports protocols such as OAuth2, OpenID Connect, and SAML.
+FusionAuth is a modern, self-hosted identity and access management platform that provides user authentication, authorization, and secure single sign-on. It supports protocols such as OAuth2, OpenID Connect, and SAML. This template deploys FusionAuth with a bundled PostgreSQL database.
 
-### Architecture
+## Architecture
 
 - **FusionAuth workload** — the identity provider, publicly reachable by default so applications can redirect users to it.
 - **Bundled PostgreSQL** — deployed from the `postgres` template as a dependency, holding all FusionAuth state.
 - **Secrets** — the database credentials secret this chart creates from your values, and the startup script.
 - **Identity and policy** — `reveal` on exactly those secrets.
+- **Backup cron** (optional) — deployed by the `postgres` template when `postgres.backup.enabled: true`.
 
 There is no volume set on the application tier — all state lives in PostgreSQL.
 
-### Prerequisites
+## Prerequisites
 
-None. The database is deployed and wired up for you; there is no secret to create beforehand.
+None for a default install. The database is deployed and wired up for you; there is no secret to create beforehand.
 
-### Getting Started
+- **(Only for database backups)** an AWS S3 or Google Cloud Storage bucket and a Control Plane cloud account — see [Backing Up Postgres](#backing-up-postgres).
+
+## Configuration
+
+```yaml
+image: controlplanecorporation/fusionauth:0.2
+resources:
+  cpu: 512m
+  memory: 1024Mi
+firewall:
+  external:
+    inboundAllowCIDR:
+        - 0.0.0.0/0
+    outboundAllowCIDR: [] # Set to 0.0.0.0/0 if communicating with an external IdP
+  internal:
+    type: same-gvc # options: same-gvc, same-org, workload-list
+```
+
+The `postgres` block configures the bundled database — its credentials, the name of the secret this chart creates from them, resources, volume size and backups:
+
+```yaml
+postgres:
+  image: postgres:18
+  credentials:                      # this chart builds the DB credentials secret from these
+    username: username
+    password: change-me-fusionauth-db # used EXACTLY as given — change it before installing
+    database: test
+  config:
+    credentialsSecretName: my-fusionauth-db-credentials # org-wide: give each release its own name
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  backup:
+    enabled: false
+    schedule: "0 2 * * *"   # daily at 2am UTC
+    provider: aws # Options: aws, gcp, or minio (minio keys go in a prerequisite secret — see the postgres template README)
+```
+
+## Getting Started
+
 1. **Automatic Database Setup**: A PostgreSQL database is automatically created and connected to FusionAuth. No manual database configuration required.
 
     - Set the credentials under `postgres.credentials` (`username`, `password`, `database`). They are used **exactly as given**, so change `change-me-fusionauth-db` before installing. They are internal plumbing — nothing outside this release connects to that database — which is why they stay values rather than becoming a prerequisite secret.
@@ -32,6 +70,94 @@ None. The database is deployed and wired up for you; there is no secret to creat
     - **Complete the setup wizard immediately after installing.** Inbound traffic is open to `0.0.0.0/0` by default and FusionAuth has no administrator until the wizard is finished, so whoever reaches it first creates that account. If you cannot complete it right away, install with `firewall.external.inboundAllowCIDR` restricted to your own address and widen it afterwards — allow a couple of minutes for a firewall change to propagate.
     - Configure your application with the corresponding `origin`, `redirect`, and `logout` URLs to your code
     - Be sure to configure your app's tenant to use the proper issuer for issuing tokens (e.g. `my-fusionauth-app.io`)
+
+## Backing Up Postgres
+
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
+
+### AWS S3
+
+For the cron job to have access to a S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`)
+
+```JSON
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+4. Update `cloudAccountName` in your values file with the name of your Cloud Account.
+
+5. Set `policyName` to match the policy created in step 3.
+
+### GCS
+
+For the cron job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+**Important**: You must add the `Storage Admin` role to the created GCP service account.
+
+### Restoring Backup
+
+Run the following command with password from a client with access to the bucket and to the database (the internal hostname resolves only inside the GVC).
+S3
+```SH
+export PGPASSWORD="PASSWORD"
+
+aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
+  | gunzip \
+  | psql \
+      --host=RELEASE_NAME-postgres.GVC_NAME.cpln.local \
+      --port=5432 \
+      --username=USERNAME \
+      --dbname=postgres
+
+unset PGPASSWORD
+```
+
+GCS
+```SH
+export PGPASSWORD="PASSWORD"
+
+gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
+  | gunzip \
+  | psql \
+      --host=RELEASE_NAME-postgres.GVC_NAME.cpln.local \
+      --port=5432 \
+      --username=USERNAME \
+      --dbname=postgres
+
+unset PGPASSWORD
+```
 
 ## Upgrading from 2.4.0
 
@@ -69,116 +195,11 @@ Carrying an old key forward fails the render with the **Postgres template's** me
 which tells you to create a dictionary secret yourself. Ignore that advice here — this
 template creates it. Move the three keys and you are done.
 
-## Backing Up Postgres
-
-Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
-
-### AWS S3
-
-For the cron job to have access to a S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
-
-1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
-
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
-
-3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`)
-
-```JSON
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject",
-                "s3:ListBucket",
-                "s3:GetObjectVersion",
-                "s3:DeleteObjectVersion"
-            ],
-            "Resource": [
-                "arn:aws:s3:::YOUR_BUCKET_NAME",
-                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
-            ]
-        }
-    ]
-}
-```
-
-4. Update `cloudAccountName` in your values file with the name of your Cloud Account.
-
-5. Set `policyName` to match the policy created in step 3.
-
-### GCS
-
-For the cron job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
-
-1. Create your bucket. Update the value `bucket` to include its name.
-
-2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
-
-**Important**: You must add the `Storage Admin` role to the created GCP service account.
-
-### Restoring Backup
-
-Run the following command with password from a client with access to the bucket.
-S3
-```SH
-export PGPASSWORD="PASSWORD"
-
-aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=WORKLOAD_NAME \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=postgres
-
-unset PGPASSWORD
-```
-
-GCS
-```SH
-export PGPASSWORD="PASSWORD"
-
-gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
-  | gunzip \
-  | psql \
-      --host=WORKLOAD_NAME \
-      --port=5432 \
-      --username=USERNAME \
-      --dbname=postgres
-
-unset PGPASSWORD
-```
-
-## Supported External Services
-- [FusionAuth Documentation](https://fusionauth.io/docs/)
-
-## Configuration
-
-```yaml
-image: controlplanecorporation/fusionauth:0.2
-resources:
-  cpu: 512m
-  memory: 1024Mi
-firewall:
-  external:
-    inboundAllowCIDR:
-        - 0.0.0.0/0
-    outboundAllowCIDR: [] # Set to 0.0.0.0/0 if communicating with an external IdP
-  internal:
-    type: same-gvc # options: same-gvc, same-org, workload-list
-```
-
-The `postgres` block configures the bundled database — its credentials, the name of the secret this chart creates from them, resources, and volume size. See [Getting Started](#getting-started) for how those credentials are used.
-
 ## Connecting
 
 | What | Value |
 |---|---|
-| Admin UI and API | the workload's public endpoint, since inbound defaults to `0.0.0.0/0` |
+| Admin UI and API | the canonical endpoint, since inbound defaults to `0.0.0.0/0` — read `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-fusionauth --gvc GVC_NAME -o yaml` |
 | Internal (same GVC) | `RELEASE_NAME-fusionauth.GVC_NAME.cpln.local:9011` |
 | Credentials | created by you in the setup wizard on first visit |
 
@@ -188,3 +209,10 @@ The `postgres` block configures the bundled database — its credentials, the na
 - **The database credentials are used exactly as given.** Change `change-me-fusionauth-db` before installing; they are applied when the data directory is first initialized and cannot be changed by editing values afterwards.
 - **Give each release its own `postgres.config.credentialsSecretName`.** Secret names are organization-wide, so a second release left on the default is refused at install.
 - **First boot waits on PostgreSQL by design.** The startup script polls for up to five minutes; a FusionAuth container that looks stuck early in an install is usually just waiting for the database.
+
+## Links
+
+- [FusionAuth Documentation](https://fusionauth.io/docs/)
+- [FusionAuth setup wizard](https://fusionauth.io/docs/get-started/download-and-install/setup-wizard)
+- [FusionAuth configuration reference](https://fusionauth.io/docs/reference/configuration)
+- [`postgres` template README (backups, restore)](https://github.com/controlplane-com/templates/blob/main/postgres/versions/3.4.1/README.md)

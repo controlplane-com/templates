@@ -1,0 +1,205 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: FusionAuth
+
+# FusionAuth keeps all state in one bundled single-instance PostgreSQL: every extra GVC location would
+# run its own FusionAuth against its own, separate database. The bundled postgres chart (2.1.0) has no
+# descriptor, so its keys are parent fields below.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: access
+    title: Access
+    description: How FusionAuth is reached, and where it may connect out to.
+    fields:
+      - type: note
+        text: >-
+          This version runs the image `controlplanecorporation/fusionauth:0.2` with 512m CPU and 1024Mi memory
+          per replica, as the workload RELEASE_NAME-auth, and opens it to the whole internet (`0.0.0.0/0`). It has
+          no setting for any of these; 2.2.0 and later add them.
+      - type: note
+        severity: warning
+        text: >-
+          FusionAuth has no administrator until its setup wizard is finished, and whoever reaches it first
+          creates that account. Complete the setup wizard right after installing.
+      - path: identityProviders.google.enabled
+        type: boolean
+        label: Allow Google as an identity provider
+        description: >-
+          Opens outbound HTTPS to oauth2.googleapis.com, www.googleapis.com and accounts.google.com. FusionAuth
+          has no other outbound internet access in this version.
+
+  - id: database
+    title: Database
+    description: The user, password and name the bundled PostgreSQL creates on first start.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'This version takes the database credentials as values: they are stored in the Helm release and in
+          the secret `' +
+          (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' : context.releaseName) +
+          '-pg-config`, which the bundled PostgreSQL chart creates. The password is used as given, so change it.'
+        text: >-
+          This version takes the database credentials as values: they are stored in the Helm release and in
+          the secret `RELEASE_NAME-pg-config`, which the bundled PostgreSQL chart creates. The password is used
+          as given, so change it.
+      - path: postgres.config.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data directory is initialized.
+      - path: postgres.config.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        help: >-
+          PostgreSQL reads the password only when its data directory is first initialized. To change it
+          later, run `ALTER ROLE ... PASSWORD` first and then set the same value here.
+      - path: postgres.config.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data directory is initialized.
+    rules:
+      - when: oldSelf == null || self.postgres.config.username != oldSelf.postgres.config.username
+        rule: >-
+          !self.postgres.config.username.matches('^\\s') && !self.postgres.config.username.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.postgres.config.username.startsWith("'") &&
+          !self.postgres.config.username.matches('^[-?:](\\s|$)') && !self.postgres.config.username.matches('\\t') &&
+          !self.postgres.config.username.contains(': ') && !self.postgres.config.username.contains(' #') &&
+          !self.postgres.config.username.endsWith(':') && !self.postgres.config.username.endsWith(' ') &&
+          !(self.postgres.config.username in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.postgres.config.username.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+          !self.postgres.config.username.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.postgres.config.username.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.postgres.config.username.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.postgres.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [postgres.config.username]
+        message: >-
+          This version writes the user name into its secret unquoted, so some values break the install or are
+          stored as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+          symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #', tabs and a
+          trailing ':' or space, and do not use a plain number, a date, true, false or null. 2.2.0 and later
+          quote it.
+      - when: oldSelf == null || self.postgres.config.password != oldSelf.postgres.config.password
+        rule: >-
+          !self.postgres.config.password.matches('^\\s') && !self.postgres.config.password.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.postgres.config.password.startsWith("'") &&
+          !self.postgres.config.password.matches('^[-?:](\\s|$)') && !self.postgres.config.password.matches('\\t') &&
+          !self.postgres.config.password.contains(': ') && !self.postgres.config.password.contains(' #') &&
+          !self.postgres.config.password.endsWith(':') && !self.postgres.config.password.endsWith(' ') &&
+          !(self.postgres.config.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.postgres.config.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+          !self.postgres.config.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.postgres.config.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.postgres.config.password.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.postgres.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [postgres.config.password]
+        message: >-
+          This version writes the password into its secret unquoted, so some values break the install or are
+          stored as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+          symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #', tabs and a
+          trailing ':' or space, and do not use a plain number, a date, true, false or null. 2.2.0 and later
+          quote it.
+      - when: oldSelf == null || self.postgres.config.database != oldSelf.postgres.config.database
+        rule: >-
+          !self.postgres.config.database.matches('^\\s') && !self.postgres.config.database.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.postgres.config.database.startsWith("'") &&
+          !self.postgres.config.database.matches('^[-?:](\\s|$)') && !self.postgres.config.database.matches('\\t') &&
+          !self.postgres.config.database.contains(': ') && !self.postgres.config.database.contains(' #') &&
+          !self.postgres.config.database.endsWith(':') && !self.postgres.config.database.endsWith(' ') &&
+          !(self.postgres.config.database in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+          !self.postgres.config.database.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+          !self.postgres.config.database.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+          !self.postgres.config.database.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.postgres.config.database.matches('^\\.(nan|NaN|NAN)$') &&
+          !self.postgres.config.database.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+        severity: warning
+        paths: [postgres.config.database]
+        message: >-
+          This version writes the database name into the PostgreSQL workload unquoted, so some values break the
+          install or are stored as a number, date, true/false or nothing. Do not start it with a space, a quote
+          or a YAML symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #', tabs
+          and a trailing ':' or space, and do not use a plain number, a date, true, false or null. 2.2.0 and
+          later quote it.
+      - when: oldSelf == null || self.postgres.config.database != oldSelf.postgres.config.database
+        rule: "!self.postgres.config.database.matches('[\\\\s/?#%:+]')"
+        severity: warning
+        paths: [postgres.config.database]
+        message: >-
+          This version writes the database name unquoted at the end of FusionAuth's JDBC URL
+          (jdbc:postgresql://…:5432/NAME). Leave out spaces and the characters / ? # % : and + (the JDBC driver decodes + to a space).
+      - rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE ... PASSWORD with the new
+          password first, or FusionAuth loses its database connection after this change.
+      - when: oldSelf != null
+        rule: self.postgres.config.password != 'password'
+        severity: info
+        paths: [postgres.config.password]
+        message: >-
+          The password is still the published default "password". Change it with ALTER ROLE ... PASSWORD,
+          then set the same value here.
+
+  - id: db-server
+    title: Database server
+    description: The compute and storage of the bundled PostgreSQL's single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+          plan a short outage.
+      - type: note
+        text: >-
+          This version runs the image `postgres:17` as the workload RELEASE_NAME-pg-db and lets any workload in
+          this GVC connect on port 5432; it has no setting for either. 2.2.0 and later add both.
+      - type: note
+        severity: info
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.1.0') < 0
+        text: >-
+          2.0.0 and earlier created the volume set with 20 GiB and let it grow automatically up to 1000 GiB.
+          This chart keeps 20 GiB but sets no automatic growth; 2.2.0 and later have settings for it.
+      - path: postgres.resources
+        type: resources
+        label: Database resources
+        required: true
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: postgres.volumeset.capacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        max: 65536
+        required: true
+        suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        help: >-
+          Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
+        docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - when: oldSelf == null || self.postgres.resources != oldSelf.postgres.resources
+        rule: self.postgres.resources.cpu.matches('^[0-9]+m$') && self.postgres.resources.memory.matches('[A-Za-z]$')
+        severity: warning
+        paths: [postgres.resources]
+        message: >-
+          This version writes the database CPU and memory unquoted: enter CPU in millicores (such as 1000m) and
+          memory with a unit (such as 1Gi).
+      - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+        paths: [postgres.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+migrations:
+  # 2.0.0 and earlier (bundled postgres 2.0.0) created a 20 GiB volume set.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.capacity
+    valueExpr: "20"
+    note: The database volume set was created with 20 GiB, and the existing volume would not shrink, so 20 is kept.

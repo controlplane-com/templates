@@ -1,0 +1,24 @@
+# mysql 1.0.0 — the version most customers run: credentials inline in `config`, and the workload and
+# volumeset named after the release alone. Used as the starting point of an upgrade to a newer version.
+# phpMyAdmin is left off so CI never publishes a login form.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  apppw: hex
+  rootpw: hex
+
+vars:
+  mysql_workload: "{release}"
+  mysql_user: e2e
+  mysql_password: "{gen.apppw}"
+  mysql_db: e2e
+  mysql_root_password: "{gen.rootpw}"
+
+values:
+  enablePhpMyAdmin: false
+  config:
+    db: e2e
+    user: e2e
+    password: "{gen.apppw}"
+    rootPassword: "{gen.rootpw}"

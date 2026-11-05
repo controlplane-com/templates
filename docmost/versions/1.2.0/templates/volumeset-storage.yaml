@@ -1,0 +1,10 @@
+---
+kind: volumeset
+name: {{ include "docmost.storage.volumeset.name" . }}
+description: Docmost local attachment storage (/app/data/storage)
+tags: {{- include "docmost.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.local.volumeset.capacity }}
+  performanceClass: general-purpose-ssd

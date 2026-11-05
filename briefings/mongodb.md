@@ -30,6 +30,8 @@ evolving schema where a single instance is enough.
 
 ## Troubleshooting traps
 
+- **Upgrading from 1.1.x or older loses the data.** 1.2.0 renamed the workload and volume set (`{release}` → `{release}-mongo` / `-mongo-vs`), so `helm upgrade` starts on an empty volume and removes the old one. Proven by the e2e CI (5161). Maintainer ruling 2026-10-26: keep today's names, no chart fix; the README tells users to install a new release and move the data. No customer has been seen upgrading these.
+
 - **Do not scale it.** Autoscaling is pinned to one replica; more replicas are isolated instances, not a
   replica set. Use `mongodb-cluster` for a real replica set.
 - **Credentials are a prerequisite secret from 1.4.0** — `username`, `password`, `database`. An upgrade still

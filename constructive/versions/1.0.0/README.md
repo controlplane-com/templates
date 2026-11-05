@@ -51,7 +51,7 @@ replicas: 1
 
 resources: # per GraphQL server replica
   minCpu: 250m
-  minMemory: 512Mi
+  minMemory: 256Mi
   maxCpu: 1000m
   maxMemory: 1Gi
 ```
@@ -107,7 +107,7 @@ postgres:
     credentialsSecretName: my-constructive-db
   resources:
     minCpu: 250m
-    minMemory: 256Mi
+    minMemory: 384Mi
     maxCpu: 1000m
     maxMemory: 1Gi
   volumeset:

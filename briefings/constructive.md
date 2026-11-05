@@ -18,7 +18,7 @@
 | identity + policy | `reveal` on the two prerequisite secrets only |
 
 - Internal only. Callers send `X-Schemata` (which schemas), `X-Database-Id` (fixed `00000000-0000-4000-8000-000000000c01`) and `X-Actor-Id` (which user, trusted as sent: this is why there is no public endpoint).
-- Boot is an inline bash script (no secret-mounted script). It takes an advisory lock (tried for at most 240 s; a replica that times out stops and retries on restart), so concurrent replicas deploy once; a state table skips a deploy whose inputs (ref, path, packages, image) are unchanged. It then drops the superuser env vars and `exec`s the server as the non-superuser login.
+- Boot is an inline bash script (no secret-mounted script). It takes an advisory lock (tried for at most 120 s; a replica that times out stops and retries on restart), so concurrent replicas deploy once; a state table skips a deploy whose inputs (ref, path, packages, image) are unchanged. It then drops the superuser env vars and `exec`s the server as the non-superuser login.
 - Availability: server replicas are interchangeable (`replicas: 2` for zero-downtime restarts). Postgres is single-instance, so a DB restart is an outage. HA Postgres is a follow-up: the catalog's HA image lacks PostGIS.
 
 ## Key knobs
@@ -35,8 +35,8 @@
 - **Left open on purpose:** `ctx`, `jwt_public`/`jwt_private` (user RLS policies call them for the current user), `public`, `errors`, `inflection*`, `app_scope` (helpers user modules build on), and `function_resolution` (the server's own request routing calls it). A trusted caller can still name these in `X-Schemata`; the README says so.
 - **`@constructive-db/*` packages are proprietary** and never deployed; the platform pieces come from MIT `@pgpm/*` installed in `/tmp/constructive-platform`, never from `/app`.
 - **Expected log noise:** a `[pgpm-env] Unsafe production environment` warning at server start (dev defaults for variables this mode does not use), and a Postgres ERROR `relation "routing_public.database_settings" does not exist` on every request (the server expects it). Both harmless.
-- **Readiness runs a GraphQL `__typename` query** (exercises the DB as the login); liveness is `/healthz` and passes while the boot marker exists. Liveness cannot kill a booting replica, but readiness still does: a never-ready replica is killed after 10 + 30 × 45 = 1360 s (readiness `periodSeconds: 45`).
-- **Boot time budget:** DB gate 90 + lock 240 + platform install 240 + platform deploy 120 + git fetch 120 + checkout 60 + all module deploys 240 = 1110 s, each a hard timeout with a FATAL, all inside the 1360 s window (250 s margin; psql connects time out at 10 s). Large module sets that need longer than 240 s to deploy are a v1 limit.
+- **Readiness runs a GraphQL `__typename` query** (exercises the DB as the login); liveness is `/healthz` and passes while the boot marker exists. Liveness cannot kill a booting replica, but readiness still does: a never-ready replica is killed after 10 + 30 × 20 = 610 s (readiness `periodSeconds: 20`).
+- **Boot time budget:** DB gate 120 + lock 120 + platform install 30 + platform deploy 30 + git fetch 45 + checkout 15 + all module deploys 120 = 480 s, each a hard timeout with a FATAL (a crash-retry, not a wedge), all inside the 610 s window (130 s margin; psql connects time out at 10 s). Measured 11-04: cold boot script ~12 s, warm ~0.3 s, DB gate up to 87 s across a Postgres restart. Module sets needing over 120 s to deploy are a v1 limit.
 - **Not in v1:** public API and end-user login tokens, file uploads, the job worker (queued jobs are not processed), AI embeddings, functions runtime.
 - **Single-location GVC only.** More locations would give each its own separate database.
 

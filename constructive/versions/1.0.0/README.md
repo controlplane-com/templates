@@ -154,7 +154,7 @@ postgres:
 | Who | Endpoint | Notes |
 |---|---|---|
 | Workloads allowed by `internalAccess` | `http://RELEASE_NAME-constructive.GVC_NAME.cpln.local:3000/graphql` | POST GraphQL with the headers below. |
-| You, from your machine | `cpln port-forward RELEASE_NAME-constructive 3000:3000 --gvc GVC_NAME`, then POST to `http://localhost:3000/graphql` | Use `curl` or a GraphQL client that sets request headers; a plain browser tab cannot send them, so `/graphiql` returns 404. |
+| You, from your machine | `cpln port-forward RELEASE_NAME-constructive 3000:3000 --gvc GVC_NAME`, then `http://localhost:3000/graphql` | POST with the headers below, or browse it in GraphiQL (next section). |
 | PostgreSQL (superuser) | `RELEASE_NAME-postgres.GVC_NAME.cpln.local:5432` | The database credentials secret. |
 
 Every request sends these headers:
@@ -173,6 +173,16 @@ curl -s http://RELEASE_NAME-constructive.GVC_NAME.cpln.local:3000/graphql \
   -H 'X-Actor-Id: 7d3b8c1e-0000-4000-8000-000000000001' \
   --data '{"query":"query { __typename }"}'
 ```
+
+### Browsing the API in GraphiQL
+
+The server ships GraphiQL at `/graphiql`, but the page itself needs `X-Database-Id` and `X-Schemata`, which a browser does not send, so a bare tab gets a 404.
+
+1. `cpln port-forward RELEASE_NAME-constructive 3000:3000 --gvc GVC_NAME`.
+2. Add `X-Database-Id: 00000000-0000-4000-8000-000000000c01` and `X-Schemata: <your schemas>` to every request to `localhost:3000`, with a browser extension that sets request headers or a local proxy that adds them.
+3. Open `http://localhost:3000/graphiql` (or the proxy's address), and set `{"X-Actor-Id": "<user UUID>"}` in its Headers pane to query as that user; leave it empty to query as `anonymous`.
+
+The Docs pane lists the types and mutations generated from your modules.
 
 ## Important Notes
 

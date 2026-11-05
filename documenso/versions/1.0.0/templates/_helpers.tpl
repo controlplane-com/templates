@@ -13,14 +13,17 @@
 {{- end }}
 
 {{/*
-Name of the DB-credentials secret this chart creates and hands to whichever
-PostgreSQL subchart is enabled. postgres 3.4.0 and postgres-highly-available
-2.5.0 both stopped creating a credentials secret of their own and now take only
-a NAME — and a parent cannot template a subchart value, so the name is a plain
-value that all three sides read.
+Credentials secret of the ACTIVE database — a PREREQUISITE the user creates
+(dictionary: username, password, database). Both database subcharts require it
+by name and initialize from it; Documenso connects with the same keys. A parent
+cannot template a subchart value, so each mode names it under its own key.
 */}}
 {{- define "documenso.secret.db.name" -}}
-{{- .Values.database.credentialsSecretName }}
+{{- if .Values.postgresHA.enabled -}}
+{{- .Values.postgresHA.config.credentialsSecretName }}
+{{- else -}}
+{{- .Values.postgres.config.credentialsSecretName }}
+{{- end }}
 {{- end }}
 
 
@@ -172,15 +175,30 @@ uploads and signing.
 {{- fail (printf "documenso: internalAccess.type must be 'none', 'same-gvc', 'same-org', or 'workload-list', got '%s'" .Values.internalAccess.type) -}}
 {{- end -}}
 
-{{- /*
-  The app reaches PostgreSQL over the GVC's internal network, and the bundled
-  `postgres` subchart has its own internalAccess knob that this chart cannot
-  inject into — a parent cannot template a subchart value. If the user narrows
-  the database to a workload list that omits this Documenso workload, the app
-  cannot reach its own database, and it fails as a boot hang rather than an
-  error. Catch it at render instead. (postgres-highly-available exposes no
-  internalAccess knob, so there is nothing to guard on that path.)
-*/ -}}
+{{- include "documenso.validateDatabase" . -}}
+{{- end }}
+
+{{/*
+Exactly one database, its HAProxy endpoint kept on in HA mode, its prerequisite
+credentials secret named, and the bundled postgres's own firewall still letting
+this release in (a parent cannot template a subchart value, so a database
+narrowed to a workload list without Documenso is caught here instead of as a
+boot hang). The secret's values are not visible at render time: they must be
+URL-safe because Documenso splices them into its connection URL (README).
+*/}}
+{{- define "documenso.validateDatabase" -}}
+{{- if and .Values.postgres.enabled .Values.postgresHA.enabled -}}
+{{- fail "documenso: enable exactly one database — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
+{{- end -}}
+{{- if and (not .Values.postgres.enabled) (not .Values.postgresHA.enabled) -}}
+{{- fail "documenso: enable exactly one database — postgres.enabled (single instance, default) or postgresHA.enabled (Patroni + etcd + HAProxy)" -}}
+{{- end -}}
+{{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
+{{- fail "documenso: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is the database endpoint Documenso connects to" -}}
+{{- end -}}
+{{- if not (include "documenso.secret.db.name" .) -}}
+{{- fail "documenso: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
 {{- if and .Values.postgres.enabled .Values.postgres.internalAccess -}}
 {{- $pgAccess := .Values.postgres.internalAccess -}}
 {{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "documenso.name" .) -}}
@@ -192,50 +210,6 @@ uploads and signing.
 {{- fail (printf "documenso: postgres.internalAccess.type is 'workload-list' but the list does not include this release's Documenso workload — add '%s', or the app cannot reach its own database" $self) -}}
 {{- end -}}
 {{- end -}}
-{{- end -}}
-{{- if and .Values.postgres.enabled .Values.postgresHA.enabled -}}
-{{- fail "documenso: enable exactly one database — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
-{{- end -}}
-{{- if and (not .Values.postgres.enabled) (not .Values.postgresHA.enabled) -}}
-{{- fail "documenso: enable exactly one database — postgres.enabled (single instance, default) or postgresHA.enabled (Patroni + etcd + HAProxy)" -}}
-{{- end -}}
-{{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
-{{- fail "documenso: postgresHA.proxy.enabled must remain true — the HAProxy leader endpoint is the database endpoint Documenso connects to" -}}
-{{- end -}}
-{{- include "documenso.validateDbCredentials" . -}}
-{{- end }}
-
-{{/*
-The database password is interpolated into NEXT_PRIVATE_DATABASE_URL as
-`postgresql://$(DB_USER):$(DB_PASSWORD)@host:5432/db`. Postgres itself accepts
-these characters; a URL does not, and the failure surfaces as an unexplained
-connection error at boot rather than anything naming the password. Reject them
-at render instead, with the fix in the message.
-*/}}
-{{- define "documenso.validateDbCredentials" -}}
-{{- $db := .Values.database -}}
-{{- if not $db.username -}}
-{{- fail "documenso: database.username is required" -}}
-{{- end -}}
-{{- if not $db.password -}}
-{{- fail "documenso: database.password is required" -}}
-{{- end -}}
-{{- if not $db.name -}}
-{{- fail "documenso: database.name is required — it is the PostgreSQL database this chart connects to and the `database` key of the credentials secret it creates" -}}
-{{- end -}}
-{{- range $ch := (list "@" ":" "/" "?" "#" "[" "]" "%") -}}
-{{- if contains $ch $db.password -}}
-{{- fail (printf "documenso: database.password may not contain '%s' — it is embedded in the NEXT_PRIVATE_DATABASE_URL connection string, where that character would have to be percent-encoded. Choose a password without any of @ : / ? # [ ] %%" $ch) -}}
-{{- end -}}
-{{- end -}}
-{{- if not .Values.database.credentialsSecretName -}}
-{{- fail "documenso: database.credentialsSecretName is required — this chart creates that dictionary secret and hands its name to the enabled PostgreSQL subchart" -}}
-{{- end -}}
-{{- if and .Values.postgres.enabled (ne (dig "config" "credentialsSecretName" "" .Values.postgres) .Values.database.credentialsSecretName) -}}
-{{- fail (printf "documenso: postgres.config.credentialsSecretName ('%s') must match database.credentialsSecretName ('%s') — the bundled database reads the secret this chart creates" (dig "config" "credentialsSecretName" "" .Values.postgres) .Values.database.credentialsSecretName) -}}
-{{- end -}}
-{{- if and .Values.postgresHA.enabled (ne (dig "config" "credentialsSecretName" "" .Values.postgresHA) .Values.database.credentialsSecretName) -}}
-{{- fail (printf "documenso: postgresHA.config.credentialsSecretName ('%s') must match database.credentialsSecretName ('%s') — the bundled database reads the secret this chart creates" (dig "config" "credentialsSecretName" "" .Values.postgresHA) .Values.database.credentialsSecretName) -}}
 {{- end -}}
 {{- end }}
 

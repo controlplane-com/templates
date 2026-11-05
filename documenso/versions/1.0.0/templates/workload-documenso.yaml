@@ -50,21 +50,22 @@ spec:
         - name: HOSTNAME
           value: "0.0.0.0"
         # ── Database ──
-        # DB_USER/DB_PASSWORD are injected from the secret and expanded by the
-        # platform via $(VAR). The database NAME is interpolated by Helm at
-        # render time and therefore must stay a plain value: a cpln:// string
-        # assembled by Helm arrives at the app as literal text (nocodb/polaris).
+        # All three parts come from the user's prerequisite credentials secret
+        # (the one the active database initialized from) and are spliced into
+        # the URLs by $(VAR) expansion at container start, so they are listed
+        # first and no credential is ever rendered by Helm.
         - name: DB_USER
           value: cpln://secret/{{ include "documenso.secret.db.name" . }}.username
         - name: DB_PASSWORD
           value: cpln://secret/{{ include "documenso.secret.db.name" . }}.password
+        - name: DB_NAME
+          value: cpln://secret/{{ include "documenso.secret.db.name" . }}.database
         - name: NEXT_PRIVATE_DATABASE_URL
-          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/{{ .Values.database.name }}
-        # packages/prisma/schema.prisma declares `directUrl = env(...)`, which
-        # Prisma resolves on every `migrate deploy` — so this is required always,
-        # not only when pooling. Same value, exactly as upstream's .env.example.
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/$(DB_NAME)
+        # The Prisma schema declares `directUrl`; without a pooler it is the
+        # same URL (start.sh would default it to this too).
         - name: NEXT_PRIVATE_DIRECT_DATABASE_URL
-          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/{{ .Values.database.name }}
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "documenso.postgres.host" . }}:5432/$(DB_NAME)
         # ── Browser-facing origin ──
         # Signing links, OAuth redirects and the session-cookie domain are all
         # built from this. The canonical hostname shape is not stable and there

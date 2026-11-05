@@ -1,0 +1,101 @@
+# ─── Aegra server ─────────────────────────────────────────────────────────────
+aegra:
+  # Your agent image: Aegra plus your graphs and aegra.json, serving on port 2026 (see README
+  # "Bring your own agent"). The default is a community build of Aegra 0.11.0 with Aegra's
+  # example agents (graph `stress_test` needs no model key; `agent` needs OPENAI_API_KEY).
+  image: upstreamyard/aegra:0.11.0
+  # Interchangeable replicas sharing Postgres and Redis; a run on a lost replica resumes on another.
+  # set aegra.replicas: 2 and postgresHA.enabled: true for near-zero-downtime upgrades and failover
+  replicas: 1                   # 1-10
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  requestTimeoutSeconds: 600    # longest /runs/wait or /runs/stream request before it is cut (1-3600)
+  # Plain (non-secret) settings for Aegra or your agent, e.g. AEGRA_CONFIG, LOG_LEVEL, WORKER_COUNT.
+  extraEnv: []
+  # extraEnv:
+  #   - name: AEGRA_CONFIG
+  #     value: /app/agents/aegra.json
+
+# ─── Agent secrets (optional prerequisite) ───────────────────────────────────
+# A `dictionary` secret you create; every key listed in `keys` becomes an env var of the same
+# name (model provider keys, your auth handler's signing secret). "" = none.
+agentSecrets:
+  secretName: ""                # e.g. my-aegra-agent-secrets
+  keys: []                      # e.g. [OPENAI_API_KEY, JWT_SECRET]
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false                # true = public *.cpln.app URL. Aegra has NO auth unless your image adds a handler
+internalAccess:
+  type: same-gvc                # none | same-gvc | same-org | workload-list
+  workloads: []                 # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Langfuse tracing (optional) ─────────────────────────────────────────────
+# A `dictionary` secret you create with keys publicKey and secretKey (from a Langfuse project).
+# "" = tracing off. e.g. my-aegra-langfuse
+langfuse:
+  secretName: ""
+  baseUrl: http://my-langfuse-langfuse-web.my-gvc.cpln.local:3000   # or https://cloud.langfuse.com
+
+# ─── Database: single PostgreSQL with pgvector (default) ─────────────────────
+# Every knob of the `postgres` template is available under this key, including scheduled
+# backups (postgres.backup.*; see the postgres template README).
+# Enable exactly one of postgres / postgresHA.
+postgres:
+  enabled: true
+  image: pgvector/pgvector:0.8.7-pg18
+  config:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. If it does not exist the
+    # deployment WEDGES silently. A `dictionary` secret with exactly three URL-safe keys:
+    # username, password, database. See README Prerequisites for the command.
+    credentialsSecretName: my-aegra-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10                # GiB (minimum 10)
+
+# ─── Database: highly available PostgreSQL ───────────────────────────────────
+# 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint; every knob of the
+# `postgres-highly-available` template (incl. backup.*) is available under this key.
+postgresHA:
+  enabled: false
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  config:
+    # REQUIRED PREREQUISITE SECRET when enabled — same keys as postgres.config above.
+    credentialsSecretName: my-aegra-db-credentials
+  replicas: 3
+  resources:                    # per Patroni replica
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10                # GiB per replica (minimum 10)
+
+# ─── Redis (job queue and run event streams) ─────────────────────────────────
+# One Redis node: Aegra connects to a single Redis URL and cannot use Sentinel. Runs are
+# recovered from Postgres if Redis restarts.
+redis:
+  mode: dev                     # required — the chart refuses production (Sentinel) mode
+  redis:
+    image: redis:8
+    resources:
+      maxCpu: 200m
+      maxMemory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+    auth:
+      # Off by default (the same-GVC firewall is the boundary). To require AUTH, create a
+      # `dictionary` secret with a URL-safe key `password` BEFORE install, then enable it here.
+      fromSecret:
+        enabled: false
+        name: ""                # e.g. my-aegra-redis
+        passwordKey: password

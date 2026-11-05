@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Aegra
+category: ai
+topology: stateless
+
+summary: >-
+  Aegra open-source agent server compatible with the LangGraph Agent Server API: assistants, threads,
+  durable background runs, streaming, store and crons for the LangGraph agents in your own image, on a
+  bundled PostgreSQL with pgvector and Redis. Replicas share the work with lease-based run recovery;
+  a highly available PostgreSQL and Langfuse tracing are optional. Pick it to self-host LangGraph
+  agents without LangGraph Platform.
+
+keywords:
+  - langgraph
+  - langgraph server
+  - langgraph platform
+  - agent server
+  - ai agents
+  - langchain
+  - deep agents
+  - agent runtime
+  - assistants api
+  - threads
+  - background runs
+  - streaming
+  - human in the loop
+  - checkpoints
+  - langfuse
+  - self-hosted agents
+  - python agents
+  - pgvector
+
+useCases:
+  - Self-host LangGraph agents behind the LangGraph Agent Server API
+  - Run long agent jobs as durable background runs that survive restarts
+  - Stream agent output to a chat frontend
+  - Add human-in-the-loop approval to agent runs
+  - Trace agent runs in Langfuse
+
+alternativeTo:
+  - LangGraph Platform
+  - LangSmith Deployment
+  - LangGraph Cloud
+
+pickInsteadIf:
+  - need: a visual low-code agent and workflow builder
+    template: n8n
+  - need: a chat UI for people to talk to models
+    template: open-webui
+  - need: one OpenAI-compatible gateway with keys and spend limits in front of many model providers
+    template: litellm
+
+related:
+  - template: langfuse
+    relation: companion
+    note: Langfuse LLM observability, the trace store for Aegra runs
+  - template: litellm
+    relation: companion
+    note: LiteLLM model gateway your agents can call instead of each provider directly
+  - template: temporal
+    relation: alternative
+    note: Temporal durable execution for workflows that are not LangGraph agents
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Aegra connects with; set the name for the database in use. A missing secret leaves the deployment waiting with no logs.
+  - kind: other
+    valuesPath: aegra.image
+    required: false
+    when: you run your own agents
+    description: An image built FROM upstreamyard/aegra with your graphs and aegra.json, pushed to a registry the GVC can pull. The default image runs Aegra's example agents.
+  - kind: other
+    valuesPath: agentSecrets.secretName
+    required: false
+    when: agentSecrets.secretName is set
+    description: A dictionary secret holding keys your agent reads (model provider API keys, an auth handler's signing secret); each key listed in agentSecrets.keys becomes an environment variable of the same name.
+  - kind: secret
+    secretType: dictionary
+    keys: [publicKey, secretKey]
+    valuesPath: langfuse.secretName
+    required: false
+    when: langfuse.secretName is set
+    description: API keys of a Langfuse project that receives traces of every run.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.redis.auth.fromSecret.enabled
+    description: URL-safe password the bundled Redis requires and Aegra connects with.

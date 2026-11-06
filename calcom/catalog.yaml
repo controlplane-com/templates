@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Cal.com
+category: apps
+topology: stateless
+
+summary: >-
+  Cal.com open-source scheduling: public booking pages, event types, availability and calendar
+  connections. One stateless app server plus a small caller that drives Cal.com's scheduled jobs, on a
+  bundled single PostgreSQL or a highly available one, with optional SMTP email and database backups.
+  Pick it to run your own appointment booking instead of a hosted scheduling service.
+
+keywords:
+  - scheduling
+  - appointment scheduling
+  - booking page
+  - meeting scheduler
+  - calendar booking
+  - online booking
+  - availability
+  - event types
+  - booking links
+  - calcom
+
+useCases:
+  - Let customers and colleagues book meetings from a public booking page
+  - Share availability across connected calendars without back-and-forth email
+  - Keep attendee names, emails and meeting notes in your own database
+  - Embed a booking flow into your own website
+
+alternativeTo:
+  - Calendly
+  - SavvyCal
+  - Acuity Scheduling
+  - Doodle
+  - Microsoft Bookings
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [nextAuthSecret, encryptionKey, cronSecret, cronApiKey]
+    valuesPath: calcom.auth.secretName
+    required: true
+    description: Session, encryption and scheduled-job keys; encryptionKey must be exactly 32 characters. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: URL-safe credentials the bundled PostgreSQL initializes with and Cal.com connects with; set the name for the database in use.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: email.auth.secretName
+    required: false
+    when: email.enabled with an authenticated relay
+    description: SMTP relay login for booking confirmations, invites and password resets.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

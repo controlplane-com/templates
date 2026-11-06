@@ -1,0 +1,350 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: WordPress
+
+# WordPress pins itself to the single `location` value, and the bundled MariaDB is a single-location
+# stateful workload with no location handling: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: mariadb
+    version: 1.4.1
+    title: Bundled MariaDB
+    after: access
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - id: network
+        title: Database network
+        description: Who can connect to the bundled MariaDB, and the optional phpMyAdmin console.
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled database dumps to object storage. Create the bucket and the Control Plane cloud
+          account first (for AWS also the IAM policy); the steps are under Storage setup in the WordPress
+          template docs.
+    exclude:
+      # Chosen with the other prerequisite secrets in the WordPress step, so all three are asked up front.
+      - credentialsSecretName
+      - rootPasswordSecretName
+    override:
+      volumeset.capacity:
+        help: >-
+          Posts, pages, users and settings live here; the media library is on the WordPress content volume.
+          Uninstalling the release deletes the volume set, so the database does not survive a reinstall.
+      internalAccess.type:
+        description: >-
+          WordPress connects to its database like any other workload: keep Same GVC, or add the WordPress
+          workload under Allowed workloads.
+
+steps:
+  - id: wordpress
+    title: WordPress
+    description: The three prerequisite secrets, where WordPress runs, its server and its content volume.
+    sections:
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              All three secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all; after creating it, run `cpln workload force-redeployment` on
+              the WordPress and MariaDB workloads. The first boot takes several minutes.
+          - path: admin.secretName
+            type: ref
+            label: Administrator secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `email`. WordPress creates its
+              administrator from it before the site accepts any request.
+            help: >-
+              Read on first boot only: changing the secret later does not change the login. Reset a lost
+              password from the dashboard or with `wp_set_password` inside the container.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, email]
+              create:
+                suggestName: "context.releaseName + '-wordpress-admin'"
+          - path: mariadb.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. MariaDB creates this
+              user and database on first boot, and WordPress connects with them.
+            help: >-
+              MariaDB reads the credentials only when its volume is first initialized. To change the password
+              later, run `ALTER USER` inside MariaDB first, then update the secret and force a redeployment of
+              the MariaDB and WordPress workloads.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-wordpress-db-credentials'"
+                hint: "Typical values: username wordpress, database wordpress, and a strong password."
+          - path: mariadb.rootPasswordSecretName
+            type: ref
+            label: MariaDB root password secret
+            required: true
+            description: An opaque secret holding only the MariaDB root password. WordPress never reads it.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                encoding: plain
+                suggestName: "context.releaseName + '-wordpress-db-root-password'"
+                hint: "Generate the content with: openssl rand -base64 24"
+        rules:
+          - rule: >-
+              self.admin.secretName != '' && self.mariadb.credentialsSecretName != '' &&
+              self.mariadb.rootPasswordSecretName != ''
+            mirrors: wordpress.validate
+            paths: [admin.secretName, mariadb.credentialsSecretName, mariadb.rootPasswordSecretName]
+            message: All three prerequisite secrets are required.
+          - rule: self.mariadb.credentialsSecretName != self.mariadb.rootPasswordSecretName
+            mirrors: wordpress.validate
+            paths: [mariadb.rootPasswordSecretName]
+            message: The database credentials and the root password must be two different secrets.
+          - rule: "!has(self.mariadb.credentials)"
+            mirrors: wordpress.validate
+            paths: [mariadb.credentialsSecretName]
+            message: >-
+              mariadb.credentials is not a key of this chart: the database credentials are the two secrets above.
+              Remove it from the values.
+          # Restated from the mariadb wizard: excluding its credentials fields dropped this rule, and the
+          # mariadb chart still refuses the key.
+          - rule: "!has(self.mariadb.config)"
+            paths: [mariadb.credentialsSecretName]
+            message: >-
+              mariadb.config was removed in mariadb 1.4.0: the database credentials are the two secrets above.
+              Remove it from the values.
+          - rule: >-
+              oldSelf == null || self.mariadb.credentialsSecretName == oldSelf.mariadb.credentialsSecretName
+            severity: info
+            paths: [mariadb.credentialsSecretName]
+            message: >-
+              MariaDB reads the credentials only when its volume is first initialized; pointing at another
+              secret does not change the existing user or password.
+          - rule: oldSelf == null || self.admin.secretName == oldSelf.admin.secretName
+            severity: info
+            paths: [admin.secretName]
+            message: >-
+              The administrator is created on first boot only; pointing at another secret does not change any
+              login.
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            immutable: true
+            description: >-
+              The one location of the GVC that WordPress runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: >-
+              self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: wordpress.validate
+            paths: [location]
+            message: >-
+              WordPress runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: Server
+        docs: "#wordpress"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              A new WordPress image changes PHP and Apache only. WordPress core, plugins and themes live on the
+              content volume: update them from the dashboard.
+          - path: wordpress.image
+            type: string
+            format: image
+            label: WordPress image
+            required: true
+            description: An official `wordpress` Apache image; the tag pins WordPress for the first install and PHP.
+          - path: wordpress.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas share the content volume and the database, so they are interchangeable; 2 keeps the site
+              up when one replica restarts.
+          - path: wordpress.resources
+            type: resources
+            label: Resources
+            required: true
+          - path: wordpress.siteTitle
+            type: string
+            label: Site title
+            required: true
+            description: Set on first boot only; change it later in Settings > General.
+          - path: wordpress.tablePrefix
+            type: string
+            label: Database table prefix
+            required: true
+            immutable: true
+            pattern: '^[A-Za-z0-9_]+$'
+            patternMessage: Use letters, digits and underscores only.
+            description: Keep `wp_` unless you import an existing database with another prefix.
+          - path: wordpress.debug
+            type: boolean
+            label: Debug mode
+            description: WP_DEBUG; PHP notices go to the container log. Leave it off for a live site.
+        rules:
+          - rule: >-
+              self.wordpress.replicas >= 1 && self.wordpress.tablePrefix.matches('^[A-Za-z0-9_]+$')
+            mirrors: wordpress.validate
+            paths: [wordpress.replicas, wordpress.tablePrefix]
+            message: Use at least one replica and a table prefix of letters, digits and underscores.
+      - title: PHP limits
+        docs: "#php-limits"
+        fields:
+          - path: php.uploadMaxSize
+            type: string
+            label: Largest upload
+            required: true
+            suggestions: [16M, 64M, 128M, 256M]
+            pattern: '^[0-9]+[KMG]?$'
+            patternMessage: Use a PHP size such as 64M or 1G.
+            description: PHP `upload_max_filesize` and `post_max_size`. Without it PHP caps uploads at 2M.
+          - path: php.memoryLimit
+            type: string
+            label: PHP memory limit
+            required: true
+            suggestions: [128M, 256M, 512M]
+            pattern: '^[0-9]+[KMG]?$'
+            patternMessage: Use a PHP size such as 256M or 1G.
+            description: PHP `memory_limit` per request. Keep it below the container memory.
+      - title: Content storage
+        docs: "#content-storage"
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Content volume capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            description: WordPress core, plugins, themes, wp-config.php and the media library.
+            help: >-
+              The volume is shared by every replica and has no snapshots or backups: keep your own copy of the
+              media library. Uninstalling the release deletes the volume set.
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: wordpress.validate
+            paths: [volumeset.capacity]
+            message: The capacity must be at least 10 GiB.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Site and access
+    description: The site URL WordPress builds links with, the public endpoint, and who reaches WordPress internally.
+    sections:
+      - title: Site URL and public endpoint
+        docs: "#access"
+        fields:
+          - path: wordpress.siteUrl
+            type: string
+            format: url
+            label: Site URL
+            placeholder: https://www.example.com
+            description: >-
+              Only for a custom domain, with the scheme and no trailing slash. Empty uses the canonical endpoint,
+              or the internal address when the public endpoint is off.
+            help: >-
+              WordPress builds every link and redirect from it, on every request, so it can be changed on an
+              installed site. For `cpln port-forward`, set it to the tunnel address, such as http://localhost:8080.
+            pattern: '^https?://[^\s"`$\\]*[^\s"`$\\/]$'
+            patternMessage: >-
+              Start with http:// or https://, and leave out spaces, double quotes, $, backticks, backslashes and
+              a trailing slash.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: The site and `/wp-admin` on the workload's `*.cpln.app` endpoint.
+        rules:
+          - rule: >-
+              self.wordpress.siteUrl == '' ||
+              (self.wordpress.siteUrl.matches('^https?://[^\\s"`$\\\\]+$') && !self.wordpress.siteUrl.endsWith('/'))
+            mirrors: wordpress.validate
+            paths: [wordpress.siteUrl]
+            message: >-
+              The site URL must start with http:// or https://, without spaces, double quotes, $, backticks,
+              backslashes or a trailing slash.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - { value: none, label: None, description: No workload can connect internally; turn public access off to isolate WordPress fully. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: >-
+              self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list'] &&
+              (self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0)
+            mirrors: wordpress.validate
+            paths: [internalAccess.workloads]
+            message: List at least one workload when WordPress is open to specific workloads.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: self.mariadb.internalAccess.type != 'none'
+    mirrors: wordpress.validate
+    paths: [mariadb.internalAccess.type]
+    message: '"None" also blocks WordPress, which connects to its database like any other workload.'
+  - when: self.mariadb.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-wordpress') in self.mariadb.internalAccess.workloads
+    mirrors: wordpress.validate
+    paths: [mariadb.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-wordpress, or WordPress cannot reach its database.'
+    message: Add the WordPress workload to the list, or WordPress cannot reach its database.
+    fix:
+      path: mariadb.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-wordpress']"

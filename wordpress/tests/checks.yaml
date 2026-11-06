@@ -1,0 +1,111 @@
+# Feature checks for the wordpress template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# Every check runs in the WordPress container (Debian, curl and php present) against Apache on
+# 127.0.0.1:80. The admin login comes from the container's own env (WP_ADMIN_USERNAME, WP_ADMIN_PASSWORD,
+# resolved from the admin secret). The runner reads any {word} as a placeholder, so the scripts never use
+# ${VAR}, curl's %{...} or PHP's {$var}. `X-Forwarded-Proto: https` stands in for the platform edge: the
+# site URL is https, so wp-login.php and application passwords need is_ssl().
+checks:
+  - id: health-ok
+    description: The deep health endpoint answers 200 ok (PHP, database and a completed install).
+    exec:
+      workload: "{release}-wordpress"
+      container: wordpress
+      script: |
+        out=$(curl -s -i http://127.0.0.1/cpln-health.php | tr -d '\r')
+        echo "HEALTH $(printf '%s\n' "$out" | head -1 | cut -d' ' -f2) $(printf '%s\n' "$out" | tail -1)"
+    expect:
+      stdout: "^HEALTH 200 ok$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: admin-login
+    description: >-
+      The administrator from the admin secret signs in through wp-login.php (a wordpress_logged_in cookie is
+      issued); the same user with a wrong password is refused.
+    exec:
+      workload: "{release}-wordpress"
+      container: wordpress
+      script: |
+        login() {
+          curl -s -o /dev/null -D - -H 'X-Forwarded-Proto: https' \
+            -b 'wordpress_test_cookie=WP%20Cookie%20check' \
+            --data-urlencode "log=$WP_ADMIN_USERNAME" --data-urlencode "pwd=$1" \
+            --data-urlencode 'testcookie=1' --data-urlencode 'redirect_to=/wp-admin/' \
+            http://127.0.0.1/wp-login.php | tr -d '\r' | grep -ci '^set-cookie: wordpress_logged_in_'
+        }
+        [ "$(login "$WP_ADMIN_PASSWORD")" -ge 1 ] && echo "LOGIN OK" || echo "LOGIN FAILED"
+        [ "$(login "$WP_ADMIN_PASSWORD-wrong")" -ge 1 ] && echo "NEGATIVE ACCEPTED" || echo "NEGATIVE REFUSED"
+    expect:
+      stdout: "(?s)^LOGIN OK$.*^NEGATIVE REFUSED$"
+      notStdout: "^(LOGIN FAILED|NEGATIVE ACCEPTED)$"
+    retries: 3
+
+  - id: post-roundtrip
+    description: A post written for this version is published and read back over the REST API.
+    exec:
+      workload: "{release}-wordpress"
+      container: wordpress
+      script: |
+        php -r '
+          $_SERVER["HTTP_HOST"] = "localhost";
+          require "/var/www/html/wp-load.php";
+          $t = "e2e-post-" . $argv[1];
+          if (!get_posts(["title" => $t, "post_status" => "publish", "numberposts" => 1])) {
+            $id = wp_insert_post(["post_title" => $t, "post_content" => "e2e body", "post_status" => "publish", "post_author" => 1], true);
+            if (is_wp_error($id)) { echo "FAIL " . $id->get_error_message() . "\n"; exit(1); }
+          }
+        ' -- "{version}" || exit 1
+        if curl -s 'http://127.0.0.1/?rest_route=/wp/v2/posts&search=e2e-post-{version}' \
+            | grep -q '"rendered":"e2e-post-{version}"'; then echo "POST_READ OK"; else echo "POST_READ MISSING"; fi
+    expect:
+      stdout: "^POST_READ OK$"
+      notStdout: "^FAIL "
+    retries: 3
+
+  - id: post-survives
+    description: The post written by the first installed version is still served after every upgrade.
+    exec:
+      workload: "{release}-wordpress"
+      container: wordpress
+      script: |
+        if curl -s 'http://127.0.0.1/?rest_route=/wp/v2/posts&search=e2e-post-{installed_version}' \
+            | grep -q '"rendered":"e2e-post-{installed_version}"'; then echo "SURVIVED"; else echo "LOST"; fi
+    expect:
+      stdout: "^SURVIVED$"
+    retries: 3
+
+  - id: media-upload
+    description: >-
+      A 4 MB file (over PHP's stock 2M cap) uploads through the REST API with an application password and is
+      served back byte for byte from the content volume.
+    exec:
+      workload: "{release}-wordpress"
+      container: wordpress
+      script: |
+        F=/tmp/e2e-upload-{version}.txt
+        head -c 3145728 /dev/urandom | base64 > "$F"
+        APP=$(php -r '
+          $_SERVER["HTTP_HOST"] = "localhost";
+          require "/var/www/html/wp-load.php";
+          $u = get_user_by("login", getenv("WP_ADMIN_USERNAME"));
+          $r = WP_Application_Passwords::create_new_application_password($u->ID, ["name" => "e2e-" . time()]);
+          if (is_wp_error($r)) { exit(1); }
+          echo $r[0];
+        ') || { echo "FAIL app-password"; exit 1; }
+        resp=$(curl -s -u "$WP_ADMIN_USERNAME:$APP" -H 'X-Forwarded-Proto: https' \
+          -H 'Content-Type: text/plain' -H 'Content-Disposition: attachment; filename=e2e-upload-{version}.txt' \
+          --data-binary @"$F" 'http://127.0.0.1/?rest_route=/wp/v2/media')
+        path=$(printf '%s' "$resp" | grep -o '"source_url":"[^"]*"' | head -1 | sed 's#\\/#/#g; s#.*/wp-content/#/wp-content/#; s#"$##')
+        [ -n "$path" ] || { echo "FAIL upload $(printf '%s' "$resp" | head -c 200)"; exit 1; }
+        want=$(sha256sum < "$F" | cut -d' ' -f1)
+        got=$(curl -s "http://127.0.0.1$path" | sha256sum | cut -d' ' -f1)
+        [ "$want" = "$got" ] && echo "UPLOAD_READ OK $(wc -c < "$F")" || echo "UPLOAD_READ MISMATCH $path"
+    expect:
+      stdout: "^UPLOAD_READ OK [0-9]+$"
+      notStdout: "^FAIL "
+    retries: 2
+    retryDelaySeconds: 20
+    timeoutSeconds: 180

@@ -1,0 +1,18 @@
+{{- /*
+  `reveal` on exactly the two prerequisite secrets the WordPress container reads.
+  The MariaDB root password is deliberately absent: WordPress connects as the
+  unprivileged user, and the mariadb subchart's own policy covers root.
+*/}}
+kind: policy
+name: {{ include "wordpress.policy.name" . }}
+description: WordPress secret access
+tags: {{- include "wordpress.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "wordpress.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "wordpress.secret.db.name" . }}
+  - //secret/{{ .Values.admin.secretName }}

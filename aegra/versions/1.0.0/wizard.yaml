@@ -108,14 +108,14 @@ steps:
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
-            when: "false"
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
-            when: "false"
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - type: note
             severity: warning

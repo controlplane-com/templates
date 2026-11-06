@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: OpenBao
+category: secrets
+topology: single
+
+summary: >-
+  OpenBao, the open-source fork of HashiCorp Vault: one OpenBao server with integrated raft storage on
+  a persistent volume, serving the Vault-compatible HTTP API and web UI. It auto-unseals on every boot
+  from a key in a Control Plane secret, or keylessly through AWS KMS or GCP Cloud KMS. Pick it for KV
+  secrets, dynamic secrets, PKI certificates and encryption as a service behind a Vault-style API in one
+  location; it runs a single node with no failover.
+
+keywords:
+  - vault
+  - hashicorp vault fork
+  - vault-compatible api
+  - secrets engine
+  - secrets manager
+  - kv secrets
+  - dynamic secrets
+  - pki
+  - certificate authority
+  - transit encryption
+  - encryption as a service
+  - auto-unseal
+  - aws kms
+  - gcp cloud kms
+  - raft storage
+  - bao cli
+
+useCases:
+  - Run a self-managed Vault-compatible secrets store for apps and services
+  - Generate short-lived dynamic database or cloud credentials
+  - Issue internal TLS certificates from your own PKI
+  - Encrypt and decrypt application data without handling the keys
+  - Move existing Vault clients, SDKs and policies to an open-source server
+
+alternativeTo:
+  - HashiCorp Vault
+  - HCP Vault Dedicated
+  - AWS Secrets Manager
+  - Azure Key Vault
+  - Google Cloud Secret Manager
+  - AWS Private CA
+
+pickInsteadIf:
+  - need: a developer-friendly secrets dashboard organized by project and environment
+    template: infisical
+  - need: sync secrets from an existing Vault or cloud secrets manager into Control Plane secrets
+    template: ess
+  - need: a password manager for people's logins that works with the Bitwarden apps
+    template: vaultwarden
+
+related:
+  - template: infisical
+    relation: alternative
+    note: Infisical secrets platform with a web UI, projects and environments
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: seal.static.secretName
+    required: true
+    description: 32-byte unseal key for the default static seal, write-once (losing it makes all data unrecoverable). Create before installing; when missing the workload waits.
+  - kind: cloud-account
+    valuesPath: [seal.aws.cloudAccountName, seal.gcp.cloudAccountName]
+    required: false
+    when: seal.type awskms or gcpckms
+    description: Control Plane cloud account that gives the workload keyless access to the KMS key.
+  - kind: other
+    valuesPath: [seal.aws.kmsKeyId, seal.gcp.cryptoKey]
+    required: false
+    when: seal.type awskms or gcpckms
+    description: Symmetric KMS key for auto-unseal. On GCP, grant the workload identity encrypter/decrypter and viewer on the key after install, or it crash-loops.
+  - kind: other
+    valuesPath: seal.aws.policyName
+    required: false
+    when: seal.type awskms
+    description: AWS IAM policy granting kms:Encrypt, kms:Decrypt and kms:DescribeKey on the key.

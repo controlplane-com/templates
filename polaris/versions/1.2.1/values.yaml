@@ -48,8 +48,8 @@ tokenSigningKey:
 # ─── Object storage credentials (optional) ────────────────────────
 # Credentials Polaris uses for its OWN metadata I/O against S3-compatible
 # storage. Empty = not configured (the server still runs; catalogs on S3 cannot
-# read or write). Point it at the SAME dictionary secret your seaweedfs/minio
-# deployment uses — keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+# read or write). Dictionary keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY;
+# a seaweedfs deployment's s3 secret can be reused as-is (MinIO's cannot).
 # Query engines keep their own copy of these credentials; this template does not
 # use STS credential vending (see README).
 storage:

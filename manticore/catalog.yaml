@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Manticore Search
+category: search
+topology: distributed
+
+summary: >-
+  A Manticore Search cluster of three replicas kept in sync with Galera replication, plus an
+  orchestrator API, an on-demand job and a web UI that build tables from CSV files in an S3 bucket
+  and swap them in without downtime. Options add delta and full backups to a second S3 bucket, a
+  custom domain for the UI and API, and a k6 load test. Pick it for SQL-queried full-text search
+  over large datasets loaded in bulk from S3.
+
+keywords:
+  - full-text search
+  - search engine
+  - sphinx
+  - sphinxql
+  - galera
+  - replicated search cluster
+  - csv import
+  - bulk import from s3
+  - zero-downtime reindex
+  - mysql protocol
+  - sql search
+  - distributed tables
+  - search backups
+  - k6 load testing
+
+useCases:
+  - Full-text search over millions of rows imported from CSV files in S3
+  - Address, product or listing search queried with SQL over the MySQL protocol
+  - Rebuild a search table from fresh data and swap it in without downtime
+  - Replicated search tier that keeps serving while replicas restart
+  - Back up and restore search tables to S3
+
+alternativeTo:
+  - Sphinx Search
+  - Apache Solr
+  - Elastic Cloud
+  - Algolia
+
+compatibleWith: [mysql-wire]
+
+pickInsteadIf:
+  - need: a search engine apps index documents into directly over a REST API
+    template: opensearch
+  - need: Elasticsearch API compatibility with Kibana
+    template: elasticsearch
+  - need: instant typo-tolerant search for a website or app on one small server
+    template: meilisearch
+  - need: vector similarity search on embeddings for RAG
+    template: qdrant
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: orchestrator.agent.tokenSecretName
+    required: true
+    description: Opaque secret holding the bearer token shared by the orchestrator, agents and UI. Create it before installing; when it is missing the deployment waits on it.
+  - kind: bucket
+    valuesPath: buckets.sourceBucket
+    required: true
+    description: S3 bucket holding the CSV files to import; read-only access is enough.
+  - kind: cloud-account
+    valuesPath: buckets.cloudAccountName
+    required: true
+    description: Control Plane cloud account for the AWS account that holds the source bucket. Only AWS S3 is supported.
+  - kind: other
+    valuesPath: buckets.awsPolicyRefs
+    required: true
+    description: AWS IAM policy granting s3:ListBucket, s3:GetBucketLocation and s3:GetObject on the source bucket, referenced by name.
+  - kind: bucket
+    valuesPath: orchestrator.backup.s3Bucket
+    required: false
+    when: orchestrator.backup.enabled
+    description: Separate S3 bucket that receives delta and full table backups; needs write access.
+  - kind: cloud-account
+    valuesPath: orchestrator.backup.cloudAccountName
+    required: false
+    when: orchestrator.backup.enabled
+    description: Control Plane cloud account for the AWS account that holds the backup bucket.
+  - kind: other
+    valuesPath: orchestrator.backup.s3Policy
+    required: false
+    when: orchestrator.backup.enabled
+    description: AWS IAM policy granting read, write and delete on the backup bucket, referenced by name.
+  - kind: domain
+    valuesPath: domain.name
+    required: false
+    when: domain.enabled
+    description: A hostname you control. The chart creates the Control Plane domain; you add the DNS records it asks for.

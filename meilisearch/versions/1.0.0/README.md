@@ -13,7 +13,7 @@ No database, cache, or object store is involved, and the template creates no sec
 
 ## Prerequisites
 
-- **A master-key secret you create yourself, BEFORE installing.** This is required — the workload will not start without it, and a deployment referencing a secret that does not exist waits indefinitely with no obvious error. It is an **opaque** secret with `encoding: plain` whose entire payload is the key:
+- **A master-key secret you create yourself, BEFORE installing.** This is required — the workload will not start without it, and a deployment referencing a secret that does not exist waits silently (`cpln logs` shows nothing) until the secret is created. It is an **opaque** secret with `encoding: plain` whose entire payload is the key:
 
   ```bash
   printf '%s' "$(openssl rand -base64 32)" | \
@@ -140,7 +140,7 @@ curl -H "Authorization: Bearer <master-key>" http://{release}-meilisearch.{gvc}.
 
 ## Important Notes
 
-- **The master-key secret must exist before you install.** If it does not, the deployment hangs waiting on a secret that will never resolve and looks broken. Check `cpln secret get <name>` first.
+- **The master-key secret must exist before you install.** If it does not, the deployment waits with no logs; the reason is under `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-meilisearch --gvc GVC_NAME -o yaml`. Once you create the secret it recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment RELEASE_NAME-meilisearch --gvc GVC_NAME`.
 - **`server.env: production` does not serve the search-preview UI.** `GET /` returns `{"status":"Meilisearch is running"}` — that is a healthy instance, not a failed one. Set `server.env: development` if you want the browser search playground at `/`; the master key still protects every route either way.
 - **Rotating the master key changes every API key.** Meilisearch derives all four keys from it, so a rotation silently breaks every deployed client. Treat it as write-once, or plan to redistribute all keys.
 - **Raising the image tag on a populated volume fails by design** — Meilisearch refuses to open a database written by an older version. Set `server.upgradeDb: true` for exactly one deploy, and **once the workload is ready again on the new tag, set it back to `false` and redeploy** so a migration flag is not left permanently on. The upgrade is **not atomic**: confirm a recent backup exists first.

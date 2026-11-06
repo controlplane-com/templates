@@ -1,0 +1,12 @@
+{{- if eq .Values.storage.type "local" }}
+---
+kind: volumeset
+name: {{ include "chatwoot.storage.volumeset.name" . }}
+description: Chatwoot local attachment storage (/app/storage)
+tags: {{- include "chatwoot.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.local.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+{{- end }}

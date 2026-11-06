@@ -16,6 +16,5 @@ dependencies:
 
 annotations:
   created: "2025-10-30"
-  lastModified: "2026-08-17"
-  category: "api-gateway"
+  lastModified: "2026-10-01"
   createsGvc: false

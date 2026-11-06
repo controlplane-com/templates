@@ -1,0 +1,147 @@
+# Feature checks for the chatwoot template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship. Placeholders:
+# {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user, pg_password, pg_db).
+#
+# Every check runs in a Patroni member, which carries curl and psql. Database checks go through the HAProxy
+# endpoint, the address Chatwoot uses, so they only pass when the proxy routes to the current leader.
+checks:
+  - id: app-healthy
+    description: >-
+      Chatwoot's /api answers on its internal port with both its database and its Redis reported ok, which only
+      a booted app connected to both returns.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-chatwoot.{gvc}.cpln.local:3000/api 2>&1
+    expect:
+      stdout: '"data_services"\s*:\s*"ok"'
+      notStdout: '"queue_services"\s*:\s*"failing"'
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: schema-loaded
+    description: >-
+      Chatwoot's schema is in its database, including the vector extension it requires (the first boot loads
+      it; a failed load leaves neither).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select 'TABLES ' ||
+          (select count(*) from information_schema.tables where table_schema = 'public'
+             and table_name in ('accounts', 'users', 'conversations', 'messages')) ||
+          ' EXT ' || coalesce((select extname from pg_extension where extname = 'vector'), 'none')" 2>&1
+    expect:
+      stdout: "^TABLES 4 EXT vector$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong database password is refused through the proxy (the control for the checks above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        PGPASSWORD=wrong-password psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: write-read-via-proxy
+    description: A row written as Chatwoot's database user through the proxy reads back.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        M="e2e-$(date +%s%N)"
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (id serial primary key, version text not null, marker text not null)" \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install that is
+      the same version; after an upgrade it proves the database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        n=$(psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+
+  - id: pgvector-0-8-7-available
+    description: >-
+      The HA database runs patroni-postgres 0.8, whose pgvector is 0.8.7 (CVE-2026-103484), the image 1.3.1
+      moved to. Read on the leader, through the proxy.
+    issue: "#5376"
+    since: 1.3.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the members restart one by one and the proxy can briefly reach a member still on the
+    # old image; this runs long enough for the rollout to finish.
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
+      without this a member that never comes back (seen once in testing: the old leader stuck initializing for
+      17 min) goes unseen.
+    issue: "#5376"
+    since: 1.3.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

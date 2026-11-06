@@ -1,0 +1,1440 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Debezium Server
+# One connector with min and max scale 1 and no location handling: every GVC location would run its own
+# connector against the same replication slot (and, with file storage, its own offsets volume).
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: source
+    title: Source database
+    description: The database Debezium Server captures changes from, and which tables it captures.
+    sections:
+      - id: connection
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Configure the source database for change data capture **before** you install: PostgreSQL
+              needs `wal_level = logical` and the publication, MySQL binary logging with row format. A
+              source left on its default settings gives a connector that starts and never emits a change.
+              See [Prerequisites](#prerequisites).
+            textExpression: >-
+              'Configure the source database for change data capture **before** ' +
+              (context.mode == 'upgrade' ? 'the connector restarts' : 'you install') +
+              ': PostgreSQL needs `wal_level = logical` and the publication, MySQL binary logging with row format. A ' +
+              'source left on its default settings gives a connector that starts and never emits a change. ' +
+              'See [Prerequisites](#prerequisites).'
+          - path: source.type
+            type: enum
+            label: Source database
+            required: true
+            options:
+              - { value: postgres, label: PostgreSQL }
+              - { value: mysql, label: MySQL }
+              - { value: mongodb, label: MongoDB }
+              - { value: sqlserver, label: SQL Server }
+          # Debezium 3.0 (the pinned quay.io/debezium/server:3.0): MongoDbConnectorConfig connects through
+          # mongodb.connection.string, which SharedMongoDbConnectorConfig refuses when it is missing, and reads
+          # mongodb.user/password, never database.hostname, port, user or password. secret-config.yaml writes the
+          # connection string only with useConnectionString, and the database.* keys for every type.
+          - type: note
+            when: self.source.type == 'mongodb'
+            text: >-
+              The MongoDB connector connects only through the connection string, with the user and password
+              inside it. It does not use the database user below or the `sourcePassword` key; the chart still
+              requires both.
+          - path: source.mongodb.useConnectionString
+            type: boolean
+            label: Connect with a connection string
+            when: self.source.type == 'mongodb'
+            description: Reads the `mongodbConnectionString` key of the credentials secret.
+            rules:
+              - rule: self.source.mongodb.useConnectionString == true
+                message: >-
+                  The MongoDB connector connects only through a connection string, which the chart passes only with
+                  this on; without it Debezium Server stops at startup. Turn it on, and put the string in the
+                  mongodbConnectionString key of the credentials secret.
+          # The MongoDB connector reads neither (note above); the chart still writes both, as inert values.
+          - path: source.database.hostname
+            type: string
+            format: hostname
+            label: Host
+            required: true
+            example: true
+            when: self.source.type != 'mongodb'
+            description: >-
+              A host name or IPv4 address the workload can reach, for example
+              `my-postgres.my-gvc.cpln.local` for a database that runs in Control Plane.
+          - path: source.database.port
+            type: integer
+            label: Port
+            when: self.source.type != 'mongodb'
+            description: Leave it empty to use the default port of the source database type.
+            min: 1
+            max: 65535
+            suggestions:
+              - { value: 1433, label: "1433 (SQL Server)" }
+              - { value: 3306, label: "3306 (MySQL)" }
+              - { value: 5432, label: "5432 (PostgreSQL)" }
+            rules:
+              # values.yaml: the shipped 5432 is PostgreSQL's; debezium.databasePort uses the port as set.
+              # 27017 is MongoDB's default (debezium.defaultPort), another type's port for the types shown here.
+              - when: self.source.database.port != null
+                rule: >-
+                  !(self.source.database.port in [5432, 3306, 27017, 1433]) ||
+                  (self.source.type == 'postgres' && self.source.database.port == 5432) ||
+                  (self.source.type == 'mysql' && self.source.database.port == 3306) ||
+                  (self.source.type == 'sqlserver' && self.source.database.port == 1433)
+                severity: info
+                messageExpression: >-
+                  'Port ' + string(self.source.database.port) + ' is the default port of another database type. ' +
+                  'Clear it to use the default of ' + {'postgres': 'PostgreSQL (5432)', 'mysql': 'MySQL (3306)',
+                  'sqlserver': 'SQL Server (1433)'}[self.source.type] +
+                  ', or keep it if your server listens there.'
+                message: >-
+                  This port is the default port of another database type. Clear it to use the default of the
+                  source database type, or keep it if your server listens there.
+          - path: source.database.name
+            type: string
+            label: Database name
+            required: true
+            rules:
+              - rule: self.source.database.name != null && self.source.database.name != ''
+                mirrors: debezium.validateSource
+                message: The database name is required.
+          - path: source.database.user
+            type: string
+            label: Database user
+            required: true
+            description: Its password is the `sourcePassword` key of the credentials secret.
+            help: >-
+              PostgreSQL needs `ALTER USER <user> REPLICATION`; MySQL needs `REPLICATION SLAVE` and
+              `REPLICATION CLIENT`. See [Prerequisites](#prerequisites).
+      - id: capture
+        title: What to capture
+        fields:
+          - path: source.serverName
+            type: string
+            label: Server name
+            required: true
+            description: The prefix of the topic names the connector writes to.
+          - path: source.tableIncludeList
+            type: string
+            label: Tables to capture
+            placeholder: public.users,public.orders
+            description: Comma-separated. Empty captures every table.
+            help: >-
+              The chart writes the list into `application.properties` as it is, where a backslash starts an escape:
+              write each backslash twice (`public\\.orders`).
+          - path: source.tableExcludeList
+            type: string
+            label: Tables to skip
+            placeholder: public.audit_log
+            description: Comma-separated.
+            help: >-
+              The chart writes the list into `application.properties` as it is, where a backslash starts an escape:
+              write each backslash twice (`public\\.audit_log`).
+      - id: postgres
+        title: PostgreSQL
+        when: self.source.type == 'postgres'
+        fields:
+          - path: source.postgres.slotName
+            type: string
+            label: Replication slot
+            required: true
+            pattern: '^[a-z0-9_]+$'
+            patternMessage: Use lowercase letters, digits and underscores.
+            help: >-
+              Debezium creates the slot on the source when it first connects. Uninstalling leaves the slot
+              behind, and PostgreSQL keeps WAL for an inactive slot until the disk fills: drop it with
+              `SELECT pg_drop_replication_slot('<slot>');` once the connector is gone
+              ([Removing a connector](#removing-a-connector)).
+          - path: source.postgres.publicationName
+            type: string
+            label: Publication
+            required: true
+            description: >-
+              Create it on the source before you install, for example
+              `CREATE PUBLICATION dbz_publication FOR ALL TABLES;`.
+          - path: source.postgres.pluginName
+            type: enum
+            label: Logical decoding plugin
+            widget: segmented
+            required: true
+            options:
+              - { value: pgoutput, label: pgoutput }
+              - { value: decoderbufs, label: decoderbufs }
+          - path: source.postgres.slotDropOnStop
+            type: boolean
+            label: Drop the slot when the connector stops
+            required: true
+            description: Keep it off for HA and failover setups, which need the slot kept.
+          - path: source.postgres.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            unit: ms
+            required: true
+            min: 0
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+            description: 0 turns heartbeats off; 5000 suits HA setups.
+            help: >-
+              Above 0, a startup step creates a `debezium_heartbeat` table (seeded with row `1`) and the
+              replication slot before the server starts. If that step fails, it logs a warning and Debezium
+              Server starts anyway.
+            suggestions:
+              - { value: 0, label: "0 (off)" }
+              - { value: 5000, label: "5000" }
+          - type: note
+            severity: warning
+            when: self.source.postgres.heartbeatIntervalMs != null && self.source.postgres.heartbeatIntervalMs > 0
+            text: >-
+              The heartbeat query (`source.postgres.heartbeatActionQuery` in YAML) goes into the configuration file
+              as written and is not checked. For example `UPDATE debezium_heartbeat SET ts = now() WHERE id = 1`
+              updates the table the startup step creates. A wrong value breaks the configuration file, or the
+              query fails on every heartbeat (Debezium logs the error).
+        rules:
+          # secret-entrypoint.yaml: the startup script (set -o nounset) gets the database name as
+          # "{{ .Values.source.database.name }}", before its exec of /debezium/run.sh.
+          - when: self.source.postgres.heartbeatIntervalMs != null && self.source.postgres.heartbeatIntervalMs > 0
+            rule: self.source.database.name == null || !self.source.database.name.matches('["$`\\\\]')
+            paths: [source.database.name]
+            message: >-
+              With a heartbeat, the chart passes the database name to its bash startup script inside double quotes,
+              where a ", a backtick, a $ or a \ can break the command or stop the script (set -o nounset) before
+              Debezium Server starts. Use a database name without them, or set the heartbeat interval to 0.
+          # README Important Notes: an abandoned slot retains WAL until it is dropped.
+          - rule: >-
+              oldSelf == null || oldSelf.source.type != 'postgres' || oldSelf.source.postgres.slotDropOnStop == true ||
+              self.source.postgres.slotName == oldSelf.source.postgres.slotName
+            severity: info
+            paths: [source.postgres.slotName]
+            messageExpression: >-
+              'The installed replication slot ' + oldSelf.source.postgres.slotName + ' stays on the source and keeps
+              WAL until you drop it: run SELECT pg_drop_replication_slot(\'' + oldSelf.source.postgres.slotName +
+              '\'); on the source after this upgrade.'
+            message: >-
+              The installed replication slot stays on the source and keeps WAL until you drop it: run
+              SELECT pg_drop_replication_slot('<old slot>'); on the source after this upgrade.
+      - id: mysql
+        title: MySQL
+        when: self.source.type == 'mysql'
+        fields:
+          - path: source.mysql.serverId
+            type: integer
+            label: Server ID
+            required: true
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+            description: Unique for MySQL replication.
+            rules:
+              # values.yaml: "Unique server ID for MySQL replication"; the default works but is shared by every release.
+              - rule: self.source.mysql.serverId != 85744
+                severity: info
+                message: >-
+                  85744 is the chart's default server ID, so another connector on the same MySQL server that kept it
+                  collides with this one. Give each release its own ID.
+          - path: source.mysql.includeSchemaChanges
+            type: boolean
+            label: Include schema changes
+            required: true
+            description: Emits DDL events too.
+      - id: mongodb
+        title: MongoDB
+        when: self.source.type == 'mongodb'
+        fields:
+          - path: source.mongodb.replicaSet
+            type: string
+            label: Replica set
+      - id: sqlserver
+        title: SQL Server
+        when: self.source.type == 'sqlserver'
+        fields:
+          - path: source.sqlserver.databaseNames
+            type: string
+            label: Databases to capture
+            placeholder: inventory,orders
+            description: Comma-separated.
+          - path: source.sqlserver.snapshotMode
+            type: enum
+            label: Snapshot mode
+            widget: segmented
+            required: true
+            options:
+              - { value: initial, label: initial }
+              - { value: schema_only, label: schema_only }
+              - { value: initial_only, label: initial_only }
+      - id: errors
+        title: Error retries
+        advanced: true
+        docs: "#error-retries"
+        fields:
+          - path: source.errors.retryDelayInitialMs
+            type: integer
+            label: First retry delay
+            unit: ms
+            required: true
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+          - path: source.errors.retryDelayMaxMs
+            type: integer
+            label: Longest retry delay
+            unit: ms
+            required: true
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+          - path: source.errors.maxRetries
+            type: integer
+            label: Maximum retries
+            required: true
+            min: -1
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+            description: -1 retries without a limit.
+    rules:
+      # README Important Notes: one connector per deployment.
+      - rule: oldSelf == null || self.source.type == oldSelf.source.type
+        severity: info
+        paths: [source.type]
+        messageExpression: >-
+          'One release runs one connector, and this one keeps the offsets it recorded for the installed source. ' +
+          'To capture another database, install another release.' +
+          (oldSelf.source.type == 'postgres' && oldSelf.source.postgres.slotDropOnStop != true ?
+          ' The installed replication slot ' + oldSelf.source.postgres.slotName +
+          ' stays on the PostgreSQL source and keeps WAL until you drop it.' : '')
+        message: >-
+          One release runs one connector, and this one keeps the offsets it recorded for the installed source.
+          To capture another database, install another release.
+
+  - id: sink
+    title: Sink
+    description: Where the change events go, and how they are serialized.
+    sections:
+      - id: sink-type
+        fields:
+          - path: sink.type
+            type: enum
+            label: Sink
+            docs: "#sink"
+            required: true
+            description: The sink must already exist; this template does not deploy it.
+            # No eventhubs: the chart writes eventhubs.connection.string and hub.name, which the Debezium Server 3.0
+            # Event Hubs sink does not read (it requires connectionstring and hubname); sink.eventhubs is yamlOnly.
+            options:
+              - { value: kafka, label: Kafka }
+              - { value: redis, label: Redis Streams }
+              - { value: nats-jetstream, label: NATS JetStream }
+              - { value: http, label: HTTP }
+              - { value: kinesis, label: Amazon Kinesis }
+              - { value: pubsub, label: Google Cloud Pub/Sub }
+              - { value: pulsar, label: Apache Pulsar }
+      - id: kafka
+        title: Kafka
+        when: self.sink.type == 'kafka'
+        fields:
+          - path: sink.kafka.bootstrapServers
+            type: string
+            label: Bootstrap servers
+            required: true
+            example: true
+          - path: sink.kafka.topic
+            type: string
+            label: Topic prefix
+            description: Events go to `{prefix}.{table}`.
+          - path: sink.kafka.securityProtocol
+            type: enum
+            label: Security protocol
+            required: true
+            options: [PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL]
+          - id: kafkaSasl
+            virtual: true
+            type: enum
+            label: SASL login
+            widget: segmented
+            required: true
+            init: "self.sink.kafka.saslMechanism == null || self.sink.kafka.saslMechanism == '' ? 'none' : 'plain'"
+            help: >-
+              The chart always writes a `PlainLoginModule` JAAS login, so PLAIN is the one SASL mechanism that
+              matches it.
+            options:
+              - value: none
+                label: "Off"
+                set: { sink.kafka.saslMechanism: "", sink.kafka.saslUsername: "" }
+              - value: plain
+                label: PLAIN
+                set: { sink.kafka.saslMechanism: PLAIN }
+            rules:
+              # README Supported Sinks: SASL always uses a PlainLoginModule JAAS config.
+              - rule: >-
+                  self.sink.kafka.saslMechanism == null || self.sink.kafka.saslMechanism == '' ||
+                  self.sink.kafka.saslMechanism == 'PLAIN'
+                messageExpression: >-
+                  'sink.kafka.saslMechanism is ' + self.sink.kafka.saslMechanism + ', but the chart always writes a
+                  PlainLoginModule JAAS login, so only PLAIN matches. Choose PLAIN here.'
+                message: >-
+                  The chart always writes a PlainLoginModule JAAS login, so only the SASL mechanism PLAIN matches.
+                  Choose PLAIN here.
+              # workload-debezium.yaml: the SASL env and the kafkaSaslPassword key follow saslUsername alone.
+              - rule: >-
+                  (self.sink.kafka.saslMechanism != null && self.sink.kafka.saslMechanism != '') ||
+                  self.sink.kafka.saslUsername == null || self.sink.kafka.saslUsername == ''
+                severity: info
+                message: >-
+                  sink.kafka.saslUsername is still set while the SASL login is off, so the chart still reads
+                  kafkaSaslPassword from the credentials secret. Clear it in YAML mode, or choose PLAIN.
+          - path: sink.kafka.saslUsername
+            type: string
+            label: SASL username
+            required: true
+            when: ui.kafkaSasl == 'plain'
+            pattern: '^[^"\\]*$'
+            patternMessage: Leave out double quotes and backslashes.
+            description: Its password is the `kafkaSaslPassword` key of the credentials secret.
+            help: >-
+              The chart writes the username and the password inside the double quotes of the JAAS login, so the
+              `kafkaSaslPassword` value must not contain a double quote or a backslash either.
+        rules:
+          # secret-config.yaml: sasl.mechanism and the JAAS login are written only with a mechanism.
+          - rule: >-
+              !(self.sink.kafka.securityProtocol in ['SASL_PLAINTEXT', 'SASL_SSL']) ||
+              (self.sink.kafka.saslMechanism != null && self.sink.kafka.saslMechanism != '')
+            severity: warning
+            paths: [sink.kafka.securityProtocol]
+            message: >-
+              With SASL_PLAINTEXT or SASL_SSL, choose PLAIN under SASL login: the chart writes the SASL mechanism and
+              the JAAS login only when a mechanism is set.
+      - id: redis
+        title: Redis Streams
+        when: self.sink.type == 'redis'
+        fields:
+          - path: sink.redis.address
+            type: string
+            label: Redis address
+            required: true
+            placeholder: redis.my-gvc.cpln.local:6379
+            rules:
+              - rule: self.sink.redis.address != null && self.sink.redis.address != ''
+                mirrors: debezium.validateSink
+                message: The Redis address is required.
+          - path: sink.redis.authEnabled
+            type: boolean
+            label: Password authentication
+            description: Reads the `sinkRedisPassword` key of the credentials secret.
+          - path: sink.redis.ssl
+            type: boolean
+            label: TLS
+          - path: sink.redis.streamName
+            type: string
+            label: Stream prefix
+            description: Events go to `{prefix}.{table}`.
+      - id: nats
+        title: NATS JetStream
+        when: self.sink.type == 'nats-jetstream'
+        # secret-config.yaml writes nats-jetstream.username/password; the Debezium Server 3.0 sink reads auth.user and
+        # auth.password, so the chart's NATS credentials are never sent (sink.nats.username is yamlOnly).
+        description: >-
+          The chart writes NATS credentials under keys the Debezium Server NATS JetStream sink does not read,
+          so it cannot pass a NATS user name or password.
+        fields:
+          - path: sink.nats.url
+            type: string
+            label: NATS URL
+            required: true
+            placeholder: nats://nats.my-gvc.cpln.local:4222
+          - path: sink.nats.subject
+            type: string
+            label: Subject prefix
+            description: Events go to `{prefix}.{table}`.
+        rules:
+          # workload-debezium.yaml: a username adds NATS_PASSWORD from the natsPassword key of the credentials secret.
+          - rule: self.sink.nats.username == null || self.sink.nats.username == ''
+            severity: info
+            message: >-
+              sink.nats.username is set, so the chart reads natsPassword from the credentials secret, but the NATS
+              JetStream sink sends neither. Clear it in YAML mode.
+      - id: http
+        title: HTTP
+        when: self.sink.type == 'http'
+        fields:
+          - path: sink.http.url
+            type: string
+            format: url
+            label: Endpoint URL
+            required: true
+            placeholder: https://hooks.example.com/cdc
+          # secret-config.yaml writes authentication.type=basic or bearer; the Debezium Server 3.0 HttpChangeConsumer
+          # accepts only jwt and standard-webhooks and throws "Unknown value 'basic'" for anything else. "" and none
+          # write no authentication. A YAML-mode basic or bearer shows NOT_IN_OPTIONS.
+          - path: sink.http.authType
+            type: enum
+            label: Authentication
+            description: >-
+              The Debezium Server HTTP sink refuses the chart's Basic and Bearer settings at startup, so the
+              endpoint must accept requests without credentials.
+            options:
+              - { value: none, label: None }
+          - type: note
+            severity: warning
+            text: >-
+              The HTTP sink sends no extra headers. Of `sink.http.headers` (YAML), Debezium Server 3.0 reads only
+              the keys `prefix` and `encode.base64`, which set the prefix and the Base64 encoding of each change
+              event's own headers. The chart writes the map into the configuration file as written and does not
+              check it: a line break in a name or value breaks the configuration file.
+      - id: kinesis
+        title: Amazon Kinesis
+        when: self.sink.type == 'kinesis'
+        fields:
+          - path: sink.kinesis.region
+            type: string
+            label: Kinesis region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: sink.kinesis.streamName
+            type: string
+            label: Kinesis stream
+            required: true
+          - type: note
+            severity: warning
+            text: >-
+              The Kinesis sink does not read the credentials provider (`sink.kinesis.credentialsProvider` in YAML);
+              it uses the AWS default credentials, which the cloud account provides. The chart writes it into the
+              configuration file as written; leave it at `default`.
+        rules:
+          # identity.yaml links the AWS cloud account only with cloudAccount.enabled; the chart passes no other
+          # AWS credentials (README Universal Cloud Identity).
+          - rule: self.sink.kinesis.cloudAccount.enabled == true
+            severity: warning
+            paths: [sink.kinesis.cloudAccount.enabled]
+            message: >-
+              Kinesis needs the AWS cloud account: without it the workload identity has no AWS access, and the
+              chart passes no other AWS credentials.
+      - id: kinesis-cloud-account
+        title: AWS cloud account
+        toggle: sink.kinesis.cloudAccount.enabled
+        when: self.sink.type == 'kinesis'
+        description: >-
+          Links a Control Plane cloud account to the workload identity (Universal Cloud Identity). The template
+          attaches no AWS IAM policy: grant the identity access to the stream yourself.
+        docs: /guides/create-cloud-account
+        fields:
+          - path: sink.kinesis.cloudAccount.name
+            type: ref
+            label: Cloud account
+            required: true
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+      - id: pubsub
+        title: Google Cloud Pub/Sub
+        when: self.sink.type == 'pubsub'
+        fields:
+          - path: sink.pubsub.projectId
+            type: string
+            label: GCP project ID
+            required: true
+            placeholder: my-gcp-project
+          - path: sink.pubsub.topic
+            type: string
+            label: Topic prefix
+            description: Events go to `{prefix}.{table}`.
+        rules:
+          # identity.yaml links the GCP cloud account only with cloudAccount.enabled (README Universal Cloud Identity).
+          - rule: self.sink.pubsub.cloudAccount.enabled == true
+            severity: warning
+            paths: [sink.pubsub.cloudAccount.enabled]
+            message: >-
+              Pub/Sub needs the GCP cloud account: without it the workload identity has no GCP access, and the
+              chart passes no other GCP credentials.
+      - id: pubsub-cloud-account
+        title: GCP cloud account
+        toggle: sink.pubsub.cloudAccount.enabled
+        when: self.sink.type == 'pubsub'
+        description: >-
+          Links a Control Plane cloud account to the workload identity, with the `pubsub` scope (Universal Cloud
+          Identity). The template grants no GCP role: grant the identity access to the topic yourself.
+        fields:
+          - path: sink.pubsub.cloudAccount.name
+            type: ref
+            label: Cloud account
+            required: true
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+      - id: pulsar
+        title: Apache Pulsar
+        when: self.sink.type == 'pulsar'
+        fields:
+          - path: sink.pulsar.serviceUrl
+            type: string
+            label: Pulsar service URL
+            required: true
+            placeholder: pulsar://pulsar.my-gvc.cpln.local:6650
+          - path: sink.pulsar.topic
+            type: string
+            label: Topic prefix
+          - path: sink.pulsar.authEnabled
+            type: boolean
+            label: Token authentication
+            description: Reads the `pulsarAuthToken` key of the credentials secret.
+          - path: sink.pulsar.authPluginClassName
+            type: string
+            label: Auth plugin class
+            suggestions: [org.apache.pulsar.client.impl.auth.AuthenticationToken]
+        rules:
+          - rule: >-
+              oldSelf != null && self.sink.pulsar.authPluginClassName == oldSelf.sink.pulsar.authPluginClassName ||
+              self.sink.pulsar.authPluginClassName == null || self.sink.pulsar.authPluginClassName == '' ||
+              self.sink.pulsar.authPluginClassName.matches('^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$')
+            paths: [sink.pulsar.authPluginClassName]
+            message: Enter a fully qualified Java class name, such as org.apache.pulsar.client.impl.auth.AuthenticationToken.
+          # secret-config.yaml writes authParams=token:${PULSAR_AUTH_TOKEN} with a class name;
+          # workload-debezium.yaml sets PULSAR_AUTH_TOKEN only with authEnabled.
+          - rule: >-
+              self.sink.pulsar.authPluginClassName == null || self.sink.pulsar.authPluginClassName == '' ||
+              self.sink.pulsar.authEnabled == true
+            severity: warning
+            paths: [sink.pulsar.authEnabled]
+            message: >-
+              With an auth plugin class, the chart passes token:${PULSAR_AUTH_TOKEN} to Pulsar, but sets that
+              variable only with token authentication on. Turn it on, or clear the auth plugin class.
+          - rule: >-
+              self.sink.pulsar.authEnabled != true ||
+              (self.sink.pulsar.authPluginClassName != null && self.sink.pulsar.authPluginClassName != '')
+            severity: warning
+            paths: [sink.pulsar.authPluginClassName]
+            message: >-
+              Token authentication needs an auth plugin class, for example
+              org.apache.pulsar.client.impl.auth.AuthenticationToken: the chart passes the token to Pulsar only
+              with a class set.
+      - id: format
+        title: Event format
+        docs: "#serialization-format"
+        fields:
+          - path: format.key
+            type: enum
+            label: Key format
+            widget: segmented
+            required: true
+            options:
+              - { value: json, label: JSON }
+              - { value: avro, label: Avro }
+              - { value: protobuf, label: Protobuf }
+          - path: format.value
+            type: enum
+            label: Value format
+            widget: segmented
+            required: true
+            options:
+              - { value: json, label: JSON }
+              - { value: avro, label: Avro }
+              - { value: protobuf, label: Protobuf }
+      - id: schema-registry
+        title: Schema registry
+        when: self.format.key in ['avro', 'protobuf'] || self.format.value in ['avro', 'protobuf']
+        description: Where the Avro and Protobuf schemas of the events are registered.
+        fields:
+          - path: format.schemaRegistry.url
+            type: string
+            format: url
+            label: Registry URL
+            required: true
+            placeholder: http://schema-registry.my-gvc.cpln.local:8081
+          - path: format.schemaRegistry.username
+            type: string
+            label: Username
+            description: >-
+              With a username, the password is the `schemaRegistryPassword` key of the credentials secret.
+
+  - id: offsets
+    title: Offsets and storage
+    description: Where the connector records how far it has read, and the volume set that file storage uses.
+    sections:
+      - id: offset-store
+        fields:
+          - path: source.offset.storage
+            type: enum
+            label: Offset store
+            docs: "#offset-storage"
+            widget: cards
+            required: true
+            help: >-
+              Offsets record how far the connector has read the change stream. Without them it snapshots the
+              source again from scratch on its next start.
+            options:
+              - value: file
+                label: File
+                description: A file on the volume set this template creates.
+              - value: redis
+                label: Redis
+                description: A key in a Redis you run.
+              - value: jdbc
+                label: JDBC database
+                description: A table in a relational database you run.
+            rules:
+              - when: self.source.offset.storage == 'redis'
+                rule: self.source.offset.redis.address != null && self.source.offset.redis.address != ''
+                mirrors: debezium.validateOffsetStorage
+                paths: [source.offset.redis.address]
+                message: The Redis address is required.
+          - path: source.offset.file.filename
+            type: string
+            label: Offsets file
+            required: true
+            advanced: true
+            when: self.source.offset.storage == 'file'
+            rules:
+              # workload-debezium.yaml mounts the volume set at /debezium/data.
+              - rule: self.source.offset.file.filename == null || self.source.offset.file.filename.startsWith('/debezium/data/')
+                severity: warning
+                message: >-
+                  The volume set is mounted at /debezium/data; a file anywhere else is lost on every restart, and
+                  the connector snapshots the source again.
+          - path: source.offset.flushIntervalMs
+            type: integer
+            label: Flush interval
+            unit: ms
+            required: true
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+            advanced: true
+          - path: source.offset.flushTimeoutMs
+            type: integer
+            label: Flush timeout
+            unit: ms
+            required: true
+            # The chart prints this number as it is; Helm writes 1000000 and above as 1e+06 (chart bug).
+            max: 999999
+            advanced: true
+      - id: offset-redis
+        title: Redis offset store
+        when: self.source.offset.storage == 'redis'
+        fields:
+          - path: source.offset.redis.address
+            type: string
+            label: Offset store address
+            required: true
+            placeholder: redis.my-gvc.cpln.local:6379
+          - path: source.offset.redis.key
+            type: string
+            label: Offset store key
+            required: true
+          - path: source.offset.redis.authEnabled
+            type: boolean
+            label: Password authentication
+            description: Reads the `offsetRedisPassword` key of the credentials secret.
+          - path: source.offset.redis.ssl
+            type: boolean
+            label: TLS
+      - id: offset-jdbc
+        title: JDBC offset store
+        when: self.source.offset.storage == 'jdbc'
+        fields:
+          - type: note
+            text: The password is the `offsetJdbcPassword` key of the credentials secret.
+          - path: source.offset.jdbc.url
+            type: string
+            label: Offset store JDBC URL
+            required: true
+            placeholder: jdbc:postgresql://my-postgres.my-gvc.cpln.local:5432/offsets
+            pattern: '^jdbc:'
+            patternMessage: Start with jdbc:, for example jdbc:postgresql://host:5432/database.
+          - path: source.offset.jdbc.user
+            type: string
+            label: Offset store user
+            required: true
+          - path: source.offset.jdbc.tableName
+            type: string
+            label: Offset table
+            required: true
+      - id: schema-history
+        title: Schema history
+        when: self.source.type in ['mysql', 'sqlserver']
+        description: MySQL and SQL Server connectors record the DDL changes they have seen here.
+        docs: "#schema-history"
+        fields:
+          - path: source.schemaHistory.storage
+            type: enum
+            label: Schema history store
+            widget: cards
+            required: true
+            options:
+              - value: file
+                label: File
+                description: A file on the volume set this template creates.
+              - value: redis
+                label: Redis
+                description: A key in a Redis you run.
+              - value: jdbc
+                label: JDBC database
+                description: A table in a relational database you run.
+          - path: source.schemaHistory.file.filename
+            type: string
+            label: Schema history file
+            required: true
+            advanced: true
+            when: self.source.schemaHistory.storage == 'file'
+            rules:
+              # workload-debezium.yaml mounts the volume set at /debezium/data.
+              - rule: >-
+                  self.source.schemaHistory.file.filename == null ||
+                  self.source.schemaHistory.file.filename.startsWith('/debezium/data/')
+                severity: warning
+                message: The volume set is mounted at /debezium/data; a file anywhere else is lost on every restart.
+      - id: history-redis
+        title: Redis schema history store
+        when: self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'redis'
+        fields:
+          - path: source.schemaHistory.redis.address
+            type: string
+            label: Schema history address
+            required: true
+            placeholder: redis.my-gvc.cpln.local:6379
+          - path: source.schemaHistory.redis.key
+            type: string
+            label: Schema history key
+            required: true
+          - path: source.schemaHistory.redis.authEnabled
+            type: boolean
+            label: Password authentication
+            description: Reads the `schemaHistoryRedisPassword` key of the credentials secret.
+          - path: source.schemaHistory.redis.ssl
+            type: boolean
+            label: TLS
+      - id: history-jdbc
+        title: JDBC schema history store
+        when: self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'jdbc'
+        fields:
+          - type: note
+            text: The password is the `schemaHistoryJdbcPassword` key of the credentials secret.
+          - path: source.schemaHistory.jdbc.url
+            type: string
+            label: Schema history JDBC URL
+            required: true
+            placeholder: jdbc:postgresql://my-postgres.my-gvc.cpln.local:5432/schema_history
+            pattern: '^jdbc:'
+            patternMessage: Start with jdbc:, for example jdbc:postgresql://host:5432/database.
+          - path: source.schemaHistory.jdbc.user
+            type: string
+            label: Schema history user
+            required: true
+          - path: source.schemaHistory.jdbc.tableName
+            type: string
+            label: Schema history table
+            required: true
+      - id: volumeset
+        title: Volume set
+        # debezium.requiresVolumeset
+        when: >-
+          self.source.offset.storage == 'file' ||
+          (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'file')
+        description: Holds the files of the stores set to File, and makes the workload stateful.
+        docs: "#storage"
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            # Platform volume set schema: maxCapacity 65536 GiB for both performance classes
+            # (nodelibs/schema/src/volumeSet.ts), refused above it; this also keeps Helm from printing it as 1e+06.
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Deleting the volume set makes the connector snapshot the source again. When it is deleted, a final
+              snapshot is kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: volumeset.performanceClass
+            type: enum
+            label: Disk class
+            widget: segmented
+            required: true
+            docs: "/reference/volumeset#performance-classes"
+            options:
+              - { value: general-purpose-ssd, label: General purpose SSD }
+              - { value: high-throughput-ssd, label: High throughput SSD }
+        rules:
+          # Platform minimum per performance class (guide §6.3).
+          - rule: self.volumeset.performanceClass != 'high-throughput-ssd' || self.volumeset.capacity >= 200
+            paths: [volumeset.capacity]
+            message: A high throughput SSD needs an initial capacity of at least 200 GiB.
+          - rule: >-
+              oldSelf == null ||
+              !(oldSelf.source.offset.storage == 'file' ||
+              (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ||
+              self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+          - rule: >-
+              oldSelf == null ||
+              !(oldSelf.source.offset.storage == 'file' ||
+              (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ||
+              self.volumeset.performanceClass == oldSelf.volumeset.performanceClass
+            paths: [volumeset.performanceClass]
+            messageExpression: >-
+              'The disk class is fixed when the volume set is created. Keep ' + oldSelf.volumeset.performanceClass + '.'
+            message: The disk class is fixed when the volume set is created. Keep the installed one.
+    rules:
+      # workload-debezium.yaml: the workload is stateful exactly while debezium.requiresVolumeset holds, and the
+      # platform refuses a changed spec.type on an existing workload ("Workload type may not be changed").
+      - rule: >-
+          oldSelf == null ||
+          (oldSelf.source.offset.storage == 'file' ||
+          (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ==
+          (self.source.offset.storage == 'file' ||
+          (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'file'))
+        paths: [source.offset.storage, source.schemaHistory.storage]
+        messageExpression: >-
+          (self.source.offset.storage == 'file' ||
+          (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'file') ?
+          'File storage makes the workload stateful, but the installed release runs it as a standard workload' :
+          'Without file storage the workload becomes a standard one, but the installed release runs it as a stateful workload') +
+          ', and the platform refuses to change the type of an existing workload. Keep the installed kind of store ' +
+          '(file, or Redis and JDBC), or install a new release for the other kind.'
+        message: >-
+          Moving between file storage and Redis or JDBC storage changes the workload between stateful and standard,
+          and the platform refuses to change the type of an existing workload. Keep the installed kind of store, or
+          install a new release for the other kind.
+      # README Offset Storage and Important Notes: lost offsets mean a new snapshot.
+      - when: >-
+          oldSelf != null &&
+          (oldSelf.source.offset.storage == 'file' ||
+          (oldSelf.source.type in ['mysql', 'sqlserver'] && oldSelf.source.schemaHistory.storage == 'file')) ==
+          (self.source.offset.storage == 'file' ||
+          (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'file'))
+        rule: oldSelf == null || self.source.offset.storage == oldSelf.source.offset.storage
+        severity: info
+        paths: [source.offset.storage]
+        message: >-
+          The installed offsets stay in the old store: the connector starts without them and snapshots the
+          source again.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret that holds every password, token and connection string the connector uses.
+    sections:
+      - id: secret
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The credentials secret must exist **before** you install or upgrade. If it is missing, the deployment
+              waits and `cpln logs` shows nothing at all; `cpln workload get-deployments RELEASE_NAME-debezium --gvc GVC_NAME -o yaml`
+              shows the reason under `status.versions[].message`.
+            textExpression: >-
+              'The credentials secret must exist **before** you ' + (context.mode == 'upgrade' ? 'upgrade' : 'install') +
+              '. If it is missing, the deployment waits and `cpln logs` shows nothing at all; `cpln workload get-deployments ' +
+              context.releaseName + '-debezium --gvc ' + (context.gvc == null ? 'GVC_NAME' : context.gvc) +
+              ' -o yaml` shows the reason under `status.versions[].message`.'
+          # README Upgrading from 1.1.x; CHANGELOG debezium-server 1.2.0.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              1.2.0 moved every credential out of the values, so this upgrade drops `source.database.password` and
+              every other password, token and connection string the release has in its values. Before you upgrade,
+              create a dictionary secret with the keys this configuration needs (listed below;
+              `source.database.password` becomes `sourcePassword`) and choose it here. The five new
+              switches are turned on where the release had the old credential set: Connect with a connection string
+              (Source database step, shown for MongoDB), Password authentication of the Redis offset store and of the Redis schema
+              history store (Offsets and storage), Password authentication of Redis Streams and Token authentication
+              of Apache Pulsar (Sink). Check them before you upgrade. See [Upgrading from 1.1.x](#upgrading-from-1-1-x).
+          - type: note
+            text: >-
+              The secret needs `sourcePassword`, plus the keys the source, sink, stores and schema registry you
+              chose read (see [Prerequisites](#prerequisites)).
+            textExpression: >-
+              'Keys the chart reads from this secret with the current settings: ' +
+              (['sourcePassword'] +
+              (self.source.type == 'mongodb' && self.source.mongodb.useConnectionString == true ? ['mongodbConnectionString'] : []) +
+              (self.source.offset.storage == 'redis' && self.source.offset.redis.authEnabled == true ? ['offsetRedisPassword'] : []) +
+              (self.source.offset.storage == 'jdbc' ? ['offsetJdbcPassword'] : []) +
+              (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'redis' &&
+              self.source.schemaHistory.redis.authEnabled == true ? ['schemaHistoryRedisPassword'] : []) +
+              (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'jdbc' ? ['schemaHistoryJdbcPassword'] : []) +
+              (self.sink.type == 'kafka' && self.sink.kafka.saslUsername != null && self.sink.kafka.saslUsername != '' ? ['kafkaSaslPassword'] : []) +
+              (self.sink.type == 'redis' && self.sink.redis.authEnabled == true ? ['sinkRedisPassword'] : []) +
+              (self.sink.type == 'nats-jetstream' && self.sink.nats.username != null && self.sink.nats.username != '' ? ['natsPassword'] : []) +
+              (self.sink.type == 'http' && self.sink.http.authType == 'basic' ? ['httpPassword'] : []) +
+              (self.sink.type == 'http' && self.sink.http.authType == 'bearer' ? ['httpBearerToken'] : []) +
+              (self.sink.type == 'pulsar' && self.sink.pulsar.authEnabled == true ? ['pulsarAuthToken'] : []) +
+              (self.sink.type == 'eventhubs' ? ['eventhubsConnectionString'] : []) +
+              (self.format.schemaRegistry.url != null && self.format.schemaRegistry.url != '' &&
+              self.format.schemaRegistry.username != null && self.format.schemaRegistry.username != '' ? ['schemaRegistryPassword'] : [])
+              ).map(k, '`' + k + '`').join(', ') + '.'
+          - path: credentialsSecretName
+            type: ref
+            label: Credentials secret
+            docs: "#prerequisites"
+            required: true
+            description: A dictionary secret. Secret names are org-wide, so give each release its own.
+            help: >-
+              Create it here, or with `cpln secret create-dictionary --name SECRET_NAME --entry sourcePassword='…'`
+              and one more `--entry` per key.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              # workload-debezium.yaml: each key is a cpln://secret/<credentialsSecretName>.<key> env reference.
+              requiredKeysFrom: >-
+                ['sourcePassword'] +
+                (self.source.type == 'mongodb' && self.source.mongodb.useConnectionString == true ? ['mongodbConnectionString'] : []) +
+                (self.source.offset.storage == 'redis' && self.source.offset.redis.authEnabled == true ? ['offsetRedisPassword'] : []) +
+                (self.source.offset.storage == 'jdbc' ? ['offsetJdbcPassword'] : []) +
+                (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'redis' &&
+                self.source.schemaHistory.redis.authEnabled == true ? ['schemaHistoryRedisPassword'] : []) +
+                (self.source.type in ['mysql', 'sqlserver'] && self.source.schemaHistory.storage == 'jdbc' ? ['schemaHistoryJdbcPassword'] : []) +
+                (self.sink.type == 'kafka' && self.sink.kafka.saslUsername != null && self.sink.kafka.saslUsername != '' ? ['kafkaSaslPassword'] : []) +
+                (self.sink.type == 'redis' && self.sink.redis.authEnabled == true ? ['sinkRedisPassword'] : []) +
+                (self.sink.type == 'nats-jetstream' && self.sink.nats.username != null && self.sink.nats.username != '' ? ['natsPassword'] : []) +
+                (self.sink.type == 'http' && self.sink.http.authType == 'basic' ? ['httpPassword'] : []) +
+                (self.sink.type == 'http' && self.sink.http.authType == 'bearer' ? ['httpBearerToken'] : []) +
+                (self.sink.type == 'pulsar' && self.sink.pulsar.authEnabled == true ? ['pulsarAuthToken'] : []) +
+                (self.sink.type == 'eventhubs' ? ['eventhubsConnectionString'] : []) +
+                (self.format.schemaRegistry.url != null && self.format.schemaRegistry.url != '' &&
+                self.format.schemaRegistry.username != null && self.format.schemaRegistry.username != '' ? ['schemaRegistryPassword'] : [])
+              create:
+                suggestName: "context.releaseName + '-debezium-secret'"
+            rules:
+              # _helpers.tpl: the chart creates <release>-debezium-credentials, -config and -entrypoint itself.
+              - when: context.releaseName != null && context.releaseName != ''
+                rule: >-
+                  !(self.credentialsSecretName in [context.releaseName + '-debezium-credentials',
+                  context.releaseName + '-debezium-config']) &&
+                  !(self.source.type == 'postgres' && self.source.postgres.heartbeatIntervalMs != null &&
+                  self.source.postgres.heartbeatIntervalMs > 0 &&
+                  self.credentialsSecretName == context.releaseName + '-debezium-entrypoint')
+                messageExpression: >-
+                  'The chart creates its own secret named ' + self.credentialsSecretName + ' in this release' +
+                  (self.credentialsSecretName == context.releaseName + '-debezium-entrypoint' ?
+                  ' while the PostgreSQL heartbeat is on' : '') +
+                  '. Give the credentials secret another name, for example ' + context.releaseName + '-debezium-secret.'
+                message: >-
+                  The chart creates its own secret with this name in this release (the entrypoint secret while the
+                  PostgreSQL heartbeat is on). Give the credentials secret another name.
+      # validateCredentials refuses each of these when it is set and not empty; values from 1.1.x or pasted YAML.
+      - id: removed-credentials
+        title: Credentials still in the values
+        description: >-
+          1.2.0 refuses these values. Clear each one here, after moving it into the credentials secret when its
+          description names a key.
+        docs: "#upgrading-from-1-1-x"
+        fields:
+          - path: source.database.password
+            type: string
+            absent: true
+            label: Source database password
+            sensitive: true
+            widget: password
+            when: self.source.database.password != null && self.source.database.password != ''
+            description: Now the `sourcePassword` key.
+            rules:
+              - rule: self.source.database.password == null || self.source.database.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.database.password was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as sourcePassword and clear it here.
+          - path: source.mongodb.connectionString
+            type: string
+            absent: true
+            label: MongoDB connection string
+            sensitive: true
+            widget: password
+            when: self.source.mongodb.connectionString != null && self.source.mongodb.connectionString != ''
+            description: Now the `mongodbConnectionString` key, with Connect with a connection string on.
+            rules:
+              - rule: self.source.mongodb.connectionString == null || self.source.mongodb.connectionString == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.mongodb.connectionString was removed in 1.2.0 and the chart refuses it. Put the value in
+                  the credentials secret as mongodbConnectionString and clear it here.
+          - path: source.offset.redis.password
+            type: string
+            absent: true
+            label: Redis offset store password
+            sensitive: true
+            widget: password
+            when: self.source.offset.redis.password != null && self.source.offset.redis.password != ''
+            description: Now the `offsetRedisPassword` key, with password authentication on.
+            rules:
+              - rule: self.source.offset.redis.password == null || self.source.offset.redis.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.offset.redis.password was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as offsetRedisPassword and clear it here.
+          - path: source.offset.jdbc.password
+            type: string
+            absent: true
+            label: JDBC offset store password
+            sensitive: true
+            widget: password
+            when: self.source.offset.jdbc.password != null && self.source.offset.jdbc.password != ''
+            description: Now the `offsetJdbcPassword` key.
+            rules:
+              - rule: self.source.offset.jdbc.password == null || self.source.offset.jdbc.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.offset.jdbc.password was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as offsetJdbcPassword and clear it here.
+          - path: source.schemaHistory.redis.password
+            type: string
+            absent: true
+            label: Redis schema history password
+            sensitive: true
+            widget: password
+            when: self.source.schemaHistory.redis.password != null && self.source.schemaHistory.redis.password != ''
+            description: Now the `schemaHistoryRedisPassword` key, with password authentication on.
+            rules:
+              - rule: self.source.schemaHistory.redis.password == null || self.source.schemaHistory.redis.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.schemaHistory.redis.password was removed in 1.2.0 and the chart refuses it. Put the value
+                  in the credentials secret as schemaHistoryRedisPassword and clear it here.
+          - path: source.schemaHistory.jdbc.password
+            type: string
+            absent: true
+            label: JDBC schema history password
+            sensitive: true
+            widget: password
+            when: self.source.schemaHistory.jdbc.password != null && self.source.schemaHistory.jdbc.password != ''
+            description: Now the `schemaHistoryJdbcPassword` key.
+            rules:
+              - rule: self.source.schemaHistory.jdbc.password == null || self.source.schemaHistory.jdbc.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  source.schemaHistory.jdbc.password was removed in 1.2.0 and the chart refuses it. Put the value
+                  in the credentials secret as schemaHistoryJdbcPassword and clear it here.
+          - path: sink.kafka.saslPassword
+            type: string
+            absent: true
+            label: Kafka SASL password
+            sensitive: true
+            widget: password
+            when: self.sink.kafka.saslPassword != null && self.sink.kafka.saslPassword != ''
+            description: Now the `kafkaSaslPassword` key.
+            rules:
+              - rule: self.sink.kafka.saslPassword == null || self.sink.kafka.saslPassword == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.kafka.saslPassword was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as kafkaSaslPassword and clear it here.
+          - path: sink.redis.password
+            type: string
+            absent: true
+            label: Redis sink password
+            sensitive: true
+            widget: password
+            when: self.sink.redis.password != null && self.sink.redis.password != ''
+            description: Now the `sinkRedisPassword` key, with password authentication on.
+            rules:
+              - rule: self.sink.redis.password == null || self.sink.redis.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.redis.password was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as sinkRedisPassword and clear it here.
+          - path: sink.nats.password
+            type: string
+            absent: true
+            label: NATS password
+            sensitive: true
+            widget: password
+            when: self.sink.nats.password != null && self.sink.nats.password != ''
+            description: Not used. The NATS JetStream sink does not read the NATS credentials this chart writes.
+            rules:
+              - rule: self.sink.nats.password == null || self.sink.nats.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.nats.password was removed in 1.2.0 and the chart refuses it. Clear it: the Debezium Server
+                  NATS JetStream sink does not read the NATS credentials this chart writes.
+          - path: sink.http.password
+            type: string
+            absent: true
+            label: HTTP basic auth password
+            sensitive: true
+            widget: password
+            when: self.sink.http.password != null && self.sink.http.password != ''
+            description: Not used. The Debezium Server HTTP sink refuses Basic authentication at startup.
+            rules:
+              - rule: self.sink.http.password == null || self.sink.http.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.http.password was removed in 1.2.0 and the chart refuses it. Clear it: it served only Basic
+                  authentication, which the Debezium Server HTTP sink refuses at startup.
+          - path: sink.http.bearerToken
+            type: string
+            absent: true
+            label: HTTP bearer token
+            sensitive: true
+            widget: password
+            when: self.sink.http.bearerToken != null && self.sink.http.bearerToken != ''
+            description: Not used. The Debezium Server HTTP sink refuses Bearer authentication at startup.
+            rules:
+              - rule: self.sink.http.bearerToken == null || self.sink.http.bearerToken == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.http.bearerToken was removed in 1.2.0 and the chart refuses it. Clear it: it served only
+                  Bearer authentication, which the Debezium Server HTTP sink refuses at startup.
+          - path: sink.pulsar.authToken
+            type: string
+            absent: true
+            label: Pulsar auth token
+            sensitive: true
+            widget: password
+            when: self.sink.pulsar.authToken != null && self.sink.pulsar.authToken != ''
+            description: Now the `pulsarAuthToken` key, with token authentication on.
+            rules:
+              - rule: self.sink.pulsar.authToken == null || self.sink.pulsar.authToken == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.pulsar.authToken was removed in 1.2.0 and the chart refuses it. Put the value in the
+                  credentials secret as pulsarAuthToken and clear it here.
+          - path: sink.eventhubs.connectionString
+            type: string
+            absent: true
+            label: Event Hubs connection string
+            sensitive: true
+            widget: password
+            when: self.sink.eventhubs.connectionString != null && self.sink.eventhubs.connectionString != ''
+            description: Not used. The Event Hubs sink cannot run with this chart.
+            rules:
+              - rule: self.sink.eventhubs.connectionString == null || self.sink.eventhubs.connectionString == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  sink.eventhubs.connectionString was removed in 1.2.0 and the chart refuses it. Clear it: the
+                  Debezium Server Event Hubs sink cannot run with this chart, which writes property names that
+                  sink does not read.
+          - path: format.schemaRegistry.password
+            type: string
+            absent: true
+            label: Schema registry password
+            sensitive: true
+            widget: password
+            when: self.format.schemaRegistry.password != null && self.format.schemaRegistry.password != ''
+            description: Now the `schemaRegistryPassword` key.
+            rules:
+              - rule: self.format.schemaRegistry.password == null || self.format.schemaRegistry.password == ''
+                mirrors: debezium.validateCredentials
+                message: >-
+                  format.schemaRegistry.password was removed in 1.2.0 and the chart refuses it. Put the value in
+                  the credentials secret as schemaRegistryPassword and clear it here.
+
+  - id: workload
+    title: Workload
+    description: The Debezium Server image, its compute and its firewall.
+    sections:
+      - id: server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Debezium Server image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources
+            docs: "#image-and-resources"
+            required: true
+            description: A single replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: firewall
+        title: Firewall
+        docs: "#firewall"
+        fields:
+          - path: firewall.internal.inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Who in Control Plane can reach port 8080, where Debezium Server serves its health endpoints.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # workload-debezium.yaml:218-220 writes any non-empty list into inboundAllowWorkload, whatever the type,
+          # so the list shows in every type (§6.8).
+          - path: firewall.internal.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.firewall.internal.inboundAllowType == 'same-gvc'
+            rules:
+              - when: self.firewall.internal.inboundAllowType == 'same-gvc' && context.gvc != null
+                rule: "!self.firewall.internal.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.firewall.internal.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+              - rule: self.firewall.internal.inboundAllowType != 'workload-list' || size(self.firewall.internal.workloads) > 0
+                severity: info
+                message: With "Specific workloads" and an empty list, no workload can reach the health endpoints.
+              - when: self.firewall.internal.inboundAllowType == 'same-org'
+                rule: size(self.firewall.internal.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.firewall.internal.inboundAllowType == 'none'
+                rule: size(self.firewall.internal.workloads) == 0
+                severity: warning
+                message: >-
+                  The chart still writes these workloads into the firewall, where the platform checks every entry, but
+                  "None" lets none of them connect. Remove them.
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            description: >-
+              Addresses outside Control Plane that Debezium Server may reach, such as a source database or a sink
+              that runs elsewhere.
+            docs: "/reference/workload/firewall#outbound-requests"
+            unique: true
+            item: { type: string, format: cidr, label: CIDR }
+            rules:
+              # values.yaml: "required for database connectivity".
+              - rule: size(self.firewall.external.outboundAllowCIDR) > 0
+                severity: info
+                message: >-
+                  With no outbound CIDR, Debezium Server reaches only workloads inside Control Plane. Add 0.0.0.0/0
+                  (the default), or the addresses of your source database and sink, unless both run in this org.
+                fix:
+                  path: firewall.external.outboundAllowCIDR
+                  items: "['0.0.0.0/0']"
+
+yamlOnly:
+  - path: source.postgres.heartbeatActionQuery
+    reason: >-
+      SQL written unescaped into the generated properties file; only experts set a heartbeat query, and the
+      defaults leave it empty.
+  - path: sink.http.headers
+    reason: >-
+      Written unescaped into the properties file as debezium.sink.http.headers.<name>=<value>; the Debezium
+      Server 3.0 HTTP sink sends none of them as headers and reads only the expert keys prefix and
+      encode.base64; the defaults leave it empty.
+  - path: sink.kinesis.credentialsProvider
+    reason: >-
+      Written unescaped into the generated properties file; the Kinesis sink does not read it (it uses the AWS
+      default credentials, which the AWS cloud account section provides), so only experts change it.
+  - path: source.oracle
+    reason: >-
+      The chart writes schema history only for MySQL and SQL Server, and the Debezium 3.0 Oracle connector needs
+      one (it falls back to Kafka schema history and stops at startup without its topic), so the Oracle source cannot
+      run with this chart (it is not offered under Source database).
+  - path: sink.nats.username
+    reason: >-
+      The chart writes it as nats-jetstream.username, but the Debezium Server NATS JetStream sink reads
+      auth.user, so the value is never sent.
+  - path: sink.http.username
+    reason: Written only with authentication type basic, which the Debezium Server HTTP sink refuses at startup.
+  - path: sink.eventhubs.hubName
+    reason: >-
+      The chart writes eventhubs.connection.string and eventhubs.hub.name, but the Debezium Server Event Hubs
+      sink requires eventhubs.connectionstring and eventhubs.hubname and stops at startup without them, so the
+      Event Hubs sink cannot run with this chart (it is not offered under Sink).
+
+migrations:
+  # 1.2.0 moved every credential into the prerequisite secret (README "Upgrading from 1.1.x", CHANGELOG 1.2.0).
+  - fromVersions: "<1.2.0"
+    from: source.database.password
+    note: Put the database password in the credentials secret as sourcePassword, and choose the secret under Credentials.
+  - fromVersions: "<1.2.0"
+    from: source.mongodb.connectionString
+    note: If the release used it, put it in the credentials secret as mongodbConnectionString.
+  - fromVersions: "<1.2.0"
+    from: source.offset.redis.password
+    note: If the release used it, put it in the credentials secret as offsetRedisPassword.
+  - fromVersions: "<1.2.0"
+    from: source.offset.jdbc.password
+    note: If the release used it, put it in the credentials secret as offsetJdbcPassword.
+  - fromVersions: "<1.2.0"
+    from: source.schemaHistory.redis.password
+    note: If the release used it, put it in the credentials secret as schemaHistoryRedisPassword.
+  - fromVersions: "<1.2.0"
+    from: source.schemaHistory.jdbc.password
+    note: If the release used it, put it in the credentials secret as schemaHistoryJdbcPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.kafka.saslPassword
+    note: If the release used it, put it in the credentials secret as kafkaSaslPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.redis.password
+    note: If the release used it, put it in the credentials secret as sinkRedisPassword.
+  - fromVersions: "<1.2.0"
+    from: sink.nats.password
+    note: >-
+      If the release used it, there is nothing to move: the Debezium Server NATS JetStream sink does not read the
+      NATS credentials this chart writes. Also clear sink.nats.username in YAML mode, or the chart still reads
+      natsPassword from the credentials secret.
+  - fromVersions: "<1.2.0"
+    from: sink.http.password
+    note: >-
+      If the release used it, there is nothing to move: it served only Basic authentication, which the
+      Debezium Server HTTP sink refuses at startup, so the endpoint must accept requests without credentials.
+  - fromVersions: "<1.2.0"
+    from: sink.http.bearerToken
+    note: >-
+      If the release used it, there is nothing to move: it served only Bearer authentication, which the
+      Debezium Server HTTP sink refuses at startup, so the endpoint must accept requests without credentials.
+  - fromVersions: "<1.2.0"
+    from: sink.pulsar.authToken
+    note: If the release used it, put it in the credentials secret as pulsarAuthToken.
+  - fromVersions: "<1.2.0"
+    from: sink.eventhubs.connectionString
+    note: >-
+      If the release used it, there is nothing to move: the Debezium Server Event Hubs sink cannot run with
+      this chart, which writes property names that sink does not read. Choose another sink under Sink.
+  - fromVersions: "<1.2.0"
+    from: format.schemaRegistry.password
+    note: If the release used it, put it in the credentials secret as schemaRegistryPassword.
+  # 1.1.x turned these on whenever the credential was not empty; the switches keep the release's behaviour
+  # (null computes nothing, so a release without the credential keeps the default false; dyn() lets the
+  # ternary mix a bool and null).
+  - fromVersions: "<1.2.0"
+    to: source.mongodb.useConnectionString
+    valueExpr: "self.source.mongodb.connectionString != null && self.source.mongodb.connectionString != '' ? dyn(true) : null"
+    note: Turned on because the release had a connection string, which versions before 1.2.0 used whenever one was set.
+  - fromVersions: "<1.2.0"
+    to: source.offset.redis.authEnabled
+    valueExpr: "self.source.offset.redis.password != null && self.source.offset.redis.password != '' ? dyn(true) : null"
+    note: Turned on because the release had a Redis offset store password, which versions before 1.2.0 used whenever one was set.
+  - fromVersions: "<1.2.0"
+    to: source.schemaHistory.redis.authEnabled
+    valueExpr: "self.source.schemaHistory.redis.password != null && self.source.schemaHistory.redis.password != '' ? dyn(true) : null"
+    note: Turned on because the release had a Redis schema history password, which versions before 1.2.0 used whenever one was set.
+  - fromVersions: "<1.2.0"
+    to: sink.redis.authEnabled
+    valueExpr: "self.sink.redis.password != null && self.sink.redis.password != '' ? dyn(true) : null"
+    note: Turned on because the release had a Redis sink password, which versions before 1.2.0 used whenever one was set.
+  - fromVersions: "<1.2.0"
+    to: sink.pulsar.authEnabled
+    valueExpr: "self.sink.pulsar.authToken != null && self.sink.pulsar.authToken != '' ? dyn(true) : null"
+    note: Turned on because the release had a Pulsar auth token, which versions before 1.2.0 used whenever one was set.

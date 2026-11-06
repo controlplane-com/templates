@@ -88,7 +88,7 @@ backup:
 
   logical: # logical backup settings
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0 # tag 17.1.0 = Postgres 17, 18.1.0 = Postgres 18
-    schedule: "0 2 * * *" # cron schedule, default isdaily at 2am UTC
+    schedule: "0 2 * * *" # cron schedule, default is daily at 2am UTC
 
   walg: # wal-g backup settings
     intervalSeconds: 21600 # interval in seconds between backups, default is every 6 hours

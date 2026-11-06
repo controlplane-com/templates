@@ -1,0 +1,16 @@
+---
+kind: policy
+name: {{ .Release.Name }}-tidb-{{ .Values.gvc.name }}-policy
+description: {{ .Release.Name }}-tidb-{{ .Values.gvc.name }}-policy
+tags: {{- include "tidb.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.gvc.name }}/identity/{{ .Release.Name }}-tidb-identity
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Release.Name }}-tidb-user
+  - //secret/{{ .Release.Name }}-tidb-pd-startup
+  - //secret/{{ .Release.Name }}-tidb-server-startup
+  - //secret/{{ .Release.Name }}-tidb-tikv-startup

@@ -12,7 +12,7 @@ hosted provider, and low-latency serving by deploying the same template to sever
 |---|---|
 | workload (stateful) | two containers — Open WebUI on `8080` (exposed) and Ollama on `11434` (internal) |
 | volumeset | pulled models; these are large |
-| secret | startup script that pulls `defaultModel` on first boot |
+| secret | startup script that starts `ollama serve` (its model-pull block never fires — see trap below) |
 | identity + policy | `reveal` on the startup secret |
 
 Does not create a GVC.
@@ -21,8 +21,8 @@ Does not create a GVC.
 
 | Knob | Default | Notes |
 |---|---|---|
-| `defaultModel` | `llama3` | pulled on first start; any model in the Ollama library |
-| UI image | `ghcr.io/open-webui/open-webui:v0.11.0` | pinned in 1.1.2; was the moving `main` branch build |
+| `defaultModel` | `llama3` | the model Open WebUI preselects; NOT downloaded — the user pulls it once by hand |
+| UI image | `ghcr.io/open-webui/open-webui:v0.12.4` | pinned in 1.1.2 (`v0.11.0`), bumped in 1.2.0; was the moving `main` branch build. `ollama.validateImage` refuses official tags below `v0.12.4` |
 | API image | `ollama/ollama:0.32.15` | pinned in 1.1.2; was **untagged**, so it resolved to `latest` |
 | `volumeset` | — | size it for the models you intend to run |
 | `firewall` / `internal_access` | — | the UI is the exposed surface |
@@ -31,10 +31,36 @@ Does not create a GVC.
 
 - **Quotas are the usual first blocker.** CPU and memory beyond org defaults need an increase, and GPU access
   must be enabled explicitly by Control Plane support.
-- **First start is slow and looks stuck.** `defaultModel` downloads before the server is useful.
+- **`defaultModel` is never pulled automatically (open chart item; read from the chart, not observed live).** The script lives in `entrypoint.payload` and reads `$DEFAULT_MODELS`, but `workload.yaml` sets `DEFAULT_MODELS` only on the Open WebUI container — the `ollama` container has `inheritEnv: false` and no env; the pull body is also single-quoted, so `$DEFAULT_MODELS` would be sent literally; and the `MODEL_DIR` check matches untagged names only. The README and docs page say plainly that the model is not downloaded and give the manual `ollama pull` (maintainer ruling 2026-10-02: do not claim an auto-download while it is broken). Fixing it changes the render → needs a new version; tracked as GitLab #5212.
 - **Never expose `11434`.** The Ollama API has no authentication; the WebUI on `8080` is the intended surface.
   Exposing the API directly hands anyone an unauthenticated model server.
 - **Models live on the volumeset, and uninstall deletes it** — every model is re-downloaded on the next
   install. A default-sized volume fills quickly once a second model is pulled.
 - **Both images floated until 1.1.2.** `open-webui:main` is a branch build, and the Ollama image carried no
-  tag at all. An install from before 1.1.2 is not reproducible.
+  tag at all. An install from before 1.1.2 is not reproducible. Moving such a release to the pins can DOWNGRADE it: measured 2026-10-26, a default 1.1.1 release ran Open WebUI 0.12.4 from `main`, and the pinned v0.11.0 then failed its DB migrations (`Can't locate revision`). The 1.1.2 wizard therefore carries the running image tags on upgrade, and the README tells users to pin a tag at least as new as the running one.
+- **1.2.0 refuses an Open WebUI tag below `v0.12.4`** (`ollama.validateImage`, mirrored by a wizard rule on the
+  image field). It matches `ghcr.io/open-webui/open-webui` and the Docker Hub mirror `openwebui/open-webui`
+  (with or without `docker.io/`); a minor-only tag (`0.11`) counts as that minor's latest patch; digests, other
+  registries and non-version tags (`main`, `latest`) pass. A release still pinning `v0.11.0` in stored values
+  fails the upgrade render with a message naming the tag to use.
+
+- **Open WebUI v0.12.4 needs 2Gi, not 1Gi** (measured 2026-10-27). At 1Gi the UI container sat at its limit
+  (`memory.events max` > 5000, ~900 MB resident vs ~737 MB on v0.11.0) and 8 of 11 navigation runs hit an
+  intermittent 503 (`upstream connect error or disconnect/reset before headers`) on a random API call. 1.2.0 raises
+  the default to 2Gi (`tw carry` moves a stored 1Gi). At 2Gi it still happened in 1 of 6 runs, and a fresh 1Gi
+  container below its limit saw it too, so memory is not the whole cause — suspected upstream (uvicorn 0.54 /
+  `--ws-per-message-deflate`). User impact: a sidebar item fails to load until a reload; no crash.
+- **The 1.1.2 → 1.2.0 upgrade signs every user out once** (old session tokens get 401).
+
+## Version history
+
+- **1.1.2** — pinned both images (`open-webui:v0.11.0`, `ollama/ollama:0.32.15`); wizard keeps the moving tags
+  of pre-1.1.2 releases, since `main` had already migrated past `v0.11.0`.
+- **1.2.0** (2026-10-27, work item 5376) — Open WebUI `v0.11.0` → `v0.12.4` for Critical CVEs (Trivy
+  Critical/High: 32/599 → 10/131; fixed pillow, nltk and more; still open upstream: unstructured, chromadb,
+  PyJWT, sentence-transformers). Ollama stays `0.32.15` (the v0.12 notes require no newer Ollama). Image
+  contract unchanged (root, `bash start.sh`, `8080`, `/health`, data in `/app/backend/data`); the image moves
+  to Python 3.12 / Debian 13. Upstream changes a user must act on: the database migrates on first start
+  (v0.11.1, v0.12.1 schema changes — no rollback to 1.1.2), tool servers saved in personal Integrations stop
+  being used until Direct Integrations is turned on (v0.12.4), pip-installing custom functions need Python
+  3.12 builds. `ENABLE_REALTIME_CHAT_SAVE` is now a no-op (the chart does not set it).

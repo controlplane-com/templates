@@ -1,0 +1,838 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Polaris
+
+# Polaris itself is stateless, but both bundled metastores are single-location stateful workloads with no
+# location handling: postgres brings this limit with its import, and postgres-highly-available (no
+# descriptor of its own, so its keys are parent fields below) needs the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.3.0
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Metastore server }
+      - { id: storage, title: Metastore storage }
+      - { id: network, title: Metastore network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Metastore backups }
+    exclude:
+      # Asked in the Metastore step below, next to the HA mode's credentials, so both modes ask for them in one place.
+      - config.username
+      - config.password
+      - config.database
+      # Polaris connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Polaris and its bootstrap workload connect to the metastore like any other workload: keep Same GVC,
+          or add both under Allowed workloads.
+
+steps:
+  - id: polaris
+    title: Polaris
+    description: The Polaris server image, its replicas and compute, and its single realm.
+    sections:
+      - title: Server
+        docs: "#server"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Polaris image
+            required: true
+            help: Keep the bootstrap image on the same tag.
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              The server is stateless; every replica shares the metastore and the token signing key. Use 2 or
+              more for rolling upgrades without downtime.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. The JVM heap is a percentage of the maximum memory.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: jvm.maxRAMPercentage
+            type: integer
+            label: Maximum heap
+            unit: "%"
+            required: true
+            min: 40
+            max: 80
+            suggestions: [60, 70, 75]
+            description: The maximum JVM heap, as a percentage of the maximum memory.
+            docs: "#jvm"
+        rules:
+          - rule: cpuMillicores(self.resources.maxCpu) <= 4 * cpuMillicores(self.resources.minCpu)
+            mirrors: polaris.validate.resources
+            paths: [resources]
+            message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+          - rule: "[self.resources.minMemory, self.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+            mirrors: polaris.validate.resources
+            paths: [resources]
+            message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
+          - rule: self.replicas >= 1 && self.jvm.maxRAMPercentage >= 40 && self.jvm.maxRAMPercentage <= 80
+            mirrors: polaris.validate
+            paths: [replicas, jvm.maxRAMPercentage]
+            message: Set at least 1 replica and a maximum heap between 40 and 80 percent.
+      - title: Realm
+        docs: "#realm"
+        fields:
+          - path: realm
+            type: string
+            label: Realm
+            required: true
+            pattern: '^[A-Za-z0-9_-]+$'
+            patternMessage: Use letters, digits, hyphens or underscores.
+            description: >-
+              The one realm this install serves. Requests without a `Polaris-Realm` header resolve to it, which
+              is what Trino needs.
+            help: >-
+              Permanent after the first install: renaming it bootstraps a new, empty realm and hides the
+              existing catalogs.
+        rules:
+          - when: oldSelf != null
+            rule: self.realm == oldSelf.realm
+            severity: warning
+            paths: [realm]
+            message: >-
+              A new realm name bootstraps an empty realm and hides every existing catalog. Changing it back makes
+              them visible again.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secrets for the root principal and the token signing key.
+    docs: "#credentials"
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Both secrets must exist **before** you install. If one is missing, the deployment waits and
+          `cpln logs` shows nothing at all.
+      - path: rootCredentials.secretName
+        type: ref
+        label: Root credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `CLIENT_ID` and `CLIENT_SECRET`, neither containing a comma. Trino,
+          Spark and other clients authenticate with them.
+        help: >-
+          Applied once, when the realm is first bootstrapped; changing them later has no effect. Rotate by
+          creating a new principal through the management API.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [CLIENT_ID, CLIENT_SECRET]
+          create:
+            suggestName: "context.releaseName + '-polaris-root-credentials'"
+      - path: tokenSigningKey.secretName
+        type: ref
+        label: Token signing key secret
+        required: true
+        description: An opaque secret with plain encoding holding a random string of 32 or more characters.
+        help: Every replica signs and validates access tokens with it. Changing it invalidates every outstanding token.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            suggestName: "context.releaseName + '-polaris-signing-key'"
+    rules:
+      - rule: self.rootCredentials.secretName != '' && self.tokenSigningKey.secretName != ''
+        mirrors: polaris.validate
+        paths: [rootCredentials.secretName, tokenSigningKey.secretName]
+        message: The root credentials secret and the token signing key secret are required.
+
+  - id: storage
+    title: Object storage
+    description: Credentials Polaris uses for its own table-metadata I/O in an S3 or S3-compatible bucket.
+    docs: "#object-storage"
+    fields:
+      - path: storage.credentialsSecretName
+        type: ref
+        label: Object storage credentials secret
+        description: >-
+          Optional. A dictionary secret with the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Leave
+          empty to run without object storage; catalogs on S3 then cannot read or write.
+        help: >-
+          A seaweedfs credentials secret works as-is. Query engines keep their own copy of the keys: this
+          template does not vend credentials.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+          create:
+            suggestName: "context.releaseName + '-polaris-s3-credentials'"
+      - path: storage.region
+        type: string
+        label: Region
+        required: true
+        placeholder: us-east-1
+        description: The bucket's AWS region. S3-compatible servers ignore it, but the SDK requires one.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Polaris inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The Iceberg REST and management APIs on the canonical endpoint. Health and metrics stay internal.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Query engines in the GVC connect internally. Firewall changes take 30 seconds to a few minutes.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: polaris.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect internally.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: database
+    title: Metastore
+    description: Which PostgreSQL holds every catalog, and its login.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Metastore
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica on a persistent volume; minutes of downtime on a node failure.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the metastore choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the metastore choice above.
+      - id: credentials
+        title: Metastore credentials
+        description: >-
+          The login of whichever PostgreSQL is chosen above. The chosen database creates its secret from these
+          values (<release>-postgres-config for the highly available one, <release>-pg-config for the
+          single-instance one), and Polaris reads it. There is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 1.3.0 takes them from a secret
+              you create instead.
+          - path: postgresHA.postgres.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgresHA.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgresHA.postgres.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgresHA.enabled
+            description: Used as typed, so replace the published default.
+            help: >-
+              PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you
+              change it here. The replication user `repl` uses the same password, so change that role too.
+          - path: postgresHA.postgres.database
+            type: string
+            label: Database name
+            required: true
+            when: self.postgresHA.enabled
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+            description: It goes into Polaris's JDBC URL, so use lowercase letters, digits and underscores.
+          - path: postgres.config.username
+            type: string
+            label: Database user
+            required: true
+            when: self.postgres.enabled
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.config.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            when: self.postgres.enabled
+            description: Used as typed, so replace the published default.
+            help: PostgreSQL keeps the password it was initialized with, so change it with `ALTER ROLE` before you change it here.
+          - path: postgres.config.database
+            type: string
+            label: Database name
+            required: true
+            when: self.postgres.enabled
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+            description: It goes into Polaris's JDBC URL, so use letters, digits, - and _.
+        rules:
+          # polaris.env.datasource writes the active mode's database name unquoted at the end of
+          # QUARKUS_DATASOURCE_JDBC_URL (jdbc:postgresql://<host>:5432/<database>), used by the server and the
+          # bootstrap admin tool alike; the JDBC driver URL-decodes that part (+ becomes a space), ? and / change
+          # how it parses the URL, and ' #' or ': ' cut off the YAML value or break the render.
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.config.database == oldSelf.postgres.config.database) ||
+              !self.postgres.config.database.matches('[\\s/?#%:+]')
+            severity: warning
+            paths: [postgres.config.database]
+            message: >-
+              This version writes the database name unquoted at the end of Polaris's JDBC URL
+              (jdbc:postgresql://…:5432/NAME). Leave out spaces and the characters / ? # % : and + (the JDBC driver
+              decodes + to a space).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.database == oldSelf.postgresHA.postgres.database) ||
+              !self.postgresHA.postgres.database.matches('[\\s/?#%:+]')
+            severity: warning
+            paths: [postgresHA.postgres.database]
+            message: >-
+              This version writes the database name unquoted at the end of Polaris's JDBC URL
+              (jdbc:postgresql://…:5432/NAME). Leave out spaces and the characters / ? # % : and + (the JDBC driver
+              decodes + to a space).
+          # The HA database (postgres-highly-available 2.4.2) writes the user and password unquoted into an
+          # unquoted shell heredoc that becomes Patroni's YAML config (loaded as YAML 1.1), and the user and
+          # database name into an unquoted psql command and CREATE DATABASE (templates/secret-startup.yaml).
+          # Reproduced by running the heredoc with sh and loading the result with PyYAML: $ and ` are expanded,
+          # a \ before $ ` \ or at the end is consumed, YAML indicators at the start, ': ', ' #' and a lone
+          # - ~ = break or alter the value, and numbers, dates, 1:30 and yes/no/on/off change type. Quotes, :
+          # and ! inside the value are kept.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password) ||
+              [self.postgresHA.postgres.password].all(x,
+              !x.matches('[$`]') && !x.matches('\\\\([$`\\\\]|$)') &&
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']) && !(x in ['~', '=', '<<']) &&
+              !x.matches('^[-+]?([0-9][0-9_]*|0b[01_]+|0x[0-9a-fA-F_]+)$') &&
+              !x.matches('^[-+]?([0-9][0-9_]*)?\\.[0-9_]*([eE][-+][0-9]+)?$') &&
+              !x.matches('^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\\.[0-9_]*)?$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.postgres.password]
+            message: >-
+              The highly available database writes the password unquoted into a shell script and its YAML config.
+              Leave out $ and `, a \ before $, ` or \ or at the end, a leading space or YAML symbol, ": " and " #", and
+              values that read as a number, a date, yes/no, on/off, true/false, null or <<.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.username == oldSelf.postgresHA.postgres.username) ||
+              (self.postgresHA.postgres.username.matches('^[A-Za-z_][A-Za-z0-9_.-]*$') &&
+              !(self.postgresHA.postgres.username.lowerAscii() in ['true', 'false', 'null', 'yes', 'no', 'on', 'off']))
+            severity: warning
+            paths: [postgresHA.postgres.username]
+            message: >-
+              Use letters, digits, _ . and -, starting with a letter or underscore, and not yes/no, on/off,
+              true/false or null. The highly available database writes the user unquoted into its YAML config and
+              a psql command.
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgresHA.postgres.database == oldSelf.postgresHA.postgres.database) ||
+              (self.postgresHA.postgres.database.matches('^[a-z_][a-z0-9_]*$') && size(self.postgresHA.postgres.database) <= 63 &&
+              !(self.postgresHA.postgres.database in ['postgres','template0','template1','all','analyse','analyze','and','any','array','as','asc','asymmetric','authorization','binary','both','case','cast','check','collate','collation','column','concurrently','constraint','create','cross','current_catalog','current_date','current_role','current_schema','current_time','current_timestamp','current_user','default','deferrable','desc','distinct','do','else','end','except','false','fetch','for','foreign','freeze','from','full','grant','group','having','ilike','in','initially','inner','intersect','into','is','isnull','join','lateral','leading','left','like','limit','localtime','localtimestamp','natural','not','notnull','null','offset','on','only','or','order','outer','overlaps','placing','primary','references','returning','right','select','session_user','similar','some','symmetric','system_user','table','tablesample','then','to','trailing','true','union','unique','user','using','variadic','verbose','when','where','window','with']))
+            severity: warning
+            paths: [postgresHA.postgres.database]
+            message: >-
+              Use up to 63 lowercase letters, digits and underscores, starting with a letter or underscore, and
+              not postgres, template0, template1 or an SQL reserved word such as user or order. The highly
+              available database runs an unquoted CREATE DATABASE when it is first created: it folds other names
+              to lowercase or fails, and a failure stops the cluster from being created, while Polaris connects
+              with the name as typed.
+          # The single-instance PostgreSQL's readiness probe runs pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+          # through sh -c without quotes.
+          - when: self.postgres.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.config.username == oldSelf.postgres.config.username &&
+              self.postgres.config.database == oldSelf.postgres.config.database) ||
+              (!self.postgres.config.username.matches('\\s') && !self.postgres.config.database.matches('\\s'))
+            severity: warning
+            paths: [postgres.config.username, postgres.config.database]
+            message: >-
+              Leave out spaces: the database's readiness check passes the user and the database name to pg_isready
+              unquoted, so it never becomes ready.
+          - when: self.postgresHA.enabled
+            rule: oldSelf == null || self.postgresHA.postgres.password == oldSelf.postgresHA.postgres.password
+            severity: info
+            paths: [postgresHA.postgres.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE for the user and for repl
+              first, or Polaris loses its metastore connection after this change.
+          - when: self.postgres.enabled
+            rule: oldSelf == null || self.postgres.config.password == oldSelf.postgres.config.password
+            severity: info
+            paths: [postgres.config.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or Polaris loses its
+              metastore connection after this change.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Polaris connects through.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database creates its cluster with consensus timeouts that Patroni
+              silently tightens, so a leader that cannot reach etcd for about 14 seconds is demoted.
+          - type: note
+            severity: warning
+            text: >-
+              The bundled highly available database also writes the database password into Patroni's shared
+              configuration, which anything that can reach port 8008 of its members can read without
+              authentication at `/config`.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0
+            text: >-
+              The installed version does not compact etcd. This upgrade turns compaction on but cannot shrink a
+              backend that has already grown; check it first
+              ([Upgrading From a Version Before 2.4.2](/template-catalog/templates/postgres-highly-available#upgrading-from-a-version-before-2-4-2)).
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, and every catalog definition with them.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: ha-backup
+        title: Metastore backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            when: self.postgresHA.backup.mode == 'wal-g'
+            text: >-
+              The WAL-G sidecar waits a full interval before its first base backup, so a new cluster archives WAL
+              with nothing to restore it from for up to that long, and turning WAL-G on for a cluster that
+              already exists does not start WAL archiving.
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory. With less it is killed for running out of memory
+              during the base backup and no backup is written.
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The backup identity of the bundled highly available database also carries the AWS managed policy
+              ReadOnlyAccess, which can read every bucket in the AWS account, not only this one.
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Object
+              Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: MinIO or S3-compatible
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The access and secret keys are stored in the Helm release in plain text. Version 1.2.1 takes them
+              from a secret you create instead.
+          - path: postgresHA.backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The URL including the port.
+          - path: postgresHA.backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+          - path: postgresHA.backup.minio.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+          - path: postgresHA.backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.minio.prefix != null && self.postgresHA.backup.minio.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.minio.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.minio.prefix == oldSelf.postgresHA.backup.minio.prefix) ||
+              [self.postgresHA.backup.minio.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.minio.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: polaris.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one metastore, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
+        mirrors: polaris.validate
+        paths: [postgresHA.enabled]
+        message: >-
+          postgresHA.proxy.enabled must remain true: the HAProxy leader endpoint is Polaris's database endpoint.
+          Remove it from the values, or set it to true.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of Polaris's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
+  - id: bootstrap
+    title: Bootstrap
+    description: The one-time job that creates the realm schema and the root principal, then idles.
+    docs: "#bootstrap"
+    fields:
+      - path: bootstrap.image
+        type: string
+        format: image
+        label: Admin tool image
+        required: true
+        advanced: true
+        help: Keep this tag in lockstep with the Polaris image.
+      - path: bootstrap.resources
+        type: resources
+        label: Resources
+        required: true
+        advanced: true
+        description: Always one replica.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: cpuMillicores(self.bootstrap.resources.maxCpu) <= 4 * cpuMillicores(self.bootstrap.resources.minCpu)
+        mirrors: polaris.validate.resources
+        paths: [bootstrap.resources]
+        message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+      - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+        mirrors: polaris.validate.resources
+        paths: [bootstrap.resources]
+        message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Polaris, which connects to its metastore like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-polaris') in self.postgres.internalAccess.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-polaris-bootstrap') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-polaris and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-polaris-bootstrap, or Polaris cannot reach its metastore.'
+    message: Add the Polaris and bootstrap workloads to the list, or Polaris cannot reach its metastore.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Polaris connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.

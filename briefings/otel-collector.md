@@ -1,8 +1,9 @@
-# otel-collector 1.1.0 — Maintainer Briefing
+# otel-collector 1.2.2 — Maintainer Briefing
 
 ## What it is
 - OpenTelemetry Collector (Apache-2.0, fully open source): a relay that receives telemetry over OTLP (the OpenTelemetry wire protocol for traces/metrics), processes it, and forwards it to backends.
 - 1.1.0 adds a metrics path — OTLP in, pushed out via Prometheus remote-write (Prometheus's standard HTTP push protocol) — plus public authenticated ingestion. Trace path from 1.0.x is preserved.
+- 1.2.x: resources block exposes only a limit, so it stays bare `cpu`/`memory` (1.2.0 briefly renamed it, 1.2.1 reverted); 1.2.2 refuses an unsubstituted `YOUR_WORKLOAD`/`YOUR_GVC` remote-write endpoint at render.
 
 ## Common use cases
 - Feed the platform's native tracing from app workloads (existing 1.0.x behavior).
@@ -25,6 +26,7 @@
 |---|---|---|
 | `otelCollector.mode` | `simple` (was `advanced`) | simple = structured knobs; advanced = raw config verbatim |
 | `otelCollector.replicas` | 1 | HA ingestion pool size |
+| `otelCollector.resources.cpu` / `.memory` | `200m` / `256Mi` | Limit only (no reservation knob) |
 | `metrics.enabled` + `metrics.remoteWrite.endpoint` | off | OTLP metrics → remote-write push URL |
 | `auth.method` | `none` | `bearer` (token in `Authorization` header) or `mtls` (mutual TLS — client must present a certificate we trust) |
 | `auth.bearer.secretName` / `auth.mtls.secretName` | `""` | Names of user-created prerequisite secrets |
@@ -36,7 +38,7 @@
 ## Troubleshooting / considerations
 - **Public without auth is refused at install** — render fails; same for public with an empty CIDR list. Users must explicitly write `0.0.0.0/0` to open wide.
 - **Never put the token in values** — bearer token and mTLS certs live in prerequisite secrets (opaque token; dictionary with `cert`/`key`/`ca`); if the secret doesn't exist before install, the deployment wedges waiting on it.
-- **Bearer vs mTLS endpoints differ:** bearer = the `https://…cpln.app` canonical endpoint (platform terminates TLS); mTLS = the direct load-balancer TCP ports 4317 (gRPC — Google's binary RPC protocol) / 4318 (HTTP). In mTLS mode the canonical endpoint intentionally stops working (fails closed).
+- **Bearer vs mTLS endpoints differ:** bearer = the `https://…cpln.app` canonical endpoint (platform terminates TLS); mTLS = the direct load-balancer TCP ports 4317 (gRPC — Google's binary RPC protocol) / 4318 (HTTP). External 4317 maps to the AUTHENTICATED gRPC receiver on container port 4319, not the plain :4317 receiver, which is never exposed. In mTLS mode the canonical endpoint intentionally stops working (fails closed).
 - **Internal trace path is never authenticated:** GVC-level tracing pushes to gRPC :4317 with no token, so the design keeps that receiver plain and puts auth on a separate receiver (:4318/:4319). If traces stop after enabling auth, check the GVC tracing target still points at :4317.
 - **Default mode flipped to `simple` in 1.1.0.** Anyone who customized `advanced.config` while relying on the old default must now set `mode: advanced` explicitly.
 - **`metrics.*` knobs only generate config in simple mode** — in advanced mode the install fails with instructions to add the pipeline to `advanced.config` (nothing is silently ignored).

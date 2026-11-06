@@ -1,0 +1,139 @@
+---
+kind: workload
+name: {{ include "pgedge.pgbouncer.name" . }}
+description: PgBouncer connection pooler for pgEdge
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: pgbouncer
+      image: {{ .Values.pgbouncer.image | quote }}
+      # The image supplies only the binary; the inline start script writes the config and runs it.
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - {{- include "pgedge.inlineScript" (include "pgedge.script.pgbouncer" .) | nindent 10 }}
+      env:
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+      cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 5432
+          protocol: tcp
+      # Real protocol bytes, never a bare port check (the mesh sidecar completes TCP
+      # handshakes). -t bounds each exec so the probe can never hang. Half 1: this
+      # PgBouncer answers. Half 2: this location's HAProxy has a healthy node ANYWHERE
+      # (HAProxy closes the connection when it has none), which keeps the pooler ready
+      # through a local node death.
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" && exec pg_isready -q -t 3 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" -h "{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        failureThreshold: 20   # ~5 min first-ready budget while pgEdge + HAProxy boot (max is 20)
+        timeoutSeconds: 5
+        successThreshold: 1
+      # Backend-INDEPENDENT on purpose: a cluster outage must never restart poolers.
+      # Catches a hung PgBouncer process only.
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE"
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        failureThreshold: 3   # measured: the platform acts after ~60 s regardless; a hung pooler serves again in ~90 s
+        timeoutSeconds: 4
+        successThreshold: 1
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0
+      maxScale: 0
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  {{- /*
+    Every localOptions entry must carry the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the null shape above and produce zero replicas in a location the
+    user did ask for.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.pgbouncer.minReplicas }}
+        maxScale: {{ $.Values.pgbouncer.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []  # only talks to this location's in-GVC HAProxy
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING traffic between
+        THIS release's own workloads: Spock logical replication between pgEdge
+        nodes across locations, and PgBouncer -> HAProxy -> node connections. A list
+        naming only clients denies replication and the mesh silently diverges,
+        so the chart adds its own workloads rather than requiring the user to
+        know. Confirmed live in etcd-multi-location and clickhouse (2026-08-27),
+        where the same omission destroyed the cluster while every replica
+        reported ready.
+      */}}
+      {{- $own := list
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgbouncer.name" .)) }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

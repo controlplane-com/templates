@@ -1,0 +1,16 @@
+{{- include "minio.validate" . -}}
+kind: policy
+name: {{ include "minio.policyName" . }}
+description: MinIO policy
+tags:
+  {{- include "minio.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "minio.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "minio.secretStartup.name" . }}
+  # The user-created root credentials — reveal on exactly that one secret.
+  - //secret/{{ .Values.admin.credentialsSecretName }}

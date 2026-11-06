@@ -1,0 +1,52 @@
+# ─── Image ────────────────────────────────────────────────────────────────────
+image: vllm/vllm-openai:v0.31.0 # CUDA 13 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
+
+# ─── Model ────────────────────────────────────────────────────────────────────
+model:
+  name: Qwen/Qwen2.5-1.5B-Instruct # Hugging Face model id; downloaded into the volume on first start
+  servedModelName: "" # name clients send as "model"; empty = the model id
+  maxModelLen: 8192 # max tokens per request (prompt + output)
+  gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
+  dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
+  toolCallParser: hermes # tool calling, which Open WebUI and agents need; must match the model: hermes (Qwen), llama3_json (Llama 3), mistral; "" = off
+  extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]
+
+# ─── Credentials ──────────────────────────────────────────────────────────────
+apiKey:
+  # REQUIRED opaque secret (encoding: plain) holding the API key clients send as a Bearer token.
+  # It must EXIST BEFORE INSTALL — the deployment waits silently (no logs) otherwise. Create it with:
+  # printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-vllm-api-key --encoding plain -f -
+  secretName: my-vllm-api-key
+huggingFace:
+  tokenSecretName: "" # opaque secret with a Hugging Face token, needed for gated models (e.g. my-vllm-hf-token); empty = anonymous
+
+# ─── GPU ──────────────────────────────────────────────────────────────────────
+gpu:
+  type: builtin # options: builtin (Control Plane GPU locations), byok (your own GPU cluster on a BYOK location)
+  model: a10g # builtin only. options: a10g (24 GB), t4 (16 GB)
+  quantity: 1 # GPUs per replica. a10g: 1, t4: 1-4, byok: 1-8; more than 1 enables tensor parallelism
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+# builtin a10g: cpu 6000m-8000m, memory 8Gi-62Gi. t4: cpu 2000m-8000m and memory 7Gi-31Gi per GPU (4000m per GPU with 2+ GPUs or from 14Gi).
+# Any type: memory below 8 MiB per millicore of cpu (e.g. under 16Gi at 2000m).
+# byok: fit your GPU node, e.g. cpu 2000m / memory 8Gi on a 4-vCPU g5.xlarge or g6.xlarge.
+resources:
+  cpu: 6000m
+  memory: 16Gi
+
+replicas: 1 # each replica runs its own GPU(s) and model cache; 2+ keeps serving through restarts and upgrades
+startupTimeoutSeconds: 900 # seconds from container start to ready (download + load) before the platform restarts it; 300-1830
+
+# ─── Model cache ──────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 50 # GiB per replica for new volumes; at least 2x the model's weights plus 5 (minimum 10)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = the API is reachable from the internet (the API key still applies to /v1)
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

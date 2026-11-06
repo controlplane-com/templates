@@ -91,8 +91,10 @@ postgresHA:
 postgres:
   enabled: false
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Metabase CREATES the dictionary secret named by config.credentialsSecretName below
-  # out of these three values, so there is nothing for you to create before installing.
+  # Used in BOTH database modes: Metabase CREATES the dictionary secret named by
+  # postgresHA.config.credentialsSecretName (HA) or config.credentialsSecretName below
+  # (single-instance) out of these three values, so there is nothing for you to create
+  # before installing. Changing the password later does not change it in the database.
   credentials:
     username: metabase
     password: change-me-metabase-db-password # change before installing

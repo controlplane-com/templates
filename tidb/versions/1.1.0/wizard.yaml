@@ -1,0 +1,401 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: TiDB
+# createsGvc: true — the chart creates its own GVC from gvc.name, so there is no target GVC to limit (§14.2).
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The GVC this release creates, the locations it runs in, and the compute of each tier.
+    sections:
+      - id: gvc
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version creates its own GVC with the name below and puts every workload in it. Use a name no
+              GVC in the org has: the release takes over an existing GVC of that name, and uninstalling the
+              release then deletes that GVC with every workload in it. A GVC that another release created is
+              refused. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          # Briefing: "Region-aware placement was broken before 1.7.0" (secret-tikv-config.yaml puts the store label
+          # in a top-level [labels] table TiKV ignores, under the key zone; PD's location-labels appear only in the
+          # restart config, which PD ignores after bootstrap), and "on 1.x's
+          # non-region-aware placement some regions lose 2 of 3 copies" when one location restarts.
+          - type: note
+            severity: warning
+            text: >-
+              This version does not place copies by location, so two of a region's three copies can sit in one
+              location, and losing that location takes the region offline. 1.7.0 places them by location for new
+              clusters.
+          # gvc.yaml, every workload: the name is written unquoted. The platform's name pattern already rules
+          # out numbers and dates; true, false and null are the names YAML would read as another type.
+          - path: gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this
+              one with everything in it.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,62}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              - when: oldSelf == null || self.gvc.name != oldSelf.gvc.name
+                rule: "!(self.gvc.name in ['true', 'false', 'null'])"
+                message: The chart writes the GVC name unquoted, so true, false and null are not names it can use.
+              - when: context.mode == 'install'
+                rule: self.gvc.name != 'tidb-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own, for example ' + context.releaseName + '-tidb.'
+                message: >-
+                  GVC names are org-wide, so a second release on the default name is refused. Give each release
+                  its own.
+          # README 1.1.1 "Upgrading from 1.1.0" and briefing (1.1.1): the TiDB server readiness probe requires
+          # every TiKV store Up (workload-server.yaml), and the first location's PD member could crash-loop after
+          # a restart on its own address; both measured on 1.1.0 and fixed in 1.1.1.
+          - type: note
+            severity: warning
+            text: >-
+              In this version losing one TiKV node, for example to a node scale-down, restarts every TiDB server
+              in every location at once, and the first location's PD member can keep restarting after a restart.
+              1.1.1 fixes both: upgrade a 1.1.0 release to 1.1.1 with the same values.
+          - path: gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 1
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 2 }
+            itemLabel: "item.name + ' × ' + (item.replicas == null ? '?' : string(item.replicas))"
+            description: >-
+              The locations of the GVC. Each runs one PD member (the first runs two when the number of locations
+              is even), and the given number of TiKV nodes and TiDB servers.
+            help: >-
+              Surviving the loss of a location needs at least three locations. Clients reach only the TiDB
+              servers in their own location.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: TiKV nodes and TiDB servers
+                  required: true
+                  min: 0
+                  suggestions: [1, 2, 3]
+              rules:
+                # templates/workload-tikv.yaml, workload-server.yaml: replicas 0 renders localOptions[].suspend.
+                - rule: item.replicas == null || item.replicas != 0
+                  severity: warning
+                  paths: [replicas]
+                  message: >-
+                    0 suspends this location, and a suspended location's workloads stay unreachable from the other
+                    locations even after it is resumed. Remove the location instead.
+        rules:
+          # workload-pd.yaml reads (index .Values.gvc.locations 1): one location fails to render.
+          - rule: size(self.gvc.locations) >= 2
+            paths: [gvc.locations]
+            message: This version needs at least 2 locations; with one, the chart fails to render.
+          # README: Configuration ("deploy the cluster across a minimum of three independent locations").
+          - when: size(self.gvc.locations) >= 2
+            rule: size(self.gvc.locations) >= 3
+            severity: info
+            paths: [gvc.locations]
+            message: >-
+              With fewer than 3 locations the cluster does not survive the loss of a location; use at least 3 for
+              production.
+          # secret-pd-config.yaml: the first PD member of the FIRST location starts the cluster, and with no PD data
+          # of its own it runs --force-new-cluster, so a first location without PD data starts a new, empty cluster.
+          - when: >-
+              oldSelf != null && size(oldSelf.gvc.locations) > 0 && size(self.gvc.locations) > 0 &&
+              self.gvc.locations[0].name != ''
+            rule: oldSelf == null || oldSelf.gvc.locations.exists(l, l.name == self.gvc.locations[0].name)
+            severity: warning
+            paths: [gvc.locations]
+            message: >-
+              The first location's first PD member starts the cluster, and one with no PD data starts a new, empty
+              cluster. Keep a location this release already runs in first.
+          - when: >-
+              oldSelf != null && size(oldSelf.gvc.locations) > 0 && size(self.gvc.locations) > 0 &&
+              self.gvc.locations[0].name != ''
+            rule: >-
+              oldSelf == null || oldSelf.gvc.locations[0].name == self.gvc.locations[0].name ||
+              !oldSelf.gvc.locations.exists(l, l.name == self.gvc.locations[0].name)
+            severity: info
+            paths: [gvc.locations]
+            message: >-
+              The first location changed. Its first PD member starts the cluster when it has no PD data of its
+              own, so the new first location must already run a PD member, or PD starts a new, empty cluster.
+      - id: compute
+        title: Compute
+        description: The defaults are sized for testing.
+        fields:
+          - path: resources.pd
+            type: resources
+            label: PD resources
+            required: true
+            description: Per PD member. For production, PD wants 4 to 8 CPU and 8 to 16Gi.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.tikv
+            type: resources
+            label: TiKV resources
+            required: true
+            description: Per TiKV node. For production, TiKV wants 8 to 16 CPU and 32 to 64Gi, memory for caching.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: resources.server
+            type: resources
+            label: TiDB server resources
+            required: true
+            description: >-
+              Per TiDB server. For production, 8 to 16 CPU and 16 to 32Gi; it scales with concurrent
+              connections.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          # The chart writes memory unquoted, so a value without a unit reaches the API as a number, which the
+          # platform's Memory schema (Joi.string()) refuses.
+          - rule: string(self.resources.pd.memory).matches('[A-Za-z]$')
+            paths: [resources.pd]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.tikv.memory).matches('[A-Za-z]$')
+            paths: [resources.tikv]
+            message: Give memory a unit such as Mi or Gi.
+          - rule: string(self.resources.server.memory).matches('[A-Za-z]$')
+            paths: [resources.server]
+            message: Give memory a unit such as Mi or Gi.
+
+  - id: database
+    title: Database
+    description: The root password and the application database and user, set when the cluster first bootstraps.
+    sections:
+      - id: credentials
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version takes these credentials as plain values, so they are stored in the Helm release. 1.8.0
+              reads them from a dictionary secret you create instead.
+          - path: database.rootPassword
+            type: string
+            label: Root password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.database.rootPassword != oldSelf.database.rootPassword
+                rule: >-
+                  !self.database.rootPassword.matches('^\\s') && !self.database.rootPassword.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.database.rootPassword.matches('^[-?:](\\s|$)') && !self.database.rootPassword.matches('\\t') &&
+                  !self.database.rootPassword.contains(': ') && !self.database.rootPassword.contains(' #') && !self.database.rootPassword.endsWith(':') && !self.database.rootPassword.endsWith(' ') &&
+                  !(self.database.rootPassword in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.database.rootPassword.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.database.rootPassword.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.database.rootPassword.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.database.rootPassword.matches('^\\.(nan|NaN|NAN)$') && !self.database.rootPassword.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-server-config.yaml: the TiDB servers write the value into their bootstrap SQL unescaped.
+              - when: oldSelf == null || self.database.rootPassword != oldSelf.database.rootPassword
+                rule: >-
+                  !self.database.rootPassword.contains("'") && !self.database.rootPassword.contains('\\')
+                severity: warning
+                message: The TiDB servers write the password into SQL unescaped, so it cannot contain ' or \.
+          - path: database.user
+            type: string
+            label: Application user
+            required: true
+            maxLength: 32
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.database.user != oldSelf.database.user
+                rule: >-
+                  !self.database.user.matches('^\\s') && !self.database.user.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.database.user.matches('^[-?:](\\s|$)') && !self.database.user.matches('\\t') &&
+                  !self.database.user.contains(': ') && !self.database.user.contains(' #') && !self.database.user.endsWith(':') && !self.database.user.endsWith(' ') &&
+                  !(self.database.user in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.database.user.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.database.user.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.database.user.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.database.user.matches('^\\.(nan|NaN|NAN)$') && !self.database.user.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-server-config.yaml: the TiDB servers write the value into their bootstrap SQL unescaped.
+              - when: oldSelf == null || self.database.user != oldSelf.database.user
+                rule: >-
+                  !self.database.user.contains("'") && !self.database.user.contains('\\')
+                severity: warning
+                message: The TiDB servers write the user into SQL unescaped, so it cannot contain ' or \.
+          - path: database.password
+            type: string
+            label: Application user password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.database.password != oldSelf.database.password
+                rule: >-
+                  !self.database.password.matches('^\\s') && !self.database.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.database.password.matches('^[-?:](\\s|$)') && !self.database.password.matches('\\t') &&
+                  !self.database.password.contains(': ') && !self.database.password.contains(' #') && !self.database.password.endsWith(':') && !self.database.password.endsWith(' ') &&
+                  !(self.database.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.database.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.database.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.database.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.database.password.matches('^\\.(nan|NaN|NAN)$') && !self.database.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-server-config.yaml: the TiDB servers write the value into their bootstrap SQL unescaped.
+              - when: oldSelf == null || self.database.password != oldSelf.database.password
+                rule: >-
+                  !self.database.password.contains("'") && !self.database.password.contains('\\')
+                severity: warning
+                message: The TiDB servers write the password into SQL unescaped, so it cannot contain ' or \.
+          - path: database.db
+            type: string
+            label: Database name
+            required: true
+            maxLength: 64
+            rules:
+              # secret-db-config.yaml writes the value unquoted into the secret's YAML.
+              - when: oldSelf == null || self.database.db != oldSelf.database.db
+                rule: >-
+                  !self.database.db.matches('^\\s') && !self.database.db.matches('^[!&*%@`\'"\\[\\]{}|>,#]') && !self.database.db.matches('^[-?:](\\s|$)') && !self.database.db.matches('\\t') &&
+                  !self.database.db.contains(': ') && !self.database.db.contains(' #') && !self.database.db.endsWith(':') && !self.database.db.endsWith(' ') &&
+                  !(self.database.db in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.database.db.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') && !self.database.db.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.database.db.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.database.db.matches('^\\.(nan|NaN|NAN)$') && !self.database.db.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+                severity: warning
+                message: >-
+                  The chart writes this value unquoted into YAML, so it cannot start with a space or one of
+                  ! & * % @ ` ' " [ ] { } | > , # or "- ", contain ": ", " #" or a tab, end with ":" or a space, or be
+                  a number, a date, true, false or null.
+              # secret-server-config.yaml: the TiDB servers write the value into their bootstrap SQL unescaped.
+              - when: oldSelf == null || self.database.db != oldSelf.database.db
+                rule: "!self.database.db.contains('`')"
+                severity: warning
+                message: The TiDB servers write the database name into SQL unescaped, so it cannot contain a backtick.
+        rules:
+          # secret-server-config.yaml: the values go into --initialize-sql-file, which runs once, at bootstrap.
+          - when: oldSelf != null
+            rule: >-
+              oldSelf == null ||
+              (self.database.rootPassword == oldSelf.database.rootPassword &&
+              self.database.user == oldSelf.database.user &&
+              self.database.password == oldSelf.database.password &&
+              self.database.db == oldSelf.database.db)
+            severity: info
+            paths: [database]
+            message: >-
+              These are applied when the cluster first bootstraps only. Changing them here does not change the
+              passwords, user or database of a running cluster; change them with `ALTER USER` first so they match.
+
+  - id: storage
+    title: Storage
+    description: The TiKV and PD volume sets.
+    sections:
+      - id: tikv-storage
+        title: TiKV volumes
+        description: One volume per TiKV node.
+        fields:
+          # volumeset.yaml: snapshots carry a retention but no schedule (2.2.0 README: "2.1.0 declared the
+          # retention but never scheduled a snapshot"; this version renders the same block).
+          - type: note
+            severity: warning
+            text: >-
+              This version takes no volume snapshots: the volume sets declare a retention but no schedule.
+              2.2.0 snapshots every PD and TiKV volume daily.
+          - path: volumeset.tikv.capacity
+            type: integer
+            label: TiKV initial capacity
+            required: true
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+      - id: pd-storage
+        title: PD volumes
+        description: One volume per PD member. PD holds only cluster metadata, so it has no autoscaling.
+        fields:
+          - path: volumeset.pd.capacity
+            type: integer
+            label: PD initial capacity
+            required: true
+            unit: GiB
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100]
+    rules:
+      - rule: oldSelf == null || self.volumeset.tikv.capacity >= oldSelf.volumeset.tikv.capacity
+        paths: [volumeset.tikv.capacity]
+        message: Keep the TiKV capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: oldSelf == null || self.volumeset.pd.capacity >= oldSelf.volumeset.pd.capacity
+        paths: [volumeset.pd.capacity]
+        message: Keep the PD capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Who can reach the TiDB servers on port 4000. PD and TiKV accept workloads in the same GVC only.
+    sections:
+      - fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can reach the TiDB servers
+            required: true
+            widget: segmented
+            options:
+              - { value: same-gvc, label: Same GVC, description: "Any workload in this release's GVC, plus the workloads listed below." }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          - path: internal_access.workloads
+            type: list
+            label: TiDB server client workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list']
+            widget: tags
+            unique: true
+            description: Workloads allowed to connect, including ones in other GVCs.
+            item:
+              type: ref
+              ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+          - path: exposeServer
+            type: boolean
+            label: Public status port
+            advanced: true
+            description: >-
+              Opens the TiDB servers to the internet. Only the unauthenticated status port (10080) is served
+              publicly; the MySQL port is not.
+            rules:
+              - rule: "!self.exposeServer"
+                severity: warning
+                message: >-
+                  This exposes TiDB's unauthenticated status and API port to the internet. Reach the servers over
+                  the internal name instead.
+
+rules:
+  # Briefing (1.1.1): "1.1.0's fresh install is flaky: 1 of 2 multi-location test installs bootstrapped with store 1
+  # Down and two stores never registered". Warning, not error: a warning still blocks Install, and an error rule
+  # must hold on the chart defaults (§8.10).
+  - when: context.mode == 'install'
+    rule: context.mode != 'install'
+    severity: warning
+    message: >-
+      A fresh 1.1.0 install can bootstrap with TiKV stores that never come up, and this version restarts every
+      TiDB server when one TiKV node is lost. Install the latest TiDB version instead; it deploys into a GVC you
+      choose.

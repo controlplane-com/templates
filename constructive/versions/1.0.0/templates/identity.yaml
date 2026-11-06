@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "constructive.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "constructive.tags" . | nindent 4 }}

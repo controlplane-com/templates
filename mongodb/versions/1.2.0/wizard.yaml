@@ -1,0 +1,260 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MongoDB
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The root user and its password, which the chart stores in a secret of its own.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'These values are stored in the release values and in the dictionary secret `' + context.releaseName +
+          '-mongo-config`, which the chart creates for MongoDB. The default password is published in the template ' +
+          'and shared by every install that keeps it, so set your own. MongoDB creates the user only when its ' +
+          'volume is first initialized. 1.4.0 and later read the credentials from a secret you create instead.'
+        text: >-
+          These values are stored in the release values and in the dictionary secret `RELEASE_NAME-mongo-config`,
+          which the chart creates for MongoDB. The default password is published in the template and shared by
+          every install that keeps it, so set your own. MongoDB creates the user only when its volume is first
+          initialized. 1.4.0 and later read the credentials from a secret you create instead.
+      - path: config.username
+        type: string
+        label: Root user
+        required: true
+        immutable: MongoDB creates this user once, when its volume is first initialized.
+        description: >-
+          MongoDB creates this user in the `admin` database with the `root` role on first boot, so connection
+          strings carry `authSource=admin`.
+      - path: config.password
+        type: string
+        label: Root password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        rules:
+          - rule: oldSelf == null || self.config.password == oldSelf.config.password
+            severity: info
+            message: >-
+              MongoDB keeps the password it was initialized with. Change it inside MongoDB with
+              db.changeUserPassword() first, or the new value in the secret no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.password != 'password'
+            severity: info
+            message: >-
+              This release still uses the template's published default password. Change it inside MongoDB with
+              db.changeUserPassword(), then enter the new password here.
+
+  - id: server
+    title: Server
+    description: The MongoDB image and the compute of its single stateful replica.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: MongoDB image
+        required: true
+        description: >-
+          MongoDB moves between major versions one at a time, after setting the feature compatibility
+          version, so change it on purpose, after a backup.
+        docs: "#image-and-resources"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: A single stateful replica.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) == imageMajor(oldSelf.image) ||
+          imageMajor(self.image) == imageMajor(oldSelf.image) + 1
+        severity: warning
+        paths: [image]
+        message: >-
+          MongoDB upgrades one major version at a time and does not start a newer data directory on an
+          older major. Move up one major per upgrade, each after setFeatureCompatibilityVersion, or migrate
+          with mongodump and mongorestore.
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) != imageMajor(oldSelf.image) + 1
+        severity: info
+        paths: [image]
+        message: >-
+          A new major version restarts MongoDB on the existing data directory. Take a backup first, and
+          check that setFeatureCompatibilityVersion reports the installed major before you upgrade.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds the database.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes
+              the volume set, after a final snapshot that is kept for 7 days.
+            docs: "#storage"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: The volume set grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database, inside Control Plane and from the internet.
+    sections:
+      - title: Database access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: info
+            textExpression: >-
+              'Applications connect to `' + context.releaseName + '-mongo.' + (context.gvc == null ? 'GVC' : context.gvc) +
+              '.cpln.local:27017` with the root user and password from Credentials and `authSource=admin`.'
+            text: >-
+              Applications connect to `RELEASE-mongo.GVC.cpln.local:27017` with the root user and
+              password from Credentials and `authSource=admin`.
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Access changes take up to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type: the values comment says "only used if type is same-gvc or workload-list", but
+          # workload-mongodb.yaml:43-44 writes any non-empty list into inboundAllowWorkload, and the platform
+          # validates every entry, though it applies the workload links only with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, the only workloads allowed to connect; with Same GVC, extra workloads
+              from other GVCs. The platform ignores the list with the other choices.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Internet access
+        docs: "#direct-load-balancer"
+        fields:
+          - path: directLoadBalancer.enabled
+            type: boolean
+            label: Publish through a direct load balancer
+            description: >-
+              Exposes MongoDB on TCP port 27017 through a direct load balancer with a public address in each
+              location. Anyone who reaches it needs only the password; leave it off for applications inside
+              Control Plane.
+    rules:
+      - when: self.internalAccess.type == 'workload-list'
+        rule: size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List at least one workload when the database is open to specific workloads, or none can connect.
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to MongoDB, so the workloads listed add
+          nothing.
+      - when: self.internalAccess.type == 'none'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: >-
+          The chart still writes the listed workloads into the firewall, where the platform checks every
+          entry, but "None" lets none of them connect. Remove them.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.2.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.x or 1.1.x release in place: 1.2.0 renamed the workload and the volume set, so the
+      upgrade deletes the volume set that holds the database and starts MongoDB on an empty one. Install this
+      version as a new release, load a mongodump of the old database into it with mongorestore, then uninstall
+      the old release.
+
+migrations:
+  # 1.0.0 and 1.1.0 set one CPU and memory value; 1.2.0 split them into minimums and maximums.
+  - { fromVersions: "<1.2.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.2.0", from: resources.memory, to: resources.maxMemory }

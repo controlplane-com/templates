@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: ClickHouse
+category: analytics
+topology: distributed
+
+summary: >-
+  ClickHouse column-oriented analytical database, with table data in object storage (Amazon S3,
+  Google Cloud Storage, Azure Blob Storage or Hetzner Object Storage) and local volumes for
+  metadata and cache. One location with one replica runs a single node; several replicas in one
+  location, or three or more locations, form a sharded and replicated cluster coordinated by
+  ClickHouse Keeper. Pick it for real-time analytics and data warehousing over large event, log
+  or metrics tables with SQL.
+
+keywords:
+  - olap
+  - columnar database
+  - column-oriented database
+  - analytical database
+  - data warehouse
+  - real-time analytics
+  - sql analytics
+  - clickhouse keeper
+  - sharding
+  - replicatedmergetree
+  - distributed tables
+  - event analytics
+  - log analytics
+  - clickstream analytics
+  - s3-backed storage
+  - hetzner object storage
+
+useCases:
+  - Run fast SQL aggregations over billions of event or log rows
+  - Real-time analytics backend for product dashboards and metrics
+  - Data warehouse with table data kept in S3, GCS or Azure Blob Storage
+  - Store and query clickstream, telemetry or observability data at scale
+  - Sharded analytical cluster spread across three or more locations
+
+alternativeTo:
+  - ClickHouse Cloud
+  - Altinity.Cloud
+  - Snowflake
+  - Google BigQuery
+  - Amazon Redshift
+  - Apache Druid
+  - Apache Pinot
+  - Tinybird
+  - StarRocks
+
+pickInsteadIf:
+  - need: transactional relational database for an application
+    template: postgres
+  - need: time-series data in PostgreSQL with hypertables and continuous aggregates
+    template: timescaledb
+  - need: full-text search and relevance ranking over documents or logs
+    template: elasticsearch
+  - need: long-term Prometheus metrics storage queried with PromQL
+    template: mimir
+  - need: one SQL query across existing databases without loading the data anywhere
+    template: trino
+  - need: a scheduled SQL job over Parquet or CSV files with no server running
+    template: duckdb
+
+related:
+  - template: trino
+    relation: companion
+    note: Joins ClickHouse tables with PostgreSQL, MySQL and other sources in one query
+  - template: metabase
+    relation: companion
+    note: BI dashboards and a SQL editor on top of ClickHouse
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [password, database]
+    valuesPath: database.credentialsSecretName
+    required: true
+    description: Password for the built-in default user and the database to create; no username key. When missing, the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [aws.bucket, gcp.bucket, azure.container, hetzner.bucket]
+    required: true
+    description: Bucket (or Azure Blob container in azure.storageAccount) that holds all table data. Object storage is required in every mode, including single node.
+  - kind: cloud-account
+    valuesPath: aws.cloudAccountName
+    required: true
+    description: AWS cloud account for keyless S3 access, needed with provider aws (the default). Not used with gcp, azure or hetzner.
+  - kind: other
+    valuesPath: aws.policyName
+    required: true
+    description: Bucket-scoped AWS IAM policy attached through the cloud account, needed with provider aws (the default). The chart refuses to render without it.
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC that contains every location listed in locations. A missing location stops the nodes from initialising; 2 locations are refused.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: gcp.credentialsSecretName
+    required: false
+    when: provider gcp
+    description: GCS interoperability HMAC key pair with Storage Object Admin on the bucket.
+  - kind: secret
+    secretType: dictionary
+    keys: [accountKey]
+    valuesPath: azure.credentialsSecretName
+    required: false
+    when: provider azure
+    description: Access key of the Azure storage account that holds the container.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: hetzner.credentialsSecretName
+    required: false
+    when: provider hetzner
+    description: Hetzner Object Storage S3 access key pair for the bucket.

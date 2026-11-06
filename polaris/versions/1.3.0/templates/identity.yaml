@@ -1,0 +1,11 @@
+kind: identity
+name: {{ include "polaris.identity.name" . }}
+description: Polaris server identity — reads the metastore credentials, the token signing key and (when configured) the object-storage credentials
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "polaris.tags" . | nindent 4 }}
+---
+kind: identity
+name: {{ include "polaris.bootstrap.identity.name" . }}
+description: Polaris bootstrap identity — the only principal that reads the root principal credentials
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "polaris.tags" . | nindent 4 }}

@@ -1,0 +1,31 @@
+---
+kind: policy
+name: {{ include "tyk.policy.name" . }}
+description: {{ include "tyk.policy.name" . }}
+tags: {{- include "tyk.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tyk.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # The user-created admin-API secret — the gateway reveals it and nothing more.
+  - //secret/{{ .Values.adminSecretName }}
+{{- /* The Redis credentials prerequisite secret(s); one link when both tiers name the same secret. */}}
+{{- $redisSecrets := list }}
+{{- if eq (include "tyk.redisAuthEnabled" .) "true" }}
+{{- $redisSecrets = append $redisSecrets .Values.redis.redis.auth.fromSecret.name }}
+{{- end }}
+{{- if eq (include "tyk.sentinelAuthEnabled" .) "true" }}
+{{- $redisSecrets = append $redisSecrets .Values.redis.sentinel.auth.fromSecret.name }}
+{{- end }}
+{{- range uniq $redisSecrets }}
+  - //secret/{{ . }}
+{{- end }}
+{{- if .Values.apiSecretName }}
+  - //secret/{{ .Values.apiSecretName }}
+{{- end }}
+{{- if .Values.policySecretName }}
+  - //secret/{{ .Values.policySecretName }}
+{{- end }}

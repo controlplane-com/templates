@@ -181,21 +181,24 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 | Database | `<release>-mysql.<gvc>.cpln.local:3306` | Subject to `internalAccess.type`. |
 | phpMyAdmin (internal) | `http://<release>-mysql-phpmyadmin.<gvc>.cpln.local` | Only when `phpMyAdmin.enabled: true`. |
 | phpMyAdmin (public) | `https://<canonical-endpoint>` | Only when `phpMyAdmin.publicAccess.enabled: true`. Read it from `status.canonicalEndpoint` in `cpln workload get <release>-mysql-phpmyadmin -o yaml`. |
-| Application credentials | your `credentialsSecretName` secret — `cpln secret reveal <name>` | Never stored in the Helm release. |
-| Root password | your `rootPasswordSecretName` secret — `cpln secret reveal <name>` | Never stored in the Helm release. |
+| Application credentials | your `credentialsSecretName` secret — `cpln secret reveal <name> -o yaml` | Never stored in the Helm release. |
+| Root password | your `rootPasswordSecretName` secret — `cpln secret reveal <name> -o yaml` | Never stored in the Helm release. |
 
 ## Restoring a Backup
 
-Run the following from a client with access to the bucket (replace `aws s3 cp` with `gsutil cp` for GCS):
+Each backup is a gzip-compressed `mysqldump --databases` script, so it recreates the database it contains and is loaded as `root` without naming one. Run it from a client that can reach both the bucket and the server — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-mysql 3306:3306 --gvc GVC_NAME` open and `--host=127.0.0.1` in place of the internal hostname (replace `aws s3 cp` with `gsutil cp` for GCS). The root password is the payload of your `rootPasswordSecretName` secret.
 
 ```sh
-aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.gz - \
+export MYSQL_PWD='ROOT_PASSWORD'
+
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz - \
   | gunzip \
-  | sed '/^SET @@GLOBAL.GTID_PURGED/d' \
   | mysql \
-      --host=WORKLOAD_NAME \
+      --host=RELEASE_NAME-mysql.GVC_NAME.cpln.local \
       --port=3306 \
       --user=root
+
+unset MYSQL_PWD
 ```
 
 ## Important Notes

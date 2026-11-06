@@ -1,0 +1,30 @@
+{{- include "pgvector.validate" . -}}
+kind: identity
+name: {{ include "pgvector.identity.name" . }}
+description: pgvector identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pgvector.tags" . | nindent 4 }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
+  policyRefs:
+    # `aws::ReadOnlyAccess` is deliberately NOT here. Control Plane attaches each
+    # ref to a per-identity derived IAM role, so permissions are the UNION of
+    # refs — and ReadOnlyAccess carries no write action at all, so it could never
+    # have been carrying the upload. What it did carry was read access to every
+    # object in every bucket in the account. Removed from `postgres` in 3.4.0
+    # after a spike proved backups succeed without it.
+    - cpln-connector
+    - {{ .Values.backup.aws.policyName | quote }}
+{{- end }}
+{{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.backup.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.backup.gcp.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

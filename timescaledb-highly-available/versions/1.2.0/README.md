@@ -8,7 +8,7 @@ Multi-replica [TimescaleDB](https://www.timescale.com/) (the time-series databas
 - **etcd** — distributed consensus store (DCS) for Patroni, from the `etcd` subchart dependency.
 - **HAProxy leader endpoint** — routes all writes to the current primary via Patroni's REST health check; on by default.
 - **PgBouncer** (optional) — connection pooler in front of the proxy; off by default.
-- **Scheduled backup** (optional) — cron `pg_dump` logical backup to S3, GCS, or an S3-compatible endpoint, routed through the proxy; off by default.
+- **Scheduled backup** (optional) — cron `pg_dumpall` logical backup to S3, GCS, or an S3-compatible endpoint, routed through the proxy; off by default.
 - **Volumeset, secrets, identity, policy** — per-replica storage; credentials and start scripts; least-privilege `reveal` on exactly those secrets.
 
 ## Prerequisites
@@ -41,7 +41,7 @@ cpln workload get-deployments RELEASE_NAME-timescaledb-ha --gvc GVC_NAME -o yaml
 the cluster <b>already has</b>. An upgrade that still carries any of the old keys is refused at render.
 
 
-- None for a default install.
+- The credentials secret above, for every install.
 - For optional backups: a bucket and access setup for one of the supported providers — AWS S3, GCS, or MinIO/S3-compatible (see [Backup storage setup](#backup-storage-setup)).
 
 ## Configuration
@@ -109,7 +109,7 @@ raises a `NOSPACE` alarm and goes **read-only**: Patroni replicas can no longer 
 restart-loop with `exitCode: 0`, which looks healthy. Compaction is what prevents that.
 
 **Already running 1.0.0?** Upgrading turns compaction on, but it cannot shrink a backend that has
-already grown. Check with `cpln workload exec {release}-etcd -- etcdctl endpoint status --cluster` and
+already grown. Check with `cpln workload exec RELEASE_NAME-etcd --gvc GVC_NAME -- etcdctl endpoint status --cluster` and
 `etcdctl alarm list`; a cluster that is already alarmed needs an operator, not an upgrade.
 
 ### PgBouncer (optional)
@@ -187,7 +187,7 @@ cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patron
 # Change them — all three together
 cpln workload exec RELEASE_NAME-timescaledb-ha --gvc GVC_NAME --container patroni-timescaledb \
   -- patronictl -c /tmp/patroni_config.yml edit-config --force \
-     -s ttl=45 -s loop_wait=10 -s retry_timeout=15
+     -s ttl=45 -s loop_wait=10 -s retry_timeout=15 -s failsafe_mode=true
 ```
 
 ### Losing etcd does not fail the cluster over
@@ -226,7 +226,7 @@ Always connect through the proxy (or PgBouncer) — never a raw replica address,
 | Via HAProxy (default) | `{release}-timescaledb-ha-proxy.{gvc}.cpln.local:5432` |
 | Via PgBouncer (when enabled) | `{release}-pgbouncer.{gvc}.cpln.local:5432` — use this as the app endpoint |
 | Credentials | The `username` and `password` entries of the secret named by `postgres.credentialsSecretName` |
-| Database | `postgres.database` (TimescaleDB extension created here) |
+| Database | The `database` entry of the same secret (TimescaleDB extension created here) |
 
 Turn a table into a hypertable and query with time buckets:
 
@@ -298,7 +298,7 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 - **`proxy.enabled` must stay true for backups** — the logical backup dumps the leader through the proxy endpoint.
 - **`replicas: 1` has no HA** — it renders a single-member Patroni cluster with no failover; use ≥ 3 for production, and an odd `etcd.replicas` (3, 5, 7) for quorum.
 - **etcd is a hard dependency** — if the etcd members are unhealthy, Patroni loses its DCS and the cluster goes read-only; check `{release}-etcd` first if writes fail.
-- **Backups are logical-only** — a nightly `pg_dump`; continuous WAL archiving / point-in-time restore is a planned follow-up.
+- **Backups are logical-only** — a nightly `pg_dumpall` (every database plus roles); continuous WAL archiving / point-in-time restore is a planned follow-up.
 - **Restoring a TimescaleDB dump** requires the same extension version and `timescaledb_pre_restore()` / `timescaledb_post_restore()` around the replay — not the vanilla PostgreSQL procedure.
 
 ## Links

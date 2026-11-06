@@ -1,0 +1,434 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Spark
+# Standard workloads with no location handling: every extra GVC location would run its own master and
+# workers behind the same internal name, so workers and drivers would reach whichever master answers.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The master that schedules applications and the workers that run their executors.
+    sections:
+      - id: master
+        title: Master
+        description: >-
+          The cluster manager and the Web UI on port 8080, a single replica. The worker and running-application
+          UIs are served behind it. It keeps no data, so losing it costs minutes of downtime, not data.
+        docs: "#master"
+        fields:
+          - type: note
+            text: >-
+              Drivers submit to the master's cluster port 7077 from inside the GVC, and every driver must set
+              `spark.driver.host` to its own IP, or executors cannot connect back and the job stalls.
+            textExpression: >-
+              'Drivers submit with --master spark://' + context.releaseName + '-spark-master.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:7077 from inside the GVC. Every driver must also pass --conf spark.driver.host= with its own IP,' +
+              ' or executors cannot connect back and the job keeps relaunching them.'
+          - path: master
+            type: resources
+            label: Master resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: workers
+        title: Workers
+        description: >-
+          Each worker registers with the master and offers its cores and memory to executors. Executor
+          scratch space is ephemeral.
+        docs: "#workers"
+        fields:
+          - path: workers.replicas
+            type: integer
+            label: Workers
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+            description: One worker is a working cluster; more spread an application's tasks across them.
+            docs: "#scaling-and-availability"
+          - path: workers.cores
+            type: integer
+            label: Cores offered per worker
+            required: true
+            min: 1
+            suggestions: [1, 2, 4, 8]
+            description: The task slots each worker offers to executors.
+          - path: workers
+            type: resources
+            label: Worker resources
+            required: true
+            description: Per worker.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: workers.memory
+            type: string
+            label: Memory offered per worker
+            required: true
+            placeholder: 2g
+            description: >-
+              Spark's offer to executors, in Spark's units (`512m`, `2g`). It is not the container limit: the
+              worker process itself needs memory on top of it, inside the maximum memory above.
+        rules:
+          - rule: >-
+              (oldSelf != null && self.workers.memory == oldSelf.workers.memory) ||
+              self.workers.memory.matches('^[1-9][0-9]*[kKmMgGtT][bB]?$')
+            paths: [workers.memory]
+            message: >-
+              Enter the memory as a whole number with a Spark unit, for example 512m or 2g. A number without a
+              unit is read as bytes.
+          - when: self.workers.memory.matches('^[1-9][0-9]*[kKmMgGtT][bB]?$')
+            rule: >-
+              int(self.workers.memory.substring(0, size(self.workers.memory) -
+              (self.workers.memory.lowerAscii().endsWith('b') ? 2 : 1))) *
+              (self.workers.memory.lowerAscii().contains('t') ? 1099511627776 :
+              self.workers.memory.lowerAscii().contains('g') ? 1073741824 :
+              self.workers.memory.lowerAscii().contains('m') ? 1048576 : 1024) <
+              memoryBytes(self.workers.maxMemory)
+            paths: [workers.memory]
+            message: >-
+              The memory offered to executors must stay below the worker's maximum memory, or executors are
+              killed for running out of memory.
+          - rule: self.workers.cores * 1000 <= cpuMillicores(self.workers.maxCpu)
+            severity: info
+            paths: [workers.cores]
+            message: >-
+              The worker offers more cores than its maximum CPU, so its tasks share the CPU and run slower
+              than the core count suggests.
+
+  - id: services
+    title: Connect and history
+    description: Optional servers for remote clients and for browsing completed applications.
+    sections:
+      - id: connect
+        title: Spark Connect
+        toggle: connect.enabled
+        description: >-
+          A gRPC server on port 15002 that runs PySpark and Scala DataFrame code sent by thin clients in the
+          GVC, without a local Spark installation. Clients install `pyspark[connect]` themselves.
+        docs: "#spark-connect"
+        fields:
+          - type: note
+            text: Clients connect to the Spark Connect server inside the GVC on port 15002.
+            textExpression: >-
+              'Clients connect to sc://' + context.releaseName + '-spark-connect.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:15002 from inside the GVC. Match the client PySpark version to Spark 4.0.'
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that restarts the master leaves Spark Connect ready but cut off from the cluster: it waits
+              for the old master and runs nothing. Once the master is ready again, redeploy Spark Connect with
+              `cpln workload force-redeployment RELEASE_NAME-spark-connect --gvc GVC_NAME`.
+            textExpression: >-
+              'An upgrade that restarts the master leaves Spark Connect ready but cut off from the cluster: it waits' +
+              ' for the old master and runs nothing. Once the master is ready again, redeploy Spark Connect with' +
+              ' cpln workload force-redeployment ' + context.releaseName + '-spark-connect --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.'
+          - path: connect
+            type: resources
+            label: Spark Connect resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: history
+        title: History Server
+        toggle: historyServer.enabled
+        description: >-
+          A Web UI on port 18080 that lists completed applications by reading their event logs from an S3 or
+          GCS bucket, which the cluster's drivers write to. The bucket and a Control Plane cloud account (for
+          S3 also an IAM policy) must exist before you turn it on.
+        docs: "#history-server"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The bucket must exist **before** you install. If it is missing or unreachable, the History Server
+              crash-loops with `UnknownStoreException` or `NoSuchBucket` in its log. An empty application list
+              is normal until the first job completes.
+          - path: storage.provider
+            type: enum
+            label: Event log storage
+            widget: cards
+            required: true
+            description: Switching it after the History Server is installed needs a new install.
+            docs: "#object-storage"
+            options:
+              - { value: aws, label: AWS S3, description: Keyless access through an AWS cloud account and an IAM policy. }
+              - { value: gcp, label: Google Cloud Storage, description: Keyless access through a GCP cloud account. }
+          - path: storage.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: Enter the bucket name only, in lowercase, without s3:// or gs://.
+          - path: storage.prefix
+            type: string
+            label: Folder prefix
+            description: The folder inside the bucket where event logs are written and read.
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+          - path: storage.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            description: An AWS or GCP cloud account, matching the storage chosen above, for the account that holds the bucket.
+            help: >-
+              See [Create a cloud account](/guides/create-cloud-account). On GCP, grant the cloud account's
+              service account the Storage Admin role (`roles/storage.admin`); the template then binds the
+              workload identity to Storage Object Admin on exactly this bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              mustExist: error
+          - path: storage.region
+            type: string
+            label: Bucket region
+            required: true
+            when: self.storage.provider == 'aws'
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: storage.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            when: self.storage.provider == 'aws'
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the eight S3 actions listed under
+              [Prerequisites](/template-catalog/templates/spark#prerequisites), on the bucket and on its objects.
+              The identity carries only `cpln-connector` and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: historyServer
+            type: resources
+            label: History Server resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.storage.provider in ['aws', 'gcp']
+            mirrors: spark.validate
+            paths: [storage.provider]
+            message: Choose AWS S3 or Google Cloud Storage for the event logs.
+          - rule: self.storage.bucket != null && self.storage.bucket != ''
+            mirrors: spark.validate
+            paths: [storage.bucket]
+            message: The bucket is required when the History Server is on.
+          - rule: self.storage.cloudAccountName != null && self.storage.cloudAccountName != ''
+            mirrors: spark.validate
+            paths: [storage.cloudAccountName]
+            message: The cloud account is required when the History Server is on.
+          # Keyed on the installed cloud account, not on historyServer.enabled: a release that turned the
+          # History Server off still carries its identity's cloud binding (the API merges, never removes).
+          # An empty name (console install with History off) or the chart placeholder means no binding was made.
+          - rule: >-
+              oldSelf == null || oldSelf.storage.cloudAccountName == null ||
+              oldSelf.storage.cloudAccountName in ['', 'my-spark-cloud-account'] ||
+              self.storage.provider == oldSelf.storage.provider
+            severity: warning
+            paths: [storage.provider]
+            message: >-
+              Switching the event log storage between S3 and GCS needs a new install: on an upgrade the identity
+              keeps its old cloud binding. Uninstall the release, then install it again with the new storage.
+    rules:
+      - when: oldSelf != null && oldSelf.historyServer.enabled
+        rule: self.historyServer.enabled
+        severity: info
+        paths: [historyServer.enabled]
+        message: >-
+          Turning the History Server off removes its workload, but the identity keeps its cloud account binding
+          until the release is uninstalled.
+
+  - id: network
+    title: Network
+    description: Who can reach the cluster inside Control Plane, and whether the Web UIs are public.
+    sections:
+      - title: Cluster access
+        docs: "#access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Governs the master, workers, Spark Connect and the History Server. The cluster port, Spark Connect
+              and the Web UIs have no authentication. Access changes take up to a few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC. Recommended.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: >-
+                  Only the workloads listed below, which must include the cluster's own master, worker and
+                  Spark Connect workloads.
+          # Shown for every type with entries: the chart writes any non-empty list into inboundAllowWorkload
+          # (workload-master.yaml:96-98 and the other workloads), and the platform validates every entry.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            absent: true
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads this is the whole allow-list, the cluster's own workloads and your drivers
+              included. With Same GVC, add workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+      - title: Web UIs
+        docs: "#reaching-a-private-ui"
+        fields:
+          - type: note
+            text: Reach the private master Web UI with cpln port-forward, then open http://localhost:8080.
+            textExpression: >-
+              'Reach the master Web UI with cpln port-forward ' + context.releaseName + '-spark-master 8080:8080 --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ', then open http://localhost:8080' +
+              (self.historyServer.enabled ? ', and the History Server with cpln port-forward ' + context.releaseName +
+              '-spark-history 18080:18080 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ', then http://localhost:18080' : '') + '. This works with public access off.'
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish the Web UIs to the internet
+            description: >-
+              Puts the master UI (and the History Server UI, when on) on public cpln.app endpoints with no login:
+              anyone with the address sees the cluster and its applications. Workers, the cluster port and
+              Spark Connect stay internal.
+            help: A change takes up to a few minutes to take effect.
+          - type: note
+            when: self.publicAccess.enabled
+            text: >-
+              Read the public address from status.canonicalEndpoint of the master workload. Jobs you submit then
+              need --conf spark.ui.reverseProxyUrl= with that address, so the links in their own UI resolve.
+            textExpression: >-
+              'Read the public address with cpln workload get ' + context.releaseName + '-spark-master --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml (status.canonicalEndpoint). Jobs you' +
+              ' submit then need --conf spark.ui.reverseProxyUrl= with that address, so the links in their own UI resolve.'
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            text: >-
+              Spark's Web UIs have no authentication. Leave this off unless you must open them from outside
+              Control Plane; the port-forward above works without it.
+    rules:
+      - rule: self.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
+        mirrors: spark.validate
+        paths: [internalAccess.type]
+        message: Choose Same GVC, Same org or Specific workloads.
+      - when: context.gvc == null
+        rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: List the workloads allowed to connect, the cluster's own workloads included.
+      - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+        rule: >-
+          (['master', 'worker'] + (self.connect.enabled ? ['connect'] : [])).all(n,
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n) in
+          self.internalAccess.workloads)
+        severity: warning
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'The master' + (self.connect.enabled ? ', workers and Spark Connect' : ' and workers') +
+          ' talk to each other through this firewall, and the chart does not add them to the list. Add ' +
+          (['master', 'worker'] + (self.connect.enabled ? ['connect'] : [])).filter(n,
+          !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n) in self.internalAccess.workloads)).map(n,
+          '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n).join(', ') +
+          ', or the cluster cannot form.'
+        message: >-
+          The cluster's own workloads talk to each other through this firewall, and the chart does not add them
+          to the list. Add them, or the cluster cannot form.
+        fix:
+          path: internalAccess.workloads
+          items: >-
+            (['master', 'worker'] + (self.connect.enabled ? ['connect'] : [])).map(n,
+            '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-spark-' + n)
+      - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internalAccess.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internalAccess.type == 'same-org'
+        rule: size(self.internalAccess.workloads) == 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to the cluster, so the listed workloads add
+          nothing.
+
+  - id: advanced
+    title: Advanced
+    description: The Spark image every tier runs, and extra Spark settings.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: Spark image
+        required: true
+        description: >-
+          Used by every tier. The History Server's S3 and GCS connectors are pinned for the Spark 4.0 and
+          Hadoop 3.4 builds of the apache/spark image.
+        docs: "#image"
+      - path: sparkDefaults
+        type: map
+        label: Extra Spark configuration
+        widget: kv
+        description: >-
+          Appended to the rendered `spark-defaults.conf` as `key value` lines, for any Spark setting the template
+          does not expose. Each value is written as is, so quote characters inside it reach Spark as part of the
+          value.
+        docs: "#extra-spark-configuration"
+        keys:
+          label: Setting
+        # Numbers and booleans are natural here (spark.sql.shuffle.partitions: 200), so values are yaml
+        # scalars; secret-conf.yaml writes each one raw ({{ $k }} {{ $v }}).
+        values: { type: yaml }
+        rules:
+          - rule: self.sparkDefaults.all(k, type(self.sparkDefaults[k]) != map && type(self.sparkDefaults[k]) != list)
+            severity: warning
+            message: >-
+              Each setting takes a single value (text, a number or true/false). A list or a map is written into
+              spark-defaults.conf as unreadable text.
+          - rule: self.sparkDefaults.all(k, k.startsWith('spark.'))
+            severity: info
+            message: >-
+              Spark reads only settings whose names start with spark. from spark-defaults.conf; the others
+              are ignored.
+          - rule: >-
+              !(['spark.driver.port', 'spark.driver.blockManager.port', 'spark.blockManager.port'].exists(k,
+              k in self.sparkDefaults))
+            severity: warning
+            message: >-
+              The template pins spark.driver.port, spark.driver.blockManager.port and spark.blockManager.port
+              to the ports its workloads declare, so that executors and drivers can reach each other. Remove
+              them from the extra configuration.
+          - rule: >-
+              !(['spark.ui.reverseProxy', 'spark.eventLog.enabled', 'spark.eventLog.dir',
+              'spark.history.fs.logDirectory', 'spark.driver.extraClassPath', 'spark.executor.extraClassPath'].exists(k,
+              k in self.sparkDefaults))
+            severity: info
+            message: >-
+              This replaces a setting the template writes itself (the Web UI reverse proxy, or the History
+              Server's event log and connector classpath). The value here wins.

@@ -1,0 +1,1118 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: PostgreSQL (multi-location)
+# createsGvc: true. The chart creates its own GVC from global.gvc.name and global.gvc.locations
+# (templates/gvc.yaml), so there is no target GVC to limit and no gvc block (guide 14.2); the location rules
+# work on global.gvc.locations instead, and context.gvc is null.
+
+# No `imports`: the bundled etcd-multi-location 1.0.1 has no descriptor, and it reads the GVC and its
+# locations from the same `global.gvc`. Its keys under `etcd.` are bound as parent fields below, and its own
+# checks are restated as parent rules without `mirrors` (their defines live in the subchart's _helpers.tpl).
+# etcd-multi-location 1.0.1 compacts its history every hour (periodic, 1h) with etcd's default quota; it reads
+# no compaction or quota values, so this version has no such fields.
+
+steps:
+  - id: locations
+    title: GVC and locations
+    description: >-
+      The GVC this release creates, the locations the cluster spans, the Patroni members in each, and where
+      the primary should run.
+    sections:
+      - id: gvc
+        title: GVC
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              This version creates its own GVC with the name below. Use a name no GVC in the org has: the release
+              adopts an existing GVC of that name when no other release manages it (one another release manages is refused), and uninstalling the release then deletes that GVC with every
+              workload in it. Uninstall the release against the GVC you install it into, not the GVC it creates.
+          - path: global.gvc.name
+            type: string
+            label: GVC name
+            required: true
+            immutable: >-
+              The release runs in the GVC it created; another name would create a new, empty GVC and delete this one
+              with everything in it, the database volumes included.
+            description: The GVC this release creates and runs in. Give every install its own.
+            pattern: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+            patternMessage: >-
+              Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
+            rules:
+              # The chart writes the GVC name unquoted (name: {{ .Values.global.gvc.name }}).
+              - rule: >-
+                  (oldSelf != null && self.global.gvc.name == oldSelf.global.gvc.name) ||
+                  !(self.global.gvc.name in ['true', 'false', 'null'])
+                severity: warning
+                message: >-
+                  This version writes the GVC name unquoted, so YAML reads true, false and null as a boolean or
+                  null and the GVC cannot be created. Choose another name.
+              - when: context.mode == 'install'
+                rule: self.global.gvc.name != 'postgres-multi-location-gvc'
+                severity: info
+                messageExpression: >-
+                  'GVC names are org-wide: a release on this name is refused while another release manages that GVC.
+                  Give each release its own, for example ' + context.releaseName + '-postgres.'
+                message: >-
+                  GVC names are org-wide: a release on this name is refused while another release manages that
+                  GVC. Give each release its own.
+        rules:
+          # pg-ml.validate refuses an empty name; `required` says it on the field, this rule carries the mirror.
+          - rule: self.global.gvc.name != null && self.global.gvc.name != ''
+            mirrors: pg-ml.validate
+            paths: [global.gvc.name]
+            message: Name the GVC this release creates.
+      - id: locations
+        title: Locations
+        fields:
+          - type: note
+            when: context.mode == 'install'
+            text: >-
+              After a fresh install allow about two minutes before believing a member is unreachable: service
+              discovery across regions can lag a ready member.
+          - type: note
+            when: size(self.global.gvc.locations) >= 2
+            text: >-
+              The consensus store runs one etcd member per location, and the primary is promoted only while a
+              majority of them agree.
+            textExpression: >-
+              string(size(self.global.gvc.locations)) + ' locations: the consensus store needs ' +
+              string(size(self.global.gvc.locations) / 2 + 1) + ' of its ' + string(size(self.global.gvc.locations)) +
+              ' members, one per location, to agree, so ' +
+              ((size(self.global.gvc.locations) - 1) / 2 == 0 ?
+              'losing either location leaves the survivor read-only until you promote it by hand.' :
+              'automatic failover survives losing ' + string((size(self.global.gvc.locations) - 1) / 2) +
+              ((size(self.global.gvc.locations) - 1) / 2 == 1 ? ' location.' : ' locations.'))
+          - path: global.gvc.locations
+            type: list
+            label: Locations
+            required: true
+            minItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "", replicas: 1 }
+            itemLabel: "(item.name == null ? '' : item.name) + (item.replicas == null ? '' : ' × ' + string(item.replicas))"
+            description: >-
+              The locations of the GVC this release creates. Members is the number of PostgreSQL members in that
+              location; etcd always runs one member per location and ignores it.
+            help: >-
+              Three locations give automatic failover, five survive losing two, and two give a warm standby
+              with manual promotion. To remove a location, remove it from this list; there is no per-location
+              suspend. For a cluster in a single location, use the postgres-highly-available template instead.
+              Replication across locations is asynchronous, so a failover can lose the most recent transactions,
+              and every member outside the primary's location receives the full WAL stream as billed
+              cross-region traffic.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Members
+                  required: true
+                  min: 1
+                  suggestions: [1, 2, 3]
+              rules:
+                # pg-ml.validate refuses replicas below 1 (`int` of a missing key is 0 too); `min` and
+                # `required` say it on the field, this rule carries the mirror.
+                - rule: item.replicas == null || item.replicas >= 1
+                  mirrors: pg-ml.validate
+                  paths: [replicas]
+                  message: >-
+                    Every location runs at least one member. To stop running in a location, remove it from the
+                    list; there is no per-location suspend.
+            rules:
+              - rule: size(self.global.gvc.locations) >= 2
+                mirrors: pg-ml.validate
+                message: >-
+                  The cluster needs at least 2 locations: the bundled consensus store is itself stretched across
+                  locations. For a single-location cluster, use the postgres-highly-available template.
+              - rule: size(self.global.gvc.locations) != 2
+                severity: info
+                message: >-
+                  Two locations give a warm standby, not automatic failover: after losing either one, the
+                  surviving replica holds current data but stays read-only until you promote it by hand. Three
+                  locations survive losing one.
+              - rule: size(self.global.gvc.locations) < 4 || size(self.global.gvc.locations) % 2 == 1
+                severity: info
+                message: >-
+                  An even number of locations survives no more location losses than one location fewer; 3
+                  survives losing one, 5 survives losing two.
+              - rule: >-
+                  oldSelf == null || size(oldSelf.global.gvc.locations) == 0 ||
+                  (size(self.global.gvc.locations) == size(oldSelf.global.gvc.locations) &&
+                  self.global.gvc.locations.all(l, oldSelf.global.gvc.locations.exists(o, o.name == l.name)))
+                severity: info
+                message: >-
+                  Changing the locations changes the locations of the GVC this release created and restarts every
+                  PostgreSQL and etcd member with a new roster. Plan a maintenance window.
+      - id: primary
+        title: Preferred primary location
+        fields:
+          # CHANGELOG 1.0.2 and the briefing: failover_priority alone never placed the primary on a fresh
+          # install; 1.0.2 added the bootstrap head start (secret-startup.yaml).
+          - type: note
+            severity: warning
+            when: context.mode == 'install' && self.primaryLocation != null && self.primaryLocation != ''
+            text: >-
+              In this version the preferred location does not decide where the primary starts on a fresh install:
+              every member races to initialize the cluster, and the primary lands wherever one gets there first.
+              Move it afterwards with patronictl switchover, or install 1.0.2 or later, where the other locations
+              wait for this one.
+          - path: primaryLocation
+            type: enum
+            label: Preferred primary location
+            widget: select
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: Failover elections favour this location. Leave it empty for no preference.
+            help: >-
+              A tiebreaker between replicas that have replayed the same amount of WAL; a restored location does
+              not take the primary back on its own. To move a running primary without a restart, use
+              `patronictl switchover`.
+            rules:
+              - rule: >-
+                  self.primaryLocation == null || self.primaryLocation == '' ||
+                  self.primaryLocation in self.global.gvc.locations.map(l, l.name)
+                mirrors: pg-ml.validate
+                message: Choose one of the listed locations as the preferred primary location, or leave it empty.
+              - rule: >-
+                  oldSelf == null || (oldSelf.primaryLocation == null ? '' : oldSelf.primaryLocation) ==
+                  (self.primaryLocation == null ? '' : self.primaryLocation)
+                severity: info
+                message: >-
+                  Changing the preferred location restarts every member, about two minutes without writes in
+                  every location, and the election that follows moves the primary there. To move the primary
+                  without a restart, use patronictl switchover and leave this setting as it is.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the database user, password and database name.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment waits on
+          it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in
+          `cpln workload get-deployments RELEASE_NAME-postgres-ml --gvc GVC_NAME`.
+        textExpression: >-
+          'The credentials secret must exist **before** you install. If it is missing, the deployment waits on it and `cpln logs` shows nothing at all; the reason is under `status.versions[].message` in `cpln workload get-deployments ' +
+          context.releaseName + '-postgres-ml --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') + '`. Once the secret exists the deployment recovers on its own within about 10 minutes, or at once with `cpln workload force-redeployment ' +
+          context.releaseName + '-postgres-ml --gvc ' + (self.global.gvc.name != null && self.global.gvc.name != '' ? self.global.gvc.name : 'GVC_NAME') + '`.'
+      - path: postgres.credentialsSecretName
+        type: ref
+        label: Database credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username`, `password` and `database`. The PostgreSQL members,
+          the optional pooler and the optional backups all read it.
+        help: >-
+          PostgreSQL applies these values only when the cluster is first created. Use plain identifiers for
+          `username` and `database`: they are used unquoted when the database is created. Create the secret
+          with:
+          `cpln secret create-dictionary --name SECRET_NAME --entry username=postgres --entry password="$(openssl rand -hex 24)" --entry database=mydb`
+        docs: "#credentials"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password, database]
+          create:
+            suggestName: "context.releaseName + '-postgres-ml-credentials'"
+    rules:
+      # pg-ml.validate refuses an empty name; `required` says it on the field, this rule carries the mirror.
+      - rule: self.postgres.credentialsSecretName != null && self.postgres.credentialsSecretName != ''
+        mirrors: pg-ml.validate
+        paths: [postgres.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null || oldSelf.postgres.credentialsSecretName == null ||
+          oldSelf.postgres.credentialsSecretName == '' ||
+          self.postgres.credentialsSecretName == oldSelf.postgres.credentialsSecretName
+        severity: info
+        paths: [postgres.credentialsSecretName]
+        message: >-
+          PostgreSQL applies the credentials only when the cluster is first created; pointing at another secret
+          does not change the existing user or password. Run ALTER ROLE for the user and for repl first so
+          the new secret matches.
+
+  - id: server
+    title: PostgreSQL
+    description: The Patroni PostgreSQL image and the compute of each member.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          Every upgrade restarts all members in every location together, also one that changes nothing:
+          about two minutes without writes everywhere. Nothing limits the rollout of a stateful workload, so
+          plan the upgrade as a short write outage.
+      - path: image
+        type: string
+        format: image
+        label: Patroni PostgreSQL image
+        required: true
+        description: PostgreSQL 17 with Patroni and WAL-G.
+        docs: "#image-and-resources"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        # workload-patroni-postgres.yaml quotes every key, and Helm prints a plain number of 1000000 or
+        # more from a values file in exponent form ("2.147483648e+09"), which the platform refuses.
+        rules:
+          - rule: >-
+              (self.resources.minMemory == null || type(self.resources.minMemory) == string) &&
+              (self.resources.maxMemory == null || type(self.resources.maxMemory) == string)
+            paths: [resources]
+            message: >-
+              Write the memory with a unit, such as 1Gi: Helm prints a plain byte count in exponent form, which
+              the platform refuses.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: >-
+              Uninstalling the release deletes the volume set and takes a final snapshot of each volume, kept
+              for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: network
+    title: Network and pooling
+    description: Who can connect, the leader-routing proxy and an optional connection pooler.
+    sections:
+      - title: Database access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Applies to the PostgreSQL members and to the proxy and pooler tiers, and also to the traffic between
+              them. The database is never published to the internet. Access changes take up to a few minutes to
+              reach every location.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC, from any of its locations.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: >-
+                  Only the workloads listed below. List this release's own workloads too: this version does not
+                  add them.
+          # Shown for every type: the workloads write any non-empty list into inboundAllowWorkload, and the
+          # platform validates every entry.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, every workload allowed to connect, this release's own included. The
+              platform also applies the list with Same GVC, for clients in other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          # pg-ml.validate refuses any other type; the options say it on the field, this rule carries the mirror.
+          - rule: self.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
+            mirrors: pg-ml.validate
+            paths: [internalAccess.type]
+            message: Choose Same GVC, Same org or Specific workloads.
+          # This version writes the list as given (no own-workload links; 2.0.0 added them). The list also
+          # governs Patroni-to-Patroni replication, the proxy's health checks, PgBouncer into the proxy and the
+          # logical dump through the proxy, so each of these must be listed (briefing, workload-list self-inclusion).
+          - when: >-
+              self.internalAccess.type == 'workload-list' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: >-
+              (['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'] +
+              (self.proxy.enabled || self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-proxy'] : []) +
+              (self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-backup'] : [])).all(w, w in self.internalAccess.workloads)
+            severity: warning
+            paths: [internalAccess.workloads]
+            message: >-
+              With Specific workloads, add this release's own workloads to the list: the list also governs the
+              replication between the members and the proxy's health checks, so without them the cluster is cut
+              off from itself while every member still reports ready.
+            messageExpression: >-
+              'Add ' + (['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'] +
+              (self.proxy.enabled || self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-proxy'] : []) +
+              (self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-backup'] : [])).filter(w, !(w in self.internalAccess.workloads)).join(', ') +
+              ' to the list: it also governs the replication between the members and the proxy health checks, so without them the cluster is cut off from itself while every member still reports ready.'
+            fix:
+              path: internalAccess.workloads
+              items: >-
+                (['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'] +
+                (self.proxy.enabled || self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-proxy'] : []) +
+                (self.pgbouncer.enabled ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-pgbouncer'] : []) +
+                (self.backup.enabled && self.backup.mode == 'logical' ? ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml-backup'] : [])).filter(w, !(w in self.internalAccess.workloads))
+          - when: self.internalAccess.type == 'same-gvc' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + self.global.gvc.name + '/workload/'))"
+            severity: info
+            paths: [internalAccess.workloads]
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internalAccess.type == 'same-org'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: Same org already lets every workload of the org connect, so these entries add nothing.
+      # Not a toggle section: the chart runs the proxy when proxy.enabled OR pgbouncer.enabled is on
+      # (workload-proxy.yaml:2), so its settings are shown under the same condition.
+      - id: proxy
+        title: Leader-routing proxy (HAProxy)
+        description: >-
+          An HAProxy tier in every location that always routes to the current primary, wherever it runs:
+          the endpoint applications connect to.
+        docs: "#leader-routing-proxy"
+        fields:
+          - type: note
+            when: self.pgbouncer.enabled && !self.proxy.enabled
+            text: The connection pooler is on and connects through this proxy, so the proxy runs anyway.
+          - type: note
+            when: "!self.pgbouncer.enabled && !self.proxy.enabled"
+            text: Logical backups (on the Backups step) connect through this proxy, so leave it on if you plan to use them.
+          - path: proxy.enabled
+            type: boolean
+            label: Run the proxy
+            description: >-
+              Without it, applications must find the primary themselves through the per-member addresses.
+          # A floor of 1: the tier serves TCP on 5432, which cannot wake a tier scaled to zero.
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum replicas per location
+            required: true
+            when: self.proxy.enabled || self.pgbouncer.enabled
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum replicas per location
+            required: true
+            when: self.proxy.enabled || self.pgbouncer.enabled
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+            when: self.proxy.enabled || self.pgbouncer.enabled
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+            when: self.proxy.enabled || self.pgbouncer.enabled
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.proxy.resources.memory == null || type(self.proxy.resources.memory) == string
+                paths: [proxy.resources]
+                message: >-
+                  Write the memory with a unit, such as 128Mi: Helm prints a plain byte count in exponent form,
+                  which the platform refuses.
+        rules:
+          - when: self.proxy.enabled || self.pgbouncer.enabled
+            rule: self.proxy.maxReplicas >= self.proxy.minReplicas
+            paths: [proxy.maxReplicas]
+            message: The maximum replicas of the proxy must be at least its minimum.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          A PgBouncer tier in every location, pooling into that location's proxy. When on, it becomes the
+          endpoint applications connect to, and the proxy runs too.
+        docs: "#pgbouncer"
+        fields:
+          # The image's entrypoint writes userlist.txt as "user" "password" without doubling an embedded
+          # double quote (edoburu/docker-pgbouncer v1.25.1-p0 entrypoint.sh:61; AUTH_TYPE is plain here), and
+          # PgBouncer ends the field at the first unescaped quote. 1.1.0 writes the file itself, escaped.
+          - type: note
+            severity: warning
+            text: >-
+              In this version PgBouncer cannot authenticate when the username or password in the credentials
+              secret contains a double quote ("): every connection through the pooler is refused. Use a value
+              without one; 1.1.0 and later escape it.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API workloads,
+              but not compatible with `SET` variables, temporary tables or advisory locks. **Session** holds it
+              for the whole client session: compatible with everything, less reuse. **Statement** returns it
+              after every statement: transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            required: true
+            min: 1
+            suggestions: [10, 25, 50, 100]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            required: true
+            min: 1
+            suggestions: [100, 500, 1000, 5000]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxDbConnections
+            type: integer
+            label: Max database connections
+            required: true
+            min: 1
+            suggestions: [10, 25, 50, 100]
+            description: >-
+              Per PgBouncer replica. Replicas do not coordinate, so PostgreSQL can see this many times the
+              maximum replicas in every location.
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum replicas per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum replicas per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.pgbouncer.resources.memory == null || type(self.pgbouncer.resources.memory) == string
+                paths: [pgbouncer.resources]
+                message: >-
+                  Write the memory with a unit, such as 128Mi: Helm prints a plain byte count in exponent form,
+                  which the platform refuses.
+        rules:
+          # pg-ml.validate refuses another pool mode even with the pooler off; the options say it on the field
+          # while the section is on, and the step rule below covers it while the section is off.
+          - rule: self.pgbouncer.poolMode in ['session', 'transaction', 'statement']
+            mirrors: pg-ml.validate
+            paths: [pgbouncer.poolMode]
+            message: Choose session, transaction or statement as the pool mode.
+          - rule: self.pgbouncer.maxReplicas >= self.pgbouncer.minReplicas
+            paths: [pgbouncer.maxReplicas]
+            message: The maximum replicas of PgBouncer must be at least its minimum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+          # PgBouncer logs in as the credentials secret's user, which is the Patroni superuser, for the one
+          # database it pools, so each replica opens at most the smaller of the pool size and the max database
+          # connections; replicas do not coordinate. max_connections is 100 (secret-startup.yaml).
+          - rule: >-
+              size(self.global.gvc.locations) * self.pgbouncer.maxReplicas * (self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections) <= 100
+            severity: info
+            paths: [pgbouncer.maxDbConnections]
+            message: >-
+              Every PgBouncer replica in every location may open up to the smaller of the pool size and the max
+              database connections, and together they can ask for more than the 100 connections PostgreSQL
+              accepts; past that, PostgreSQL refuses new connections. Lower the pool size, the max database
+              connections or the maximum replicas.
+            messageExpression: >-
+              'Up to ' + string(size(self.global.gvc.locations) * self.pgbouncer.maxReplicas * (self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections)) +
+              ' server connections (' + string(size(self.global.gvc.locations)) + ' locations × ' +
+              string(self.pgbouncer.maxReplicas) + ' replicas × ' + string((self.pgbouncer.defaultPoolSize < self.pgbouncer.maxDbConnections ? self.pgbouncer.defaultPoolSize : self.pgbouncer.maxDbConnections)) +
+              ' per replica) against the 100 connections PostgreSQL accepts; past that, PostgreSQL refuses new connections. Lower the pool size, the max database connections or the maximum replicas.'
+    rules:
+      - when: "!self.pgbouncer.enabled"
+        rule: self.pgbouncer.poolMode in ['session', 'transaction', 'statement']
+        mirrors: pg-ml.validate
+        paths: [pgbouncer.enabled]
+        message: >-
+          The pool mode must be session, transaction or statement, and the chart checks it even with the
+          pooler off. Fix pgbouncer.poolMode in the values.
+
+  - id: backup
+    title: Backups
+    description: Optional scheduled dumps, or continuous WAL archiving, to object storage.
+    sections:
+      - id: backup
+        title: Backups
+        toggle: backup.enabled
+        description: >-
+          Logical mode runs a nightly pg_dumpall in one location; WAL-G mode archives WAL continuously from
+          whichever member is the primary. The bucket and, for AWS S3 and Google Cloud Storage, the cloud
+          account must exist before you turn it on.
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              oldSelf != null &&
+              (oldSelf.backup.enabled == true && oldSelf.backup.mode == 'wal-g') != (self.backup.mode == 'wal-g')
+            text: >-
+              Switching to or from WAL-G changes `archive_mode`, so this upgrade restarts PostgreSQL in every
+              location. Turning WAL-G on can take about 10 minutes to settle in a location; check that
+              `archive_mode` is on in every location before relying on the archive.
+          - path: backup.mode
+            type: enum
+            label: Backup mode
+            widget: cards
+            required: true
+            options:
+              - value: logical
+                label: Logical dumps
+                description: A scheduled pg_dumpall through the proxy, in one location. Portable SQL dumps.
+              - value: wal-g
+                label: WAL-G
+                description: >-
+                  A sidecar on every member; only the primary pushes WAL and periodic base backups, for
+                  point-in-time recovery.
+          - path: backup.location
+            type: enum
+            label: Run the backup job in
+            required: true
+            when: self.backup.mode == 'logical'
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: >-
+              A cron workload would otherwise run in every location; the job runs only here. Pick the
+              location nearest the bucket.
+          - path: backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.backup.mode == 'logical'
+          - path: backup.walg.intervalSeconds
+            type: integer
+            label: Time between base backups
+            unit: seconds
+            required: true
+            when: self.backup.mode == 'wal-g'
+            min: 1
+            suggestions:
+              - { value: 3600, label: "3600 (1 hour)" }
+              - { value: 21600, label: "21600 (6 hours, default)" }
+              - { value: 86400, label: "86400 (1 day)" }
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+              - { value: minio, label: MinIO or S3-compatible }
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.mode == 'logical'
+            description: Tag 17.x.x for PostgreSQL 17, 18.x.x for PostgreSQL 18.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: >-
+              The logical backup job, or the WAL-G sidecar next to each member. Google Cloud Storage needs at
+              least 256Mi of memory for logical backups and 512Mi for WAL-G, more than this version's default of
+              128Mi.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.backup.resources.memory == null || type(self.backup.resources.memory) == string
+                paths: [backup.resources]
+                message: >-
+                  Write the memory with a unit, such as 512Mi: Helm prints a plain byte count in exponent form,
+                  which the platform refuses.
+              # CHANGELOG 1.0.1, briefing and the 1.0.1 values.yaml: the GCP path is killed at this version's
+              # 128Mi default with no log output (logical jobs report failed, the wal-g sidecar loops on
+              # OOMKilled); the briefing verified 256Mi for logical and 512Mi for wal-g.
+              - when: >-
+                  self.backup.enabled && self.backup.provider == 'gcp' && self.backup.resources.memory != null &&
+                  type(self.backup.resources.memory) == string
+                rule: >-
+                  memoryBytes(self.backup.resources.memory) >= (self.backup.mode == 'wal-g' ? 536870912 : 268435456)
+                severity: warning
+                paths: [backup.resources]
+                message: >-
+                  Raise the backup memory to at least 256Mi for logical backups or 512Mi for WAL-G: below it the
+                  Google Cloud Storage path runs out of memory with no log output, so logical jobs only report
+                  failed and the WAL-G sidecar restarts in a loop while no base backup is taken. 1.0.1 raised the
+                  default to 512Mi.
+        rules:
+          # pg-ml.validateBackup: the options say the mode and provider on their fields; these carry the mirror.
+          - rule: self.backup.mode in ['logical', 'wal-g']
+            mirrors: pg-ml.validateBackup
+            paths: [backup.mode]
+            message: Choose logical or wal-g as the backup mode.
+          - rule: self.backup.provider in ['aws', 'gcp', 'minio']
+            mirrors: pg-ml.validateBackup
+            paths: [backup.provider]
+            message: Choose aws, gcp or minio as the backup destination.
+          - when: self.backup.mode == 'logical'
+            rule: self.proxy.enabled || self.pgbouncer.enabled
+            mirrors: pg-ml.validateBackup
+            paths: [backup.mode]
+            message: >-
+              Logical backups dump the current primary through the leader-routing proxy. Turn on Run the proxy
+              under Network and pooling, or choose WAL-G.
+          - when: self.backup.mode == 'logical'
+            rule: >-
+              self.backup.location == null || self.backup.location == '' ||
+              self.backup.location in self.global.gvc.locations.map(l, l.name)
+            mirrors: pg-ml.validateBackup
+            paths: [backup.location]
+            message: >-
+              The backup job must run in one of the listed locations; it is suspended everywhere else and would
+              never run.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the S3 actions listed under [AWS S3](#aws-s3), on the bucket and on its
+              objects. The backup identity carries only `cpln-connector` and this policy, so an action missing
+              from it is missing for the backups.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.aws.prefix == self.backup.aws.prefix) ||
+                  (!self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') &&
+                  !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+                  !self.backup.aws.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              self.backup.resources.memory != null && type(self.backup.resources.memory) == string &&
+              memoryBytes(self.backup.resources.memory) < (self.backup.mode == 'wal-g' ? 536870912 : 268435456)
+            text: >-
+              This version's default backup memory, 128Mi, is too little for Google Cloud Storage: the backups fail
+              with no log output. Raise Backup resources (under the advanced settings) to at least 256Mi for
+              logical backups or 512Mi for WAL-G.
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
+              role on the project. The chart also grants the backup identity Storage Object Admin on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix) ||
+                  (!self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') &&
+                  !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+                  !self.backup.gcp.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        docs: "#minio"
+        fields:
+          - type: note
+            severity: warning
+            when: self.backup.mode == 'wal-g'
+            text: >-
+              With WAL-G every member reads the archive when it starts, so the endpoint must be reachable from
+              every location. A MinIO workload in only one location leaves the members elsewhere restarting
+              indefinitely while the primary keeps serving. Use an endpoint present in every location, or AWS
+              S3 or Google Cloud Storage.
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio.my-gvc.cpln.local:9000
+            description: >-
+              The S3 API address including the port. For a workload in a GVC use its full internal name,
+              `WORKLOAD.GVC.cpln.local`.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX unquoted into the members' env.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.minio.bucket == self.backup.minio.bucket) ||
+                  (!self.backup.minio.bucket.contains(': ') && !self.backup.minio.bucket.contains(' #') &&
+                  !self.backup.minio.bucket.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the bucket is written unquoted into the members' settings: leave out ": ", " #" and tabs.
+          - path: backup.minio.credentialsSecretName
+            type: ref
+            label: MinIO credentials secret
+            required: true
+            description: A dictionary secret with the keys `accessKey` and `secretKey`.
+            help: >-
+              It must exist before you turn backups on: while it is missing, the deployment waits on it and
+              `cpln logs` shows nothing. Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry accessKey=MINIO_ACCESS_KEY --entry secretKey=MINIO_SECRET_KEY`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-postgres-ml-minio-credentials'"
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+            rules:
+              # WAL-G mode writes s3://BUCKET/PREFIX (gs:// for GCS) unquoted into the members' env
+              # (workload-patroni-postgres.yaml); under cpln's YAML parser ': ' or a trailing ':' fail the
+              # manifest and ' #' or a trailing space cut the value.
+              - when: self.backup.mode == 'wal-g'
+                rule: >-
+                  (oldSelf != null && oldSelf.backup.minio.prefix == self.backup.minio.prefix) ||
+                  (!self.backup.minio.prefix.contains(': ') && !self.backup.minio.prefix.contains(' #') &&
+                  !self.backup.minio.prefix.endsWith(':') && !self.backup.minio.prefix.endsWith(' ') &&
+                  !self.backup.minio.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  With WAL-G the prefix is written unquoted into the members' settings: leave out ": ", " #",
+                  tabs, and a trailing colon or space.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The bundled etcd cluster, one member per location, that Patroni uses to elect the primary.
+    sections:
+      - title: etcd members
+        fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              A restart of the etcd tier costs about 20 seconds of writes; the cluster recovers on its own.
+          - path: etcd.image
+            type: string
+            format: image
+            label: etcd image
+            required: true
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            rules:
+              - rule: self.etcd.resources.memory == null || type(self.etcd.resources.memory) == string
+                paths: [etcd.resources]
+                message: >-
+                  Write the memory with a unit, such as 512Mi: Helm prints a plain byte count in exponent form,
+                  which the platform refuses.
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            required: true
+            description: Per member.
+            # etcd-multi-location's volume set is general-purpose-ssd, which the platform allows from 10 to
+            # 65536 GiB.
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50]
+        rules:
+          - rule: oldSelf == null || oldSelf.etcd.volumeset.capacity == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the etcd capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - id: raft
+        title: Raft timers
+        description: >-
+          The defaults suit locations up to about 250 ms apart. Raise both in proportion for locations further
+          apart.
+        docs: "/template-catalog/templates/etcd-multi-location#raft-tuning"
+        fields:
+          - path: etcd.tuning.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            required: true
+            description: About 0.5 to 1.5 times the worst round trip between your locations.
+            unit: ms
+            # etcd refuses a heartbeat of 0, and no heartbeat above 5000 leaves an election timeout under
+            # etcd-multi-location's 50000 cap at 10 times the heartbeat.
+            min: 1
+            max: 5000
+          - path: etcd.tuning.electionTimeoutMs
+            type: integer
+            label: Election timeout
+            required: true
+            description: The defaults detect a dead etcd leader in about 5 seconds across US and EU regions.
+            unit: ms
+            max: 50000
+        rules:
+          # etcd-ml.validate (subchart): election >= 10 x heartbeat.
+          - when: self.etcd.tuning.heartbeatIntervalMs <= 5000
+            rule: self.etcd.tuning.electionTimeoutMs >= 10 * self.etcd.tuning.heartbeatIntervalMs
+            paths: [etcd.tuning.electionTimeoutMs]
+            message: >-
+              The etcd election timeout must be at least 10 times the heartbeat interval; a shorter one makes
+              members campaign over ordinary heartbeat jitter.
+            messageExpression: >-
+              'The etcd election timeout must be at least ' + string(10 * self.etcd.tuning.heartbeatIntervalMs) +
+              ' ms, 10 times the heartbeat interval; a shorter one makes members campaign over ordinary heartbeat jitter.'
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internalAccess.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            description: >-
+              etcd here has no TLS and no authentication: every workload allowed here can read and write the
+              cluster state Patroni keeps in it.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - value: workload-list
+                label: Specific workloads
+                description: >-
+                  Only the workloads listed below. List the etcd workload itself too: this version does not add
+                  it.
+          - path: etcd.internalAccess.workloads
+            type: list
+            label: Allowed etcd clients
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads, every workload that reaches etcd: the etcd workload itself, for the
+              traffic between its members, and this release's PostgreSQL workload.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          # etcd-multi-location 1.0.1 writes the list as given; the list also governs the raft traffic
+          # between the etcd members (2.0.0 added its own workload).
+          - when: >-
+              self.etcd.internalAccess.type == 'workload-list' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: >-
+              ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-etcd', '//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'].all(w, w in self.etcd.internalAccess.workloads)
+            severity: warning
+            paths: [etcd.internalAccess.workloads]
+            messageExpression: >-
+              'Add ' + ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-etcd', '//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'].filter(w, !(w in self.etcd.internalAccess.workloads)).join(', ') +
+              ' to the etcd clients: without the etcd workload its members cannot reach each other, and without the PostgreSQL workload Patroni cannot reach etcd and no member becomes the primary.'
+            message: >-
+              Add the etcd workload and this release's PostgreSQL workload to the etcd clients: without them the
+              etcd members cannot reach each other and Patroni cannot reach etcd.
+            fix:
+              path: etcd.internalAccess.workloads
+              items: >-
+                ['//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-etcd', '//gvc/' + self.global.gvc.name + '/workload/' + context.releaseName + '-postgres-ml'].filter(w, !(w in self.etcd.internalAccess.workloads))
+          - when: self.etcd.internalAccess.type == 'same-gvc' && self.global.gvc.name != null && self.global.gvc.name != ''
+            rule: >-
+              !self.etcd.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + self.global.gvc.name + '/workload/'))
+            severity: info
+            paths: [etcd.internalAccess.workloads]
+            message: Same GVC already lets every workload in this GVC reach etcd, so those entries can be removed from the list.
+          - when: self.etcd.internalAccess.type == 'same-org'
+            rule: size(self.etcd.internalAccess.workloads) == 0
+            severity: info
+            paths: [etcd.internalAccess.workloads]
+            message: Same org already lets every workload of the org reach etcd, so these entries add nothing.
+      - id: recovery
+        title: Disaster recovery
+        when: >-
+          context.mode == 'upgrade' ||
+          (self.etcd.recovery.forceNewClusterInLocation != null && self.etcd.recovery.forceNewClusterInLocation != '')
+        description: >-
+          Emergency only, after the consensus store lost its majority for good (with two locations, the loss
+          of either one): the etcd member in one surviving location restarts as a new single-member cluster.
+        fields:
+          - type: note
+            severity: warning
+            when: self.etcd.recovery.forceNewClusterInLocation != null && self.etcd.recovery.forceNewClusterInLocation != ''
+            text: >-
+              Once PostgreSQL accepts writes again, clear this setting with the next upgrade: while it is set,
+              the etcd member forces a new cluster on every restart. Reset the volumes of the lost location's
+              members before they rejoin.
+          - path: etcd.recovery.forceNewClusterInLocation
+            type: enum
+            label: Force a new etcd cluster in
+            widget: select
+            optionsFrom: self.global.gvc.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: The surviving location. Leave it empty in normal operation.
+            help: >-
+              With three or more locations this is never needed: losing one location is an automatic failover.
+              If the lost location is coming back, wait: a member that returns with its volume intact rejoins on
+              its own. Once the survivor accepts writes, clear this setting, and remove the lost location from the
+              list or reset its volumes before its members rejoin.
+            rules:
+              # etcd-ml.validate (subchart): the location must be one of global.gvc.locations.
+              - when: self.etcd.recovery.forceNewClusterInLocation != null && self.etcd.recovery.forceNewClusterInLocation != ''
+                rule: self.etcd.recovery.forceNewClusterInLocation in self.global.gvc.locations.map(l, l.name)
+                message: Choose one of the listed locations, or leave it empty.
+              - when: context.mode == 'install'
+                rule: self.etcd.recovery.forceNewClusterInLocation == null || self.etcd.recovery.forceNewClusterInLocation == ''
+                severity: warning
+                message: >-
+                  Forcing a new etcd cluster is an emergency step for a running release that lost its majority
+                  for good; a fresh install has nothing to recover, and the member would force a new cluster on
+                  every restart. Leave it empty.

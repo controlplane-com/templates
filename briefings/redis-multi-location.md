@@ -72,6 +72,8 @@
 
 **Never `helm upgrade` a 2.x release onto 3.0.0.** The upgrade drops `kind: gvc` from the manifest and Helm prunes what a chart no longer declares — deleting the GVC and every workload, volume set and identity in it, in seconds, while printing `upgraded successfully`. Migrate to a NEW release against an existing GVC, copy the keyspace, then uninstall the old one. Both the README and the values comments say so.
 
+**In-place path (2026-10-29, render-verified only, not run live):** `scripts/keep-gvc.py`, then 2.2.0 → 3.0.0 with `--gvc <old GVC>` and `global.gvc.locations` → `global.locations` (all resource names match); README "Upgrading in place from 2.2.0".
+
 The **three-layer defence**, all present:
 
 1. **Render-time `fail`** on `hasKey .Values.global "gvc"`. Verified two ways: `helm template 3.0.0 -f 2.2.0/values.yaml` (the real upgrade path) and `--set global.gvc.name=…`. **One hole is not closable at render** — an upgrade run with NO values at all sees 3.0.0's own defaults, the key is absent, and the guard cannot fire. That is why the prose matters.

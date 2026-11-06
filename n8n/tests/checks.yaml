@@ -1,0 +1,126 @@
+# Feature checks for the n8n template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (owner_email,
+# owner_password, pg_user, pg_password, pg_db).
+#
+# Every check runs in the HA database's patroni-postgres container, which has curl and psql and reaches
+# n8n over the GVC (internalAccess same-gvc). Database checks go through the HAProxy endpoint, the
+# address n8n itself uses.
+checks:
+  - id: owner-login
+    description: The owner from the prerequisite secret logs in to n8n's REST API (the password matches the stored bcrypt hash).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 20 -X POST http://{release}-n8n.{gvc}.cpln.local:5678/rest/login \
+          -H 'Content-Type: application/json' -H 'browser-id: e2e' \
+          -d '{"emailOrLdapLoginId":"{owner_email}","password":"{owner_password}"}'
+    expect:
+      stdout: '"email":"e2e@example\.com"'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong owner password is refused (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 20 -X POST http://{release}-n8n.{gvc}.cpln.local:5678/rest/login \
+          -H 'Content-Type: application/json' -H 'browser-id: e2e' \
+          -d '{"emailOrLdapLoginId":"{owner_email}","password":"wrong-password"}'
+    expect:
+      stdout: "Wrong username or password"
+      notStdout: '"email":"e2e@example\.com"'
+
+  - id: owner-in-database
+    description: n8n's schema and the owner account are in the HA database, read through the HAProxy endpoint.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'OWNER ' || email from \"user\" where email = '{owner_email}'" 2>&1
+    expect:
+      stdout: "^OWNER e2e@example\\.com$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      Writes a row tagged with the running version into n8n's database, then reads the row written on the
+      version this scenario installed first. After an upgrade that proves the HA database carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (version text not null)" \
+          -c "insert into e2e (version) values ('{version}')" >/dev/null || { echo "WRITE FAILED"; exit 1; }
+        n=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.0 moved to.
+    issue: "#5376"
+    since: 1.5.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After an upgrade the HAProxy endpoint can briefly route to a member still on the old image while the
+    # Patroni members restart one at a time; this runs long enough to reach the new leader.
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
+      without this a member that never comes back (seen once in testing: the old leader stuck initializing for
+      17 min) goes unseen.
+    issue: "#5376"
+    since: 1.5.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

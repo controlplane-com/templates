@@ -1,0 +1,25 @@
+{{- include "airflow.validate" . -}}
+{{- /*
+  The webserver reads its own GVC at boot to confirm the GVC really has the
+  location this release is pinned to, and that KEDA is enabled on it when the
+  values ask for KEDA. The platform validates NEITHER: a localOptions entry
+  naming a location the GVC lacks is stored verbatim and is simply inert, and a
+  `metric: keda` workload is accepted into a GVC with KEDA turned off (both
+  measured 2026-08-28). Helm cannot see a live GVC at render time, so the
+  container asks the GVC itself.
+
+  Scoped to the ONE install GVC; never `target: all`, which would grant view on
+  every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "airflow.gvcPolicy.name" . }}
+description: Airflow GVC read policy
+tags: {{- include "airflow.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "airflow.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

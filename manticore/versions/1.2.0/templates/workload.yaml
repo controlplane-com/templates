@@ -109,7 +109,7 @@ spec:
         - name: IMPORT_BATCH_SIZE
           value: "{{ .Values.orchestrator.agent.import.batchSize | default 1000 }}"
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
       readinessProbe:
         failureThreshold: 20
         initialDelaySeconds: 10
@@ -346,7 +346,7 @@ spec:
       port: 3000
       env:
         - name: ORCHESTRATOR_API_URL
-          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.cpln.gvc }}.cpln.local:8080"
+          value: "http://{{ include "manticore.orchestratorAPIName" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080"
         - name: ORCHESTRATOR_AUTH_TOKEN
           value: "cpln://secret/{{ include "manticore.secretAgentTokenName" . }}.payload"
         - name: PORT

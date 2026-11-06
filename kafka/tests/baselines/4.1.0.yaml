@@ -1,0 +1,70 @@
+# kafka 4.1.0 — a customer install as it looks today: passwords inline in values (this version has no
+# credentials secret). Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  kraft: kraft-cluster-id
+  adminpw: hex
+  userpw: hex
+  interpw: hex
+  controllerpw: hex
+  restpw: hex
+
+secrets:
+  kafbat:
+    type: opaque
+    payload: |
+      kafka:
+        clusters:
+          - name: e2e
+            bootstrapServers: "{release}-cluster.{gvc}.cpln.local:9092"
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: PLAIN
+              sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{gen.adminpw}";'
+      management:
+        health:
+          ldap:
+            enabled: false
+      auth:
+        type: DISABLED
+      server:
+        port: 8080
+
+vars:
+  admin_password: "{gen.adminpw}"
+  rest_password: "{gen.restpw}"
+
+values:
+  kafka:
+    cpu: 500m
+    minCpu: 250m
+    listeners:
+      client:
+        sasl:
+          admin:
+            password: "{gen.adminpw}"
+          passwords: "{gen.userpw}"
+    secrets:
+      kraft_cluster_id: "{gen.kraft}"
+      inter_broker_password: "{gen.interpw}"
+      controller_password: "{gen.controllerpw}"
+  kafbat_ui:
+    configuration_secret: "{secrets.kafbat.name}"
+  kafka_rest_proxy:
+    properties:
+      bootstrap.servers: "SASL_PLAINTEXT://{release}-cluster.{gvc}.cpln.local:9092"
+    jaas_conf: |
+      KafkaClient {
+      org.apache.kafka.common.security.plain.PlainLoginModule required
+      username="admin"
+      password="{gen.adminpw}";
+      };
+      KafkaRest {
+        org.eclipse.jetty.jaas.spi.PropertyFileLoginModule required
+        debug="true"
+        file="/etc/kafka-rest/password.properties";
+      };
+    password_properties:
+      e2e: "{gen.restpw},user"

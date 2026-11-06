@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Redpanda
+category: messaging
+topology: distributed
+
+summary: >-
+  A Redpanda broker cluster of one, three or five nodes forming a Raft quorum, each on its own
+  snapshotted volume, speaking the Kafka wire protocol with SCRAM authentication and ACLs, plus a
+  built-in Schema Registry and an optional HTTP Proxy. Redpanda Console is on by default and closed
+  to the internet; public Kafka access over TLS with per-broker hostnames is optional. Pick it for
+  Kafka-compatible streaming with a schema registry and no JVM or ZooKeeper.
+
+keywords:
+  - kafka compatible
+  - kafka api
+  - event streaming
+  - message broker
+  - schema registry
+  - pandaproxy
+  - http proxy
+  - redpanda console
+  - raft
+  - rpk
+  - scram
+  - sasl
+  - topics
+  - consumer groups
+  - pub/sub
+  - data streaming
+
+useCases:
+  - Stream events between services with existing Kafka clients and SDKs
+  - Run Kafka-compatible topics with an Avro, Protobuf or JSON schema registry in one deployment
+  - Ingest logs, clickstreams or telemetry into durable, replayable topics
+  - Produce and consume over HTTP through the built-in proxy
+  - Browse topics, messages and consumer groups in a web console
+
+alternativeTo:
+  - Redpanda Cloud
+  - Confluent Cloud
+  - Amazon MSK
+  - Confluent Schema Registry
+  - Azure Event Hubs
+
+compatibleWith: [kafka-api]
+
+pickInsteadIf:
+  - need: Kafka Connect workers running source and sink connectors such as S3, ClickHouse or Snowflake
+    template: kafka
+  - need: an AMQP broker with exchanges, routing keys and per-message acknowledgements
+    template: rabbitmq
+  - need: lightweight pub/sub and request-reply, including one bus across several regions
+    template: nats
+  - need: a new Postgres whose row changes stream into Kafka, set up in one install
+    template: cdc-pipeline
+
+related:
+  - template: kafka
+    relation: alternative
+    note: Apache Kafka in KRaft mode with Kafbat UI, REST Proxy and Kafka Connect
+  - template: debezium-server
+    relation: companion
+    note: Streams database change events into Redpanda topics over the Kafka API
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: redpanda.auth.users
+    required: true
+    description: One SASL user secret per redpanda.auth.users entry; the first is the superuser. A missing secret leaves the brokers waiting with no logs.
+  - kind: domain
+    required: false
+    when: redpanda.listeners.kafka.external or redpanda_console.domain is set
+    description: A domain you control, with TXT, apex, _acme-challenge and per-broker CNAME records added before install, for external Kafka access or a console hostname.
+  - kind: other
+    required: false
+    when: redpanda.listeners.kafka.external is set
+    description: Dedicated load balancer enabled on the GVC; external Kafka access needs it to route TCP traffic to each broker.
+  - kind: other
+    required: false
+    when: redpanda.volume.customEncryption.enabled
+    description: An AWS KMS key for volume encryption; after install, finish the key setup from each volume's spec in the console.

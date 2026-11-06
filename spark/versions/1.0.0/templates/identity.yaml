@@ -1,0 +1,24 @@
+{{- include "spark.validate" . -}}
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "spark.identity.name" . }}
+description: Apache Spark identity (reveal on conf secret; cloud-account binding for object storage)
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+{{- if and .Values.historyServer.enabled (eq .Values.storage.provider "aws") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.policyName }}"
+{{- end }}
+{{- if and .Values.historyServer.enabled (eq .Values.storage.provider "gcp") }}
+gcp:
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.storage.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.cloudAccountName }}
+  scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+{{- end }}

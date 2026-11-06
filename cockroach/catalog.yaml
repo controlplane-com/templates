@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: CockroachDB
+category: database
+topology: multi-location
+
+summary: >-
+  A CockroachDB distributed SQL cluster of at least three nodes, each on its own volume, in the
+  locations of an existing GVC, with a PgBouncer pooler per location and optional scheduled
+  BACKUP INTO S3 or GCS. The default, three nodes in one location, survives a node loss; with
+  three or more locations the database gets a REGION survival goal and keeps serving when a
+  location is lost. Clients use PostgreSQL drivers; it runs in insecure mode with no SQL
+  passwords. Pick it for consistent SQL that scales out across nodes and regions.
+
+keywords:
+  - distributed sql
+  - newsql
+  - cockroach
+  - crdb
+  - postgresql compatible
+  - postgres wire protocol
+  - multi-region database
+  - region survival
+  - geo-distributed database
+  - horizontal scaling
+  - raft consensus
+  - strong consistency
+  - serializable transactions
+  - fault tolerant
+  - pgbouncer
+  - connection pooling
+  - database backups
+  - sql
+
+useCases:
+  - SQL database that keeps serving through node or region failures
+  - Multi-region app database with strongly consistent transactions
+  - Scale a PostgreSQL-compatible database out by adding nodes
+  - Ledger, order or inventory system that needs serializable transactions
+
+alternativeTo:
+  - CockroachDB Cloud
+  - Google Cloud Spanner
+  - Amazon Aurora DSQL
+  - YugabyteDB
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: full PostgreSQL compatibility including extensions
+    template: postgres
+  - need: MySQL-compatible distributed SQL
+    template: tidb
+  - need: native PostgreSQL with active-active local writes in every region
+    template: pgedge
+  - need: password-authenticated Postgres with automatic failover in one location
+    template: postgres-highly-available
+
+prerequisites:
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC that contains every location listed in locations; a missing one makes the CockroachDB nodes refuse to initialise.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled BACKUP INTO runs.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket; the README has the JSON.

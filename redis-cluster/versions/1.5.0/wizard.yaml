@@ -1,0 +1,467 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis Cluster
+# Six stateful replicas with replicaDirect and no location handling: every GVC location would run its
+# own six-node cluster, each with its own volumes, behind one internal name.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The size of each of the six nodes.
+    sections:
+      - title: Nodes
+        fields:
+          - type: note
+            severity: info
+            text: >-
+              In this version a peer name that briefly fails to resolve while the cluster is first created
+              restarts the node instead of retrying, which can delay a new cluster by several restarts. 1.6.0
+              retries in place.
+          - path: replicas
+            type: integer
+            label: Nodes
+            required: true
+            min: 6
+            max: 6
+            description: >-
+              Three primaries that split the hash slots, each with one replica. The platform caps a
+              replica-direct workload at 6 replicas, so 6 is the only supported size.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU per node
+            required: true
+            min: 25m
+            suggestions: ["200m", "500m", "1", "2"]
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory per node
+            required: true
+            min: 64Mi
+            description: The default is a floor; a cache at 250Mi starts evicting soon under real load.
+            suggestions: [250Mi, 512Mi, 1Gi, 1600Mi]
+        rules:
+          - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+            paths: [memory]
+            message: >-
+              The platform refuses more than 8Mi of memory per millicore of CPU, for example 2Gi needs at least
+              256m. Raise the CPU or lower the memory.
+
+  - id: auth
+    title: Authentication
+    description: Whether clients and the nodes themselves need a password.
+    sections:
+      - title: Password
+        fields:
+          - id: clusterAuth
+            virtual: true
+            type: enum
+            label: Cluster authentication
+            widget: segmented
+            required: true
+            init: "self.redis.password != null && self.redis.password != '' ? 'password' : 'none'"
+            options:
+              - value: none
+                label: No password
+                description: Any workload the network settings admit has full access.
+                set: { redis.password: "" }
+              - value: password
+                label: Password in values
+                description: Stored in plain text in the release values.
+                set: { redis.password: change-me-redis-cluster-password }
+            rules:
+              - when: oldSelf != null
+                rule: >-
+                  (self.redis.password == null ? '' : self.redis.password) ==
+                  (oldSelf.redis.password == null ? '' : oldSelf.redis.password)
+                severity: info
+                message: >-
+                  Changing authentication restarts every node, one at a time. Until the rollout completes,
+                  nodes on the old and the new setting can fail to replicate from each other, and clients need the
+                  new password. Plan a maintenance window.
+          - type: note
+            severity: warning
+            when: ui.clusterAuth == 'password'
+            text: >-
+              This version stores the password in plain text in the release values and in this release's own
+              secrets. 1.7.0 can read it from a dictionary secret you create instead.
+          - path: redis.password
+            type: string
+            absent: true
+            label: Password
+            sensitive: true
+            widget: password
+            required: true
+            when: ui.clusterAuth == 'password'
+            description: Every node writes it into its configuration file as one unquoted value.
+            rules:
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  self.redis.password.matches("^[^\\s\"'\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes, line breaks and other control characters.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  (!self.redis.password.matches('^\\s') && !self.redis.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+                  !self.redis.password.matches('^[-?:](\\s|$)') && !self.redis.password.matches('\\t') &&
+                  !self.redis.password.contains(': ') && !self.redis.password.contains(' #') &&
+                  !self.redis.password.endsWith(':') && !self.redis.password.endsWith(' ') &&
+                  !(self.redis.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.redis.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+                  !self.redis.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.redis.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.redis.password.matches('^\\.(nan|NaN|NAN)$') &&
+                  !self.redis.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the password into its secret unquoted, so a value that reads as a number,
+                  true, false, null or a date, that starts with a character such as # & * ! [ { or ,, or that ends
+                  with a colon, breaks the install or changes the password.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  !self.redis.password.matches('[*?\\[]')
+                severity: warning
+                message: >-
+                  Leave out * ? and [. This version's start script passes the password unquoted, so these
+                  characters can be expanded as file patterns and the nodes never become healthy; 1.7.0 fixes it.
+              - rule: >-
+                  !(self.redis.password in ['change-me-redis-cluster-password', 'your-secure-password-here']) ||
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password)
+                severity: warning
+                messageExpression: >-
+                  '`' + self.redis.password + '` is an example password that the template publishes. Choose
+                  your own.'
+                message: This is an example password that the template publishes. Choose your own.
+
+  - id: storage
+    title: Storage
+    description: The volume set that gives every node its own persistent volume.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            help: >-
+              Each node keeps its data and its cluster state on its own volume, which survives redeploys.
+              Uninstalling the release deletes the volume set, and the data with it.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: network
+    title: Network
+    description: Who can connect to the cluster, and on which port.
+    sections:
+      - title: Cluster access
+        docs: "#internal-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              The cluster is never published to the internet by this template. The nodes reach each other
+              through this setting too. Access changes take up to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect, and the nodes cannot reach each other to form the cluster.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type once it has entries: workload.yaml writes any non-empty list into
+          # inboundAllowWorkload, and the platform applies it with same-gvc and workload-list.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type in ['same-gvc', 'workload-list'] || size(self.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads allowed to connect, for example from another GVC. The platform applies the list
+              with Same GVC and Specific workloads.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.internalAccess.type != 'none'
+            severity: warning
+            paths: [internalAccess.type]
+            message: With None the nodes cannot reach each other, so the cluster never forms.
+          - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-cluster') in
+              self.internalAccess.workloads
+            severity: info
+            paths: [internalAccess.workloads]
+            messageExpression: >-
+              'The nodes must reach each other to form the cluster. If they cannot, add the cluster itself:
+              //gvc/' + context.gvc + '/workload/' + context.releaseName + '-redis-cluster.'
+            message: >-
+              The nodes must reach each other to form the cluster. If they cannot, add the cluster's own
+              workload to this list.
+      - title: Port
+        fields:
+          - path: port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 55535
+            description: The cluster bus stays on 16379 in this version.
+        rules:
+          - rule: "!(self.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [port]
+            message: >-
+              The platform reserves 8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and 41000.
+              Choose another port.
+          - rule: self.port == 6379 || (oldSelf != null && self.port == oldSelf.port)
+            severity: warning
+            paths: [port]
+            message: >-
+              Keep 6379. In this version the health check and the cluster setup always use 6379 and the cluster
+              bus stays on 16379, so any other port leaves every node restarting. 1.6.0 fixes it.
+
+  - id: backup
+    title: Backups
+    description: Scheduled per-shard snapshots to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload dumps every primary with `redis-cli --rdb` and uploads one gzipped RDB file per
+          shard to an S3 or GCS bucket through a Control Plane cloud account. The bucket and the cloud
+          account (for S3 also the IAM policy) must exist before you turn it on.
+        docs: "#backing-up"
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^[^*]'
+            patternMessage: >-
+              Start with a number, such as `0 2 * * *` or `0-59/15 * * * *`. This version writes the schedule
+              unquoted, so one that starts with * stops the chart from rendering.
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            description: The job dumps every primary in turn; below 512Mi it can run out of memory during uploads.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: redis-cluster.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the backup destination.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs the S3 actions listed under
+              [AWS S3](/template-catalog/templates/redis-cluster#aws-s3), on the bucket and on its objects. The
+              backup identity carries only `cpln-connector` and this policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              !self.backup.aws.bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.aws.bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.aws.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$') &&
+              !(self.backup.aws.bucket in ['true', 'false', 'null'])
+            paths: [backup.aws.bucket]
+            message: >-
+              This version writes the bucket name unquoted, so a name that reads as a number, a date, true, false
+              or null reaches the platform as one and the backup workload is rejected. Use a bucket name that
+              does not read as any of these.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: >-
+              !self.backup.gcp.bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.gcp.bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.gcp.bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$') &&
+              !(self.backup.gcp.bucket in ['true', 'false', 'null'])
+            paths: [backup.gcp.bucket]
+            message: >-
+              This version writes the bucket name unquoted, so a name that reads as a number, a date, true, false
+              or null reaches the platform as one and the backup workload is rejected. Use a bucket name that
+              does not read as any of these.
+
+  - id: advanced
+    title: Advanced
+    description: The node image.
+    sections:
+      - title: Image
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            description: >-
+              This version was released with docker.io/redis:7.2. Another image is unproven here: it needs bash
+              and redis-cli, and a newer Redis may not read the data an older one wrote. Try a new tag on a
+              throwaway release first.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '1.3.0') >= 0
+    message: >-
+      Do not upgrade a 1.0.x to 1.2.x release in place: 1.3.0 renamed the workload and the volume set, so the
+      upgrade deletes the volumes that hold the data and starts an empty cluster. Install this version as a new
+      release, move the data into it, then uninstall the old release.
+  - when: >-
+      context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.4') < 0 &&
+      self.backup.enabled && self.backup.provider == 'aws'
+    rule: "false"
+    severity: info
+    message: >-
+      1.4.4 removed the AWS managed policy ReadOnlyAccess from the backup identity, so backups now rely on your IAM
+      policy alone. Make sure it grants every S3 action listed under AWS S3 in the docs before you upgrade.
+
+yamlOnly:
+  - path: redis
+    reason: An empty map in values.yaml; its only key, redis.password, is set under Authentication.
+
+migrations:
+  # 1.3.0 renamed these keys (and the resources, which is why the root rule blocks those upgrades).
+  - fromVersions: "<1.3.0"
+    from: diskCapacity
+    note: Replaced by volumeset.capacity under Storage.
+  - fromVersions: "<1.3.0"
+    from: firewallConfig.internal.inboundAllowType
+    to: internalAccess.type

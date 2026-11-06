@@ -1,0 +1,73 @@
+# kafka 4.4.0 — the recommended install: every password in prerequisite secrets.
+# Prod shape (three brokers, one location) at the smallest size that runs.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  kraft: kraft-cluster-id
+  restpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [inter-broker-password, controller-password, client-admin-password, client-user-password]
+  kafbat:
+    type: opaque
+    payload: |
+      kafka:
+        clusters:
+          - name: e2e
+            bootstrapServers: "{release}-cluster.{gvc}.cpln.local:9092"
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: PLAIN
+              sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{secrets.creds.client-admin-password}";'
+      management:
+        health:
+          ldap:
+            enabled: false
+      auth:
+        type: DISABLED
+      server:
+        port: 8080
+  restjaas:
+    type: opaque
+    payload: |
+      KafkaClient {
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="admin"
+        password="{secrets.creds.client-admin-password}";
+      };
+      KafkaRest {
+        org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+        debug="true"
+        file="/etc/kafka-rest/password.properties";
+      };
+  restusers:
+    type: opaque
+    payload: "e2e: {gen.restpw},user"
+
+vars:
+  admin_password: "{secrets.creds.client-admin-password}"
+  rest_password: "{gen.restpw}"
+
+values:
+  kafka:
+    credentialsSecretName: "{secrets.creds.name}"
+    secrets:
+      kraft_cluster_id: "{gen.kraft}"
+    cpu: 500m
+    minCpu: 250m
+  kafbat_ui:
+    configuration_secret: "{secrets.kafbat.name}"
+  kafka_rest_proxy:
+    jaas_conf_secret: "{secrets.restjaas.name}"
+    password_properties_secret: "{secrets.restusers.name}"
+    properties:
+      bootstrap.servers: "SASL_PLAINTEXT://{release}-cluster.{gvc}.cpln.local:9092"
+
+# The versions customers run most (4.1.0, then 3.2.0). Each is installed with its own baseline and
+# upgraded with those same values, the way a user's `helm upgrade -f my-values.yaml` does.
+upgradeFrom:
+  - version: 4.1.0
+  - version: 3.2.0

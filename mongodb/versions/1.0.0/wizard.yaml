@@ -1,0 +1,186 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: MongoDB
+# One stateful replica on its own volume: every GVC location would run an independent copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The root user and its password, which the chart stores in a secret of its own.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'These values are stored in the release values and in the dictionary secret `' + context.releaseName +
+          '-conf`, which the chart creates for MongoDB. The default password is published in the template ' +
+          'and shared by every install that keeps it, so set your own. MongoDB creates the user only when its ' +
+          'volume is first initialized. 1.4.0 and later read the credentials from a secret you create instead.'
+        text: >-
+          These values are stored in the release values and in the dictionary secret `RELEASE_NAME-conf`,
+          which the chart creates for MongoDB. The default password is published in the template and shared by
+          every install that keeps it, so set your own. MongoDB creates the user only when its volume is first
+          initialized. 1.4.0 and later read the credentials from a secret you create instead.
+      - path: config.username
+        type: string
+        label: Root user
+        required: true
+        immutable: MongoDB creates this user once, when its volume is first initialized.
+        description: >-
+          MongoDB creates this user in the `admin` database with the `root` role on first boot, so connection
+          strings carry `authSource=admin`.
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.2.0 quotes
+          # it). Measured with helm template: "a: b", "*x", "-", "- x" and a trailing ":" fail to render, "#x"
+          # renders as a comment (null) and "ab #c" is cut to "ab". cpln helm parses the result with js-yaml 4
+          # (YAML 1.2), so 12345, true, null and 2024-01-01 become a number, a boolean, null and a date, while
+          # yes/no/on/off, 12:30 and a value that only starts with a digit (9f8a7b) stay strings. Checked only
+          # when the value changes.
+          - when: oldSelf == null || self.config.username != oldSelf.config.username
+            rule: >-
+              !self.config.username.matches('^[-+]?(\\.[0-9]+|[0-9]+(\\.[0-9]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.username.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.username.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.username.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.username.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+              !self.config.username.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}') &&
+              !self.config.username.matches("^[!&*%@`'\"\\[\\]{}|>,#]") &&
+              self.config.username != '-' && !self.config.username.startsWith('- ') &&
+              !self.config.username.matches('^\\s|\\s$|\\t') &&
+              !self.config.username.contains(': ') && !self.config.username.contains(' #') && !self.config.username.endsWith(':') &&
+              !(self.config.username.lowerAscii() in ['true', 'false', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the root user into its secret unquoted, so some values break the install or are
+              stored as something else. Avoid a value that is only a number or a date, the words true, false or
+              null, a leading quote, # or another YAML symbol, a leading "- ", ': ', ' #', a trailing ':' and tabs, or
+              install 1.2.0 or later, which quotes it.
+      - path: config.password
+        type: string
+        label: Root password
+        widget: password
+        required: true
+        example: true
+        sensitive: true
+        rules:
+          # This version writes the value into its secret unquoted (templates/secret-config.yaml; 1.2.0 quotes
+          # it). Measured with helm template: "a: b", "*x", "-", "- x" and a trailing ":" fail to render, "#x"
+          # renders as a comment (null) and "ab #c" is cut to "ab". cpln helm parses the result with js-yaml 4
+          # (YAML 1.2), so 12345, true, null and 2024-01-01 become a number, a boolean, null and a date, while
+          # yes/no/on/off, 12:30 and a value that only starts with a digit (9f8a7b) stay strings. Checked only
+          # when the value changes.
+          - when: oldSelf == null || self.config.password != oldSelf.config.password
+            rule: >-
+              !self.config.password.matches('^[-+]?(\\.[0-9]+|[0-9]+(\\.[0-9]*)?)([eE][-+]?[0-9]+)?$') &&
+              !self.config.password.matches('^[-+]?0[xX][0-9a-fA-F_]+$') &&
+              !self.config.password.matches('^[-+]?0[oO][0-7_]+$') &&
+              !self.config.password.matches('^[-+]?0[bB][01_]+$') &&
+              !self.config.password.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+              !self.config.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}') &&
+              !self.config.password.matches("^[!&*%@`'\"\\[\\]{}|>,#]") &&
+              self.config.password != '-' && !self.config.password.startsWith('- ') &&
+              !self.config.password.matches('^\\s|\\s$|\\t') &&
+              !self.config.password.contains(': ') && !self.config.password.contains(' #') && !self.config.password.endsWith(':') &&
+              !(self.config.password.lowerAscii() in ['true', 'false', 'null', '~', '.inf', '-.inf', '+.inf', '.nan'])
+            severity: warning
+            message: >-
+              This version writes the root password into its secret unquoted, so some values break the install or are
+              stored as something else. Avoid a value that is only a number or a date, the words true, false or
+              null, a leading quote, # or another YAML symbol, a leading "- ", ': ', ' #', a trailing ':' and tabs, or
+              install 1.2.0 or later, which quotes it.
+          - rule: oldSelf == null || self.config.password == oldSelf.config.password
+            severity: info
+            message: >-
+              MongoDB keeps the password it was initialized with. Change it inside MongoDB with
+              db.changeUserPassword() first, or the new value in the secret no longer matches the database.
+          - when: oldSelf != null
+            rule: self.config.password != 'password'
+            severity: info
+            message: >-
+              This release still uses the template's published default password. Change it inside MongoDB with
+              db.changeUserPassword(), then enter the new password here.
+
+  - id: server
+    title: Server
+    description: >-
+      The MongoDB image and the compute of its single stateful replica. This version always stores the database
+      on a 50 GiB volume set, with no setting to change it; uninstalling the release deletes the volume set,
+      after a final snapshot that is kept for 7 days.
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: MongoDB image
+        required: true
+        description: >-
+          MongoDB moves between major versions one at a time, after setting the feature compatibility
+          version, so change it on purpose, after a backup.
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          The limits of the MongoDB container. This version sets no reservation (minimum CPU or memory).
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+        rules:
+          # templates/workload-mongodb.yaml writes both values unquoted: a whole number of cores or a memory
+          # value without a unit renders as a YAML number rather than a quantity string.
+          - rule: type(self.resources.cpu) == string && self.resources.cpu.endsWith('m')
+            severity: warning
+            paths: [resources.cpu]
+            message: >-
+              Enter the CPU in millicores, such as 1000m for one core. This version writes the value unquoted,
+              so a plain number of cores is written as a number rather than a quantity.
+          - rule: type(self.resources.memory) == string && self.resources.memory.matches('[A-Za-z]$')
+            severity: warning
+            paths: [resources.memory]
+            message: >-
+              Give memory with a unit, such as 1024Mi. This version writes the value unquoted, so a value
+              without a unit is written as a number rather than a quantity.
+    rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) == imageMajor(oldSelf.image) ||
+          imageMajor(self.image) == imageMajor(oldSelf.image) + 1
+        severity: warning
+        paths: [image]
+        message: >-
+          MongoDB upgrades one major version at a time and does not start a newer data directory on an
+          older major. Move up one major per upgrade, each after setFeatureCompatibilityVersion, or migrate
+          with mongodump and mongorestore.
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) != imageMajor(oldSelf.image) + 1
+        severity: info
+        paths: [image]
+        message: >-
+          A new major version restarts MongoDB on the existing data directory. Take a backup first, and
+          check that setFeatureCompatibilityVersion reports the installed major before you upgrade.
+
+  - id: network
+    title: Network
+    description: Who can connect to the database from the internet.
+    fields:
+      - type: note
+        severity: info
+        textExpression: >-
+          'Applications connect to `' + context.releaseName + '.' + (context.gvc == null ? 'GVC' : context.gvc) +
+          '.cpln.local:27017` with the root user and password from Credentials and `authSource=admin`. In this ' +
+          'version any workload in this GVC can connect, with no setting to change it.'
+        text: >-
+          Applications connect to `RELEASE.GVC.cpln.local:27017` with the root user and password from
+          Credentials and `authSource=admin`. In this version any workload in this GVC can connect, with no
+          setting to change it.
+      - path: directLoadBalancer.enabled
+        type: boolean
+        label: Publish through a direct load balancer
+        docs: "#direct-load-balancer"
+        description: >-
+          Exposes MongoDB on TCP port 27017 through a direct load balancer with a public address in each
+          location. Anyone who reaches it needs only the password; leave it off for applications inside
+          Control Plane.
+

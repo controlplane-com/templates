@@ -1,0 +1,961 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: TimescaleDB (highly available)
+# Patroni, etcd and HAProxy derive every peer address from the member's own location (secret-startup.yaml,
+# secret-ha-proxy.yaml), so each extra GVC location would run an unrelated cluster with its own data.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The database user, password and name the cluster sets up when it is first created.
+    fields:
+      - type: note
+        severity: warning
+        textExpression: >-
+          'This version takes the database credentials as values: they are stored in the Helm release, in the
+          secret `' + (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' :
+          context.releaseName) + '-tsdb-ha-config` and in the Patroni startup script secret, both of which the chart
+          creates. 1.1.0 and later read them from a dictionary secret you create instead.'
+        text: >-
+          This version takes the database credentials as values: they are stored in the Helm release, in the secret
+          `RELEASE_NAME-tsdb-ha-config` and in the Patroni startup script secret, both of which the chart creates.
+          1.1.0 and later read them from a dictionary secret you create instead.
+      - path: postgres.username
+        type: string
+        label: Username
+        required: true
+        description: Patroni creates this user as the cluster superuser when the cluster is first created.
+        immutable: >-
+          Patroni creates the superuser once, when the cluster is first created, and every member, PgBouncer and
+          the backup job sign in with this name.
+      - path: postgres.password
+        type: string
+        label: Password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: The superuser's password. The replication role repl uses the same one.
+        help: >-
+          Patroni applies the password only when the cluster is first created. To change it later, run
+          `ALTER ROLE ... PASSWORD` for this user and for `repl` on the leader first, then set the same value here.
+      - path: postgres.database
+        type: string
+        label: Database name
+        required: true
+        description: The database created with the TimescaleDB extension in it.
+        immutable: >-
+          The cluster creates the database once, when it is first created, and PgBouncer serves it by this name.
+    rules:
+      # secret-startup.yaml: the user name goes unquoted into the Patroni YAML and into the post_init shell command
+      # (sh -lc '... -U NAME ...'), inside an unquoted bash heredoc. Measured by running the rendered script and
+      # parsing the config with PyYAML (Patroni's parser): a space, quote, ; or $ breaks post_init or the script.
+      - when: oldSelf == null || self.postgres.username != oldSelf.postgres.username
+        rule: >-
+          self.postgres.username.matches('^[A-Za-z0-9_][A-Za-z0-9_.@+-]*$') &&
+          !(self.postgres.username in ['yes', 'Yes', 'YES', 'no', 'No', 'NO', 'on', 'On', 'ON', 'off', 'Off', 'OFF',
+          'true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL']) &&
+          !self.postgres.username.matches('^[-+]?(0b[01_]+|0[0-7_]+|0|[1-9][0-9_]*|0x[0-9a-fA-F_]+)$') &&
+          !self.postgres.username.matches('^[-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?$') &&
+          !self.postgres.username.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        severity: warning
+        paths: [postgres.username]
+        message: >-
+          This version writes the user name unquoted into Patroni's YAML configuration and into a shell command, so
+          use only letters, digits and _ . @ + -, do not start it with . @ + or -, and do not use a value that is
+          entirely a number or a date, or yes, no, on, off, true, false or null.
+      # Same script, password position: unquoted in the Patroni YAML (PyYAML, YAML 1.1) inside an unquoted bash
+      # heredoc. Each clause matches a measured failure: YAML indicators and ': '/' #' break or alter the value,
+      # YAML 1.1 bools, ints (incl. 0b/0x/octal/sexagesimal), floats, timestamps, null, << and = change type,
+      # surrounding whitespace is trimmed, $ and backticks are expanded by bash, \\ and a trailing \ are rewritten.
+      - when: oldSelf == null || self.postgres.password != oldSelf.postgres.password
+        rule: >-
+          !self.postgres.password.matches('^\\s') && !self.postgres.password.matches('\\s$') &&
+          !self.postgres.password.matches('\\t') &&
+          !self.postgres.password.matches('^[,\\[\\]{}#&*!|>"%@`]') && !self.postgres.password.startsWith("'") &&
+          !self.postgres.password.matches('^[-?:](\\s|$)') && !self.postgres.password.contains(': ') &&
+          !self.postgres.password.contains(' #') && !self.postgres.password.endsWith(':') &&
+          !(self.postgres.password in ['yes', 'Yes', 'YES', 'no', 'No', 'NO', 'on', 'On', 'ON', 'off', 'Off', 'OFF',
+          'true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~', '<<', '=']) &&
+          !self.postgres.password.matches('^[-+]?(0b[01_]+|0[0-7_]+|0|[1-9][0-9_]*|0x[0-9a-fA-F_]+|[1-9][0-9_]*(:[0-5]?[0-9])+)$') &&
+          !self.postgres.password.matches('^([-+]?[0-9][0-9_]*\\.[0-9_]*([eE][-+][0-9]+)?|\\.[0-9][0-9_]*([eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(inf|Inf|INF)|\\.(nan|NaN|NAN))$') &&
+          !self.postgres.password.matches('^([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\\.[0-9]*)?([ \\t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?)$') &&
+          !self.postgres.password.contains('$') && !self.postgres.password.contains('`') &&
+          !self.postgres.password.matches('\\\\(\\\\|$)')
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          This version writes the password unquoted into Patroni's YAML configuration inside a shell script, so some
+          passwords break the cluster or silently become a different password. Do not start or end it with a space,
+          do not start it with a quote or one of , [ ] { } # & * ! | > % @ (or with - ? : and a space), leave out
+          $, backticks, tabs, a double backslash, ': ' and ' #', do not end it with : or a backslash, and do not use
+          a value that is entirely a number, a time such as 12:30, a date, yes, no, on, off, true, false or null.
+          1.2.0 escapes it.
+      # workload-pgbouncer.yaml lets edoburu/pgbouncer write DB_PASSWORD into userlist.txt between double quotes
+      # without escaping; 1.2.0 writes the file itself with the quote doubled (1.2.0 template comment, CHANGELOG).
+      - when: >-
+          self.pgbouncer.enabled && (oldSelf == null || self.postgres.password != oldSelf.postgres.password ||
+          oldSelf.pgbouncer.enabled != true)
+        rule: "!self.postgres.password.contains('\"')"
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          PgBouncer cannot sign in with a password that contains a double quote in this version: its user list is
+          written without escaping, so every PgBouncer login fails. Leave out the double quote; 1.2.0 escapes it.
+      # post_init runs CREATE DATABASE NAME and psql -d NAME unquoted (measured: MyDb is created as mydb and then
+      # not found; My-Db and select are syntax errors; a space, quote or $ breaks the script). postgres, template0
+      # and template1 already exist, so CREATE DATABASE fails, post_init exits non-zero and Patroni cancels the
+      # initialisation and retries. The word list is
+      # every keyword CREATE DATABASE refused on PostgreSQL 14 (pg_get_keywords, reserved and type/function
+      # names), plus system_user, reserved since PostgreSQL 16.
+      - when: oldSelf == null || self.postgres.database != oldSelf.postgres.database
+        rule: >-
+          self.postgres.database.matches('^[a-z_][a-z0-9_]{0,62}$') &&
+          !(self.postgres.database in ['postgres', 'template0', 'template1']) && !(self.postgres.database in [
+          'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc', 'asymmetric',
+          'authorization', 'binary', 'both', 'case', 'cast', 'check', 'collate', 'collation', 'column',
+          'concurrently', 'constraint', 'create', 'cross', 'current_catalog', 'current_date',
+          'current_role', 'current_schema', 'current_time', 'current_timestamp', 'current_user',
+          'default', 'deferrable', 'desc', 'distinct', 'do', 'else', 'end', 'except', 'false', 'fetch',
+          'for', 'foreign', 'freeze', 'from', 'full', 'grant', 'group', 'having', 'ilike', 'in',
+          'initially', 'inner', 'intersect', 'into', 'is', 'isnull', 'join', 'lateral', 'leading',
+          'left', 'like', 'limit', 'localtime', 'localtimestamp', 'natural', 'not', 'notnull', 'null',
+          'offset', 'on', 'only', 'or', 'order', 'outer', 'overlaps', 'placing', 'primary',
+          'references', 'returning', 'right', 'select', 'session_user', 'similar', 'some', 'symmetric',
+          'system_user', 'table', 'tablesample', 'then', 'to', 'trailing', 'true', 'union', 'unique',
+          'user', 'using', 'variadic', 'verbose', 'when', 'where', 'window', 'with'])
+        severity: warning
+        paths: [postgres.database]
+        message: >-
+          This version passes the database name to CREATE DATABASE and psql unquoted, so use lowercase letters,
+          digits and _, starting with a letter or _, at most 63 characters, not an SQL reserved word such as user
+          or select, and not a database that already exists (postgres, template0, template1). Otherwise the
+          database or its TimescaleDB extension is not created, and for an existing name the cluster never
+          finishes initialising.
+      - rule: oldSelf == null || self.postgres.password == oldSelf.postgres.password
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          Patroni applies the password only when the cluster is first created, so changing it here does not change
+          it in the database. On the leader, run ALTER ROLE ... PASSWORD for this user and for repl with the new
+          password first, or the members, PgBouncer and the backup job cannot sign in after their next restart.
+      - when: oldSelf != null
+        rule: self.postgres.password != 'password'
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          The password is still the published default "password". Change it with ALTER ROLE ... PASSWORD for this
+          user and for repl, then set the same value here.
+
+  - id: cluster
+    title: Cluster
+    description: The Patroni-managed TimescaleDB members, their image and their compute.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the members restarts them, and nothing limits the rollout of a stateful
+          workload, so plan for a short write outage.
+      # secret-startup.yaml (bootstrap.dcs): ttl 30, loop_wait 10, retry_timeout 30 and no failsafe_mode. Patroni
+      # rewrites an invalid combination to loop_wait 1, retry_timeout 14 (briefing, CHANGELOG 1.2.0 entry).
+      - type: note
+        severity: warning
+        text: >-
+          This version creates the cluster with Patroni timeouts (ttl 30, loop_wait 10, retry_timeout 30) that
+          break Patroni's rule loop_wait + 2 × retry_timeout ≤ ttl. Patroni silently shortens them, so an etcd
+          outage of about 14 seconds demotes a healthy leader and writes are refused until a leader is elected
+          again. 1.2.0 creates clusters with valid timeouts. The `patronictl edit-config` command in
+          [Upgrading from a version before 1.2.0](/template-catalog/templates/timescaledb-highly-available#upgrading-from-a-version-before-1-2-0)
+          works on this version too, so you can move this cluster without upgrading.
+      - path: replicas
+        type: integer
+        label: TimescaleDB members
+        required: true
+        min: 1
+        suggestions: [1, 3, 5]
+        description: One is the leader; the others stream from it and take over if it fails.
+      - path: image
+        type: string
+        format: image
+        label: TimescaleDB HA image
+        required: true
+        description: >-
+          The `timescale/timescaledb-ha` image bundles PostgreSQL, TimescaleDB and Patroni. The `pgNN` prefix of
+          the tag is the PostgreSQL major version.
+        help: >-
+          The chart starts PostgreSQL from its version 18 binaries, and the data directory belongs to the major
+          version that created it.
+        docs: "#cluster-and-resources"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per member.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: multiZone
+        type: boolean
+        label: Spread across zones
+        description: >-
+          Applies to the TimescaleDB members and to the HAProxy and PgBouncer workloads when they run. Confirm that
+          your location supports multiple zones.
+    rules:
+      - rule: self.replicas >= 3
+        severity: info
+        paths: [replicas]
+        message: With fewer than 3 members there is no standby to take over when the leader fails.
+      # secret-startup.yaml: bin_dir /usr/lib/postgresql/18/bin.
+      - rule: "!self.image.matches(':pg[0-9]+[^:/]*$') || self.image.matches(':pg18([^0-9][^:/]*)?$')"
+        severity: warning
+        paths: [image]
+        message: >-
+          The chart starts PostgreSQL from /usr/lib/postgresql/18/bin, so the image tag must be a pg18 one, such
+          as pg18.4-ts2.28.3.
+      - rule: "!self.image.endsWith('-oss')"
+        severity: info
+        paths: [image]
+        message: >-
+          The -oss tags are Apache-only builds without compression, continuous aggregates and retention policies.
+      # secret-ha-proxy.yaml reads the member count when HAProxy starts; cpln helm tags the workload with the
+      # secret's hash, so the upgrade that changes the secret also restarts HAProxy.
+      - rule: oldSelf == null || self.replicas == oldSelf.replicas || !(self.proxy.enabled || self.pgbouncer.enabled)
+        severity: info
+        paths: [replicas]
+        messageExpression: >-
+          'HAProxy reads the member list when it starts; the upgrade restarts the HAProxy workload so it routes to
+          the new members.' +
+          (self.replicas < oldSelf.replicas ? ' Removing the member that holds the leader role triggers a failover.' : '')
+        message: >-
+          HAProxy reads the member list when it starts; the upgrade restarts the HAProxy workload so it routes to
+          the new members.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each member's data directory.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per member.
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes the volume
+              set; a final snapshot is kept for 7 days.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: etcd
+    title: Consensus (etcd)
+    description: The bundled etcd cluster Patroni uses for leader election and its shared configuration.
+    sections:
+      - title: etcd cluster
+        fields:
+          # Bundled etcd 1.4.1 starts etcd with no --auto-compaction flags (etcd 1.4.1 secret.yaml); etcd 1.4.2,
+          # bundled from 1.0.1, adds them (CHANGELOG etcd 1.4.2 and timescaledb-highly-available 1.0.1 entries).
+          - type: note
+            severity: warning
+            text: >-
+              This version's etcd never compacts its history. Patroni renews its leader lease every few seconds and
+              every renewal is kept, so the etcd backend grows with time alone until it reaches etcd's 2 GiB quota,
+              in a matter of months. etcd then goes read-only and the TimescaleDB members can restart-loop.
+              Version 1.0.1 turns compaction on.
+          - path: etcd.replicas
+            type: integer
+            label: etcd members
+            widget: stepper
+            required: true
+            min: 3
+            immutable: >-
+              Each etcd member builds its peer list from the member count when the cluster first starts, and the
+              etcd template never adds or removes members.
+            description: Each member on its own volume. Fixed once the cluster is created.
+          - path: etcd.resources
+            type: resources
+            label: etcd resources
+            required: true
+            description: Per member.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: etcd.multiZone
+            type: boolean
+            label: Spread etcd across zones
+            description: Confirm that your location supports multiple zones.
+          - path: etcd.volumeset.capacity
+            type: integer
+            label: etcd initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50]
+            description: Per member.
+        rules:
+          - rule: self.etcd.replicas % 2 == 1
+            paths: [etcd.replicas]
+            message: The number of etcd members must be odd. An even count gains no fault tolerance and risks split votes.
+          - rule: oldSelf == null || oldSelf.etcd.volumeset.capacity == null || self.etcd.volumeset.capacity >= oldSelf.etcd.volumeset.capacity
+            paths: [etcd.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+      - title: Who can connect to etcd
+        docs: /reference/workload/firewall
+        fields:
+          - path: etcd.internal_access.type
+            type: enum
+            label: Who can connect to etcd
+            widget: cards
+            required: true
+            description: etcd has no authentication, so anything this firewall admits can read and write its keyspace.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # The etcd chart writes any non-empty list into its firewall, whatever the type.
+          - path: etcd.internal_access.workloads
+            type: list
+            label: Allowed etcd clients
+            when: >-
+              self.etcd.internal_access.type in ['same-gvc', 'workload-list'] ||
+              size(self.etcd.internal_access.workloads) > 0
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads this is the whole allow-list, including the TimescaleDB and etcd workloads of
+              this release. With Same GVC it adds workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.etcd.internal_access.type == 'same-gvc'
+        rules:
+          - when: self.etcd.internal_access.type == 'workload-list' && context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha') in self.etcd.internal_access.workloads &&
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd') in self.etcd.internal_access.workloads
+            severity: warning
+            paths: [etcd.internal_access.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add ' +
+              (['-timescaledb-ha', '-etcd'].filter(s, !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.etcd.internal_access.workloads))
+              .map(s, '//gvc/' + context.gvc + '/workload/' + context.releaseName + s).join(' and ')) +
+              ': Patroni reaches etcd through it, and the etcd members reach each other through it.'
+            message: >-
+              The chart does not add its own workloads to the list: add the TimescaleDB and etcd workloads, or
+              Patroni cannot reach etcd and the etcd members cannot form a quorum.
+            fix:
+              path: etcd.internal_access.workloads
+              items: >-
+                ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha',
+                '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd']
+          - when: self.etcd.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.etcd.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [etcd.internal_access.workloads]
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.etcd.internal_access.type == 'same-org'
+            rule: size(self.etcd.internal_access.workloads) == 0
+            severity: info
+            paths: [etcd.internal_access.workloads]
+            message: Same org already lets every workload of the org connect to etcd, so the listed workloads add nothing.
+
+  - id: backup
+    title: Backups
+    description: Scheduled database dumps to object storage.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: backup.enabled
+        description: >-
+          A cron workload runs pg_dumpall through the HAProxy leader endpoint on a schedule and uploads a gzipped
+          SQL dump of every database and role to an S3 bucket, a GCS bucket or an S3-compatible endpoint. The
+          bucket and its access (a cloud account, for S3 also an IAM policy, or for MinIO an access key and
+          secret key) must exist before you turn it on. There is no point-in-time recovery.
+        fields:
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - value: aws
+                label: AWS S3
+                description: Through an AWS cloud account and a bucket-scoped IAM policy.
+              - value: gcp
+                label: Google Cloud Storage
+                description: Through a GCP cloud account; no stored keys.
+              - value: minio
+                label: MinIO or S3-compatible
+                description: An S3 endpoint with an access key and secret key.
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+          - path: backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: Tag 18.x.x matches the PostgreSQL 18 server.
+          - path: backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp', 'minio']
+            mirrors: tsdb-ha.validateBackupConfig
+            paths: [backup.provider]
+            message: Choose AWS S3, Google Cloud Storage or MinIO as the backup destination.
+          - rule: imageMajor(self.backup.image) < 0 || imageMajor(self.backup.image) >= 18
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least 18, the PostgreSQL version of the server; an older
+              pg_dumpall cannot dump a newer server.
+          # values.yaml ships 128Mi; 1.2.0 raised it to 512Mi after 128Mi OOM-killed the dump (exit code 137).
+          - rule: memoryBytes(self.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [backup.resources]
+            message: >-
+              Give the backup job at least 512Mi of memory. This version's default of 128Mi OOM-kills the dump
+              part-way through, which leaves no backup, or an empty object, and logs nothing. 1.2.0 raises the
+              default to 512Mi.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          # identity.yaml: policyRefs cpln-connector, aws::ReadOnlyAccess and the user's policy; 1.1.1 drops
+          # aws::ReadOnlyAccess (1.1.0 -> 1.1.1 templates diff, briefing).
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy `aws::ReadOnlyAccess` to the backup identity, which
+              grants the backup job read access to every bucket in your AWS account. 1.1.1 removes it; give your own
+              policy the full action list under IAM policy name so the backup keeps working after that upgrade.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              Allow s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetObjectVersion,
+              s3:DeleteObjectVersion, s3:GetBucketLocation, s3:AbortMultipartUpload, s3:ListBucketMultipartUploads
+              and s3:ListMultipartUploadParts on `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: >-
+              oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix ||
+              !self.backup.aws.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.aws.prefix != oldSelf.backup.aws.prefix
+            rule: >-
+              !self.backup.aws.prefix.matches('^\\s') && !self.backup.aws.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.aws.prefix.startsWith("'") &&
+              !self.backup.aws.prefix.matches('^[-?:](\\s|$)') && !self.backup.aws.prefix.matches('\\t') &&
+              !self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') && !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+              !(self.backup.aws.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.aws.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.aws.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.aws.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.aws.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.aws.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.aws.prefix]
+            message: >-
+              This version writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: >-
+              oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix ||
+              !self.backup.gcp.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.gcp.prefix != oldSelf.backup.gcp.prefix
+            rule: >-
+              !self.backup.gcp.prefix.matches('^\\s') && !self.backup.gcp.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.gcp.prefix.startsWith("'") &&
+              !self.backup.gcp.prefix.matches('^[-?:](\\s|$)') && !self.backup.gcp.prefix.matches('\\t') &&
+              !self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') && !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+              !(self.backup.gcp.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.gcp.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.gcp.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.gcp.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.gcp.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.gcp.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.gcp.prefix]
+            message: >-
+              This version writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
+      - title: MinIO or S3-compatible
+        when: self.backup.enabled && self.backup.provider == 'minio'
+        fields:
+          - type: note
+            severity: warning
+            textExpression: >-
+              'This version takes the MinIO access key and secret key as values: they are stored in the Helm release
+              and in the secret `' + (context.releaseName == null || context.releaseName == '' ? 'RELEASE_NAME' :
+              context.releaseName) + '-tsdb-ha-config`, which the chart creates. 1.1.0 and later read them from a
+              dictionary secret you create instead.'
+            text: >-
+              This version takes the MinIO access key and secret key as values: they are stored in the Helm release
+              and in the secret `RELEASE_NAME-tsdb-ha-config`, which the chart creates. 1.1.0 and later read them
+              from a dictionary secret you create instead.
+          - path: backup.minio.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            example: true
+            placeholder: http://my-minio-workload:9000
+            description: The S3 API address including the port.
+          - path: backup.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: backup.minio.accessKey
+            type: string
+            label: Access key
+            required: true
+            example: true
+            description: For the minio template, its admin user name.
+          - path: backup.minio.secretKey
+            type: string
+            label: Secret key
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: For the minio template, its admin password.
+          - path: backup.minio.prefix
+            type: string
+            label: Folder prefix
+            required: true
+        rules:
+          - rule: self.backup.minio.accessKey != null && self.backup.minio.accessKey != ''
+            mirrors: tsdb-ha.validateBackupConfig
+            paths: [backup.minio.accessKey]
+            message: The MinIO access key is required.
+          - rule: self.backup.minio.secretKey != null && self.backup.minio.secretKey != ''
+            mirrors: tsdb-ha.validateBackupConfig
+            paths: [backup.minio.secretKey]
+            message: The MinIO secret key is required.
+          - rule: >-
+              oldSelf != null && self.backup.minio.prefix == oldSelf.backup.minio.prefix ||
+              !self.backup.minio.prefix.startsWith('/')
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: Leave out the leading / of the folder prefix.
+          # workload-logical-backup.yaml writes BACKUP_PREFIX unquoted (cpln helm parses with js-yaml, YAML 1.2).
+          - when: oldSelf == null || self.backup.minio.prefix != oldSelf.backup.minio.prefix
+            rule: >-
+              !self.backup.minio.prefix.matches('^\\s') && !self.backup.minio.prefix.matches('^[!&*%@`"\\[\\]{}|>,#]') && !self.backup.minio.prefix.startsWith("'") &&
+              !self.backup.minio.prefix.matches('^[-?:](\\s|$)') && !self.backup.minio.prefix.matches('\\t') &&
+              !self.backup.minio.prefix.contains(': ') && !self.backup.minio.prefix.contains(' #') && !self.backup.minio.prefix.endsWith(':') && !self.backup.minio.prefix.endsWith(' ') &&
+              !(self.backup.minio.prefix in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !self.backup.minio.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.backup.minio.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.backup.minio.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.backup.minio.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.backup.minio.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [backup.minio.prefix]
+            message: >-
+              This version writes the folder prefix into the backup workload unquoted, so some values break the install
+              or reach it as a number, date, true/false or nothing. Do not start it with a space, a quote or a YAML
+              symbol such as ! & * % @ [ { | > , # (or with - ? : and a space), leave out ': ', ' #' and tabs, do
+              not end it with : or a space, and do not use a plain number, a date, true, false or null.
+
+  - id: network
+    title: Network
+    description: Who can connect, the leader endpoint and an optional connection pooler.
+    sections:
+      - title: Network access
+        docs: "#internal-access"
+        fields:
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Applies to the TimescaleDB members and to the HAProxy and PgBouncer workloads when they run. The
+              cluster is never published to the internet. Firewall changes can take several minutes to take effect.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # Shown for every type once it holds entries: the workloads write any non-empty list into
+          # inboundAllowWorkload, whatever the type.
+          - path: internal_access.workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Specific workloads this is the whole allow-list: your applications and this release's own
+              workloads. With Same GVC it adds workloads from other GVCs.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+      - id: proxy
+        title: HAProxy leader endpoint
+        toggle: proxy.enabled
+        description: >-
+          An endpoint that always routes to the current leader. Applications, PgBouncer and the backup job connect
+          through it; keep it on unless your clients follow the leader themselves.
+        docs: "#haproxy-leader-endpoint"
+        fields:
+          - type: note
+            textExpression: >-
+              'Applications connect to ' + context.releaseName + '-timescaledb-ha-proxy.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432.'
+            text: Applications connect to RELEASE_NAME-timescaledb-ha-proxy.GVC_NAME.cpln.local:5432.
+          - path: proxy.minReplicas
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.maxReplicas
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: proxy.image
+            type: string
+            format: image
+            label: HAProxy image
+            required: true
+            advanced: true
+          - path: proxy.resources
+            type: resources
+            label: HAProxy resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.proxy.maxReplicas >= self.proxy.minReplicas
+            paths: [proxy.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: >-
+          PgBouncer multiplexes many application connections into a small pool of database connections. When on, it
+          sits in front of HAProxy and becomes the endpoint your applications connect to.
+        fields:
+          - type: note
+            textExpression: >-
+              'Applications connect to ' + context.releaseName + '-pgbouncer.' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:5432. PgBouncer signs in with the
+              cluster user and password and uses the same "Who can connect" setting for its own firewall.'
+            text: >-
+              Applications connect to RELEASE_NAME-pgbouncer.GVC_NAME.cpln.local:5432. PgBouncer signs in with the
+              cluster user and password and uses the same "Who can connect" setting for its own firewall.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** holds a connection for one transaction: best for most web and API workloads, but not
+              compatible with `SET` variables, temporary tables or advisory locks. **Session** holds it for the
+              whole client session: compatible with everything, less reuse. **Statement** returns it after every
+              statement: transactions are not supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+            description: Per PgBouncer replica.
+          - path: pgbouncer.maxDbConnections
+            type: integer
+            label: Max database connections
+            min: 1
+            required: true
+            suggestions: [10, 20, 25, 50, 100]
+            description: >-
+              Per PgBouncer replica: replicas do not coordinate, so the cluster can see up to this times the
+              maximum replicas, against a max_connections of 100 with 3 reserved for superusers.
+          - path: pgbouncer.minReplicas
+            type: integer
+            label: Minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.maxReplicas
+            type: integer
+            label: Maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.pgbouncer.maxReplicas >= self.pgbouncer.minReplicas
+            paths: [pgbouncer.maxReplicas]
+            message: The maximum replicas must be at least the minimum.
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+          - rule: self.pgbouncer.maxReplicas * self.pgbouncer.maxDbConnections <= 97
+            severity: info
+            paths: [pgbouncer.maxDbConnections]
+            messageExpression: >-
+              'Up to ' + string(self.pgbouncer.maxReplicas * self.pgbouncer.maxDbConnections) + ' database
+              connections (' + string(self.pgbouncer.maxReplicas) + ' replicas × ' +
+              string(self.pgbouncer.maxDbConnections) + ') can open against a max_connections of 100, of which 97
+              are usable, so under load clients get "remaining connection slots are reserved" instead of waiting.
+              Keep maximum replicas × max database connections under 97.'
+            message: >-
+              Maximum replicas × max database connections is above the 97 usable connections of the cluster, so
+              under load clients get "remaining connection slots are reserved" instead of waiting.
+    rules:
+      # Step-level, so they still run while the HAProxy section is switched off.
+      # workload-ha-proxy.yaml renders HAProxy when proxy or pgbouncer is on, and writes cpu and memory without
+      # | quote; the API takes both only as strings (nodelibs schema workload.ts: Cpu and Memory are Joi.string()).
+      - when: self.proxy.enabled || self.pgbouncer.enabled
+        rule: >-
+          string(self.proxy.resources.cpu).matches('^[0-9]+m$') &&
+          string(self.proxy.resources.memory).matches('[A-Za-z]$')
+        severity: error
+        paths: [proxy.enabled]
+        message: >-
+          This version writes the HAProxy CPU and memory into the workload unquoted, so a whole or decimal number of
+          cores, or a memory without a unit, reaches the platform as a number and the workload is refused. Give the
+          HAProxy CPU in millicores, such as 1000m, and its memory with a unit, such as 256Mi (in YAML mode while
+          the HAProxy switch is off and PgBouncer is on).
+      - when: self.backup.enabled
+        rule: self.proxy.enabled || self.pgbouncer.enabled
+        severity: warning
+        paths: [proxy.enabled]
+        message: The backup job dumps the leader through the HAProxy leader endpoint; keep it on while backups are on.
+      - when: self.pgbouncer.enabled
+        rule: self.proxy.enabled
+        severity: info
+        paths: [proxy.enabled]
+        message: >-
+          PgBouncer connects through HAProxy, so the chart runs HAProxy with its settings even while this switch is
+          off.
+      - when: self.internal_access.type == 'workload-list'
+        rule: size(self.internal_access.workloads) > 0
+        severity: warning
+        paths: [internal_access.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.
+      # The members replicate from each other and HAProxy checks them; PgBouncer and the backup job connect to
+      # HAProxy. All of them share internal_access (workload-*.yaml), and the chart adds none of its own names.
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha') in self.internal_access.workloads &&
+          (!(self.proxy.enabled || self.pgbouncer.enabled) ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha-proxy') in self.internal_access.workloads) &&
+          (!self.pgbouncer.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer') in self.internal_access.workloads) &&
+          (!self.backup.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha-backup') in self.internal_access.workloads)
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          ((['-timescaledb-ha'] +
+          (self.proxy.enabled || self.pgbouncer.enabled ? ['-timescaledb-ha-proxy'] : []) +
+          (self.pgbouncer.enabled ? ['-pgbouncer'] : []) +
+          (self.backup.enabled ? ['-timescaledb-ha-backup'] : []))
+          .filter(s, !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.internal_access.workloads))
+          .map(s, '//gvc/' + context.gvc + '/workload/' + context.releaseName + s).join(', ')) +
+          ', or they cannot connect.'
+        message: >-
+          The chart does not add its own workloads to the list: add the TimescaleDB members and the HAProxy
+          workload, and the PgBouncer and backup workloads when they are on, or they cannot connect.
+        fix:
+          path: internal_access.workloads
+          items: >-
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha'] +
+            (self.proxy.enabled || self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha-proxy'] : []) +
+            (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
+            (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-timescaledb-ha-backup'] : [])
+      - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internal_access.type == 'same-org'
+        rule: size(self.internal_access.workloads) == 0
+        severity: info
+        paths: [internal_access.workloads]
+        message: Same org already lets every workload of the org connect, so the listed workloads add nothing.
+
+rules:
+  # Platform: a workload name has at most 49 characters and other names at most 64 (workload apply schema).
+  # The longest names are RELEASE-timescaledb-ha-backup (22 more), RELEASE-timescaledb-ha-proxy (21 more),
+  # RELEASE-timescaledb-ha (15 more) and the secret RELEASE-timescaledb-ha-patroni-startup (31 more).
+  - when: context.mode == 'install' && context.releaseName != null
+    rule: >-
+      size(context.releaseName) <= 33 &&
+      size(context.releaseName) + (self.backup.enabled ? 22 : (self.proxy.enabled || self.pgbouncer.enabled) ? 21 : 15) <= 49
+    messageExpression: >-
+      'The release name has ' + string(size(context.releaseName)) + ' characters. The chart names a workload `' +
+      context.releaseName + (self.backup.enabled ? '-timescaledb-ha-backup' :
+      (self.proxy.enabled || self.pgbouncer.enabled) ? '-timescaledb-ha-proxy' : '-timescaledb-ha') +
+      '`, and a workload name has at most 49 characters, so use a release name of at most ' +
+      string(self.backup.enabled ? 27 : (self.proxy.enabled || self.pgbouncer.enabled) ? 28 : 33) + ' characters.'
+    message: >-
+      The chart names workloads such as `<release>-timescaledb-ha-proxy`, and a workload name has at most 49
+      characters, so use a release name of at most 28 characters (27 with backups on).
+  - when: >-
+      context.mode == 'upgrade' && context.releaseName != null && oldSelf != null &&
+      oldSelf.backup.enabled != true && self.backup.enabled
+    rule: size(context.releaseName) <= 27
+    message: >-
+      The backup workload would be named `<release>-timescaledb-ha-backup`, longer than the 49 characters a workload
+      name may have. Back up from another release with a shorter name instead.

@@ -1,0 +1,51 @@
+# polaris 1.3.1 — the highly available metastore path (three Patroni members, three etcd members, two
+# HAProxy replicas) with one Polaris replica and its bootstrap workload, one location, all three
+# prerequisite secrets created by CI. No object storage: catalogs are metadata until a table is written.
+# HA rather than the single-instance default, because the HA database image is what 1.3.1 changes.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before the bootstrap can create the realm (about 6 minutes).
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  clientsecret: hex
+  signingkey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: polaris
+      password: "{gen.pgpw}"
+      database: polaris
+  root:
+    type: dictionary
+    entries:
+      CLIENT_ID: root
+      CLIENT_SECRET: "{gen.clientsecret}"
+  signing:
+    type: opaque
+    payload: "{gen.signingkey}"
+
+vars:
+  pg_user: polaris
+  pg_password: "{gen.pgpw}"
+  pg_db: polaris
+  client_id: root
+  client_secret: "{gen.clientsecret}"
+
+values:
+  rootCredentials:
+    secretName: "{secrets.root.name}"
+  tokenSigningKey:
+    secretName: "{secrets.signing.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 1.3.0 is the previous version (same values; its HA metastore still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 1.3.0

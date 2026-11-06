@@ -31,15 +31,22 @@ The chart creates **no secret of its own** from 1.3.0.
 
 - **The auth key is a prerequisite `opaque` secret from 1.3.0**, referenced as `cpln://secret/{name}` with no
   key suffix. Through 1.2.1 it was `AuthKey` in values, so it sat in the Helm release; an upgrade still
-  carrying `AuthKey` is refused at render. Unlike a database password, a Tailscale auth key only authorizes
-  the device at join time, so rotating it is safe and does not disturb a joined node.
+  carrying `AuthKey` is refused at render, and the upgrade deletes the old chart-owned `{release}-tailscale`
+  secret, so the new prerequisite needs a different name. The gateway keeps no Tailscale state
+  (`TS_KUBE_SECRET: ''`, no volume), so it rejoins with the key on EVERY container start: keep a valid key in
+  the secret, and force a redeployment after rotating it (a `cpln://` reference does not re-resolve live).
 - **`TS_HOSTNAME` used to default to `cpln-test-new`** — a leftover from testing that became the tailnet name
   of every install. Fixed in 1.3.0; if you see `cpln-test-new` on a tailnet, it is a pre-1.3.0 deployment.
 - **`image.tag: stable` floated.** Two installs a month apart ran different Tailscale builds. Pinned in 1.3.0.
 - **A missing prerequisite secret wedges the deployment silently** — `cpln logs` returns zero lines; read
   `status.versions[].message` from `cpln workload get-deployments RELEASE_NAME-tailscale`.
-- **Auth keys expire.** Tailscale's default is 90 days, and a reusable/ephemeral key is a separate choice at
-  generation time. A node that silently drops off the tailnet months later is usually an expired key, not a
-  template problem — regenerate and update the secret.
+- **Auth keys expire.** Tailscale's default is 90 days. Because the gateway rejoins on every start, an expired
+  key surfaces at the next restart — regenerate (Reusable + Ephemeral), update the secret, force-redeploy.
+- **Advertised routes are `192.168.0.0/16`, `240.240.0.0/16` and `{locationDNS[location]}/32`.** The README's
+  old `autoApprovers` example also listed `10.0.0.0/16`, which the chart never advertises (removed 2026-10-01).
+- **No render guard when `location` is missing from `locationDNS`** — `TS_ROUTES` then ends in a bare `/32`.
+  Candidate validate check for a future version.
+- **`location` not on the GVC → nothing runs anywhere** (every other location is suspended). The platform
+  does not validate it.
 - **`location` is single-valued on purpose.** A subnet router advertising the same routes from several
   locations gives Tailscale competing paths; run one, or give each its own hostname and routes.

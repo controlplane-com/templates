@@ -52,7 +52,7 @@ printf '%s' "$(openssl rand -base64 32)" | \
 - Advise callers to have the application fall back to a database query when search is unavailable.
 
 ## Troubleshooting / considerations
-- **"It won't start and the deployment looks stuck" is almost always the missing master-key secret.** The template references it by name; if it does not exist the workload waits indefinitely with no obvious error. Check `cpln secret get <name>` first, every time.
+- **"It won't start and the deployment looks stuck" is almost always the missing master-key secret.** The template references it by name; if it does not exist the workload waits with no logs (reason in `get-deployments` → `status.versions[].message`) and recovers within ~10 min of the secret being created, or at once with `force-redeployment`. Check `cpln secret get <name>` first, every time.
 - **`server.env: production` does not serve the search-preview UI, and `GET /` returns `200 {"status":"Meilisearch is running"}`.** Both look like a broken instance and are not — it is healthy. The suppression is real and causally tied to the knob: the same chart at `server.env: development` serves the full HTML dashboard at `/`.
 - **`/metrics` returns HTTP 400, not 404, when metrics are off** — `{"code":"feature_not_enabled"}`. Unauthenticated it is 401 in both states. Enabled it returns real Prometheus output.
 - **"Master key must be at least 16 bytes in a production environment"** means exactly that — the secret's payload is too short. `openssl rand -base64 32` is the documented way to make one.

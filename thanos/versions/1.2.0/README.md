@@ -23,8 +23,8 @@ This app deploys [Thanos](https://thanos.io) Query — a global PromQL layer tha
 - **Thanos Query**: stateless standard workload; UI and PromQL API on port 10902, gRPC Store API on 10901; single replica by default — set `replicas: 2` or more for an HA query tier.
 - **Identity**: shared workload identity; receives bucket access only when the storage tier is enabled.
 - **Store Gateway** (optional, off by default): stateful workload serving historical bucket blocks to Query, with a 10 GiB cache volumeset (safe to lose — it rebuilds).
-- **Compactor** (optional, off by default): stateful **singleton** that compacts, downsamples, and applies retention to bucket blocks, with a 20 GiB workspace volumeset.
-- **Objstore secret + policy** (optional): the rendered `objstore.yml` bucket config and a `reveal` grant scoped to it — created only when the storage tier is on.
+- **Compactor** (optional, off by default): stateful workload, one replica **in each location of the GVC**, that compacts, downsamples, and applies retention to bucket blocks, with a 20 GiB workspace volumeset.
+- **Objstore secret + policy** (optional): the rendered `objstore.yml` bucket config and a `reveal` grant scoped to it (plus your MinIO credentials secret with `storage.type: minio`) — created only when the storage tier is on.
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@ For the optional storage tier, an existing bucket in one of the supported backen
 
 - **AWS S3** — an S3 bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for your AWS account, and a bucket-scoped IAM policy.
 - **Google Cloud Storage** — a GCS bucket and a Control Plane cloud account for your GCP project.
-- **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket and static access credentials (no cloud account).
+- **S3-compatible (MinIO, R2, Wasabi, …)** — a bucket, and a `dictionary` secret holding its `accessKey`/`secretKey`, created before install (no cloud account).
 
 ## Configuration
 
@@ -80,11 +80,21 @@ internalAccess:
 ```yaml
 storeGateway:
   enabled: false        # serves historical bucket blocks to Query
+  resources:
+    maxCpu: 500m
+    maxMemory: 1Gi
+    minCpu: 250m
+    minMemory: 512Mi
   volumeset:
     capacity: 10        # GiB — local cache; safe to lose (rebuilds on start)
 
 compactor:
-  enabled: false        # MUST be the ONLY compactor on the bucket, across all installs
+  enabled: false        # MUST be the ONLY compactor on the bucket — one install, single-location GVC
+  resources:
+    maxCpu: 500m
+    maxMemory: 1Gi
+    minCpu: 250m
+    minMemory: 512Mi
   volumeset:
     capacity: 20        # GiB — workspace; size ~2x two weeks of raw blocks
   retention:            # per-resolution bucket retention; "0d" keeps forever
@@ -110,7 +120,7 @@ storage:
     cloudAccountName: my-gcs-cloud-account
 
   minio:
-    endpoint: my-minio:9000          # host:port, no scheme
+    endpoint: my-minio:9000          # host:port, no scheme — use the FQDN, e.g. my-minio.my-gvc.cpln.local:9000
     insecure: true                   # true for plain-HTTP endpoints
     bucket: my-thanos-bucket
     region: us-east-1
@@ -123,14 +133,11 @@ storage:
 
 Each `stores:` entry is a gRPC Store API endpoint — typically a Prometheus Thanos sidecar — as `host:port` with **no scheme**:
 
-- **Same GVC**: `WORKLOAD.GVC.cpln.local:10901` (the short form `WORKLOAD:10901` also works)
-- **Cross-GVC / cross-region**: the same service-level internal DNS — `WORKLOAD.GVC.cpln.local:10901` (e.g. `my-prometheus-prometheus.metrics-east.cpln.local:10901`)
-
-Use the service-level name in both cases: the prometheus template is single-replica by design, so it addresses the one replica directly and is the most reliable form. (Per-replica DNS — `replica-N.WORKLOAD.LOCATION.GVC.cpln.local` — is only needed for genuinely multi-replica Store API targets.)
+- Same GVC, cross-GVC or cross-region: the fully qualified service name `WORKLOAD_NAME.GVC_NAME.cpln.local:10901` (e.g. `my-prometheus-prometheus.metrics-east.cpln.local:10901`). Do not use the bare workload name — it is not reliable.
 
 Two requirements for cross-GVC endpoints, both **on the Prometheus side**:
 
-1. The target workload's internal firewall must allow inbound from this Query workload — set its `internalAccess.type` to `same-org`, or `workload-list` including `//gvc/GVC/workload/RELEASE-thanos`. A store showing as "down" in the Query UI is almost always this firewall.
+1. The target workload's internal firewall must allow inbound from this Query workload — set its `internalAccess.type` to `same-org`, or `workload-list` including `//gvc/GVC_NAME/workload/RELEASE_NAME-thanos`. A store showing as "down" in the Query UI is almost always this firewall.
 2. Cross-location internal traffic (Query in one region querying sidecars in another) incurs egress charges.
 
 ## Storage setup
@@ -167,22 +174,24 @@ Two requirements for cross-GVC endpoints, both **on the Prometheus side**:
 
 ### S3-compatible (MinIO, R2, Wasabi, …)
 
-1. Create the bucket on your server and credentials that can read/write it.
-2. Set `storage.minio.*`: endpoint as `host:port` (no scheme; `insecure: true` for plain HTTP), bucket, region, and the access key pair.
+1. Create the bucket on your server and an access key pair that can read/write it.
+2. Create the dictionary secret holding that key pair **before** install (see the snippet at the top of this README) and set `storage.minio.credentialsSecretName` to its name.
+3. Set `storage.minio.*`: endpoint as `host:port` (no scheme — a fully qualified `WORKLOAD_NAME.GVC_NAME.cpln.local:9000` for a server in Control Plane; `insecure: true` for plain HTTP), bucket and region.
 
 ## Connecting
 
 | What | Endpoint |
 |---|---|
-| Query UI / PromQL API (in-GVC) | `http://RELEASE-thanos.GVC.cpln.local:10902` |
+| Query UI / PromQL API (in-GVC) | `http://RELEASE_NAME-thanos.GVC_NAME.cpln.local:10902` |
 | Grafana Prometheus datasource | the same URL — Query speaks the Prometheus HTTP API |
-| Query UI / API (public, when `publicAccess.enabled`) | the `*.cpln.app` canonical endpoint (`cpln workload get RELEASE-thanos -o yaml` → `status.canonicalEndpoint`) |
-| Query's own Store API (for a higher Thanos tier) | `RELEASE-thanos.GVC.cpln.local:10901` (gRPC) |
+| Query UI / API (public, when `publicAccess.enabled`) | the `*.cpln.app` canonical endpoint (`cpln workload get RELEASE_NAME-thanos --gvc GVC_NAME -o yaml` → `status.canonicalEndpoint`) |
+| Query's own Store API (for a higher Thanos tier) | `RELEASE_NAME-thanos.GVC_NAME.cpln.local:10901` (gRPC) |
 
 ## Important Notes
 
 - **Query has no built-in authentication** — with `publicAccess.enabled: true`, anyone with the URL can run queries. Keep it off, or front Query with an authenticating proxy.
-- **Run exactly one Compactor per bucket, across all installs and regions** — a second one corrupts the block layout and requires manual repair. Multi-region users enable `compactor` in one install only.
+- **Run exactly one Compactor per bucket, across all installs and regions** — a second one corrupts the block layout and requires manual repair. The Compactor runs one replica in **each location** of its GVC, so enable `compactor` in one install only, in a single-location GVC.
+- **Upgrading from 1.0.0: `cpu`/`memory` in all three `resources` blocks were renamed to `maxCpu`/`maxMemory` in 1.1.0** — the old keys are silently ignored, so rename them.
 - **Cross-GVC stores need a firewall change on the Prometheus side** — the sidecar workload must allow inbound `same-org` or list this Query workload (see [Wiring Prometheus sources](#wiring-prometheus-sources)).
 - **Changing `stores:` takes effect via `helm upgrade`** — endpoints are workload args, so an upgrade safely redeploys Query with the new list.
 - **No deduplication happening?** `queryReplicaLabels` must exactly match the external label name your HA Prometheus pair sets (`replica` by default).

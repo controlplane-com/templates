@@ -1,0 +1,42 @@
+# metabase 1.5.0 — the default install: one Metabase replica on highly available PostgreSQL (3 Patroni
+# members, 3 etcd, HAProxy), at the chart's default sizes. The three prerequisite secrets are generated per
+# run (hex passes Metabase's letters-and-digits password rule).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  adminpw: hex
+  enckey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: metabase
+      password: "{gen.pgpw}"
+      database: metabase
+  admin:
+    type: dictionary
+    entries:
+      email: e2e-admin@example.com
+      password: "{gen.adminpw}"
+  key:
+    type: opaque
+    payload: "{gen.enckey}"
+
+vars:
+  pg_user: metabase
+  pg_password: "{gen.pgpw}"
+  pg_db: metabase
+  admin_email: e2e-admin@example.com
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  encryptionKey:
+    secretName: "{secrets.key.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"

@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Vaultwarden
+category: security
+topology: single
+
+summary: >-
+  Vaultwarden, a lightweight Bitwarden-compatible password manager server: one replica serving the web
+  vault and the APIs used by the official Bitwarden browser, desktop and mobile apps, with its SQLite
+  database and attachments on a persistent volume and daily volume snapshots by default. Optional
+  admin panel, SMTP for invites and verification, and a custom domain. Pick it to self-host password
+  and passkey storage for a person, family or team.
+
+keywords:
+  - bitwarden
+  - bitwarden server
+  - password manager
+  - password vault
+  - credential vault
+  - team password sharing
+  - family password manager
+  - passkeys
+  - totp authenticator
+  - secure notes
+  - bitwarden send
+  - sqlite
+
+useCases:
+  - Self-host a password manager for a family or small team
+  - Use the official Bitwarden apps and browser extensions against your own server
+  - Share logins and secure notes in organizations with access control
+  - Store passkeys and two-factor TOTP codes alongside passwords
+
+alternativeTo:
+  - Bitwarden
+  - 1Password
+  - LastPass
+  - Dashlane
+  - Keeper
+  - NordPass
+
+pickInsteadIf:
+  - need: store application secrets and API keys that services read at runtime
+    template: infisical
+  - need: single sign-on and user login for your own applications
+    template: keycloak
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.tokenSecretName
+    required: false
+    when: admin.tokenSecretName is set to enable the /admin panel
+    description: Argon2 hash of your admin token, stored as-is (encoding plain). Without it the /admin panel stays disabled.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: smtp.authSecretName
+    required: false
+    when: smtp.host is set and the mail server requires authentication
+    description: SMTP login for invites, email verification and email two-factor. Leave smtp.authSecretName empty for an unauthenticated relay.
+  - kind: domain
+    valuesPath: customDomain
+    required: false
+    when: customDomain is set
+    description: A domain you own, configured in Control Plane to route to the workload. Passkey logins are bound to the URL, so pick it before users register.

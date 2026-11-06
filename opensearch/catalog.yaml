@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: OpenSearch
+category: search
+topology: distributed
+
+summary: >-
+  An OpenSearch cluster of an odd number of nodes, three by default, each on its own persistent
+  volume, with optional OpenSearch Dashboards (on by default). Options add scheduled snapshots to
+  S3 or GCS and a demo pipeline that ships sample logs into an index with Fluent Bit. The security
+  plugin is disabled, so it has no authentication and is reachable only from inside Control Plane.
+  Pick it for Apache-2.0 licensed full-text search and log analytics.
+
+keywords:
+  - full-text search
+  - search engine
+  - opensearch dashboards
+  - lucene
+  - query dsl
+  - aggregations
+  - log analytics
+  - log search
+  - fluent bit
+  - document search
+  - search cluster
+  - index snapshots
+  - s3 snapshots
+  - apache 2.0
+
+useCases:
+  - Full-text search over product catalogs, documents or site content
+  - Store, search and visualize application logs
+  - Aggregations and analytics over large sets of JSON documents
+  - Self-hosted replacement for a managed OpenSearch domain
+  - Search cluster that keeps serving when one node restarts
+
+alternativeTo:
+  - Amazon OpenSearch Service
+  - Elastic Cloud
+  - Aiven for OpenSearch
+  - Apache Solr
+
+compatibleWith: [elasticsearch-api]
+
+pickInsteadIf:
+  - need: Elasticsearch itself with Kibana, for Elastic clients and tooling
+    template: elasticsearch
+  - need: instant typo-tolerant search for a website or app on one small server
+    template: meilisearch
+  - need: full-text search over CSV data bulk-loaded from S3 and queried with SQL
+    template: manticore
+  - need: vector similarity search on embeddings for RAG
+    template: qdrant
+  - need: fast SQL analytics over large event or log tables
+    template: clickhouse
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled snapshots.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the snapshot bucket. On GCP, its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the snapshot bucket (bucket and bucket/* ARNs), referenced by name from the identity.

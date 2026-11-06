@@ -1,0 +1,332 @@
+# =============================================================================
+# CDC Pipeline Meta-Template
+# =============================================================================
+# Deploys a complete Change Data Capture pipeline:
+#   - PostgreSQL HA (Patroni + etcd + HAProxy), wal_level logical
+#   - Kafka (KRaft cluster)
+#   - Debezium Server (CDC connector: postgres -> kafka)
+#
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. One `dictionary`
+# secret holds every credential of the pipeline: keys `username`, `password`,
+# `database`, `sourcePassword` (the same value as `password`),
+# `kafkaSaslPassword` (the debezium user's Kafka password), `kafkaAdminPassword`,
+# `kafkaInterBrokerPassword` and `kafkaControllerPassword`. Its name appears in
+# BOTH credentialsSecretName values AND in the four kafka.kafka.env entries
+# below; all six must name the same secret. If it does not exist the deployment
+# WEDGES silently — `cpln logs` returns nothing. See Prerequisites in the README.
+#
+# Internal DNS names are computed automatically from the release name:
+#   PostgreSQL: <release>-postgres-ha-proxy.<gvc>.cpln.local:5432
+#   Kafka:      <release>-cluster.<gvc>.cpln.local:9092
+#   Debezium:   <release>-debezium.<gvc>.cpln.local
+# =============================================================================
+
+# =============================================================================
+# PostgreSQL HA
+# =============================================================================
+postgres-highly-available:
+  replicas: 3
+
+  resources:
+    minCpu: 500m
+    minMemory: 1Gi
+    maxCpu: 1
+    maxMemory: 2Gi
+
+  image: controlplanecorporation/patroni-postgres:0.7
+
+  # Debezium's pgoutput decoding needs wal_level = logical; the chart refuses anything else.
+  walLevel: logical
+
+  config:
+    # REQUIRED PREREQUISITE SECRET (see the top of this file). Must equal
+    # debezium-server.credentialsSecretName.
+    credentialsSecretName: my-cdc-pipeline-credentials
+
+  multiZone: false
+
+  volumeset:
+    capacity: 10
+    autoscaling:
+      enabled: false
+      maxCapacity: 100
+      minFreePercentage: 10
+      scalingFactor: 1.2
+
+  internal_access:
+    type: same-gvc
+
+  etcd:
+    replicas: 3
+    resources:
+      cpu: 500m
+      memory: 512Mi
+    multiZone: false
+    volumeset:
+      capacity: 10
+    internal_access:
+      type: same-gvc
+
+  pgbouncer:
+    enabled: false
+
+  proxy:
+    enabled: true
+    image: haproxy:2.9
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    minReplicas: 2
+    maxReplicas: 2
+
+  backup:
+    enabled: false
+
+# =============================================================================
+# Kafka
+# =============================================================================
+kafka:
+  kafka:
+    name: cluster
+    image: apache/kafka:3.9.1
+    suspend: false
+    deletionProtection: false
+    replicas: 3
+    minReadySeconds: 0
+    debug: false
+    multiZone: false
+    logDirs: /opt/kafka/logs-0,/opt/kafka/logs-1
+    # The brokers read their SASL passwords from the credentials secret through these variables (the
+    # `${env:...}` references below). Keep all four; the secret name must equal credentialsSecretName.
+    env:
+      - name: CDC_KAFKA_ADMIN_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaAdminPassword
+      - name: CDC_KAFKA_DEBEZIUM_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaSaslPassword
+      - name: CDC_KAFKA_INTER_BROKER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaInterBrokerPassword
+      - name: CDC_KAFKA_CONTROLLER_PASSWORD
+        value: cpln://secret/my-cdc-pipeline-credentials.kafkaControllerPassword
+    volumes:
+      logs:
+        initialCapacity: 10
+        performanceClass: general-purpose-ssd
+        fileSystemType: ext4
+        snapshots:
+          createFinalSnapshot: true
+          retentionDuration: 7d
+          schedule: 0 0 * * *
+        autoscaling:
+          maxCapacity: 1000
+          minFreePercentage: 20
+          scalingFactor: 1.2
+    cpu: 1000m
+    memory: 2000Mi
+    minCpu: 250m
+    minMemory: 2000Mi
+    firewall:
+      internal_inboundAllowType: "same-gvc"
+    listeners:
+      client:
+        protocol: SASL_PLAINTEXT
+        name: CLIENT
+        containerPort: 9092
+        sasl:
+          admin:
+            username: admin
+            password: "${env:CDC_KAFKA_ADMIN_PASSWORD}"     # resolved by the broker from the env above; not a value
+          users: "debezium"
+          passwords: "${env:CDC_KAFKA_DEBEZIUM_PASSWORD}"  # the secret's kafkaSaslPassword
+    acl:
+      # The debezium user is a super user so it can create and write its topics (the kafka chart has no way to declare ACLs).
+      superUsers: "User:admin;User:debezium"
+      allowEveryoneIfNoAclFound: false
+    secrets:
+      kraft_cluster_id: "change-me-cdc-pipeline-kraft-cluster-id"
+      inter_broker_password: "${env:CDC_KAFKA_INTER_BROKER_PASSWORD}"
+      controller_password: "${env:CDC_KAFKA_CONTROLLER_PASSWORD}"
+    extra_configurations:
+      # Kafka's env config provider resolves the `${env:...}` password references above. Keep both lines.
+      config.providers: env
+      config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      default.replication.factor: 3
+      auto.create.topics.enable: true
+      log.retention.hours: 168
+
+  # Off: the health sidecar and the Kafka exporter need the admin password as a plain value, which this
+  # template no longer holds. The chart refuses them. `false`, not `null`: Helm 4 ignores a `null` in a
+  # parent chart's own values and keeps the kafka chart's defaults, which would turn both back on.
+  kafka_orchestrator: false
+  kafka_exporter: false
+
+  jmx_exporter:
+    name: jmx-exporter
+    image: ghcr.io/controlplane-com/bitnami/jmx-exporter
+    kafkaJmxPort: 5557
+    exporterPort: 5556
+    debug: false
+    cpu: 250m
+    memory: 256Mi
+    minCpu: 80m
+    minMemory: 125Mi
+    listener: client
+    dropMetrics: []
+    config:
+      jmxUrl: service:jmx:rmi:///jndi/rmi://127.0.0.1:5557/jmxrmi
+      lowercaseOutputName: true
+      lowercaseOutputLabelNames: true
+      ssl: false
+      whitelistObjectNames:
+        - kafka.controller:*
+        - kafka.server:*
+        - java.lang:*
+        - kafka.network:*
+        - kafka.log:*
+        - kafka.producer:*
+        - kafka.consumer:*
+      rules:
+        - labels:
+            request: "$3"
+          name: kafka_request_count
+          pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(.+)><>(Count)
+        - labels:
+            request: "$3"
+            stat: "$4"
+          name: kafka_request_metrics_totaltimems
+          pattern: kafka.network<type=(RequestMetrics), name=(TotalTimeMs), request=(.+)><>(.+)
+        - labels:
+            request: "$3"
+            component: "$2"
+            stat: "$4"
+          name: kafka_request_latency_ms
+          pattern: kafka.network<type=(RequestMetrics), name=(.+TimeMs), request=(.+)><>(.+)
+        - labels:
+            client_type: "$3"
+            metric: "$2"
+            stat: "$4"
+          name: kafka_client_metrics
+          pattern: kafka.network<type=(RequestMetrics), name=(.+), request=(Fetch|Produce)><>(.+)
+        - labels:
+            client_id: "$1"
+            metric: "$2"
+          name: kafka_consumer_metrics
+          pattern: kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+)><>(.+)
+        - labels:
+            client_id: "$1"
+            metric: "$2"
+          name: kafka_producer_metrics
+          pattern: kafka.producer<type=producer-metrics, client-id=(.+)><>(.+)
+        - name: kafka_server_$1_$2_$3
+          pattern: kafka.server<type=(.+), name=(.+)><>(Count|Value)
+        - name: java_lang_$1_$2
+          pattern: java.lang<type=(.+)><>(.+)
+
+  kafbat_ui:
+    # Off by default: it needs an opaque config secret you create first (see the README), and it is public when on.
+    enabled: false
+    deletionProtection: false
+    name: kafbat-ui
+    image: ghcr.io/kafbat/kafka-ui
+    cpu: 300m
+    memory: 1000Mi
+    minCpu: 100m
+    minMemory: 400Mi
+    replicas: 1
+    timeoutSeconds: 30
+    configuration_secret: kafka-kafbat-ui-config
+    firewall:
+      external_inboundAllowCIDR: "0.0.0.0/0"
+      external_outboundAllowCIDR: "0.0.0.0/0"
+
+  kafka_rest_proxy:
+    enabled: false # refused: in kafka 4.3.0 it needs its Kafka password inline in values
+
+  kafka_client:
+    name: client
+    image: apache/kafka:3.9.1
+    cpu: 500m
+    memory: 1000Mi
+    firewall:
+      external_outboundAllowCIDR: "0.0.0.0/0"
+
+  kafka_ui:
+    enabled: false
+
+# =============================================================================
+# Debezium Server
+# =============================================================================
+# Database hostname and Kafka bootstrap servers are auto-computed from
+# the release name when left empty. Override only if connecting to
+# external instances not managed by this meta-template.
+debezium-server:
+  image: quay.io/debezium/server:3.0.8.Final
+
+  # REQUIRED PREREQUISITE SECRET (see the top of this file). Must equal
+  # postgres-highly-available.config.credentialsSecretName.
+  credentialsSecretName: my-cdc-pipeline-credentials
+
+  resources:
+    cpu: 500m
+    memory: 512Mi
+
+  source:
+    type: postgres
+
+    database:
+      hostname: ""  # Auto-computed: <release>-postgres-ha-proxy.<gvc>.cpln.local
+      port: 5432
+      name: cdcdb       # Must equal the secret's `database` key
+      user: cdc_user    # Must equal the secret's `username` key
+      # password: the secret's `sourcePassword` key (the same value as `password`)
+
+    serverName: "dbserver1"
+    tableIncludeList: ""
+    tableExcludeList: ""
+
+    postgres:
+      slotName: "debezium"
+      publicationName: "dbz_publication"
+      pluginName: "pgoutput"
+      slotDropOnStop: false
+      slotFailover: true  # replicas keep a synchronized copy, so the slot survives a database switchover
+      heartbeatIntervalMs: 5000
+      heartbeatActionQuery: "UPDATE debezium_heartbeat SET ts = now() WHERE id = 1"
+
+    offset:
+      storage: file
+      flushIntervalMs: 10000
+      flushTimeoutMs: 60000
+      file:
+        filename: "/debezium/data/offsets.dat"
+
+    schemaHistory:
+      storage: file
+      file:
+        filename: "/debezium/data/schema-history.dat"
+
+    errors:
+      retryDelayInitialMs: 300
+      retryDelayMaxMs: 10000
+      maxRetries: -1
+
+  sink:
+    type: kafka
+    kafka:
+      bootstrapServers: ""         # Auto-computed: <release>-cluster.<gvc>.cpln.local:9092
+      topic: ""
+      securityProtocol: "SASL_PLAINTEXT"
+      saslMechanism: "PLAIN"
+      saslUsername: "debezium"      # Must be in kafka.kafka.listeners.client.sasl.users and acl.superUsers
+      # saslPassword: the secret's `kafkaSaslPassword` key (the debezium entry of sasl.passwords)
+
+  volumeset:
+    capacity: 10
+    performanceClass: general-purpose-ssd
+
+  firewall:
+    internal:
+      inboundAllowType: same-gvc
+      workloads: []
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0

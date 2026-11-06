@@ -1,0 +1,225 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Uptime Kuma
+# One stateful replica on its own volume set, with no location handling: every GVC location would run
+# an independent copy with its own SQLite database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: server
+    title: Uptime Kuma
+    description: The Uptime Kuma image, the compute of its single replica, and the volume set that holds its data.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the single replica, so monitoring pauses briefly. Monitors resume on their
+              own once it is back, and all data stays on the volume set.
+          - path: image
+            type: string
+            format: image
+            label: Uptime Kuma image
+            required: true
+            description: >-
+              A newer Uptime Kuma migrates its SQLite database when it first boots, so change the image on
+              purpose, after a snapshot of the volume set.
+            docs: "#image"
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.3.0') < 0
+            text: >-
+              This upgrade moves Uptime Kuma to 2.5.8, which migrates the SQLite database on its first start;
+              going back to the previous image afterwards is not supported, so take a snapshot of the volume set
+              first. TCP Port monitors that checked TLS or STARTTLS become plain TCP checks.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              A single stateful replica. Uptime Kuma runs exactly one instance: it has no clustering, so the
+              template has no replica setting.
+            docs: "#resources-and-storage"
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              !(self.image.split(':')[0] in ['louislam/uptime-kuma', 'docker.io/louislam/uptime-kuma']) ||
+              size(self.image.split(':')) < 2 ||
+              !(self.image.split(':')[1].matches('^1([.-]|$)') ||
+                self.image.split(':')[1].matches('^2[.]([0-4][.][0-9]|5[.][0-7]([^0-9]|$))'))
+            mirrors: uptime-kuma.validateImage
+            paths: [image]
+            messageExpression: >-
+              'Uptime Kuma before 2.5.8 has an admin remote-code-execution flaw (GHSA-v2p3-6f5h-6hhf) and Critical
+              CVEs in its image. Use louislam/uptime-kuma:2.5.8' +
+              (self.image.matches('-slim-rootless$') ? '-slim-rootless' :
+              self.image.matches('-slim$') ? '-slim' :
+              self.image.matches('-rootless$') ? '-rootless' : '') + '.'
+            message: >-
+              Uptime Kuma before 2.5.8 has an admin remote-code-execution flaw (GHSA-v2p3-6f5h-6hhf) and Critical
+              CVEs in its image. Use louislam/uptime-kuma:2.5.8, keeping a -slim or -rootless suffix if you use one.
+          - rule: "!has(self.resources.cpu) && !has(self.resources.memory)"
+            mirrors: uptime-kuma.validateResourceKnobs
+            paths: [resources]
+            message: >-
+              resources.cpu and resources.memory were renamed to resources.maxCpu and resources.maxMemory in
+              1.1.0. Remove the old keys from the values.
+      - title: Storage
+        docs: "#backing-up"
+        description: >-
+          The volume set holds the SQLite database, uploads and generated keys, and survives redeploys. There
+          are no scheduled backups or snapshots; uninstalling deletes the volume set after a final snapshot
+          that is kept for 7 days.
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            suggestions: [10, 20, 50, 100]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - type: note
+            textExpression: >-
+              'Take a manual snapshot before a risky change, such as a new image: `cpln volumeset snapshot create ' +
+              context.releaseName + '-uptime-kuma-data --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' --snapshot-name NAME`.'
+            text: >-
+              Take a manual snapshot before a risky change, such as a new image:
+              `cpln volumeset snapshot create RELEASE_NAME-uptime-kuma-data --gvc GVC_NAME --snapshot-name NAME`.
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: uptime-kuma.validate
+            paths: [volumeset.capacity]
+            message: The volume set capacity must be at least 10 GiB.
+          - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: Whether the dashboard and status pages are on the internet, and which workloads can reach Uptime Kuma inside Control Plane.
+    sections:
+      - title: Public access
+        docs: "#first-run"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            textExpression: >-
+              'Uptime Kuma has no preset admin login: whoever first opens the dashboard creates the admin account.
+              Install with public access off, run `cpln port-forward ' + context.releaseName +
+              '-uptime-kuma 3001:3001 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, open http://localhost:3001 and create the account. Then upgrade the release with public access on
+              if you need public status pages. Monitors, notifications and status pages are set up in the app
+              after you sign in.'
+            text: >-
+              Uptime Kuma has no preset admin login: whoever first opens the dashboard creates the admin account.
+              Install with public access off, run `cpln port-forward RELEASE_NAME-uptime-kuma 3001:3001 --gvc GVC_NAME`,
+              open http://localhost:3001 and create the account. Then upgrade the release with public access on
+              if you need public status pages. Monitors, notifications and status pages are set up in the app
+              after you sign in.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              Since 1.2.0 new installs start private. This upgrade keeps the public access setting the release
+              runs with, so a release that was public stays public; turning the switch off closes the dashboard
+              and the status pages to the internet. See
+              [Upgrading from 1.1.0 or earlier](/template-catalog/templates/uptime-kuma#upgrading-from-1-1-0-or-earlier).
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              The dashboard and the public status pages (under /status/) on the canonical *.cpln.app endpoint.
+              The dashboard is behind Uptime Kuma's own login; status pages need no login.
+            help: Turning it on or off takes 30 seconds to a few minutes to take effect.
+          - type: note
+            when: self.publicAccess.enabled
+            textExpression: >-
+              'Read the public address from status.canonicalEndpoint in `cpln workload get ' + context.releaseName +
+              '-uptime-kuma --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.'
+            text: >-
+              Read the public address from status.canonicalEndpoint in
+              `cpln workload get RELEASE_NAME-uptime-kuma --gvc GVC_NAME -o yaml`.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled && (oldSelf == null || !oldSelf.publicAccess.enabled)
+            textExpression: >-
+              'Create the admin account before the endpoint opens: until it exists, anyone who reaches the
+              endpoint can claim the instance. ' +
+              (context.mode == 'install' ?
+              'Install with this off, create the account over the port-forward above, then turn it on with an upgrade.' :
+              'If you have not created it yet, do it first over `cpln port-forward ' + context.releaseName +
+              '-uptime-kuma 3001:3001 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.')
+            text: >-
+              Create the admin account before the endpoint opens: until it exists, anyone who reaches the endpoint
+              can claim the instance. Create it first over `cpln port-forward RELEASE_NAME-uptime-kuma 3001:3001 --gvc GVC_NAME`.
+      - title: Internal access
+        docs: "#access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: >-
+              Workloads that call Uptime Kuma inside Control Plane, at port 3001. Its own checks are outbound and
+              need no setting here. Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            when: self.internalAccess.type == 'workload-list'
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: The whole allow-list; no other workload can connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: uptime-kuma.validate
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+migrations:
+  - { fromVersions: "<1.1.0", from: resources.cpu, to: resources.maxCpu }
+  - { fromVersions: "<1.1.0", from: resources.memory, to: resources.maxMemory }
+  # 1.2.0 changed the default of publicAccess.enabled from true to false. A rename-free key carries only
+  # changed values, so a release that kept the old default would be closed to the internet: keep what it runs.
+  - fromVersions: "<1.2.0"
+    to: publicAccess.enabled
+    valueExpr: self.publicAccess.enabled
+    note: >-
+      The release keeps its public access setting. Since 1.2.0 new installs start private; turning it off closes
+      the dashboard and the status pages to the internet.

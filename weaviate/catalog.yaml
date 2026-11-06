@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Weaviate
+category: database
+topology: distributed
+
+summary: >-
+  A Weaviate vector database cluster, three nodes by default, using Raft for schema and cluster
+  state, with one persistent volume per node and API-key authentication. Optional vectorizer and
+  generative modules call OpenAI, Anthropic, Cohere or Hugging Face with your own key, and optional
+  scheduled backups go to S3 or GCS. Pick it for hybrid keyword and vector search reached from
+  inside Control Plane; it has no public endpoint.
+
+keywords:
+  - vector database
+  - vector search
+  - hybrid search
+  - bm25
+  - semantic search
+  - embeddings
+  - rag
+  - retrieval-augmented generation
+  - generative search
+  - vectorizer
+  - text2vec-openai
+  - graphql
+  - grpc
+  - raft
+  - cohere
+  - hugging face
+  - vector backups
+
+useCases:
+  - Hybrid keyword and vector search over documents for RAG
+  - Generate embeddings at insert time with OpenAI, Cohere or Hugging Face
+  - Answer questions from retrieved objects with a generative module
+  - Multi-node vector store for an internal AI application
+  - Semantic search over a product catalog or knowledge base
+
+alternativeTo:
+  - Weaviate Cloud
+  - Pinecone
+  - Zilliz Cloud
+  - Milvus
+  - Vertex AI Vector Search
+  - Azure AI Search
+
+pickInsteadIf:
+  - need: a lightweight single-server vector database with an optional public HTTPS endpoint
+    template: qdrant
+  - need: vector similarity search inside PostgreSQL next to relational data
+    template: pgvector
+  - need: typo-tolerant keyword search for a website or app
+    template: meilisearch
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local embedding models when you compute vectors outside Weaviate
+  - template: langfuse
+    relation: companion
+    note: Traces the retrieval and generation calls of a RAG application
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: apiKeySecretName
+    required: true
+    description: Opaque secret whose payload is the API key every client uses. Create it before installing; when it is missing the deployment waits on it.
+  - kind: secret
+    secretType: opaque
+    valuesPath:
+      - modules.openai.apiKeySecretName
+      - modules.anthropic.apiKeySecretName
+      - modules.cohere.apiKeySecretName
+      - modules.huggingface.apiKeySecretName
+    required: false
+    when: using an OpenAI, Anthropic, Cohere or Hugging Face module
+    description: One opaque secret per AI provider holding its API key. Naming a secret turns that provider on, and its calls are billed to you.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled backups.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the backup bucket. On GCP, grant its service account roles/storage.objectAdmin on the bucket.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (bucket and bucket/* ARNs), referenced by name from the backup identity.

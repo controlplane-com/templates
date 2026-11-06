@@ -1,0 +1,106 @@
+{{/*
+Startup script, passed to the container inline (sh -c) rather than mounted from a
+secret: it holds no credentials, and a secret the workload must reveal is what
+stalled 2.x -> 3.0.0 upgrades (the new reveal permission was not yet visible to
+the new workload). Rendered through "pgedge.inlineScript", which doubles every $
+because the platform expands $(VAR) and collapses $$ in container args.
+*/}}
+{{- define "pgedge.script.pgbouncer" -}}
+#!/bin/sh
+# PgBouncer start script. POSIX sh -- the image's /bin/sh is dash.
+# Credentials arrive as env (cpln:// resolves ONLY in env vars, never inside a
+# file), so pgbouncer.ini and the userlist are written here at container start,
+# never at Helm render.
+set -eu
+
+for v in PG_USERNAME PG_PASSWORD PG_DATABASE; do
+  eval "val=\${$v:-}"
+  if [ -z "${val}" ]; then echo "[pgbouncer] FATAL: ${v} is empty" >&2; exit 1; fi
+done
+if [ "${PG_DATABASE}" = "pgbouncer" ]; then
+  echo "[pgbouncer] FATAL: database name 'pgbouncer' is reserved for PgBouncer's admin console; use another name in your credentials secret" >&2
+  exit 1
+fi
+
+RUN_DIR=/tmp/pgbouncer
+umask 077
+mkdir -p "${RUN_DIR}"
+
+# ONE backend: this location's HAProxy. The service DNS is location-pinned, so
+# every PgBouncer reaches its OWN location's HAProxy; HAProxy does all node
+# selection and failover.
+BACKEND_HOST="{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+
+# Serve ONLY the configured database. PgBouncer's ini parser rejects quoted
+# keys (measured on the pinned image), so a name is used as a bare key only when
+# it is ini-safe; any other name falls back to `*` (every database the user can
+# reach) rather than crash-looping the pooler.
+case "${PG_DATABASE}" in
+  *[!A-Za-z0-9_.-]*)
+    DB_KEY='*'
+    echo "[pgbouncer] WARNING: database name '${PG_DATABASE}' has characters PgBouncer cannot use as a key; serving every database the user can reach" >&2
+    ;;
+  *) DB_KEY="${PG_DATABASE}" ;;
+esac
+
+# auth_file fields escape " by doubling it.
+esc() { printf '%s' "$1" | sed 's/"/""/g'; }
+
+printf '"%s" "%s"\n' "$(esc "${PG_USERNAME}")" "$(esc "${PG_PASSWORD}")" > "${RUN_DIR}/userlist.txt"
+
+# Unquoted heredoc on purpose: ${VAR} must expand. No secret is in this file.
+#   server_login_retry 3: after a failed server login PgBouncer fast-fails new
+#     clients for this long; the 15 s default would outlast HAProxy's ~6 s failover.
+#   server_lifetime 300: pooled connections drift back to the local node within
+#     ~5 min after it recovers (HAProxy only moves sessions on mark-DOWN).
+#   extra_float_digits: sent by JDBC on every connect; rejected without this.
+#   track_extra_parameters: lets clients set these in the `options` startup
+#     parameter (PGOPTIONS='-c statement_timeout=5s'); PgBouncer re-applies them
+#     on every server connection the client is given. Anything else in
+#     `options` is still refused with a clear error rather than silently dropped.
+cat > "${RUN_DIR}/pgbouncer.ini" <<EOF
+[databases]
+${DB_KEY} = host=${BACKEND_HOST} port=5432
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 5432
+unix_socket_dir =
+auth_type = scram-sha-256
+auth_file = ${RUN_DIR}/userlist.txt
+admin_users = ${PG_USERNAME}
+pool_mode = {{ .Values.pgbouncer.poolMode }}
+default_pool_size = {{ .Values.pgbouncer.defaultPoolSize | int }}
+max_client_conn = {{ .Values.pgbouncer.maxClientConn | int }}
+max_prepared_statements = 200
+ignore_startup_parameters = extra_float_digits
+track_extra_parameters = statement_timeout, lock_timeout, idle_in_transaction_session_timeout, idle_session_timeout, work_mem, maintenance_work_mem, default_transaction_isolation, client_min_messages
+server_login_retry = 3
+server_lifetime = 300
+log_connections = 0
+log_disconnections = 0
+EOF
+
+echo "[pgbouncer] $(/usr/bin/pgbouncer -V 2>&1 | tr '\n' ' ')"
+echo "[pgbouncer] serving database '${DB_KEY}' via ${BACKEND_HOST}:5432 (this location's HAProxy)"
+echo "[pgbouncer] nofile limit: $(ulimit -n)"
+
+# Not `exec`: PgBouncer's SIGTERM waits for EVERY client to disconnect (pooled app
+# connections never do), so the replica would be killed at the grace deadline
+# mid-transaction. Translate TERM -> INT (SHUTDOWN WAIT_FOR_SERVERS): finish
+# in-flight transactions, then exit; clients reconnect to a surviving replica.
+/usr/bin/pgbouncer "${RUN_DIR}/pgbouncer.ini" &
+PID=$!
+# A hung (stopped) process cannot act on SIGINT, so escalate to SIGKILL if it
+# has not exited 30 s later; a healthy one finishes its transactions first.
+trap 'echo "[pgbouncer] SIGTERM -> safe shutdown"; kill -INT "${PID}" 2>/dev/null || true; ( sleep 30; kill -KILL "${PID}" 2>/dev/null ) &' TERM
+trap 'kill -HUP "${PID}" 2>/dev/null || true' HUP
+set +e
+RC=0
+while :; do
+  wait "${PID}"; RC=$?
+  kill -0 "${PID}" 2>/dev/null || break   # wait was interrupted by a trap; keep waiting
+done
+echo "[pgbouncer] exited with ${RC}"
+exit "${RC}"
+{{- end -}}

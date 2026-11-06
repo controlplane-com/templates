@@ -1,0 +1,19 @@
+apiVersion: v2
+name: constructive
+description: Constructive pgpm Postgres modules with an auto-generated GraphQL API and row-level security
+type: application
+version: 1.0.0
+appVersion: "08e422d"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-11-04"
+  lastModified: "2026-11-04"
+  createsGvc: false

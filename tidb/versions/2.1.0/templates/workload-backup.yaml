@@ -1,0 +1,95 @@
+{{- if .Values.backup.enabled }}
+---
+kind: workload
+name: {{ include "tidb.backup.name" . }}
+description: TiDB Backup
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: cron
+  containers:
+    - name: backup-tidb
+      cpu: {{ .Values.backup.resources.cpu | quote }}
+      memory: {{ .Values.backup.resources.memory | quote }}
+      env:
+        - name: BACKUP_PROVIDER
+          value: {{ .Values.backup.provider }}
+      {{- if eq .Values.backup.provider "aws" }}
+        - name: AWS_REGION
+          value: {{ .Values.backup.aws.region }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.aws.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.aws.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.backup.provider "gcp" }}
+        - name: BACKUP_BUCKET
+          value: {{ .Values.backup.gcp.bucket }}
+        - name: BACKUP_PREFIX
+          value: {{ .Values.backup.gcp.prefix | quote }}
+      {{- end }}
+        - name: TIDB_PD_ADDR
+          value: {{ include "tidb.pd.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:2379
+      image: {{ .Values.backup.image }}
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: true
+    timeoutSeconds: 3600
+  {{- /*
+    The cron is suspended everywhere by defaultOptions and unsuspended in exactly
+    one location. backup.location is validated at render time against
+    `locations` — the platform accepts a localOptions entry for a location that
+    does not exist, stores it, and the cron then never runs anywhere with nothing
+    to observe.
+
+    Every field defaultOptions carries is REPEATED here. A localOptions entry is
+    not a patch onto defaultOptions: the API completes a partial entry from its
+    OWN platform defaults. Measured on cockroach 2026-08-28 — with only
+    `location` and `suspend` sent, the one location that actually runs the backup
+    was stored with `timeoutSeconds: 5` instead of the chart's value,
+    `capacityAI: true` instead of false, and `autoscaling: {metric: concurrency,
+    minScale: 1, maxScale: 5}`, i.e. eligible to run five concurrent backup pods.
+    1.x sent exactly that two-field entry here.
+  */}}
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: 1
+        metric: disabled
+        minScale: 1
+        scaleToZeroDelay: 300
+        target: 95
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.backup.location }}
+      suspend: false
+      timeoutSeconds: 3600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "tidb.identity.name" . }}
+  job:
+    activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+    concurrencyPolicy: Forbid
+    historyLimit: 5
+    restartPolicy: Never
+    schedule: {{ .Values.backup.schedule }}
+  supportDynamicTags: false
+{{- end }}

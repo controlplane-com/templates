@@ -1,0 +1,256 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis Cluster
+# Six stateful replicas and no location handling: every GVC location would run its
+# own six-node cluster, each with its own volumes, behind one internal name.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The size of each of the six nodes.
+    sections:
+      - title: Nodes
+        fields:
+          - type: note
+            severity: info
+            text: >-
+              In this version a peer name that briefly fails to resolve while the cluster is first created
+              restarts the node instead of retrying, which can delay a new cluster by several restarts. 1.6.0
+              retries in place.
+          - path: replicas
+            type: integer
+            label: Nodes
+            required: true
+            min: 6
+            max: 6
+            description: >-
+              Three primaries that split the hash slots, each with one replica. 6 is the size this template is
+              built and documented for.
+          - path: cpu
+            type: quantity
+            quantity: cpu
+            label: CPU per node
+            required: true
+            min: 25m
+            suggestions: ["200m", "500m", "1000m", "2000m"]
+          - path: memory
+            type: quantity
+            quantity: memory
+            label: Memory per node
+            required: true
+            min: 64Mi
+            description: The default is a floor; a cache at 250Mi starts evicting soon under real load.
+            suggestions: [250Mi, 512Mi, 1Gi, 1600Mi]
+        rules:
+          - rule: string(self.cpu).matches('m$')
+            paths: [cpu]
+            message: >-
+              Give the CPU in millicores, such as 500m or 1000m. This version writes it unquoted, so a whole or
+              decimal number of cores reaches the platform as a number and the workload is rejected.
+          - rule: string(self.memory).matches('[A-Za-z]$')
+            paths: [memory]
+            message: >-
+              Give the memory a unit, such as 512Mi or 1Gi. This version writes it unquoted, so a bare number
+              reaches the platform as a number and the workload is rejected.
+          - rule: memoryBytes(self.memory) <= 8 * 1048576 * cpuMillicores(self.cpu)
+            paths: [memory]
+            message: >-
+              The platform refuses more than 8Mi of memory per millicore of CPU, for example 2Gi needs at least
+              256m. Raise the CPU or lower the memory.
+
+  - id: auth
+    title: Authentication
+    description: Whether clients and the nodes themselves need a password.
+    sections:
+      - title: Password
+        fields:
+          - id: clusterAuth
+            virtual: true
+            type: enum
+            label: Cluster authentication
+            widget: segmented
+            required: true
+            init: "self.redis.password != null && self.redis.password != '' ? 'password' : 'none'"
+            options:
+              - value: none
+                label: No password
+                description: Any workload the network settings admit has full access.
+                set: { redis.password: "" }
+              - value: password
+                label: Password in values
+                description: Stored in plain text in the release values.
+                set: { redis.password: change-me-redis-cluster-password }
+            rules:
+              - when: oldSelf != null
+                rule: >-
+                  (self.redis.password == null ? '' : self.redis.password) ==
+                  (oldSelf.redis.password == null ? '' : oldSelf.redis.password)
+                severity: info
+                message: >-
+                  Changing authentication restarts every node, one at a time. Until the rollout completes,
+                  nodes on the old and the new setting can fail to replicate from each other, and clients need the
+                  new password. Plan a maintenance window.
+          - type: note
+            severity: warning
+            when: ui.clusterAuth == 'password'
+            text: >-
+              This version stores the password in plain text in the release values and in this release's own
+              secrets. 1.7.0 can read it from a dictionary secret you create instead.
+          - path: redis.password
+            type: string
+            absent: true
+            label: Password
+            sensitive: true
+            widget: password
+            required: true
+            when: ui.clusterAuth == 'password'
+            description: Every node writes it into its configuration file as one unquoted value.
+            rules:
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  self.redis.password.matches("^[^\\s\"'\\x00-\\x1f\\x7f]+$")
+                message: Leave out spaces, quotes, line breaks and other control characters.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  (!self.redis.password.matches('^\\s') && !self.redis.password.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+                  !self.redis.password.matches('^[-?:](\\s|$)') && !self.redis.password.matches('\\t') &&
+                  !self.redis.password.contains(': ') && !self.redis.password.contains(' #') &&
+                  !self.redis.password.endsWith(':') && !self.redis.password.endsWith(' ') &&
+                  !(self.redis.password in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+                  !self.redis.password.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+                  !self.redis.password.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+                  !self.redis.password.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.redis.password.matches('^\\.(nan|NaN|NAN)$') &&
+                  !self.redis.password.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+                severity: warning
+                message: >-
+                  This version writes the password into its secret unquoted, so a value that reads as a number,
+                  true, false, null or a date, that starts with a character such as # & * ! [ { or ,, or that ends
+                  with a colon, breaks the install or changes the password.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  !self.redis.password.matches('[*?\\[]')
+                severity: warning
+                message: >-
+                  Leave out * ? and [. This version's start script passes the password unquoted, so these
+                  characters can be expanded as file patterns and the nodes never become healthy; 1.7.0 fixes it.
+              - rule: >-
+                  !(self.redis.password in ['change-me-redis-cluster-password', 'your-secure-password-here']) ||
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password)
+                severity: warning
+                messageExpression: >-
+                  '`' + self.redis.password + '` is an example password that the template publishes. Choose
+                  your own.'
+                message: This is an example password that the template publishes. Choose your own.
+
+  - id: storage
+    title: Storage
+    description: The volume set that gives every node its own persistent volume.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250]
+            help: >-
+              Each node keeps its data and its cluster state on its own volume, which survives redeploys.
+              Uninstalling the release deletes the volume set, and the data with it. This version cannot grow the
+              volumes automatically.
+            docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  - id: network
+    title: Network
+    description: Who can connect to the cluster, and on which port.
+    sections:
+      - title: Cluster access
+        fields:
+          - path: firewallConfig.internal.inboundAllowType
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              The cluster is never published to the internet by this template. The nodes reach each other
+              through this setting too. Access changes take up to a couple of minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect, and the nodes cannot reach each other to form the cluster.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: This version always writes an empty workload list, so no workload can connect.
+        rules:
+          - rule: "!(self.firewallConfig.internal.inboundAllowType in ['none', 'workload-list'])"
+            severity: warning
+            paths: [firewallConfig.internal.inboundAllowType]
+            message: >-
+              With this setting no workload can connect, not even the nodes to each other, so the cluster never
+              forms. This version cannot list allowed workloads; choose Same GVC or Same org.
+      - title: Port
+        fields:
+          - path: port
+            type: integer
+            label: Client port
+            required: true
+            min: 1
+            max: 55535
+            description: The cluster bus stays on 16379 in this version.
+        rules:
+          - rule: "!(self.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [port]
+            message: >-
+              The platform reserves 8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and 41000.
+              Choose another port.
+          - rule: self.port == 6379 || (oldSelf != null && self.port == oldSelf.port)
+            severity: warning
+            paths: [port]
+            message: >-
+              Keep 6379. In this version the health check and the cluster setup always use 6379 and the cluster
+              bus stays on 16379, so any other port leaves every node restarting. 1.6.0 fixes it.
+
+rules:
+  - when: context.mode != 'edit'
+    rule: "false"
+    severity: warning
+    message: >-
+      This version's nodes cannot start on the current docker.io/redis:7.2 image: each node announces its
+      hostname as cluster-announce-ip, which Redis 7.2.14 and later refuse, so the node exits at start. Install
+      1.4.3 or later as a new release instead.
+  - when: context.mode == 'edit'
+    rule: "false"
+    severity: info
+    message: >-
+      A change that restarts the nodes leaves them unable to start on the current docker.io/redis:7.2 image: this
+      version announces each node's hostname as cluster-announce-ip, which Redis 7.2.14 and later refuse.
+      Install 1.4.3 or later as a new release, move the data into it, then uninstall this one. An in-place
+      upgrade deletes the volumes, because 1.3.0 renamed them.
+
+yamlOnly:
+  - path: redis
+    reason: An empty map in values.yaml; its only key, redis.password, is set under Authentication.
+  - path: diskCapacity
+    reason: Not read by this version; volumeset.capacity sizes the volumes.
+
+migrations:
+  # 1.1.0 and older hard-code a 20 GiB volume per node; 1.2.0 reads volumeset.capacity (default 10).
+  - fromVersions: "<1.2.0"
+    to: volumeset.capacity
+    valueExpr: "20"
+    note: Releases on 1.1.0 or older run 20 GiB volumes, so the capacity is kept at 20.

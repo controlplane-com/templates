@@ -1,0 +1,12 @@
+{{- if eq .Values.storage.type "local" }}
+---
+kind: volumeset
+name: {{ include "nocodb.storage.volumeset.name" . }}
+description: NocoDB local attachment storage (/usr/app/data)
+tags: {{- include "nocodb.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.local.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+{{- end }}

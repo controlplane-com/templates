@@ -4,13 +4,14 @@ listenPort: 8080 # REQUIRED - the port the gateway listens on
 
 # ─── Prerequisite secrets ─────────────────────────────────────────────────────
 # All three must EXIST BEFORE INSTALL. See README Prerequisites for the exact
-# `cpln secret create-*` commands.
+# commands that create them.
 
 # The admin secret is the Gateway Control API key (X-Tyk-Authorization on /tyk/*),
 # which creates, lists and revokes API keys — so it never transits Helm values.
 adminSecretName: my-tyk-admin-secret # REQUIRED - opaque secret (encoding: plain) holding the admin API key
 
-# These two are OPTIONAL — set either to "" to omit it. But note what happens if
+# These two default to placeholder names, so the secrets must exist unless you
+# explicitly set either to "" to omit it. But note what happens if
 # you omit the APIs: the gateway falls back to the demo API definitions baked
 # into the upstream image and will happily serve "Tyk Test API" instead of
 # nothing, which looks like a working install until you notice it is not yours.

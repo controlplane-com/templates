@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: OpenTelemetry Collector
+category: observability
+topology: stateless
+
+summary: >-
+  A stateless OpenTelemetry Collector that receives OTLP over gRPC and HTTP, forwards traces to the
+  platform's built-in tracing and derives span metrics (request rate, errors, latency histograms) on a
+  Prometheus scrape endpoint. Options include an OTLP-to-remote-write metrics pipeline into any
+  Prometheus remote-write store, a fully custom collector config, several replicas, and public
+  ingestion protected by a bearer token or mTLS. Pick it to collect telemetry from OpenTelemetry SDKs;
+  it stores nothing itself.
+
+keywords:
+  - otel
+  - otel collector
+  - otlp
+  - traces
+  - distributed tracing
+  - trace ingestion
+  - telemetry pipeline
+  - telemetry collector
+  - span metrics
+  - metrics pipeline
+  - prometheus remote write
+  - opentelemetry sdk
+  - bearer token
+  - mtls
+
+useCases:
+  - Receive OTLP traces from instrumented apps and forward them to the platform's tracing
+  - Turn OTLP metrics from OpenTelemetry SDKs into Prometheus remote write
+  - Derive request rate, error and latency metrics from spans
+  - Accept OTLP from apps running elsewhere over an authenticated public endpoint
+  - Run a custom OpenTelemetry Collector pipeline config
+
+alternativeTo:
+  - Grafana Alloy
+  - AWS Distro for OpenTelemetry
+  - Datadog Agent
+
+compatibleWith: [otlp]
+
+pickInsteadIf:
+  - need: a database that stores and queries metrics with PromQL
+    template: prometheus
+  - need: long-term metrics storage in object storage
+    template: mimir
+  - need: capture application exceptions and crashes reported by Sentry SDKs
+    template: glitchtip
+  - need: trace and evaluate LLM calls, prompts and token costs
+    template: langfuse
+  - need: store and search application logs
+    template: opensearch
+
+related:
+  - template: prometheus
+    relation: companion
+    note: Remote-write target for the collector's metrics pipeline
+  - template: mimir
+    relation: companion
+    note: Long-term remote-write target for the collector's metrics pipeline
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.bearer.secretName
+    required: false
+    when: auth.method bearer
+    description: Bearer token that OTLP senders present on the authenticated ingest receiver. The deployment waits without it.
+  - kind: secret
+    secretType: dictionary
+    keys: [cert, key, ca]
+    valuesPath: auth.mtls.secretName
+    required: false
+    when: auth.method mtls
+    description: Server certificate and private key plus the CA that signed your client certificates, for mTLS ingestion. The deployment waits without it.
+  - kind: other
+    valuesPath: metrics.remoteWrite.endpoint
+    required: false
+    when: metrics.enabled
+    description: A Prometheus remote-write store reachable from the collector, such as a Prometheus or Mimir install. The placeholder endpoint is refused at render.

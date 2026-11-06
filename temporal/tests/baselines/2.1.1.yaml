@@ -1,0 +1,31 @@
+# temporal 2.1.1 — the default install: one Temporal server replica and the Web UI on highly available
+# PostgreSQL (three Patroni members, three etcd members, two HAProxy replicas), one location, with the
+# database credentials secret created by CI. `database` must be `temporal`.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before the admin sidecar can create and migrate the schemas.
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: temporal
+      password: "{gen.pgpw}"
+      database: temporal
+
+vars:
+  pg_user: temporal
+  pg_password: "{gen.pgpw}"
+  pg_db: temporal
+
+values:
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 2.1.0 is the previous version (same values; its HA database still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 2.1.0

@@ -59,8 +59,10 @@ that both sides read, which is why it is not derived from the release name.
 
 {{/*
 Credentials secret of the ACTIVE database.
-HA path: still created by postgres-highly-available 2.4.2 (pg-ha.secretDatabase.name).
-Single-instance path: created by this chart, named by postgres.config.credentialsSecretName.
+Created by this chart (secret-db.yaml) in BOTH modes from postgres.credentials.*.
+HA path: named by postgresHA.config.credentialsSecretName (postgres-highly-available
+2.5.0 creates no credentials secret of its own).
+Single-instance path: named by postgres.config.credentialsSecretName.
 Both hold the same three keys — username, password, database; Temporal reads only the
 first two (its two store names are set on the workload, not taken from the secret).
 */}}

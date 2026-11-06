@@ -71,8 +71,11 @@ postgresHA:
 postgres:
   enabled: false
   # Credentials for the bundled database — internal plumbing no human types elsewhere.
-  # Keycloak CREATES the dictionary secret named by config.credentialsSecretName below
-  # out of these three values, so there is nothing for you to create before installing.
+  # Used in BOTH store modes: Keycloak CREATES the dictionary secret named by
+  # postgresHA.config.credentialsSecretName (HA) or config.credentialsSecretName below
+  # (single-instance) out of these three values, so there is nothing for you to create
+  # before installing. Set them before install — changing the password later does not
+  # change it in an existing database.
   credentials:
     username: keycloak
     password: change-me-keycloak-db # change before installing

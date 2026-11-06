@@ -50,7 +50,7 @@ mariadb:
     capacity: 10 # GiB (minimum 10)
   internalAccess:
     type: same-gvc # WordPress connects like any workload: never none
-  # Optional scheduled database backups to AWS S3 or GCS (see "Database backups" in the README).
+  # Optional scheduled database backups to AWS S3 or GCS (see "Storage setup" in the README).
   backup:
     enabled: false
     provider: aws # aws | gcp

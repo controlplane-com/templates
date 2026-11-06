@@ -24,7 +24,8 @@ imports:
         title: Database backups
         description: >-
           Optional scheduled database dumps to object storage. Create the bucket and the Control Plane cloud
-          account first (for AWS also the IAM policy); the steps are in the mariadb template docs.
+          account first (for AWS also the IAM policy); the steps are under Storage setup in the WordPress
+          template docs.
     exclude:
       # Chosen with the other prerequisite secrets in the WordPress step, so all three are asked up front.
       - credentialsSecretName
@@ -195,8 +196,6 @@ steps:
             type: resources
             label: Resources
             required: true
-            cpu: { min: 100m }
-            memory: { min: 256Mi }
           - path: wordpress.siteTitle
             type: string
             label: Site title

@@ -8,9 +8,8 @@
   `performanceClass: shared` is declared explicitly: omitting it makes the API
   backfill exactly that value, which is permanent drift from creation.
 
-  No `snapshots` block. The API accepts one, but shared volumes are expand-only
-  with no restore path we have verified — see "Backups" in the README rather than
-  a recovery procedure we cannot stand behind.
+  No `snapshots` block: the chart takes no snapshots of the content volume (see
+  Important Notes in the README).
 */}}
 kind: volumeset
 name: {{ include "wordpress.volume.name" . }}

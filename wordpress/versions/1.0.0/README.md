@@ -6,12 +6,12 @@
 
 - **`RELEASE-wordpress`**: a `standard` workload serving the site and `/wp-admin` on port 80, pinned to the single `location`. Every replica mounts the same content volume and is interchangeable.
 - **`RELEASE-wordpress-vs`**: a `shared` volume set mounted at `/var/www/html`, holding core, plugins, themes, uploads and the generated `wp-config.php`.
-- **`RELEASE-maria`**: the bundled `mariadb` template (a `stateful` workload with its own volume set) holding posts, pages, users and settings. It can also run a phpMyAdmin console and scheduled backups.
+- **`RELEASE-maria`**: the bundled `mariadb` template (a `stateful` workload with its own volume set) holding posts, pages, users and settings. Every `mariadb` template knob is available under `mariadb`, including the phpMyAdmin console (`mariadb.phpMyAdmin.enabled`) and scheduled backups.
 - **Identity and policies**: `reveal` on exactly the administrator and database credentials secrets, and `view` on the install GVC for a boot-time location check. The chart creates no secret.
 
 ## Prerequisites
 
-Three secrets must exist **before** you install, in a GVC with **one location**; each release needs its own secret names. If a secret is missing, the deployment waits and `cpln logs` shows nothing. `cpln workload get-deployments RELEASE-wordpress --gvc YOUR-GVC -o yaml` names the missing secret under `status.versions[].message`.
+Three secrets must exist **before** you install, in a GVC with **one location**. If a secret is missing, the deployment waits and `cpln logs` shows nothing; `cpln workload get-deployments RELEASE-wordpress --gvc YOUR-GVC -o yaml` names it under `status.versions[].message`. After creating it, run `cpln workload force-redeployment` on `RELEASE-wordpress` and `RELEASE-maria`.
 
 **1. Administrator**: a `dictionary` WordPress creates its admin account from on first boot:
 
@@ -36,8 +36,6 @@ openssl rand -hex 24 | tr -d '\n' | \
 
 ## Configuration
 
-### WordPress
-
 ```yaml
 # The ONE location of your GVC that WordPress runs in; it must be a location the GVC has.
 location: aws-us-east-1
@@ -58,11 +56,7 @@ wordpress:
 php:
   uploadMaxSize: 64M # upload_max_filesize and post_max_size (stock PHP caps uploads at 2M)
   memoryLimit: 256M # memory_limit
-```
 
-### Admin account, storage and access
-
-```yaml
 admin:
   secretName: my-wordpress-admin # MUST EXIST BEFORE INSTALL: dictionary with username, password, email (first boot only)
 
@@ -74,11 +68,7 @@ publicAccess:
 internalAccess:
   type: same-gvc # none | same-gvc | same-org | workload-list
   workloads: [] # used only with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
-```
 
-### MariaDB
-
-```yaml
 mariadb:
   image: mariadb:11.8.9
   credentialsSecretName: my-wordpress-db-credentials # MUST EXIST BEFORE INSTALL: dictionary with username, password, database
@@ -92,9 +82,21 @@ mariadb:
     capacity: 10 # GiB (minimum 10)
   internalAccess:
     type: same-gvc # WordPress connects like any workload: never none
+  # Optional scheduled database backups to AWS S3 or GCS (see "Storage setup" in the README).
+  backup:
+    enabled: false
+    provider: aws # aws | gcp
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: wordpress/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: wordpress/backups
 ```
-
-Backups are under `mariadb.backup` (see **Storage setup**). Every other knob of the `mariadb` template is available under the `mariadb` key too, including `mariadb.phpMyAdmin.enabled` for a browser database console (internal-only by default).
 
 ## Storage setup
 
@@ -105,13 +107,11 @@ Only needed when `mariadb.backup.enabled: true`, which also needs a bucket and a
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
+  "Statement": [{"Effect": "Allow",
     "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "s3:GetObjectVersion",
                "s3:DeleteObjectVersion", "s3:GetBucketLocation", "s3:AbortMultipartUpload",
                "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
-    "Resource": ["arn:aws:s3:::YOUR_BUCKET_NAME", "arn:aws:s3:::YOUR_BUCKET_NAME/*"]
-  }]
+    "Resource": ["arn:aws:s3:::YOUR_BUCKET_NAME", "arn:aws:s3:::YOUR_BUCKET_NAME/*"]}]
 }
 ```
 
@@ -124,16 +124,14 @@ Only needed when `mariadb.backup.enabled: true`, which also needs a bucket and a
 | Public site | The `*.cpln.app` endpoint, from `status.canonicalEndpoint` of `cpln workload get RELEASE-wordpress --gvc YOUR-GVC -o yaml` |
 | Admin dashboard | `SITE_URL/wp-admin`, with the administrator secret's `username` and `password` |
 | From another workload | `http://RELEASE-wordpress.YOUR-GVC.cpln.local` (port 80) |
-| Health endpoint | `/cpln-health.php` answers `ok` when PHP, the database and the install are all working |
+| Health endpoint | `/cpln-health.php` answers `ok` when PHP, the database and the install are all working. The first boot seeds the content volume and runs the installer, so expect several minutes before the site is ready |
 | Database (internal only) | `RELEASE-maria.YOUR-GVC.cpln.local:3306`, with the database credentials secret |
 
-With `publicAccess.enabled: false`, reach the site through a tunnel. WordPress builds every link from its site URL, so set `wordpress.siteUrl` to the tunnel address (here `http://localhost:8080`, with `publicAccess.enabled: false`), upgrade the release, and open the tunnel on the same port:
+With `publicAccess.enabled: false`, reach the site through a tunnel. WordPress builds every link from its site URL, so set `wordpress.siteUrl` to the tunnel address (`http://localhost:8080`), upgrade the release, open the tunnel on that port and browse `http://localhost:8080/wp-admin/`. Set `wordpress.siteUrl` back to `""` (or your custom domain) before turning the public endpoint on again.
 
 ```bash
 cpln port-forward RELEASE-wordpress 8080:80 --gvc YOUR-GVC
 ```
-
-Then browse `http://localhost:8080/wp-admin/`. Set `wordpress.siteUrl` back to `""` (or your custom domain) before turning the public endpoint on again.
 
 **Lost admin password**: the administrator secret is read on first boot only, so reset the password inside the container (user `1` is the administrator created at install):
 
@@ -146,11 +144,12 @@ cpln workload exec RELEASE-wordpress --gvc YOUR-GVC --container wordpress -- \
 
 - **Install into a single-location GVC and set `location` to that location.** WordPress is pinned to it, but the bundled MariaDB runs in every location the GVC has, and a second location means a second, separate database. A boot-time check refuses a fresh install on a multi-location GVC; do not add or remove GVC locations under a live release.
 - **A `location` the GVC does not have runs nothing.** The deployment reports `deactivated because maxScale is set to 0` in every GVC location; set `location` to one the GVC lists.
-- **The media library is not backed up.** The content volume is `shared`, which cannot be snapshotted, and uninstalling the release deletes it. Keep your own copy of `wp-content/uploads`.
+- **The media library is not backed up.** This chart takes no snapshots of the content volume, and uninstalling deletes it. Keep your own copy of `wp-content/uploads`.
 - **Changing `wordpress.image` does not update WordPress core.** The image seeds the content volume only while it is empty; after that it changes PHP and Apache only. Update core, plugins and themes from the dashboard.
 - **`wordpress.siteTitle`, `wordpress.tablePrefix` and the three secrets apply on first boot only.** Change the title in Settings > General. To change a database password, run `ALTER USER` in MariaDB first, then update the secret and force a redeployment of both workloads.
 - **Outbound email does not work out of the box.** The container has no mail transport, so password-reset and invitation emails are not sent. Install an SMTP plugin before relying on email.
 - **The bundled MariaDB is a single instance** and bounds availability: `wordpress.replicas: 2` keeps the site up while a WordPress replica restarts, not while the database restarts.
+- **`internalAccess.type: none` isolates WordPress only with `publicAccess.enabled: false`;** with the public endpoint on, anyone can reach the site through it.
 - **A firewall change takes from 30 seconds to a few minutes to take effect** after changing `publicAccess.enabled` or `internalAccess`.
 
 ## Links

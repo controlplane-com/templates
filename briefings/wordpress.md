@@ -34,7 +34,7 @@
 - **Redirect loops through `cpln port-forward`:** `wordpress.siteUrl` must equal the tunnel address (e.g. `http://localhost:8080`); it applies on an installed site.
 - **Lost admin password:** the admin secret is first-boot only; reset with `wp_set_password` via `cpln workload exec` (README has the command).
 - **No outbound mail:** `wp_mail()` fails silently without an SMTP plugin.
-- **Media library is not backed up:** the content volume is `shared` (no snapshots); MariaDB backups cover the database only.
+- **Media library is not backed up:** the chart takes no snapshots of the content volume; MariaDB backups cover the database only.
 - **DB password change:** `ALTER USER` first, then update the secret and force-redeploy both workloads; MariaDB reads the secret only at first init.
 - **Wizard rule:** `mariadb.internalAccess` may not be `none`, and a workload-list must include `{release}-wordpress` (mirrors `wordpress.validate`).
 - **Upstream mariadb 1.4.1 drift** is tracked as a separate mariadb PR, not in this template.

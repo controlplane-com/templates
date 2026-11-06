@@ -50,7 +50,13 @@ ENV AEGRA_CONFIG=/app/agents/aegra.json
 }
 ```
 
-Push it to a registry the GVC can pull from and set `aegra.image`. Each graph is registered as an assistant whose id is the graph name.
+Build and push it to your org's private registry, then set `aegra.image` to the printed `image` value:
+
+```bash
+cpln image build --name my-agent:1 --dockerfile Dockerfile --push   # builds linux/amd64
+```
+
+Only your graphs are served; the example agents of the default image are not registered. Each graph appears in `/assistants/search` under an id generated from its name (the `graph_id` is the name you listed in `aegra.json`); call it with `"assistant_id": "my_agent"`.
 
 ## Configuration
 

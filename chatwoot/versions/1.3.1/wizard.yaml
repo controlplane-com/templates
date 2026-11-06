@@ -389,18 +389,20 @@ steps:
                 label: Single-instance PostgreSQL
                 description: One PostgreSQL replica; lighter, without failover.
                 set: { postgresHA.enabled: false, postgres.enabled: true }
-          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          # Declared so the import conditions are fields; the chooser above writes them, so they are never shown.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - type: note
             severity: warning
@@ -671,13 +673,9 @@ steps:
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in the MinIO
               credentials secret and remove them from the values.
     rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: chatwoot.validate
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
       - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
         mirrors: chatwoot.validate
-        paths: [postgresHA.enabled]
+        paths: [postgresHA.config.credentialsSecretName]
         message: >-
           The HAProxy leader endpoint is how Chatwoot reaches the HA database, so it stays on: remove
           postgresHA.proxy.enabled from the values.
@@ -726,7 +724,7 @@ steps:
           does not change the existing user or password.
       - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
         severity: warning
-        paths: [postgresHA.enabled, postgres.enabled]
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
         message: >-
           Switching the database on a running release points Chatwoot at a separate, empty database; the
           existing data is not migrated.
@@ -807,6 +805,11 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
+  # No paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden fields), so this only
+  # trips on YAML edits, including both off, when no database field is visible; it blocks Install on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: chatwoot.validate
+    message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
   - when: self.postgres.enabled
     rule: "!self.postgres.image.startsWith('postgres:')"
     mirrors: chatwoot.validate

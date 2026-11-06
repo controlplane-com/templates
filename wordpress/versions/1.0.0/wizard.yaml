@@ -50,9 +50,11 @@ steps:
         fields:
           - type: note
             severity: warning
+            when: context.mode == 'install'
             text: >-
               All three secrets must exist **before** you install. If one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
+              `cpln logs` shows nothing at all; after creating it, run `cpln workload force-redeployment` on
+              the WordPress and MariaDB workloads. The first boot takes several minutes.
           - path: admin.secretName
             type: ref
             label: Administrator secret
@@ -306,7 +308,7 @@ steps:
             required: true
             description: Firewall changes take 30 seconds to a few minutes to take effect.
             options:
-              - { value: none, label: None, description: No workload can connect. }
+              - { value: none, label: None, description: No workload can connect internally; turn public access off to isolate WordPress fully. }
               - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
               - { value: same-org, label: Same org, description: Any workload in this org. }
               - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }

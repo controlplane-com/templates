@@ -1,0 +1,50 @@
+# aegra 1.0.0 — the production-leaning shape at the smallest size that runs: two Aegra replicas on the
+# bundled single PostgreSQL and a one-node Redis that requires a password, with the default image
+# (Aegra's example agents, no model key needed) and an agent secret delivered as an env var. All
+# credentials are prerequisite secrets CI creates (hex, so they are URL-safe for REDIS_URL).
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+  redispw: hex
+  probe: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: aegra
+      password: "{gen.pgpw}"
+      database: aegra
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  agent:
+    type: dictionary
+    entries:
+      E2E_PROBE: "{gen.probe}"
+
+vars:
+  aegra_version: "0.11.0"          # the Aegra version the image reports on /info; bump with the image tag
+  redis_password: "{gen.redispw}"
+  probe: "{gen.probe}"
+
+values:
+  aegra:
+    replicas: 2
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+  agentSecrets:
+    secretName: "{secrets.agent.name}"
+    keys: [E2E_PROBE]
+
+# New template: no earlier version to upgrade from.

@@ -14,12 +14,13 @@ spec:
   containers:
     - name: wordpress
       image: {{ .Values.wordpress.image }}
-      # Boot goes through the mounted wrapper: it elects one replica to seed the
-      # shared docroot and create the admin account BEFORE Apache binds, then
-      # execs the image's own apache2-foreground.
+      # The inline start script (templates/_script-start.tpl) elects one replica to
+      # seed the shared docroot and create the admin account BEFORE Apache binds,
+      # then execs the image's own apache2-foreground.
       command: /bin/bash
       args:
-        - /cpln/start.sh
+        - "-c"
+        - {{- include "wordpress.inlineScript" (include "wordpress.script.start" .) | nindent 10 }}
       inheritEnv: false
       minCpu: {{ .Values.wordpress.resources.minCpu | quote }}
       minMemory: {{ .Values.wordpress.resources.minMemory | quote }}
@@ -58,7 +59,7 @@ spec:
             define('FS_METHOD', 'direct');
             $cpln_site_url = getenv('WP_SITE_URL');
             if ($cpln_site_url) { define('WP_HOME', $cpln_site_url); define('WP_SITEURL', $cpln_site_url); }
-        # ── First-run bootstrap (read by /cpln/install.php only) ──
+        # ── First-run bootstrap (read by the start script's installer only) ──
         - name: WP_SITE_TITLE
           value: {{ .Values.wordpress.siteTitle | quote }}
         - name: WP_ADMIN_USERNAME
@@ -74,43 +75,36 @@ spec:
         - path: /var/www/html
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "wordpress.volume.name" . }}
-        - path: /cpln/start.sh
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "wordpress.secret.start.name" . }}.payload
-        - path: /cpln/install.php
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "wordpress.secret.install.name" . }}.payload
-        - path: /usr/local/etc/php/conf.d/zz-cpln-wordpress.ini
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "wordpress.secret.phpini.name" . }}.payload
       # WordPress ships no health endpoint: / and /wp-login.php redirect before
       # install and on host/scheme mismatch, and a static asset would prove Apache
-      # is up while PHP or the database is down. start.sh writes cpln-health.php
-      # into the docroot instead.
+      # is up while PHP or the database is down. The start script writes
+      # cpln-health.php into the docroot instead.
       #
-      # readiness runs the DEEP check (PHP + database + is_blog_installed).
-      # Budget = 20 + 20*15 = 320 s, which has to cover seeding a 117 MB docroot
-      # onto network storage, the database wait and the install.
+      # Readiness runs the DEEP check (PHP + database + is_blog_installed). The
+      # platform derives a startup probe from it: a never-ready container is killed
+      # after about initialDelaySeconds + 30 x periodSeconds = 920 s, which covers
+      # every boot gate in the start script (worst case ~830 s). A sick replica
+      # leaves rotation after 3 x 30 = 90 s.
       readinessProbe:
         httpGet:
           path: /cpln-health.php
           port: 80
           scheme: HTTP
         initialDelaySeconds: 20
-        periodSeconds: 15
-        failureThreshold: 20
+        periodSeconds: 30
+        failureThreshold: 3
         successThreshold: 1
         timeoutSeconds: 5
-      # liveness runs the SHALLOW check, deliberately database-independent: a
-      # database blip must stop traffic to the replica (readiness) without
-      # restarting it in a loop. initialDelaySeconds is past the readiness budget
-      # so liveness never kills a container that is legitimately still seeding.
+      # Liveness runs the SHALLOW check, deliberately database-independent: a
+      # database blip takes the replica out of rotation (readiness) without
+      # restarting it. Its first possible kill, 600 + 10 x 30 = 900 s, also sits
+      # past every boot gate.
       livenessProbe:
         httpGet:
           path: /cpln-health.php?shallow=1
           port: 80
           scheme: HTTP
-        initialDelaySeconds: 360
+        initialDelaySeconds: 600
         periodSeconds: 30
         failureThreshold: 10
         successThreshold: 1

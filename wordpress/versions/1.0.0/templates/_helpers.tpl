@@ -20,34 +20,25 @@
 {{- printf "%s-wordpress-gvc-policy" .Release.Name }}
 {{- end }}
 
-{{/* Boot wrapper: GVC guard -> docroot seed -> wp-config -> install -> Apache. */}}
-{{- define "wordpress.secret.start.name" -}}
-{{- printf "%s-wordpress-start" .Release.Name }}
-{{- end }}
-
-{{/* First-run installer, run before Apache binds. */}}
-{{- define "wordpress.secret.install.name" -}}
-{{- printf "%s-wordpress-install" .Release.Name }}
-{{- end }}
-
-{{/* PHP ini overlay (upload size, memory limit). */}}
-{{- define "wordpress.secret.phpini.name" -}}
-{{- printf "%s-wordpress-php-ini" .Release.Name }}
-{{- end }}
-
 {{/*
-Names of the two secrets this chart CREATES for the bundled mariadb subchart.
-mariadb 1.4.0 stopped creating its own secrets and now takes only their NAMES,
-and a parent cannot template a subchart value — so the names are plain values
-that both sides read.
+Name of the prerequisite `dictionary` secret (username, password, database) that
+the bundled MariaDB initializes with and WordPress connects with. It is the
+mariadb subchart's own value, so both sides read the one key.
 */}}
 {{- define "wordpress.secret.db.name" -}}
 {{- .Values.mariadb.credentialsSecretName }}
 {{- end }}
 
-{{- define "wordpress.secret.dbRoot.name" -}}
-{{- .Values.mariadb.rootPasswordSecretName }}
-{{- end }}
+{{/*
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args (even inside single quotes), so
+every $ is doubled and the shell receives the script byte for byte. A |- block
+scalar keeps heredoc terminators at column 0. Copied from pgedge.inlineScript.
+*/}}
+{{- define "wordpress.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
+{{- end -}}
 
 
 {{/* Dependency Helpers (deterministic on .Release.Name — mirrors the subchart helper) */}}
@@ -103,27 +94,18 @@ because a hand-maintained list is exactly what drifts when that changes.
 {{- fail "wordpress: admin.secretName is required — the name of a prerequisite `dictionary` secret holding exactly the keys `username`, `password` and `email`. It MUST exist BEFORE install: the admin account is created before Apache binds, and a missing secret wedges the deployment silently (cpln logs returns nothing — read status.versions[].message from `cpln workload get-deployments`)" -}}
 {{- end -}}
 
-{{- /* Bundled-database plumbing this chart creates. */ -}}
+{{- /* Bundled-database credentials: two prerequisite secrets, never values. */ -}}
 {{- if not .Values.mariadb.credentialsSecretName -}}
-{{- fail "wordpress: mariadb.credentialsSecretName is required — this chart CREATES that dictionary secret from mariadb.credentials.*, and the bundled MariaDB reads it by name. Secret names are org-wide, so give each wordpress release its own name" -}}
+{{- fail "wordpress: mariadb.credentialsSecretName is required — the name of a prerequisite `dictionary` secret holding `username`, `password` and `database`. MariaDB initializes with it and WordPress connects with it. It MUST exist BEFORE install: cpln secret create-dictionary --name my-wordpress-db-credentials --entry username=wordpress --entry password='YOUR-STRONG-PASSWORD' --entry database=wordpress" -}}
 {{- end -}}
 {{- if not .Values.mariadb.rootPasswordSecretName -}}
-{{- fail "wordpress: mariadb.rootPasswordSecretName is required — this chart CREATES that opaque secret from mariadb.credentials.rootPassword, and the bundled MariaDB reads it by name. Secret names are org-wide, so give each wordpress release its own name" -}}
-{{- end -}}
-{{- if not .Values.mariadb.credentials.username -}}
-{{- fail "wordpress: mariadb.credentials.username is required" -}}
-{{- end -}}
-{{- if not .Values.mariadb.credentials.password -}}
-{{- fail "wordpress: mariadb.credentials.password is required" -}}
-{{- end -}}
-{{- if not .Values.mariadb.credentials.database -}}
-{{- fail "wordpress: mariadb.credentials.database is required" -}}
-{{- end -}}
-{{- if not .Values.mariadb.credentials.rootPassword -}}
-{{- fail "wordpress: mariadb.credentials.rootPassword is required" -}}
+{{- fail "wordpress: mariadb.rootPasswordSecretName is required — the name of a prerequisite `opaque` secret (encoding plain) holding the MariaDB root password. It MUST exist BEFORE install: printf '%s' 'YOUR-STRONG-ROOT-PASSWORD' | cpln secret create-opaque --name my-wordpress-db-root-password --encoding plain -f -" -}}
 {{- end -}}
 {{- if eq .Values.mariadb.credentialsSecretName .Values.mariadb.rootPasswordSecretName -}}
-{{- fail "wordpress: mariadb.credentialsSecretName and mariadb.rootPasswordSecretName must be DIFFERENT secrets — the application credential is deliberately separate from root, so sharing the first does not hand out the second" -}}
+{{- fail "wordpress: mariadb.credentialsSecretName and mariadb.rootPasswordSecretName must be DIFFERENT secrets — WordPress reads the credentials secret, and must not be able to read the root password" -}}
+{{- end -}}
+{{- if .Values.mariadb.credentials -}}
+{{- fail "wordpress: mariadb.credentials is not a key of this chart — the database credentials are prerequisite secrets. Create them and set mariadb.credentialsSecretName and mariadb.rootPasswordSecretName (see Prerequisites in the README)" -}}
 {{- end -}}
 
 {{- /*
@@ -132,7 +114,7 @@ because a hand-maintained list is exactly what drifts when that changes.
   supplies the real count here. The platform does NOT validate this direction —
   a localOptions entry naming a location the GVC lacks is accepted, stored, and
   simply inert — so the render-time checks below catch the shapes we can see and
-  the boot-time GVC read in start.sh catches the rest, best-effort.
+  the boot-time GVC read in the start script catches the rest, best-effort.
 */ -}}
 {{- if hasKey .Values "locations" -}}
 {{- fail "wordpress: `locations` (plural) is not a key of this chart. WordPress runs in exactly ONE location — one docroot volume and one bundled database — so use the singular `location`, e.g. `location: aws-us-east-1`" -}}
@@ -164,6 +146,9 @@ because a hand-maintained list is exactly what drifts when that changes.
 {{- if .Values.wordpress.siteUrl -}}
 {{- if not (or (hasPrefix "http://" .Values.wordpress.siteUrl) (hasPrefix "https://" .Values.wordpress.siteUrl)) -}}
 {{- fail (printf "wordpress: wordpress.siteUrl must start with http:// or https:// — it is used verbatim as WP_HOME and WP_SITEURL, got '%s'" .Values.wordpress.siteUrl) -}}
+{{- end -}}
+{{- if not (regexMatch "^https?://[^\\s\"`$\\\\]+$" .Values.wordpress.siteUrl) -}}
+{{- fail (printf "wordpress: wordpress.siteUrl must be a URL without spaces, double quotes, $, backticks or backslashes — the start script writes it into a shell string, got '%s'" .Values.wordpress.siteUrl) -}}
 {{- end -}}
 {{- if hasSuffix "/" .Values.wordpress.siteUrl -}}
 {{- fail (printf "wordpress: wordpress.siteUrl must not end with a trailing slash, got '%s'" .Values.wordpress.siteUrl) -}}

@@ -1,14 +1,13 @@
 apiVersion: v2
 name: wordpress
-description: WordPress content management system with bundled MariaDB and persistent media storage
+description: WordPress websites and blogs with a bundled MariaDB database and persistent media storage
 type: application
 version: 1.0.0
-appVersion: "7.1.0"
+appVersion: "7.1.4"
 
 annotations:
   created: "2026-08-31"
-  lastModified: "2026-08-31"
-  category: "cms"
+  lastModified: "2026-11-06"
   createsGvc: false
 
 dependencies:

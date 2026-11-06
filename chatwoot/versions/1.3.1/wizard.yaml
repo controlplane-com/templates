@@ -673,10 +673,6 @@ steps:
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in the MinIO
               credentials secret and remove them from the values.
     rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: chatwoot.validate
-        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
-        message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
       - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
         mirrors: chatwoot.validate
         paths: [postgresHA.config.credentialsSecretName]
@@ -809,6 +805,11 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' step.
 rules:
+  # No paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden fields), so this only
+  # trips on YAML edits, including both off, when no database field is visible; it blocks Install on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: chatwoot.validate
+    message: Enable exactly one database, either the highly available or the single-instance PostgreSQL.
   - when: self.postgres.enabled
     rule: "!self.postgres.image.startsWith('postgres:')"
     mirrors: chatwoot.validate

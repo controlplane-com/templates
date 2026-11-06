@@ -285,6 +285,8 @@ def generate_pkcs12(passphrase):
 def generate(kind):
     if kind == "kraft-cluster-id":  # a KRaft cluster id is a base64url UUID without padding
         return base64.urlsafe_b64encode(pysecrets.token_bytes(16)).decode().rstrip("=")
+    if kind == "fernet":  # a Fernet key is 32 random bytes, base64url WITH padding (44 characters)
+        return base64.urlsafe_b64encode(pysecrets.token_bytes(32)).decode()
     return pysecrets.token_hex(16)
 
 

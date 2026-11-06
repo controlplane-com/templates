@@ -165,7 +165,8 @@ steps:
               `cronApiKey`.
             help: >-
               `encryptionKey` encrypts every connected calendar and app credential; replacing it makes them
-              unreadable. `cronSecret` authorizes the scheduled-job caller.
+              unreadable. `cronSecret` authorizes the scheduled-job caller. After changing any other key, run
+              `cpln workload force-redeployment` on `{release}-calcom` (and `{release}-calcom-cron` for `cronSecret`).
             ref:
               kind: secret
               format: name
@@ -258,8 +259,8 @@ steps:
         fields:
           - type: note
             when: >-
-              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
-              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != '' &&
+              self.postgresHA.config.credentialsSecretName != self.postgres.config.credentialsSecretName
             text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
             textExpression: >-
               'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
@@ -313,7 +314,7 @@ steps:
 
   - id: access
     title: Access
-    description: The public endpoint for booking pages, and which workloads can reach Cal.com.
+    description: The public endpoint for booking pages, which workloads can reach Cal.com, and the scheduled-job caller.
     sections:
       - title: Public endpoint
         docs: "#access"
@@ -335,11 +336,13 @@ steps:
             label: Who can connect internally
             widget: cards
             required: true
-            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            description: >-
+              Changing this restarts Cal.com (brief downtime at 1 replica), and the firewall takes 30 seconds to a
+              few minutes to update.
             options:
               - value: none
                 label: None
-                description: No workload can connect. Turns off the scheduled-job caller too.
+                description: No workload can connect. Turn the scheduled-job caller off first; it reaches Cal.com internally.
               - value: same-gvc
                 label: Same GVC
                 description: Any workload in this GVC.
@@ -368,10 +371,6 @@ steps:
             paths: [internalAccess.type]
             message: Choose who can connect internally.
 
-  - id: jobs
-    title: Scheduled jobs
-    description: The caller that runs Cal.com's scheduled jobs, which the app itself never triggers.
-    sections:
       - title: Scheduled-job caller
         toggle: cron.enabled
         docs: "#scheduled-jobs"

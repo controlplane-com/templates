@@ -2,8 +2,8 @@
 
 ### Architecture
 
-- **Syncer workload** — polls each configured provider on its interval and creates or updates Control Plane secrets to match, exposing an admin API on `port`.
-- **Identity and policy** — permission to manage the Control Plane secrets it writes.
+- **Syncer workload** — polls each configured provider on its interval and creates or updates Control Plane secrets to match, with an admin API on port `3004`.
+- **Identity and policy** — the policy grants the identity `manage` on **every secret in the org** (`target: all`), not only the secrets it writes. The identity has no AWS or GCP binding.
 
 The sync configuration is **your** secret, mounted into the workload — this template creates none of its own, and does not create a GVC.
 
@@ -23,9 +23,9 @@ ESS tags every secret it manages with `syncer.cpln.io/source` (set to the worklo
 
 ### Patch Notes
 
-This version adds automatic base64 handling to `discoverAllSecrets`: a discovered opaque secret whose value is canonical base64 is marked `encoding: base64`, so Control Plane decodes the payload when workloads consume it. Add a `cpln-encoding: disable` label to a GCP secret to opt it out and store its value verbatim.
+Version 2.1.0 moves the sync configuration out of values into a prerequisite secret (see [Prerequisites](#prerequisites)). Version 2.0.0 added automatic base64 handling to `discoverAllSecrets`: a discovered opaque secret whose value is canonical base64 is marked `encoding: base64`, so Control Plane decodes the payload when workloads consume it. Add a `cpln-encoding: disable` label to a GCP secret to opt it out and store its value verbatim.
 
-> **Upgrade note:** On the first sync after upgrading, any already-discovered opaque secret whose value looks like base64 is re-written with `encoding: base64`, and workloads consuming it start receiving the **decoded** value. If a consumer decodes such a secret itself today, label the GCP secret `cpln-encoding: disable` **before** upgrading to keep the current behavior.
+> **Upgrade note (from 1.x):** On the first sync after upgrading, any already-discovered opaque secret whose value looks like base64 is re-written with `encoding: base64`, and workloads consuming it start receiving the **decoded** value. If a consumer decodes such a secret itself today, label the GCP secret `cpln-encoding: disable` **before** upgrading to keep the current behavior.
 
 ### Prerequisites
 
@@ -49,15 +49,15 @@ providers:
 secrets:
   - name: my-app-secret
     provider: my-vault
-    type: opaque
-    path: secret/data/my-app
-    key: password
+    opaque:
+      path: /v1/secret/data/my-app
+      parse: data.password
 ```
 
 Then create the secret from it and set `configSecretName` to the name you used:
 
 ```bash
-cpln secret create-opaque --name my-ess-config --encoding plain -f sync.yaml
+cat sync.yaml | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -
 ```
 
 The schema for `providers` and `secrets` is documented below — it is unchanged, it simply lives in this file
@@ -72,7 +72,8 @@ cpln workload get-deployments RELEASE_NAME-ess --gvc GVC_NAME -o yaml
 
 <b>Upgrading from 2.0.x:</b> move your existing `essConfig` block into `sync.yaml` verbatim — the keys are
 identical, only the top-level `essConfig:` wrapper goes away — create the secret, and delete `essConfig` from
-your values. An upgrade that still carries `essConfig` is refused at render. Rotate any credential that was in
+your values. Do not name the new secret `RELEASE_NAME-ess-config`: 2.0.x created that secret and the upgrade
+removes it. An upgrade that still carries `essConfig` is refused at render. Rotate any credential that was in
 your values file, since it was stored in the Helm release.
 
 ### Configuring `values.yaml`
@@ -83,8 +84,8 @@ your values file, since it was stored in the Helm release.
 |---|---|
 | `image` | The ESS container image. Do not change unless upgrading. |
 | `resources.cpu` / `resources.memory` | Resource limits for the workload container. |
-| `port` | Port for the ESS HTTP admin API (default: `3004`). Used for health checks and manual sync triggers. |
-| `allowedIp` | List of CIDRs allowed to reach the ESS admin API externally. Replace the placeholder with your IP, or use `0.0.0.0/0` to allow all. |
+| `port` | Container port and health-check port for the admin API (default: `3004`). The chart does not pass it to ESS, which always listens on `3004`, so leave it at the default. |
+| `allowedIp` | List of CIDRs allowed to reach the ESS admin API on its public endpoint. The `1.2.3.4` placeholder admits nobody; replace it with your CIDR. Other workloads in the GVC cannot reach the admin API. |
 | `configSecretName` | Name of the `opaque` secret holding your `sync.yaml` — the full sync configuration. See [Prerequisites](#prerequisites). |
 
 ---
@@ -107,8 +108,8 @@ Each provider entry requires a unique `name` and exactly one provider block. An 
 - name: my-aws-ssm
   awsParameterStore:
     region: us-east-1
-    accessKeyId: <ACCESS_KEY>       # optional if using an IAM-linked identity
-    secretAccessKey: <SECRET_KEY>   # optional if using an IAM-linked identity
+    accessKeyId: <ACCESS_KEY>       # required — the template's identity has no AWS binding
+    secretAccessKey: <SECRET_KEY>   # required
 ```
 
 **AWS Secrets Manager**
@@ -132,7 +133,7 @@ Each provider entry requires a unique `name` and exactly one provider block. An 
 - name: my-gcp
   gcpSecretManager:
     projectId: 123456789876
-    credentials:                    # optional — omit to use Application Default Credentials
+    credentials:                    # required — the template's identity has no GCP binding
       clientEmail: <EMAIL>
       privateKey: <PRIVATE_KEY>
 ```
@@ -337,7 +338,8 @@ Priority (highest wins):
 - **Secret type changes:** Changing a secret from `opaque` to `dictionary` (or vice versa) causes ESS to delete the existing secret and recreate it. There is a brief window where the secret does not exist.
 - **No automatic deletion:** ESS only creates and updates secrets — it never deletes them. Removing a secret from `sync.yaml`, or deleting a source secret upstream, leaves the existing Control Plane secret in place; delete unwanted secrets manually. ESS-managed secrets carry the `syncer.cpln.io/source` tag (and discovered secrets additionally carry `syncer.cpln.io/discoveredBy`) to help identify them.
 - **Doppler `parse`:** The `parse` field only works when the Doppler secret's value is JSON or YAML. Using `parse` on a plain string secret throws an error.
-- **`sync.yaml` hot reload:** ESS watches its config file and automatically restarts when changes are detected (every ~5 seconds). No workload restart is needed after updating the config secret.
+- **Changing `sync.yaml`:** ESS reloads when its mounted file changes, but updating the config secret does not change the file in a running replica. After every change, run `cpln workload force-redeployment RELEASE_NAME-ess --gvc GVC_NAME`.
+- **Org-wide secret access:** the policy grants `manage` on every secret in the org. Treat the workload as security-sensitive and keep `allowedIp` narrow.
 
 ### Resources
 
@@ -348,8 +350,8 @@ Priority (highest wins):
 
 | What | Value |
 |---|---|
-| Admin API (same GVC) | `RELEASE_NAME-ess.GVC_NAME.cpln.local:3004` |
-| Externally | only from the CIDRs in `allowedIp`, which defaults to a placeholder that admits nothing |
+| Admin API (public) | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-ess --gvc GVC_NAME -o yaml`, reachable only from the CIDRs in `allowedIp` (the default placeholder admits nobody) |
+| Admin API (private) | `cpln port-forward RELEASE_NAME-ess 3004:3004 --gvc GVC_NAME` — other workloads in the GVC cannot reach it |
 | Health check | `GET /about` |
 
 The synced secrets themselves are ordinary Control Plane secrets — workloads consume them by name, with no dependency on this template being reachable.

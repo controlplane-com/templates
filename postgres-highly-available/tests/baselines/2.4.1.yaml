@@ -1,0 +1,18 @@
+# postgres-highly-available 2.4.1 — a customer install as it looks today: credentials inline in the
+# `postgres:` block. Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  postgres:
+    username: e2e
+    password: "{gen.pgpw}"
+    database: e2e

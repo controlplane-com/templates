@@ -1,0 +1,14 @@
+{{- include "chatwoot.validate" . }}
+---
+kind: identity
+name: {{ include "chatwoot.identity.name" . }}
+description: Chatwoot identity (shared by the web and worker workloads)
+tags: {{- include "chatwoot.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq .Values.storage.type "s3" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

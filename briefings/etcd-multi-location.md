@@ -49,6 +49,7 @@
 
 - **Never `helm upgrade` a 1.x release onto 2.0.0.** The upgrade drops `kind: gvc` from the manifest and Helm prunes what a chart no longer declares — measured elsewhere at **6 seconds to delete a GVC and everything in it, while printing `upgraded successfully`**.
 - The chart therefore **fails at render** on `hasKey .Values.global "gvc"`. Proven against the real 1.0.2 `values.yaml` via `-f`, and against `--set global.gvc.name=…`, `--set global.gvc.locations[0].name=…` and `--set-json 'global.gvc={}'`.
+- **In-place path (2026-10-29, proven live):** `scripts/keep-gvc.py` marks the GVC `keep` in the release records, then `helm upgrade --gvc <old GVC>` with `global.gvc.locations` → `global.locations` updates every resource in place; README "Upgrading in place from 1.0.2".
 - **One hole is not closable at render**: an upgrade run with *no* values at all sees only 2.0.0's defaults, and the guard cannot fire. That is why the migration prose exists in both the README and here.
 - Migration is: new release into an existing GVC → `etcdctl get "" --prefix -w json` out of the old cluster → write into the new → uninstall the old release (which takes the GVC it created). Do **not** point the new release at the GVC the old release created: that GVC is still owned by the old release.
 

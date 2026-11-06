@@ -1,0 +1,15 @@
+{{- if eq (include "debezium.requiresVolumeset" .) "true" }}
+kind: volumeset
+name: {{ include "debezium.volumeset.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Debezium Server data volumeset for offset and schema history storage
+tags:
+  {{- include "debezium.tags" . | nindent 2 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: {{ .Values.volumeset.performanceClass }}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+{{- end }}

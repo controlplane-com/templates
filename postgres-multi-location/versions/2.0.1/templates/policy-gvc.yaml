@@ -1,0 +1,22 @@
+{{- /*
+The Patroni members read their own GVC at boot to confirm it really has every
+location this release declares. The platform does not validate that: a
+localOptions entry naming a location the GVC lacks is accepted, stored and
+inert, so the declared member and its etcd peer never start while every status
+surface reads healthy — and the etcd DCS forms on a bare majority or not at all.
+Scoped to the ONE install GVC; never `target: all`, which would grant view on
+every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "pg-ml.policy.gvc.name" . }}
+description: PostgreSQL multi-location GVC read policy
+tags:
+  {{- include "pg-ml.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pg-ml.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

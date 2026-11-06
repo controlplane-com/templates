@@ -1,0 +1,324 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis Multi-Location
+# Chart.yaml says createsGvc: false, but the chart has two modes. With `locations` listed it creates one GVC per
+# location named <release>-<location> (templates/multi-location/gvc-locations.yaml) and runs nothing in the GVC it
+# is installed into; with `locations` empty it runs in the install GVC (templates/single-location). The location
+# count of the install GVC matters only in the second mode, so it is a rule, not a gvc block.
+
+steps:
+  - id: topology
+    title: Locations and Sentinel
+    description: >-
+      Where Redis and Sentinel run, how many Redis instances each location gets, and how many Sentinels must
+      agree before a failover.
+    sections:
+      - id: locations
+        title: Locations
+        fields:
+          - id: topology
+            virtual: true
+            type: enum
+            label: Placement
+            widget: cards
+            required: true
+            init: "size(self.locations) > 0 ? 'multi' : 'single'"
+            options:
+              - value: multi
+                label: One GVC per location
+                description: The chart creates a GVC named after the release and each listed location.
+              - value: single
+                label: The GVC you install into
+                description: Everything runs in the install GVC.
+                set: { locations: [] }
+          - type: note
+            severity: warning
+            when: ui.topology == 'multi' && context.mode == 'install'
+            text: >-
+              This version creates one GVC per listed location, named after the release and the location, and
+              runs nothing in the GVC you install into. A GVC of such a name that no release manages is adopted,
+              and uninstalling the release then deletes it with every workload in it; one that another release
+              manages makes the install fail. Uninstall the release against the GVC you install it into.
+            textExpression: >-
+              'This version creates one GVC per listed location (' +
+              self.locations.filter(l, l != '').map(l, context.releaseName + '-' + l).join(', ') +
+              ') and runs nothing in the GVC you install into. A GVC of such a name that no release manages is
+              adopted, and uninstalling the release then deletes it with every workload in it; one that another
+              release manages makes the install fail. Uninstall the release against the GVC you install it into.'
+          - type: note
+            when: ui.topology == 'single'
+            text: >-
+              Redis and Sentinel run in the GVC you install into. The first Redis instance boots as the master
+              and the others replicate from it.
+          - path: locations
+            type: list
+            label: Locations
+            required: true
+            when: ui.topology == 'multi'
+            minItems: 2
+            unique: true
+            widget: tags
+            description: >-
+              One GVC per location. The first location's first Redis instance boots as the master, and every
+              other instance replicates from it.
+            item:
+              type: ref
+              ref: { kind: location, format: name, mustExist: error }
+            rules:
+              # The GVCs are named <release>-<location>; the platform schema caps a name at 64 characters.
+              - when: context.releaseName != null
+                rule: self.locations.all(l, size(context.releaseName) + 1 + size(l) <= 64)
+                severity: warning
+                messageExpression: >-
+                  'The chart names each GVC <release>-<location>, and a name may have at most 64 characters: ' +
+                  self.locations.filter(l, size(context.releaseName) + 1 + size(l) > 64).map(l,
+                  context.releaseName + '-' + l).join(', ') + ' is too long. Use a shorter release name.'
+                message: >-
+                  The chart names each GVC <release>-<location>, and a name may have at most 64 characters. Use
+                  a shorter release name.
+              - rule: oldSelf == null || oldSelf.locations.all(l, l in self.locations)
+                severity: info
+                messageExpression: >-
+                  'Removing a location deletes its GVC with its Redis and Sentinel workloads and volume sets: ' +
+                  oldSelf.locations.filter(l, !(l in self.locations)).map(l, context.releaseName + '-' + l).join(', ') +
+                  '.'
+                message: >-
+                  Removing a location deletes its GVC (<release>-<location>) with its Redis and Sentinel workloads
+                  and volume sets.
+          - path: redis.replicas
+            type: integer
+            label: Redis instances per location
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              With one GVC per location, every location runs this many Redis workloads of one instance each;
+              in the install GVC, one workload runs this many instances.
+            rules:
+              - rule: oldSelf == null || size(self.locations) == 0 || self.redis.replicas >= oldSelf.redis.replicas
+                severity: info
+                message: >-
+                  Lowering the count deletes the Redis workloads above it in every location, with their volume
+                  sets.
+          - path: sentinel.quorum
+            type: integer
+            label: Sentinel quorum
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              How many Sentinels must agree that the master is down before a failover starts. The chart runs one
+              Sentinel more than the quorum (a single one for a quorum of 1).
+          - type: note
+            when: self.sentinel.quorum != null && ui.topology == 'multi' && size(self.locations) > 0
+            text: The Sentinels are spread over the locations in list order.
+            textExpression: >-
+              string(self.sentinel.quorum == 1 ? 1 : self.sentinel.quorum + 1) + ' Sentinels, spread over the ' +
+              string(size(self.locations)) + ' locations in list order' +
+              ((self.sentinel.quorum == 1 ? 1 : self.sentinel.quorum + 1) % size(self.locations) == 0 ? '.' :
+              '; the first locations get one more.') +
+              ((self.sentinel.quorum == 1 ? 1 : self.sentinel.quorum + 1) < size(self.locations) ?
+              ' Some locations run no Sentinel.' : '')
+        rules:
+          # multi-location/workload-redis.yaml reads `$current.redis.replicas` (nil) unless there are 2+ locations.
+          - rule: ui.topology != 'multi' || size(self.locations) != 1
+            paths: [locations]
+            message: >-
+              With one GVC per location this version needs at least 2 locations: with exactly one, the chart
+              fails to render. For a single location, choose the GVC you install into.
+          - when: ui.topology == 'single' && context.gvcLocations != null
+            rule: size(context.gvcLocations) <= 1
+            severity: warning
+            messageExpression: >-
+              'The target GVC has ' + string(size(context.gvcLocations)) + ' locations, and in the install GVC
+              every location runs its own copy of Redis and Sentinel, each with its own master and volumes.
+              Choose a GVC with one location, or one GVC per location.'
+            message: >-
+              In the install GVC every location runs its own copy of Redis and Sentinel, each with its own
+              master and volumes. Choose a GVC with one location, or one GVC per location.
+      - id: images
+        title: Images
+        fields:
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            help: >-
+              The default is the image this version ships with; another tag is unproven with it. After changing
+              it, check that every Redis workload reports ready before relying on it.
+          - path: sentinel.image
+            type: string
+            format: image
+            label: Sentinel image
+            required: true
+            help: >-
+              The default is the image this version ships with; another tag is unproven with it. After changing
+              it, check that every Sentinel workload reports ready before relying on it.
+        rules:
+          - rule: self.redis.image == null || !self.redis.image.matches(':[^:/@]*alpine')
+            paths: [redis.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the chart builds its config in a way busybox
+              does not support. Use a Debian-based tag such as redis:7.2.
+          - rule: self.sentinel.image == null || !self.sentinel.image.matches(':[^:/@]*alpine')
+            paths: [sentinel.image]
+            message: >-
+              An -alpine tag fails at start with "Bad directive": the chart builds its config in a way busybox
+              does not support. Use a Debian-based tag such as redis:7.2.
+    rules:
+      # The two placements render different resources, so switching prunes every Redis workload and volume set.
+      - rule: >-
+          oldSelf == null || ((oldSelf.locations == null ? 0 : size(oldSelf.locations)) > 0) ==
+          (size(self.locations) > 0)
+        severity: warning
+        message: >-
+          Switching between one GVC per location and the install GVC deletes every Redis workload and volume set.
+          Install a new release instead.
+
+  - id: auth
+    title: Authentication
+    description: Optional passwords for Redis and for Sentinel, taken as values in this version.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: ui.redisAuth == 'password' || ui.sentinelAuth == 'password'
+            text: >-
+              This version takes the passwords as values: they are stored in the Helm release in plain text.
+              From 2.1.0 the chart reads them from secrets you create instead.
+      - title: Redis
+        fields:
+          - id: redisAuth
+            virtual: true
+            type: enum
+            label: Redis authentication
+            widget: segmented
+            required: true
+            init: "self.redis.password == null || self.redis.password == '' ? 'none' : 'password'"
+            options:
+              - value: none
+                label: No password
+                set: { redis.password: "" }
+              - value: password
+                label: Password in values
+                description: Stored in the release values.
+          - path: redis.password
+            type: string
+            absent: true
+            sensitive: true
+            widget: password
+            label: Redis password
+            required: true
+            when: ui.redisAuth == 'password'
+            description: >-
+              Every Redis instance uses it for `requirepass` and `masterauth`, and Sentinel to reach the master.
+            rules:
+              # The secret-*-config.yaml templates write `requirepass <password>` unquoted into the config files,
+              # which Redis splits on whitespace and quotes.
+              - rule: >-
+                  (oldSelf != null && self.redis.password == oldSelf.redis.password) ||
+                  !self.redis.password.matches('[\\s"\']')
+                severity: warning
+                message: >-
+                  The chart writes the password into the Redis and Sentinel config files unquoted, so a space or
+                  a quote stops Redis and Sentinel from starting or changes the password. Use letters, digits and
+                  other punctuation, for example the output of openssl rand -hex 24.
+      - title: Sentinel
+        fields:
+          - id: sentinelAuth
+            virtual: true
+            type: enum
+            label: Sentinel authentication
+            widget: segmented
+            required: true
+            init: "self.sentinel.password == null || self.sentinel.password == '' ? 'none' : 'password'"
+            options:
+              - value: none
+                label: No password
+                set: { sentinel.password: "" }
+              - value: password
+                label: Password in values
+                description: Stored in the release values.
+          - path: sentinel.password
+            type: string
+            absent: true
+            sensitive: true
+            widget: password
+            label: Sentinel password
+            required: true
+            when: ui.sentinelAuth == 'password'
+            description: Sentinel's own password, independent of the Redis one. Every Sentinel uses it for `requirepass`.
+            rules:
+              - rule: >-
+                  (oldSelf != null && self.sentinel.password == oldSelf.sentinel.password) ||
+                  !self.sentinel.password.matches('[\\s"\']')
+                severity: warning
+                message: >-
+                  The chart writes the password into the Sentinel config file unquoted, so a space or a quote
+                  stops Sentinel from starting or changes the password. Use letters, digits and other
+                  punctuation, for example the output of openssl rand -hex 24.
+
+  - id: resources
+    title: Resources
+    description: Compute for every Redis instance and Sentinel.
+    fields:
+      - type: note
+        text: >-
+          This version gives every Redis instance a 20 GiB volume and every Sentinel its own volume, and has no
+          setting for their size. Uninstalling the release deletes the volume sets. Workloads in the GVCs the
+          chart creates accept connections from any workload in the org, and in the install GVC from any
+          workload in that GVC; this version has no firewall setting.
+      - path: redis.resources
+        type: resources
+        label: Redis resources
+        required: true
+        description: Per instance.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: sentinel.resources
+        type: resources
+        label: Sentinel resources
+        required: true
+        description: Per Sentinel.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - type: note
+        severity: warning
+        text: >-
+          Extra arguments (`redis.extraArgs` and `sentinel.extraArgs` in YAML) are added to the `redis-server`
+          and `redis-sentinel` command lines as written and are not checked. A wrong value can stop Redis or
+          Sentinel from starting.
+    rules:
+      # The workload templates write cpu and memory unquoted, and the platform schema takes them as strings.
+      - when: oldSelf == null || self.redis.resources != oldSelf.redis.resources
+        rule: self.redis.resources.cpu.matches('^[0-9]+m$') && self.redis.resources.memory.matches('[A-Za-z]$')
+        severity: warning
+        paths: [redis.resources]
+        message: >-
+          This version writes CPU and memory unquoted: enter CPU in millicores (such as 1000m) and memory
+          with a unit (such as 1Gi).
+      - when: oldSelf == null || self.sentinel.resources != oldSelf.sentinel.resources
+        rule: self.sentinel.resources.cpu.matches('^[0-9]+m$') && self.sentinel.resources.memory.matches('[A-Za-z]$')
+        severity: warning
+        paths: [sentinel.resources]
+        message: >-
+          This version writes CPU and memory unquoted: enter CPU in millicores (such as 1000m) and memory
+          with a unit (such as 1Gi).
+
+migrations:
+  # 1.0.0 had no image values and always ran valkey/valkey:8; 1.0.1 defaults to redis:7.2. Keep what the release
+  # runs rather than switching its server on upgrade.
+  - fromVersions: "<1.0.1"
+    to: redis.image
+    valueExpr: "'valkey/valkey:8'"
+    note: 1.0.0 always ran valkey/valkey:8, so the release keeps it; this version's default is redis:7.2.
+  - fromVersions: "<1.0.1"
+    to: sentinel.image
+    valueExpr: "'valkey/valkey:8'"
+    note: 1.0.0 always ran valkey/valkey:8, so the release keeps it; this version's default is redis:7.2.
+  # 1.0.0 defaulted redis.replicas to 3, 1.0.1 to 2; a lower count deletes Redis workloads and their volume sets.
+  - fromVersions: "<1.0.1"
+    to: redis.replicas
+    valueExpr: self.redis.replicas

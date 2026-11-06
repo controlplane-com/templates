@@ -1,0 +1,210 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Nginx
+# No gvc block: the proxy and the example backend are stateless serverless workloads with no storage.
+
+steps:
+  - id: routing
+    title: Routing
+    description: Where the proxy sends each request.
+    sections:
+      - id: routes
+        title: Routes
+        docs: "#locations"
+        description: >-
+          Each route becomes an nginx `location` that forwards matching requests to a workload in this GVC. Each
+          target's internal firewall must allow the proxy workload (for example same-gvc, or a workload list that
+          includes it), or its route returns the `/fail` response. `/health` and `/fail` are always present.
+        fields:
+          - type: note
+            text: >-
+              A route to the workload `example` makes the chart deploy a demo helloworld backend named `example`,
+              reachable only from the proxy; the default routes `/` to it. That name is not prefixed with the release
+              name, so it is shared by every release in the GVC. Remove the route to deploy no demo backend.
+          - path: locations
+            type: list
+            label: Routes
+            widget: table
+            newItem: { path: "/", workload: "", port: 8080, regexModifier: "" }
+            itemLabel: "(item.regexModifier != null && item.regexModifier != '' ? item.regexModifier + ' ' : '') + item.path + ' → ' + item.workload"
+            item:
+              type: object
+              label: Route
+              fields:
+                - path: path
+                  type: string
+                  label: Path
+                  required: true
+                  placeholder: /api
+                - path: regexModifier
+                  type: enum
+                  label: Match
+                  options:
+                    - { value: "", label: Prefix }
+                    - { value: "=", label: Exact }
+                    - { value: "^~", label: "Prefix, no regex" }
+                    - { value: "~", label: Regex }
+                    - { value: "~*", label: "Regex, any case" }
+                - path: workload
+                  type: string
+                  label: Workload
+                  required: true
+                  description: >-
+                    The bare name of a workload in this GVC, or `example` for the demo backend. nginx resolves every
+                    target when it starts, so a workload that does not exist stops the proxy from starting.
+                  pattern: '^[a-z][-a-z0-9]*[a-z0-9]$'
+                  patternMessage: Enter only the workload name, without the GVC or .cpln.local.
+                - path: port
+                  type: integer
+                  label: Port
+                  required: true
+                  description: The port the target workload listens on.
+                  min: 1
+                  max: 65535
+              rules:
+                # files/_nginxConf.txt writes the path unquoted into `location <modifier> <path> {`.
+                - rule: item.path == '' || !item.path.matches('[\\s;{}#\'"]')
+                  paths: [path]
+                  message: >-
+                    The path is written into nginx.conf as is, so it cannot contain spaces, ; { } # or quotes.
+                - rule: item.path == '' || (item.regexModifier != null && item.regexModifier in ['~', '~*']) || item.path.startsWith('/')
+                  severity: warning
+                  paths: [path]
+                  message: Start the path with /, or pick a regex match.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              A running replica keeps the nginx.conf it started with. After changing the routes, force a
+              redeployment of the proxy workload: `cpln workload force-redeployment WORKLOAD_NAME --gvc GVC_NAME`.
+            textExpression: >-
+              'A running replica keeps the nginx.conf it started with. After changing the routes, force a
+              redeployment: `cpln workload force-redeployment ' + context.releaseName + '-' + self.proxyWorkload.name + ' --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+        rules:
+          # nginx refuses two prefix (or ^~) locations, or two exact locations, with the same path:
+          # "duplicate location" (src/http/ngx_http.c, ngx_http_init_locations), and does not start.
+          - rule: >-
+              self.locations.all(a, a.path == '' || (a.regexModifier != null && a.regexModifier in ['~', '~*']) ||
+              self.locations.filter(b, b.path == a.path &&
+              ((a.regexModifier == '=') == (b.regexModifier == '=')) && !(b.regexModifier != null && b.regexModifier in ['~', '~*'])).size() == 1)
+            severity: warning
+            paths: [locations]
+            message: >-
+              Two routes have the same path and the same kind of match. nginx refuses duplicate locations and the
+              proxy would not start.
+
+  - id: workload
+    title: Proxy workload
+    description: >-
+      The nginx workload. It is always open to the internet on its canonical endpoint; any authentication is up to
+      the services behind it.
+    sections:
+      - id: scaling
+        title: Autoscaling
+        docs: "#autoscaling"
+        description: >-
+          The proxy is stateless and scales on CPU (50% target). With one replica, a restart or redeployment briefly
+          interrupts traffic; run at least two for an endpoint other systems depend on.
+        fields:
+          - path: autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+          - path: autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+          - path: autoscaling.maxConcurrency
+            type: integer
+            label: Maximum concurrent requests per replica
+            required: true
+            description: Requests beyond this wait for a free replica; 0 allows all requests.
+            min: 0
+            max: 30000
+        rules:
+          - rule: self.autoscaling.minScale <= self.autoscaling.maxScale
+            paths: [autoscaling.minScale]
+            message: The minimum replicas cannot exceed the maximum replicas.
+      - id: resources
+        title: Resources
+        docs: "#resources"
+        fields:
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: The limit of each nginx replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - id: container
+        title: Container
+        fields:
+          - path: proxyWorkload.name
+            type: string
+            label: Workload name suffix
+            required: true
+            description: >-
+              The proxy workload is named RELEASE_NAME-<suffix>, and its identity, policy and configuration secret
+              are named after it.
+            pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and dashes, starting and ending with a letter or digit.
+            rules:
+              - rule: size(context.releaseName) + size(self.proxyWorkload.name) + 1 <= 49
+                paths: [proxyWorkload.name]
+                messageExpression: >-
+                  'The workload ' + context.releaseName + '-' + self.proxyWorkload.name + ' would have ' +
+                  string(size(context.releaseName) + size(self.proxyWorkload.name) + 1) +
+                  ' characters, and a workload name has at most 49. Shorten the suffix or the release name.'
+                message: The proxy workload name can have at most 49 characters. Shorten the suffix or the release name.
+              - rule: oldSelf == null || self.proxyWorkload.name == oldSelf.proxyWorkload.name
+                severity: info
+                paths: [proxyWorkload.name]
+                message: >-
+                  Changing the suffix replaces the proxy workload, its identity, policy and configuration secret,
+                  and the canonical endpoint changes.
+          - type: note
+            text: >-
+              This version always runs the unpinned image nginx:latest, so a redeployment can pick up a newer nginx.
+              Version 1.1.0 makes the image configurable, and 1.1.2 pins it.
+          - path: proxyWorkload.timeoutSeconds
+            type: integer
+            label: Request timeout
+            unit: seconds
+            required: true
+            advanced: true
+            description: The longest a request may take, including waiting for a replica to become available.
+            min: 1
+            max: 600
+
+rules:
+  # templates/config-secret.yaml renders `tpl .Values.nginxConf`, a key values.yaml does not declare. The classic
+  # install screen adds it from files/_nginxConf.txt (file-nginxConf annotation); without it the secret payload, and
+  # so /etc/nginx/nginx.conf, is empty (helm template of the defaults), and nginx refuses a configuration with no
+  # events section (src/event/ngx_event.c).
+  - rule: "[self].all(m, m.exists(k, k == 'nginxConf' && m[k] != null && m[k] != ''))"
+    severity: warning
+    message: >-
+      This version reads nginx.conf from a value (nginxConf) that only the classic install screen adds. Without it
+      the proxy gets an empty nginx.conf and cannot start. Install version 1.1.0 or later instead.
+  # The chart hard-codes autoscaling metric cpu; nodelibs/schema/src/workloadOptions.ts refuses capacityAI with it.
+  - rule: "!self.proxyWorkload.capacityAI"
+    message: >-
+      proxyWorkload.capacityAI must be false: the chart scales the proxy on CPU, and Control Plane refuses CapacityAI
+      with CPU-based scaling, so the install would fail.
+  # files/_nginxConf.txt listens on 80 and both probes check port 80; this value only moves the declared port.
+  - rule: self.proxyWorkload.port == 80
+    severity: warning
+    message: >-
+      proxyWorkload.port must stay 80: nginx listens on 80 and the health probes check 80 whatever this value is,
+      so another port leaves the endpoint pointing at a port nothing serves.
+
+yamlOnly:
+  - path: proxyWorkload.capacityAI
+    reason: Only false works with this chart, which scales the proxy on CPU; a root rule refuses true.
+  - path: proxyWorkload.port
+    reason: nginx.conf and the probes are fixed to port 80; a root rule keeps it at 80.
+

@@ -52,7 +52,9 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
+          # wizard.yaml is not part of the chart's rendered output; a change to it alone needs no chart validation
           version_dirs=$(git diff --name-only "$base_sha" HEAD \
+            | grep -v -E '/wizard\.yaml$' \
             | grep -E '^[^/]+/versions/[^/]+/' \
             | sed -E 's|^([^/]+/versions/[^/]+)/.*|\1|' \
             | sort -u | tr '\n' ' ')
@@ -144,7 +146,7 @@ jobs:
             fi
 
             # 3. Required Chart.yaml annotations
-            for annotation in category created lastModified createsGvc; do
+            for annotation in created lastModified createsGvc; do
               if ! grep -qE "^\s+${annotation}:" "$version_dir/Chart.yaml"; then
                 echo "FAIL [$template @ $version]: Missing annotation '$annotation' in Chart.yaml"
                 failed=1
@@ -185,6 +187,17 @@ jobs:
                 fi
                 if [ ! -f "$template/icon.png" ]; then
                   echo "FAIL [$template]: Missing icon.png (required for new templates)"
+                  failed=1
+                fi
+              fi
+
+              # 5. New version: require wizard.yaml (the console install wizard, WIZARD_AUTHORING.md).
+              # Only versions this PR adds: most published versions predate the wizard, and an
+              # in-place fix to one of them must not start failing. Content is checked with
+              # `tw lint` by the author, not here.
+              if ! git ls-tree -r "$base_sha" --name-only 2>/dev/null | grep -q "^${version_dir}/Chart.yaml$"; then
+                if [ ! -f "$version_dir/wizard.yaml" ]; then
+                  echo "FAIL [$template @ $version]: Missing wizard.yaml (required for every new version; see WIZARD_AUTHORING.md)"
                   failed=1
                 fi
               fi

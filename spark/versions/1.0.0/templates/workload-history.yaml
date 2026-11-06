@@ -1,0 +1,128 @@
+{{- if .Values.historyServer.enabled }}
+{{- include "spark.validate" . -}}
+kind: workload
+name: {{ include "spark.history.name" . }}
+description: Apache Spark History Server (Web UI :18080, object-storage backed)
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "spark.identity.name" . }}
+  containers:
+    - name: spark-history
+      image: {{ .Values.image }}
+      inheritEnv: false
+      command: "/bin/bash"
+      args:
+        - "-c"
+        - |
+          set -euo pipefail
+          # Leave SPARK_LOCAL_IP unset so the History Server Web UI binds 0.0.0.0
+          # and is reachable over both the mesh and cpln port-forward (loopback).
+          {{- if eq .Values.storage.provider "aws" }}
+          export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=s3a://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- end }}
+          {{- if eq .Values.storage.provider "gcp" }}
+          export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=gs://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- end }}
+          {{- include "spark.jarPrelude" . | nindent 10 }}
+          # The History Server refuses to start unless its log directory exists, but on
+          # object storage a prefix does not exist until an object lives under it — so a
+          # fresh install would crash-loop until the first job writes a log. Seed the
+          # directory. Notes: FsShell needs a Hadoop conf dir (the Spark image ships none
+          # → "core-site.xml not found") and reads Hadoop config, not spark-defaults.conf,
+          # so we hand it an empty core-site + the fs settings via -D.
+          mkdir -p /tmp/hconf && printf '<configuration/>' > /tmp/hconf/core-site.xml
+          export HADOOP_CONF_DIR=/tmp/hconf
+          {{- if eq .Values.storage.provider "aws" }}
+          FS_D="-Dfs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem -Dfs.s3a.endpoint.region={{ .Values.storage.region }} -Dfs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.auth.IAMInstanceCredentialsProvider"
+          LOGDIR="s3a://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- else if eq .Values.storage.provider "gcp" }}
+          FS_D="-Dfs.gs.impl=com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem -Dfs.gs.auth.type=APPLICATION_DEFAULT"
+          LOGDIR="gs://{{ .Values.storage.bucket }}/{{ .Values.storage.prefix }}"
+          {{- end }}
+          # `mkdir -p` creates the directory marker (getFileStatus then reports it as a
+          # directory, which is all the History Server needs); we then VERIFY with the
+          # pure read `-test -d` (rc 0 = exists, rc 1 = absent). Two quirks make a plain
+          # mkdir+check insufficient, so we RETRY in a loop:
+          #   1. On S3A a fresh mkdir returns a nonzero exit from a post-write verify race
+          #      even though the marker IS written — so mkdir's rc is not trustworthy and
+          #      the -test -d read is the real gate.
+          #   2. Keyless cloud creds (IMDS for AWS, ADC for GCP) are NOT ready the instant
+          #      the container starts — the identity's cloud binding takes up to a few
+          #      minutes to materialize on a FRESH install, and until it does every FS call
+          #      fails to load credentials. A single attempt would FATAL and crash-loop
+          #      (re-downloading the connector jars each time) until creds arrived.
+          # The loop tolerates both: it retries the seed for ~3 min (inside the readiness
+          # deadline) and only fails the boot if the directory is still unreachable after.
+          fsshell() { /opt/spark/bin/spark-class org.apache.hadoop.fs.FsShell $FS_D "$@"; }
+          seeded=0
+          for i in $(seq 1 12); do
+            fsshell -mkdir -p "$LOGDIR" 2>/dev/null || true
+            if fsshell -test -d "$LOGDIR" 2>/dev/null; then
+              seeded=1; echo "[spark-prelude] log directory ready: $LOGDIR"; break
+            fi
+            echo "[spark-prelude] log dir not ready (attempt $i) — cloud creds may still be materializing; retry in 15s"
+            sleep 15
+          done
+          [ "$seeded" = 1 ] || { echo "[spark-prelude] FATAL: could not create log directory $LOGDIR after retries"; exit 1; }
+          exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
+      minCpu: {{ .Values.historyServer.minCpu | quote }}
+      minMemory: {{ .Values.historyServer.minMemory | quote }}
+      cpu: {{ .Values.historyServer.maxCpu | quote }}
+      memory: {{ .Values.historyServer.maxMemory | quote }}
+      ports:
+        - number: 18080
+          protocol: http
+      volumes:
+        - path: /opt/spark/conf/spark-defaults.conf
+          uri: cpln://secret/{{ include "spark.secret.conf.name" . }}.payload
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 18080
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        timeoutSeconds: 3
+        failureThreshold: 20
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 18080
+        initialDelaySeconds: 40
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 6
+  defaultOptions:
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  supportDynamicTags: false
+{{- end }}

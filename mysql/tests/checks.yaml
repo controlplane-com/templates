@@ -1,0 +1,68 @@
+# Feature checks for the mysql template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (mysql_workload, mysql_user, mysql_password, mysql_db, mysql_root_password). mysql_workload exists
+# because 1.0.0 and 1.1.0 name the workload after the release alone.
+#
+# Every connection is TCP (--protocol=TCP to 127.0.0.1), so the server checks the password over the
+# network path rather than the socket. The image has no `hostname`, so the replica's own IP is not used.
+checks:
+  - id: write-read
+    description: A row written by the application user over TCP reads back.
+    exec:
+      workload: "{mysql_workload}"
+      container: mysql
+      shell: bash
+      script: |
+        set -e
+        M="e2e-$(date +%s%N)"
+        export MYSQL_PWD='{mysql_password}'
+        mysql -h 127.0.0.1 -P 3306 --protocol=TCP -u {mysql_user} {mysql_db} -e "
+          create table if not exists e2e (id int auto_increment primary key, version varchar(32) not null, marker varchar(64) not null);
+          insert into e2e (version, marker) values ('{version}', '$M');"
+        mysql -h 127.0.0.1 -P 3306 --protocol=TCP -u {mysql_user} {mysql_db} -N -B -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: root-login
+    description: The root password from the install authenticates over TCP.
+    exec:
+      workload: "{mysql_workload}"
+      container: mysql
+      shell: bash
+      script: |
+        MYSQL_PWD='{mysql_root_password}' mysql -h 127.0.0.1 -P 3306 --protocol=TCP -u root -N -B -e "select concat('ROOT ', current_user())"
+    expect:
+      stdout: "^ROOT root@"
+
+  - id: rejects-bad-password
+    description: A wrong password is refused over TCP (the control for the checks above).
+    exec:
+      workload: "{mysql_workload}"
+      container: mysql
+      shell: bash
+      script: |
+        MYSQL_PWD=wrong-password mysql -h 127.0.0.1 -P 3306 --protocol=TCP -u {mysql_user} {mysql_db} -e "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "Access denied for user"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data directory carried over.
+    exec:
+      workload: "{mysql_workload}"
+      container: mysql
+      shell: bash
+      script: |
+        n=$(MYSQL_PWD='{mysql_password}' mysql -h 127.0.0.1 -P 3306 --protocol=TCP -u {mysql_user} {mysql_db} -N -B \
+          -e "select count(*) from e2e where version = '{installed_version}'" 2>/tmp/e2e.err)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none}) $(cat /tmp/e2e.err)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

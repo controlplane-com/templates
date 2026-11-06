@@ -1,0 +1,550 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Trino
+# Stateless (no volume set, no location handling), so no gvc limits; the README's advice to keep the GVC
+# single-location is an info rule at the root instead.
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: One coordinator plus a tier of interchangeable workers, and how much memory the JVM may use.
+    sections:
+      - title: Workers
+        docs: "#workers"
+        fields:
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that changes the configuration restarts the coordinator and the workers. Queries running
+              at that moment fail and must be resubmitted.
+          - path: workers.replicas
+            type: integer
+            label: Worker replicas
+            min: 0
+            required: true
+            suggestions:
+              - { value: 0, label: "0 (single node)" }
+              - { value: 1, label: "1 (default)" }
+              - { value: 2, label: "2" }
+              - { value: 3, label: "3" }
+              - { value: 5, label: "5" }
+            description: >-
+              With 0 there is no worker workload and the coordinator executes queries itself, which suits small
+              or development installs. Two or more keep queries running through a rolling restart of the
+              workers; with one, a worker restart empties the execution tier for its duration.
+            help: >-
+              Open-source Trino has exactly one coordinator and no coordinator failover, so restarting it
+              briefly interrupts all querying. Queries are not retried: a query running on a node that restarts
+              fails and must be resubmitted.
+          - path: workers.resources
+            type: resources
+            label: Worker resources
+            required: true
+            when: self.workers.replicas == null || self.workers.replicas > 0
+            description: Per worker replica. The JVM heap is a percentage of the maximum memory.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.workers.replicas == null || self.workers.replicas >= 0
+            mirrors: trino.validate
+            paths: [workers.replicas]
+            message: The number of worker replicas must be 0 or more.
+          # trino.validate.resources runs for the workers only while workers.replicas > 0.
+          - when: self.workers.replicas != null && self.workers.replicas > 0
+            rule: >-
+              self.workers.resources.maxMemory.matches('^[0-9]+Gi$') &&
+              memoryBytes(self.workers.resources.maxMemory) >= 2147483648
+            mirrors: trino.validate.resources
+            paths: [workers.resources]
+            message: >-
+              The workers' maximum memory must be whole GiB and at least 2Gi, such as 4Gi: the JVM heap is a
+              percentage of it, and below 2Gi Trino runs out of heap on the first real query.
+          - when: self.workers.replicas != null && self.workers.replicas > 0
+            rule: self.workers.resources.minMemory.matches('^[0-9]+(Mi|Gi)$') && memoryBytes(self.workers.resources.minMemory) > 0
+            mirrors: trino.validate.resources
+            paths: [workers.resources]
+            message: The workers' minimum memory must be a whole number of Mi or Gi, such as 2Gi.
+          - when: self.workers.replicas != null && self.workers.replicas > 0
+            rule: >-
+              self.workers.resources.minCpu.matches('^([0-9]+m|[0-9]+([.][0-9]+)?)$') &&
+              self.workers.resources.maxCpu.matches('^([0-9]+m|[0-9]+([.][0-9]+)?)$') &&
+              cpuMillicores(self.workers.resources.minCpu) > 0 && cpuMillicores(self.workers.resources.maxCpu) > 0
+            mirrors: trino.validate.resources
+            paths: [workers.resources]
+            message: The workers' minimum and maximum CPU must be positive quantities, such as 500m or 2.
+          - when: self.workers.replicas != null && self.workers.replicas > 0
+            rule: cpuMillicores(self.workers.resources.maxCpu) <= 4 * cpuMillicores(self.workers.resources.minCpu)
+            mirrors: trino.validate.resources
+            paths: [workers.resources]
+            messageExpression: >-
+              'The workers can have at most 4 times their minimum CPU as maximum: raise the minimum CPU to at least ' +
+              string((cpuMillicores(self.workers.resources.maxCpu) + 3) / 4) + 'm or lower the maximum.'
+            message: The workers' maximum CPU can be at most 4 times their minimum CPU. Raise the minimum or lower the maximum.
+      - title: Coordinator
+        docs: "#coordinator"
+        fields:
+          - path: coordinator.resources
+            type: resources
+            label: Coordinator resources
+            required: true
+            description: >-
+              Always one replica. It plans queries and serves the Web UI and the JDBC and REST endpoint, and
+              also executes queries when there are no workers.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              self.coordinator.resources.maxMemory.matches('^[0-9]+Gi$') &&
+              memoryBytes(self.coordinator.resources.maxMemory) >= 2147483648
+            mirrors: trino.validate.resources
+            paths: [coordinator.resources]
+            message: >-
+              The coordinator's maximum memory must be whole GiB and at least 2Gi, such as 4Gi: the JVM heap is
+              a percentage of it, and below 2Gi Trino runs out of heap on the first real query.
+          - rule: self.coordinator.resources.minMemory.matches('^[0-9]+(Mi|Gi)$') && memoryBytes(self.coordinator.resources.minMemory) > 0
+            mirrors: trino.validate.resources
+            paths: [coordinator.resources]
+            message: The coordinator's minimum memory must be a whole number of Mi or Gi, such as 2Gi.
+          - rule: >-
+              self.coordinator.resources.minCpu.matches('^([0-9]+m|[0-9]+([.][0-9]+)?)$') &&
+              self.coordinator.resources.maxCpu.matches('^([0-9]+m|[0-9]+([.][0-9]+)?)$') &&
+              cpuMillicores(self.coordinator.resources.minCpu) > 0 && cpuMillicores(self.coordinator.resources.maxCpu) > 0
+            mirrors: trino.validate.resources
+            paths: [coordinator.resources]
+            message: The coordinator's minimum and maximum CPU must be positive quantities, such as 500m or 1.
+          - rule: cpuMillicores(self.coordinator.resources.maxCpu) <= 4 * cpuMillicores(self.coordinator.resources.minCpu)
+            mirrors: trino.validate.resources
+            paths: [coordinator.resources]
+            messageExpression: >-
+              'The coordinator can have at most 4 times its minimum CPU as maximum: raise the minimum CPU to at least ' +
+              string((cpuMillicores(self.coordinator.resources.maxCpu) + 3) / 4) + 'm or lower the maximum.'
+            message: The coordinator's maximum CPU can be at most 4 times its minimum CPU. Raise the minimum or lower the maximum.
+      - title: JVM memory
+        docs: "#jvm"
+        fields:
+          - path: jvm.maxRAMPercentage
+            type: integer
+            label: Heap share of the maximum memory
+            unit: "%"
+            min: 40
+            max: 80
+            required: true
+            suggestions: [50, 60, 70, 75]
+            description: >-
+              The heap is this share of each tier's maximum memory; the JVM needs the rest for its code cache,
+              metaspace, thread stacks and buffers. Each query may use 30% of a node's heap, so the maximum
+              memory is normally the number to raise when queries run out of memory.
+          - type: note
+            text: The heap of each node is the heap share of that tier's maximum memory.
+            textExpression: >-
+              'Heap per node: coordinator ' +
+              string(memoryBytes(self.coordinator.resources.maxMemory) * self.jvm.maxRAMPercentage / 100 / 1048576) +
+              ' MiB' +
+              (self.workers.replicas != null && self.workers.replicas > 0 ?
+              ', each worker ' +
+              string(memoryBytes(self.workers.resources.maxMemory) * self.jvm.maxRAMPercentage / 100 / 1048576) +
+              ' MiB' : '') +
+              '. A single query may use up to 30% of the heap on each node.'
+        rules:
+          - rule: self.jvm.maxRAMPercentage == null || (self.jvm.maxRAMPercentage >= 40 && self.jvm.maxRAMPercentage <= 80)
+            mirrors: trino.validate
+            paths: [jvm.maxRAMPercentage]
+            message: >-
+              The heap share must be between 40 and 80 percent: above 80 leaves no room for the code cache,
+              metaspace and buffers, and below 40 wastes the container.
+          - rule: self.jvm.maxRAMPercentage == null || self.jvm.maxRAMPercentage <= 75
+            severity: info
+            paths: [jvm.maxRAMPercentage]
+            message: >-
+              Above about 75 percent the JVM is short of memory outside the heap. When queries run out of
+              memory, raise the maximum memory instead.
+      - title: Image
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Trino image
+            required: true
+            advanced: true
+            description: One image for the coordinator and the workers.
+            docs: "#image"
+
+  - id: access
+    title: Access
+    description: Who can query Trino, and whether it signs users in.
+    sections:
+      - title: Endpoint and login
+        docs: "#authentication"
+        fields:
+          - id: access
+            virtual: true
+            type: enum
+            label: How clients connect
+            widget: cards
+            required: true
+            init: "self.publicAccess.enabled || self.auth.enabled ? 'public' : 'internal'"
+            options:
+              - value: internal
+                label: Inside Control Plane only
+                description: >-
+                  Recommended unless clients outside Control Plane must connect. No login: the internal
+                  firewall below is the boundary.
+                set: { auth.enabled: false, publicAccess.enabled: false }
+              - value: public
+                label: Public HTTPS endpoint with password login
+                description: >-
+                  The Web UI and JDBC on the workload's *.cpln.app endpoint. Every client signs in there over
+                  HTTPS, including clients inside Control Plane.
+                set: { auth.enabled: true, publicAccess.enabled: true }
+            help: >-
+              Trino refuses password logins over plain HTTP, so a login works only on the public HTTPS
+              endpoint, and an endpoint on the internet without a login would expose every connected data
+              source. The two always go together. Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-trino --gvc GVC_NAME -o yaml`.
+          - type: note
+            severity: warning
+            when: ui.access == 'public'
+            textExpression: >-
+              'Both secrets must exist **before** you install or upgrade. If one is missing, the deployment waits ' +
+              'on it and `cpln logs` shows nothing at all; the reason is in `cpln workload get-deployments ' +
+              context.releaseName + '-trino --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              ' -o yaml` under `status.versions[].message`. It recovers on its own within about 10 minutes of ' +
+              'creating the secret, or at once with `cpln workload force-redeployment ' + context.releaseName +
+              '-trino --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`' +
+              (self.workers.replicas != null && self.workers.replicas > 0 ?
+              ' (and the same for ' + context.releaseName + '-trino-worker).' : '.')
+            text: >-
+              Both secrets must exist **before** you install or upgrade. If one is missing, the deployment waits
+              on it and `cpln logs` shows nothing at all; the reason is in
+              `cpln workload get-deployments RELEASE_NAME-trino --gvc GVC_NAME -o yaml` under
+              `status.versions[].message`. It recovers on its own within about 10 minutes of creating the
+              secret, or at once with `cpln workload force-redeployment`.
+          - type: note
+            when: ui.access == 'public'
+            textExpression: >-
+              'With login on, clients inside Control Plane must also connect through the public HTTPS endpoint and ' +
+              'sign in there. Trino refuses password logins over plain HTTP, so the internal address ' +
+              context.releaseName + '-trino.' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '.cpln.local:8080 answers them with 401 Password not allowed for insecure authentication.'
+            text: >-
+              With login on, clients inside Control Plane must also connect through the public HTTPS endpoint and
+              sign in there. Trino refuses password logins over plain HTTP, so the internal address answers them
+              with 401 Password not allowed for insecure authentication.
+          - path: auth.passwordFileSecretName
+            type: ref
+            label: Password file secret
+            required: true
+            when: ui.access == 'public'
+            description: >-
+              An opaque secret (encoding plain) holding a bcrypt password file, one `user:hash` line per user.
+              These are the logins for the Web UI and every client.
+            help: >-
+              Create it with
+              `htpasswd -B -C 10 -n alice | cpln secret create-opaque --name PASSWORD_FILE_SECRET_NAME --encoding plain -f -`
+              (bcrypt cost 8 or more). After you change the secret, force a redeployment of the coordinator
+              (`cpln workload force-redeployment RELEASE_NAME-trino --gvc GVC_NAME`): a running coordinator
+              keeps the file it started with.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-trino-passwords'"
+                hint: "Generate the content with: htpasswd -B -C 10 -n USER_NAME"
+          - path: auth.sharedSecretName
+            type: ref
+            label: Internal shared secret
+            required: true
+            when: ui.access == 'public'
+            description: >-
+              An opaque secret (encoding plain) holding a random string that the coordinator and the workers
+              share once authentication is on.
+            help: >-
+              Create it with
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SHARED_SECRET_NAME --encoding plain -f -`.
+              After you change it, force a redeployment of both workloads, so every node holds the same value.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-trino-shared-secret'"
+                hint: "Generate the content with: openssl rand -hex 32"
+        rules:
+          - rule: "!self.auth.enabled || self.publicAccess.enabled"
+            mirrors: trino.validate
+            paths: [publicAccess.enabled]
+            message: >-
+              Authentication needs the public HTTPS endpoint: Trino refuses password logins over plain HTTP, so
+              with authentication on and no public endpoint nobody can query it. Choose the public endpoint with
+              password login, or turn authentication off.
+          - rule: "!self.publicAccess.enabled || self.auth.enabled"
+            mirrors: trino.validate
+            paths: [auth.enabled]
+            message: >-
+              The public endpoint needs authentication: an unauthenticated Trino on the internet can read every
+              connected data source. Choose the public endpoint with password login, or keep Trino inside
+              Control Plane.
+          - when: self.auth.enabled
+            rule: self.auth.passwordFileSecretName != null && self.auth.passwordFileSecretName != ''
+            mirrors: trino.validate
+            paths: [auth.passwordFileSecretName]
+            message: The password file secret is required when authentication is on.
+          - when: self.auth.enabled
+            rule: self.auth.sharedSecretName != null && self.auth.sharedSecretName != ''
+            mirrors: trino.validate
+            paths: [auth.sharedSecretName]
+            message: The internal shared secret is required when authentication is on.
+      - title: Internal access
+        docs: "#access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can reach the coordinator
+            widget: cards
+            required: true
+            description: >-
+              The coordinator always allows itself and its own workers. Access changes take up to a few minutes
+              to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, plus the release's own coordinator and workers.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            when: self.internalAccess.type == 'workload-list'
+            description: >-
+              The workloads allowed to query Trino from inside Control Plane, for example a BI tool. The chart
+              adds the release's own coordinator and workers itself.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: trino.validate
+            paths: [internalAccess.type]
+            message: Choose Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'none'
+            mirrors: trino.validate
+            paths: [internalAccess.type]
+            message: >-
+              "None" is not supported: the coordinator calls itself through this firewall, so every query would
+              fail with 403 RBAC access denied. Choose Same GVC, Same org or Specific workloads.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: >-
+              With no workloads listed, only the release's own coordinator and workers can reach the coordinator
+              from inside Control Plane.
+          - when: self.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: >-
+              !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-trino') in self.internalAccess.workloads) &&
+              !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-trino-worker') in self.internalAccess.workloads)
+            severity: info
+            paths: [internalAccess.workloads]
+            message: >-
+              The chart already allows the release's own coordinator and workers, so they can be removed from
+              the list.
+
+  - id: catalogs
+    title: Catalogs
+    description: The data sources Trino queries, each with its credentials from secrets.
+    sections:
+      - title: Catalogs
+        docs: "#catalogs"
+        fields:
+          - type: note
+            text: >-
+              The image already ships the `tpch`, `tpcds`, `memory` and `jmx` catalogs, so Trino is queryable
+              with no catalogs added. `jmx` shows JVM internals to anyone who can run a query.
+          - type: note
+            severity: warning
+            when: self.catalogs.exists(c, size(c.secrets) > 0)
+            textExpression: >-
+              'Every secret a catalog names must exist **before** you install or upgrade. If one is missing, the ' +
+              'deployment waits on it and `cpln logs` shows nothing at all; the reason is in ' +
+              '`cpln workload get-deployments ' + context.releaseName + '-trino --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml` under `status.versions[].message`. ' +
+              'It recovers on its own within about 10 minutes of creating the secret, or at once with ' +
+              '`cpln workload force-redeployment`. After you change a secret value later, force a redeployment of ' +
+              context.releaseName + '-trino' +
+              (self.workers.replicas != null && self.workers.replicas > 0 ? ' and ' + context.releaseName + '-trino-worker' : '') +
+              ': a running node keeps the value it started with.'
+            text: >-
+              Every secret a catalog names must exist **before** you install or upgrade. If one is missing, the
+              deployment waits on it and `cpln logs` shows nothing at all; the reason is in
+              `cpln workload get-deployments RELEASE_NAME-trino --gvc GVC_NAME -o yaml` under
+              `status.versions[].message`. After you change a secret value later, force a redeployment of the
+              coordinator and any workers: a running node keeps the value it started with.
+          - path: catalogs
+            type: list
+            label: Catalogs
+            uniqueBy: [name]
+            newItem:
+              name: ""
+              properties: "connector.name=postgresql\nconnection-url=jdbc:postgresql://WORKLOAD_NAME.GVC_NAME.cpln.local:5432/postgres\nconnection-user=postgres\nconnection-password=${ENV:PG_PASSWORD}\n"
+              secrets:
+                - { env: PG_PASSWORD, secretName: "", secretKey: password }
+            itemLabel: "item.name + ' (' + string(size(item.secrets)) + (size(item.secrets) == 1 ? ' secret)' : ' secrets)')"
+            description: >-
+              One entry per data source, queried as `name.schema.table`. Reach sibling templates at
+              `WORKLOAD_NAME.GVC_NAME.cpln.local`.
+            help: >-
+              Copy the properties from the connector's page in the
+              [Trino connector docs](https://trino.io/docs/current/connector.html). Never write a password into
+              them: write `${ENV:NAME}` and map a secret to `NAME` under Secrets.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  placeholder: pg
+                  pattern: '^[a-z][a-z0-9_]*$'
+                  patternMessage: Use lowercase letters, digits and underscores, starting with a letter.
+                - path: properties
+                  type: string
+                  label: Properties
+                  required: true
+                  multiline: true
+                  description: The connector properties file, starting with a `connector.name=` line.
+                - path: secrets
+                  type: list
+                  label: Secrets
+                  widget: table
+                  uniqueBy: [env]
+                  newItem: { env: "", secretName: "", secretKey: password }
+                  description: >-
+                    Each maps a secret into an environment variable that the properties read as `${ENV:NAME}`.
+                    For a dictionary secret, the key holds the value; for an opaque secret, the key is `payload`.
+                  item:
+                    type: object
+                    fields:
+                      - path: env
+                        type: string
+                        label: Variable
+                        required: true
+                        placeholder: PG_PASSWORD
+                        pattern: '^[A-Z][A-Z0-9_]*$'
+                        patternMessage: Use upper-case letters, digits and underscores, starting with a letter.
+                      - path: secretName
+                        type: ref
+                        label: Secret
+                        required: true
+                        ref:
+                          kind: secret
+                          format: name
+                          filter: { secretType: [opaque, dictionary] }
+                          mustExist: error
+                          allowCreate: true
+                          requiredKeysFrom: "item.secretKey != null && item.secretKey != '' && item.secretKey != 'payload' ? [item.secretKey] : []"
+                          create:
+                            secretType: dictionary
+                      - path: secretKey
+                        type: string
+                        label: Key
+                        required: true
+                        placeholder: password
+                        description: >-
+                          The dictionary key that holds the value, such as `password`. For an opaque secret, enter
+                          `payload`.
+                    rules:
+                      - rule: item.secretName != null && item.secretName != ''
+                        mirrors: trino.validate
+                        paths: [secretName]
+                        message: Choose the secret this variable comes from; it must exist before you install.
+                      - rule: "!item.env.startsWith('CPLN_')"
+                        paths: [env]
+                        message: Names starting with CPLN_ are reserved by Control Plane; choose another variable name.
+                      - when: self.auth.enabled
+                        rule: item.env != 'TRINO_SHARED_SECRET'
+                        paths: [env]
+                        message: TRINO_SHARED_SECRET is the variable the chart uses for the internal shared secret; choose another name.
+              rules:
+                - rule: item.name != null && item.name != ''
+                  mirrors: trino.validate
+                  paths: [name]
+                  message: Each catalog needs a name.
+                - rule: item.name == null || item.name == '' || item.name.matches('^[a-z][a-z0-9_]*$')
+                  mirrors: trino.validate
+                  paths: [name]
+                  message: A catalog name must be lowercase letters, digits and underscores, starting with a letter.
+                - rule: item.name != 'system'
+                  mirrors: trino.validate
+                  paths: [name]
+                  message: The catalog name system is reserved by Trino's built-in system catalog.
+                - rule: item.properties != null && item.properties.matches('(^|\n)connector[.]name=')
+                  mirrors: trino.validate
+                  paths: [properties]
+                  message: The properties must contain a connector.name= line; copy it from the connector's documentation page.
+                - rule: item.properties == null || !(item.properties.contains('WORKLOAD_NAME') || item.properties.contains('GVC_NAME'))
+                  severity: warning
+                  paths: [properties]
+                  message: >-
+                    Replace WORKLOAD_NAME and GVC_NAME in the properties with the data source's workload and GVC,
+                    or with its own host name.
+                - rule: item.secrets.all(s, s.env == null || !s.env.matches('^[A-Z][A-Z0-9_]*$') || item.properties == null || item.properties.contains('${ENV:' + s.env + '}'))
+                  severity: info
+                  paths: [properties]
+                  messageExpression: >-
+                    'The properties never read ' +
+                    item.secrets.filter(s, s.env != null && s.env.matches('^[A-Z][A-Z0-9_]*$') && !item.properties.contains('${ENV:' + s.env + '}')).map(s, '${ENV:' + s.env + '}').join(', ') +
+                    ', so that secret is not used.'
+                  message: A secret is mapped to a variable that the properties never read as ${ENV:NAME}.
+                - rule: >-
+                    item.properties == null ||
+                    item.properties.split('${ENV:').all(p, p.indexOf('}') < 0 ||
+                    !p.substring(0, p.indexOf('}')).matches('^[A-Z][A-Z0-9_]*$') ||
+                    p.substring(0, p.indexOf('}')) in item.secrets.map(s, s.env))
+                  severity: warning
+                  paths: [properties]
+                  messageExpression: >-
+                    'The properties read ' +
+                    item.properties.split('${ENV:').filter(p, p.indexOf('}') >= 0 &&
+                    p.substring(0, p.indexOf('}')).matches('^[A-Z][A-Z0-9_]*$') &&
+                    !(p.substring(0, p.indexOf('}')) in item.secrets.map(s, s.env))).map(p, '${ENV:' + p.substring(0, p.indexOf('}')) + '}').join(', ') +
+                    ' but no secret is mapped to it; Trino does not start with an unset variable. Add it under Secrets.'
+                  message: The properties read an ${ENV:NAME} variable that no secret is mapped to; Trino does not start with an unset variable. Add it under Secrets.
+                - rule: item.properties == null || !item.properties.matches('(^|\n)[a-z0-9._-]*password[ \t]*=[ \t]*(?![$][{]ENV:)[^ \t\n]')
+                  severity: info
+                  paths: [properties]
+                  message: >-
+                    A password is written into the properties, where it is stored in the release values. Put it in a
+                    secret and write ${ENV:NAME} instead.
+        rules:
+          - rule: self.catalogs.all(c, c.secrets.all(s, s.env == null || s.env == '' || sum(self.catalogs.map(c2, size(c2.secrets.filter(s2, s2.env == s.env)))) == 1))
+            mirrors: trino.validate
+            paths: [catalogs]
+            message: >-
+              Each variable name can be used once across all catalogs: the variables are shared by the whole
+              container, so one catalog would read another's credential.
+
+rules:
+  - rule: context.gvcLocations == null || size(context.gvcLocations) <= 1
+    severity: info
+    message: >-
+      This GVC has more than one location, and every location runs a coordinator and workers. Keep Trino in a
+      single-location GVC: the traffic between the coordinator and the workers is per query and sensitive to
+      latency.

@@ -18,21 +18,26 @@ proxy in front of a workload you already run. Traffic enters the WAF, is inspect
 Does not create a GVC, and does not deploy the workload it protects. The container's `command`/`args` run
 the image's own entrypoint behind a `tail` — see the hook-visibility trap below; do not "simplify" it away.
 
-## Key knobs (shipped defaults, 1.2.0)
+## Key knobs (shipped defaults, 1.2.1)
 
 | Knob | Default | Notes |
 |---|---|---|
-| `image` | `coraza-crs@sha256:21e95b21…` | = tag `4.25-caddy-alpine-202607180107`, CRS 4.25.0, Caddy v2.11.2 |
+| `image` | `coraza-crs@sha256:ed1e4a65…` | = tag `4.28-caddy-alpine-202608260808`, CRS 4.28.0, Caddy v2.11.3 |
 | `targetWorkload` | `my-workload.my-gvc.cpln.local` | must be fully qualified |
 | `targetPort` / `WAFPort` | `8080` / `80` | upstream port, and the port clients reach |
 | `resources` | `500m` / `512Mi` | limits only, so bare `cpu`/`memory` naming is correct |
 | `timeoutSeconds` | `30` | request timeout; was hardcoded at 5 before 1.2.0 |
 | `multiZone` | `false` | spread replicas across zones |
 
-`diskBodyInspection` was **removed** in 1.2.0: it only set `SecRequestBodyNoFilesLimit`, which this
-Coraza build does not enforce. At `NoFilesLimit=1000` a 5 KB benign body returns 200 (a Reject would be
-403) while the same body carrying SQLi returns 403 — read and inspected five times past the "limit". If a
-future image starts honouring the directive, the knob becomes real again.
+**Hardcoded, no values knob:** rule engine `On` (blocking; no detection-only mode, no paranoia-level
+setting — image defaults), autoscaling 1-3 on CPU, external inbound `0.0.0.0/0` (always public), internal
+`same-gvc`, egress `[]`, and every `CORAZA_*`/`ACCESSLOG` env var. The custom-rules secret is chart-rendered
+with no knob; whether an upgrade preserves user edits is unverified.
+
+`diskBodyInspection` was **removed** in 1.2.0. It did two things: set `SecRequestBodyNoFilesLimit`, which
+this Coraza build does not enforce (at `NoFilesLimit=1000` a 5 KB benign body returns 200 while the same
+body carrying SQLi returns 403), and `mkdir -p /tmp/coraza`, which is load-bearing on older images. The
+startup hook now creates that directory unconditionally — see the disk-buffering trap below.
 
 ## The 1.2.0 incident, and why the hook changed
 

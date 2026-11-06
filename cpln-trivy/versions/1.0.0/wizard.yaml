@@ -1,0 +1,489 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: CPLN Trivy
+# No gvc block: a cron workload and a serverless workload, no volume set. A GVC with several locations
+# runs one scan per location (an info rule on the Scanning step says so), which costs but does not break.
+
+steps:
+  - id: access
+    title: Secrets and access
+    description: The report post token, the service account Trivy pulls images with, and its key.
+    fields:
+      # _helpers.tpl: cpln-trivy.daemon.name and cpln-trivy.webserver.name are the fixed strings daemon and web-server.
+      - type: note
+        severity: warning
+        when: context.mode == 'install'
+        text: >-
+          Install this template **only once per GVC**: its workloads are always named `daemon` and `web-server`,
+          whatever the release name, so a second release in the same GVC collides with the first.
+        textExpression: >-
+          'Install this template **only once per GVC**: its workloads are always named `daemon` and `web-server`,
+          whatever the release name, so a second release in ' + (context.gvc != null ? context.gvc : 'the same GVC') +
+          ' collides with any release already there.'
+      - type: note
+        severity: warning
+        when: context.mode == 'install'
+        text: >-
+          The service account must exist **before** you install, and so must the dictionary secret holding its
+          key if you choose an existing secret below: the daemon reads the key when it starts. If you create the
+          secret only afterwards, run `cpln workload force-redeployment daemon --gvc GVC_NAME` once it exists.
+        textExpression: >-
+          'The service account must exist **before** you install, and so must the dictionary secret holding its
+          key if you choose an existing secret below: the daemon reads the key when it starts. If you create the
+          secret only afterwards, run `cpln workload force-redeployment daemon --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + '` once it exists.'
+      # secret.yaml: postToken is written into the chart-owned dictionary secret RELEASE-secret (key POST_TOKEN),
+      # which both workloads read.
+      - path: postToken
+        type: string
+        label: Report post token
+        required: true
+        sensitive: true
+        example: true
+        description: >-
+          A random bearer token the daemon presents when it uploads a report to the web server, whose upload
+          endpoint is on the public internet. Generate one with `openssl rand -hex 32`.
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the post token as a plain value: it is stored in the Helm release, and the
+          template copies it into the secret `RELEASE_NAME-secret`. Never keep the published default
+          `changeme`, which is the only thing guarding the upload endpoint. Version 1.2.0 and later read the
+          token from an opaque secret you create instead.
+        textExpression: >-
+          'This version takes the post token as a plain value: it is stored in the Helm release, and the
+          template copies it into the secret `' + context.releaseName + '-secret`. Never keep the published
+          default `changeme`, which is the only thing guarding the upload endpoint. Version 1.2.0 and later
+          read the token from an opaque secret you create instead.'
+      - path: serviceAccountName
+        type: ref
+        label: Registry service account
+        required: true
+        description: >-
+          The service account Trivy pulls images with. The template grants it `pull` and `view` on every
+          image in the org.
+        help: >-
+          [Create a service account](/reference/serviceaccount) and add a key to it; copy the key value, which
+          cannot be read again later. Give Trivy the key below.
+        ref:
+          kind: serviceaccount
+          format: name
+          mustExist: error
+      # secret.yaml / workload-daemon.yaml: inline writes the key into RELEASE-secret (key SERVICE_ACCOUNT_KEY);
+      # existingSecret reads cpln://secret/NAME.KEY and adds NAME to the reveal policy.
+      - path: trivyAuth.type
+        type: enum
+        label: Service account key
+        widget: cards
+        required: true
+        options:
+          - value: existingSecret
+            label: Existing dictionary secret
+            description: Read the key from one entry of a dictionary secret you create.
+          - value: inline
+            label: Paste the key
+            description: The template stores the key in its own secret; the key is also kept in the Helm release.
+      - path: trivyAuth.serviceAccountKey
+        type: string
+        label: Service account key value
+        when: self.trivyAuth.type == 'inline'
+        required: true
+        sensitive: true
+        example: true
+      - type: note
+        severity: warning
+        when: self.trivyAuth.type == 'inline'
+        text: >-
+          A pasted key is stored in the Helm release, and the template copies it into the secret
+          `RELEASE_NAME-secret`. To keep it out of the release, choose an existing dictionary secret instead.
+          Version 1.1.0 and later read the key from an opaque secret you create.
+        textExpression: >-
+          'A pasted key is stored in the Helm release, and the template copies it into the secret `' +
+          context.releaseName + '-secret`. To keep it out of the release, choose an existing dictionary secret
+          instead. Version 1.1.0 and later read the key from an opaque secret you create.'
+      - path: trivyAuth.existingSecret.name
+        type: ref
+        label: Key secret
+        when: self.trivyAuth.type == 'existingSecret'
+        required: true
+        description: A dictionary secret with an entry whose value is the key of the service account above.
+        help: >-
+          Create the secret with
+          `cpln secret create-dictionary --name REGISTRY_SECRET_NAME --entry serviceAccountKey=SERVICE-ACCOUNT-KEY`;
+          serviceAccountKey is the default entry name below.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+      - path: trivyAuth.existingSecret.key
+        type: string
+        label: Entry
+        when: self.trivyAuth.type == 'existingSecret'
+        required: true
+        description: The name of the entry in that secret that holds the service account key.
+      # policy.yaml: manage on target all images (the scan tags), and pull/view on target all images for the
+      # service account. Deliberate: the template scans the whole registry.
+      - type: note
+        text: >-
+          A scan covers **every image in the org**, not only images this release created. To do that the
+          template's identity holds `manage` on all images in the org (to write the `cpln/trivy-scan` and
+          `cpln/trivy-scan-time` tags), and the service account above gets `pull` and `view` on all images.
+          These org-wide grants are what the scanner needs; treat the workloads as security-sensitive.
+    rules:
+      - rule: self.trivyAuth.type in ['inline', 'existingSecret']
+        mirrors: cpln-trivy.validateAuth
+        paths: [trivyAuth.type]
+        message: Choose how Trivy gets the service account key.
+      - when: self.trivyAuth.type == 'inline'
+        rule: self.trivyAuth.serviceAccountKey != null && self.trivyAuth.serviceAccountKey != ''
+        mirrors: cpln-trivy.validateAuth
+        paths: [trivyAuth.serviceAccountKey]
+        message: The service account key is required.
+      - when: self.trivyAuth.type == 'existingSecret'
+        rule: self.trivyAuth.existingSecret.name != null && self.trivyAuth.existingSecret.name != ''
+        mirrors: cpln-trivy.validateAuth
+        paths: [trivyAuth.existingSecret.name]
+        message: The key secret is required.
+      - when: self.trivyAuth.type == 'existingSecret'
+        rule: self.trivyAuth.existingSecret.key != null && self.trivyAuth.existingSecret.key != ''
+        mirrors: cpln-trivy.validateAuth
+        paths: [trivyAuth.existingSecret.key]
+        message: The entry that holds the key is required.
+      - rule: self.postToken != 'changeme'
+        severity: warning
+        paths: [postToken]
+        message: >-
+          changeme is the published default token, and it is the only thing guarding the public upload
+          endpoint. Enter a random token, for example the output of openssl rand -hex 32.
+      # The chart owns RELEASE-secret (a dictionary holding POST_TOKEN); it has no payload for Trivy to read.
+      - when: self.trivyAuth.type == 'existingSecret'
+        rule: self.trivyAuth.existingSecret.name != context.releaseName + '-secret'
+        severity: warning
+        paths: [trivyAuth.existingSecret.name]
+        message: >-
+          The template creates a secret with this name itself, to hold the post token. Put the service account
+          key in a dictionary secret under another name and choose that one.
+      - rule: self.serviceAccountName != 'controlplane'
+        severity: warning
+        paths: [serviceAccountName]
+        message: >-
+          controlplane is the org's built-in service account, used by Control Plane itself. Create a service
+          account for Trivy instead, so the pull and view grants on every image go to an account you own.
+      - rule: oldSelf == null || self.postToken == oldSelf.postToken
+        severity: info
+        paths: [postToken]
+        message: >-
+          The daemon and the web server both switch to the new token in this upgrade. A scan run that is in
+          progress keeps the old token, so its remaining uploads may fail with 401.
+
+  - id: storage
+    title: Report storage
+    description: Where the web server stores the HTML reports.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: Storage
+            widget: cards
+            required: true
+            docs: "#storage"
+            description: >-
+              Choose it once: switching later leaves the reports stored so far in the old storage, unserved, and
+              the identity keeps its old cloud binding until a reinstall.
+            options:
+              - value: s3
+                label: AWS S3
+                description: An S3 bucket, reached keylessly through an AWS cloud account and an IAM policy.
+              - value: azureFileshare
+                label: Azure file share
+                description: An Azure file share, mounted into the web server through an Azure cloud account.
+        rules:
+          - rule: self.storage.type in ['s3', 'azureFileshare']
+            mirrors: cpln-trivy.validateStorage
+            paths: [storage.type]
+            message: Choose AWS S3 or Azure file share for the reports.
+          # identity.yaml switches aws: / azure:, and the API keeps an identity's old cloud binding on update
+          # (CLAUDE.md, measured 2026-08-21). The web server reads reports only from the new storage.
+          - rule: oldSelf == null || self.storage.type == oldSelf.storage.type
+            severity: info
+            paths: [storage.type]
+            message: >-
+              Reports stored so far stay in the old storage, and the web server no longer serves them: their
+              links in the image tags stop working until the images are scanned again. The identity also keeps
+              its old cloud binding after the switch; only a reinstall removes it.
+      - title: AWS S3
+        when: self.storage.type == 's3'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The AWS cloud account, the bucket and the bucket-scoped IAM policy must exist **before** you install;
+              the template creates none of them. The steps and the IAM policy JSON are in the Storage section of
+              this version's README.
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Enter the bucket name, 3 to 63 lowercase letters, digits, dots and hyphens.
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            patternMessage: Enter an AWS region code, such as us-east-1.
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy allows `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on the
+              bucket and on its objects; the README holds the full JSON. The identity carries no other AWS
+              policy.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+        rules:
+          - rule: self.storage.s3.cloudAccountName != null && self.storage.s3.cloudAccountName != ''
+            mirrors: cpln-trivy.validateStorage
+            paths: [storage.s3.cloudAccountName]
+            message: The AWS cloud account is required for S3 storage.
+      - title: Azure file share
+        when: self.storage.type == 'azureFileshare'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The Azure cloud account, the storage account and its file share must exist **before** you install;
+              the template creates none of them. The steps are in the Storage section of this version's README.
+          - path: storage.azureFileshare.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An Azure [cloud account](/guides/create-cloud-account) for the subscription that holds the storage account."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [azure] }
+              mustExist: error
+          - path: storage.azureFileshare.accountName
+            type: string
+            label: Storage account
+            required: true
+            example: true
+            pattern: '^[a-z0-9]{3,24}$'
+            patternMessage: Enter the storage account name, 3 to 24 lowercase letters and digits.
+          - path: storage.azureFileshare.fileShare
+            type: string
+            label: File share
+            required: true
+            example: true
+            description: The web server mounts it at `/app/data`.
+          - path: storage.azureFileshare.scope
+            type: string
+            label: Storage account resource ID
+            required: true
+            placeholder: /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/STORAGE_ACCOUNT
+            description: >-
+              The template grants the identity the **Reader and Data Access** role at exactly this scope.
+        rules:
+          - rule: self.storage.azureFileshare.scope != null && self.storage.azureFileshare.scope != ''
+            mirrors: cpln-trivy.validateStorage
+            paths: [storage.azureFileshare.scope]
+            message: The storage account resource ID is required for Azure file share storage.
+          # A stricter check than the chart's: skip the installed value (guide §8.8).
+          - rule: >-
+              self.storage.azureFileshare.scope == '' ||
+              (oldSelf != null && self.storage.azureFileshare.scope == oldSelf.storage.azureFileshare.scope) ||
+              self.storage.azureFileshare.scope.matches('^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Storage/storageAccounts/[^/]+$')
+            paths: [storage.azureFileshare.scope]
+            message: >-
+              Enter the storage account's full resource ID, in the form
+              /subscriptions/ID/resourceGroups/GROUP/providers/Microsoft.Storage/storageAccounts/NAME.
+          - rule: >-
+              self.storage.azureFileshare.scope == '' || self.storage.azureFileshare.accountName == '' ||
+              self.storage.azureFileshare.scope.endsWith('/storageAccounts/' + self.storage.azureFileshare.accountName)
+            severity: warning
+            paths: [storage.azureFileshare.scope]
+            message: >-
+              The resource ID names another storage account than the one above, so the role would be granted on
+              the wrong account and the web server could not use the file share.
+
+  - id: scanning
+    title: Scanning
+    description: When the daemon runs, and the compute of each run.
+    fields:
+      - type: note
+        when: context.gvcLocations != null && size(context.gvcLocations) > 1
+        text: >-
+          The daemon is a cron workload, so every location of this GVC runs its own scan of the whole org on
+          each tick, and each image is scanned once per location. Install into a GVC with one location to scan
+          each image once.
+        textExpression: >-
+          'The daemon is a cron workload, so each of the ' + string(size(context.gvcLocations)) + ' locations
+          of this GVC runs its own scan of the whole org on each tick, and each image is scanned ' +
+          string(size(context.gvcLocations)) + ' times. Install into a GVC with one location to scan each image once.'
+      # 1.0.0 has no rescanAfter: the daemon scans only images without a cpln/trivy-scan tag.
+      - type: note
+        text: >-
+          Each image is scanned once. To scan an image again, remove its `cpln/trivy-scan` tag; the next run
+          picks it up.
+      - path: schedule
+        type: string
+        format: cron
+        label: Schedule (UTC)
+        required: true
+        description: >-
+          The default `*/59 * * * *` fires at minute 0 and minute 59 of every hour; for hourly runs use
+          `0 * * * *`. Runs never overlap: a long run over a large registry delays the next one instead of
+          starting a second.
+        suggestions:
+          - { value: "0 * * * *", label: "Every hour" }
+          - { value: "0 */6 * * *", label: "Every 6 hours" }
+          - { value: "0 2 * * *", label: "Daily at 02:00" }
+          - { value: "0 2 * * 0", label: "Weekly, Sunday 02:00" }
+      - path: daemon.image
+        type: string
+        format: image
+        label: Daemon image
+        required: true
+        advanced: true
+      - path: daemon.resources
+        type: resources
+        label: Daemon resources
+        required: true
+        advanced: true
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: trivyApi.image
+        type: string
+        format: image
+        label: Trivy image
+        required: true
+        advanced: true
+      - path: trivyApi.resources
+        type: resources
+        label: Trivy resources
+        required: true
+        advanced: true
+        description: Scanning is CPU-bound; less CPU makes every run longer.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: daemon.firewall.outboundAllowCIDR
+        type: list
+        label: Daemon outbound CIDRs
+        widget: tags
+        unique: true
+        advanced: true
+        description: >-
+          Where the daemon may connect: the Control Plane API, the image registry and the web server's public
+          endpoint.
+        item: { type: string, format: cidr }
+    rules:
+      - rule: size(self.daemon.firewall.outboundAllowCIDR) > 0
+        severity: warning
+        paths: [daemon.firewall.outboundAllowCIDR]
+        message: >-
+          With no outbound CIDRs the daemon reaches neither the Control Plane API nor the web server, so no
+          image is ever scanned. Allow at least the addresses it needs, for example 0.0.0.0/0.
+
+  - id: webserver
+    title: Report web server
+    description: Who can open the reports, and the scale of the web server that stores and serves them.
+    sections:
+      - title: Network access
+        fields:
+          - type: note
+            text: >-
+              The web server has no internal access: the daemon uploads each report through the web server's
+              **public** endpoint, and reports are read there by URL without any login (the URL holds an
+              unguessable hash). A report's URL is in the `cpln/trivy-scan` tag of the scanned image.
+          - path: webServer.firewall.inboundAllowCIDR
+            type: list
+            label: Allowed inbound CIDRs
+            widget: tags
+            unique: true
+            description: >-
+              Addresses allowed to reach the web server, both to open reports and to upload them. The daemon's
+              uploads arrive from addresses this template does not fix, so keep `0.0.0.0/0` unless you have
+              confirmed where the daemon's traffic comes from. Firewall changes take up to a few minutes to take
+              effect.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get web-server --gvc GVC_NAME -o yaml`.
+            item: { type: string, format: cidr }
+          - path: webServer.firewall.outboundAllowCIDR
+            type: list
+            label: Web server outbound CIDRs
+            widget: tags
+            unique: true
+            advanced: true
+            description: Where the web server may connect; it must reach your S3 bucket or Azure storage.
+            item: { type: string, format: cidr }
+        rules:
+          - rule: size(self.webServer.firewall.inboundAllowCIDR) > 0
+            severity: warning
+            paths: [webServer.firewall.inboundAllowCIDR]
+            message: >-
+              With no inbound CIDRs nothing reaches the web server, including the daemon, which uploads every
+              report through it. Keep 0.0.0.0/0 in the list.
+          - when: self.storage.type == 's3'
+            rule: size(self.webServer.firewall.outboundAllowCIDR) > 0
+            severity: warning
+            paths: [webServer.firewall.outboundAllowCIDR]
+            message: >-
+              With no outbound CIDRs the web server cannot reach the S3 bucket, so no report is stored or served.
+              Allow at least the bucket's addresses, for example 0.0.0.0/0.
+          - rule: >-
+              size(self.webServer.firewall.inboundAllowCIDR) == 0 ||
+              self.webServer.firewall.inboundAllowCIDR.exists(c, c == '0.0.0.0/0')
+            severity: info
+            paths: [webServer.firewall.inboundAllowCIDR]
+            message: >-
+              The daemon uploads reports through this same public endpoint, from addresses this template does
+              not fix. Without 0.0.0.0/0 its uploads may be refused and no new report is stored.
+      - title: Scale and resources
+        fields:
+          - path: webServer.autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            min: 0
+            required: true
+            description: With 0 the web server scales to zero when idle and starts on the next request.
+          - path: webServer.autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            min: 1
+            required: true
+          - path: webServer.image
+            type: string
+            format: image
+            label: Web server image
+            required: true
+            advanced: true
+          - path: webServer.resources
+            type: resources
+            label: Web server resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.webServer.autoscaling.maxScale >= self.webServer.autoscaling.minScale
+            paths: [webServer.autoscaling.maxScale]
+            message: The maximum replicas must be at least the minimum replicas.

@@ -1,0 +1,28 @@
+kind: volumeset
+name: {{ .Release.Name }}-tidb-pd-vs
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "tidb.tags" . | nindent 2 }}
+  workload: {{ .Release.Name }}-pd
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.pd.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+    
+---
+kind: volumeset
+name: {{ .Release.Name }}-tidb-tikv-vs
+gvc: {{ .Values.gvc.name }}
+tags:
+  {{- include "tidb.tags" . | nindent 2 }}
+  workload: {{ .Release.Name }}-tikv
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.tikv.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

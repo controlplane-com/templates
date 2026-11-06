@@ -1,0 +1,92 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: SeaweedFS
+category: storage
+topology: single
+
+summary: >-
+  SeaweedFS as one all-in-one node (master, volume server, filer, S3 gateway and admin UI in one
+  process) on a persistent volume, serving a SigV4-authenticated S3 API with path-style addressing
+  and creating listed buckets at startup. The S3 API can be published on a public HTTPS endpoint;
+  the admin UI stays internal. Pick it as a light S3-compatible target for backups, uploads,
+  metrics storage and data files when one replica without failover is enough.
+
+keywords:
+  - object storage
+  - s3
+  - s3 compatible
+  - s3 api
+  - bucket storage
+  - blob storage
+  - backup target
+  - path-style s3
+  - filer
+  - weed mini
+  - development s3 endpoint
+  - public s3 endpoint
+
+useCases:
+  - S3-compatible backup target for databases and other templates
+  - Object storage for long-term Prometheus metrics with Thanos or Mimir
+  - Store app uploads and files behind an S3 API in the same GVC
+  - Light S3 endpoint for development and testing
+  - Bucket storage for Parquet files and lakehouse tables
+
+alternativeTo:
+  - Amazon S3
+  - Cloudflare R2
+  - Wasabi
+  - Backblaze B2
+  - Google Cloud Storage
+  - Azure Blob Storage
+  - DigitalOcean Spaces
+
+compatibleWith: [s3-api]
+
+pickInsteadIf:
+  - need: object storage that keeps serving while nodes are down, with erasure coding
+    template: minio
+  - need: SFTP access to files stored in a bucket
+    template: sftpgo
+
+related:
+  - template: thanos
+    relation: companion
+    note: Long-term Prometheus metrics retention in a SeaweedFS bucket
+  - template: mimir
+    relation: companion
+    note: Prometheus metrics store that keeps its blocks in SeaweedFS
+  - template: prometheus
+    relation: companion
+    note: Thanos sidecar uploads TSDB blocks to SeaweedFS
+  - template: postgres-highly-available
+    relation: companion
+    note: Sends scheduled backups to a SeaweedFS bucket
+  - template: docmost
+    relation: companion
+    note: Stores wiki attachments in SeaweedFS over S3
+  - template: duckdb
+    relation: companion
+    note: Scheduled SQL jobs that read and write Parquet in SeaweedFS
+  - template: polaris
+    relation: companion
+    note: Iceberg REST catalog for lakehouse tables stored in SeaweedFS
+  - template: sftpgo
+    relation: companion
+    note: SFTP front end that stores uploaded files in a SeaweedFS bucket
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    valuesPath: s3.credentialsSecretName
+    required: true
+    description: S3 access key pair every client uses; without it S3 would be unauthenticated. When missing at install, the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: adminUI.credentialsSecretName
+    required: true
+    description: Admin UI login, needed while adminUI.enabled is true (the default). When missing at install, the workload waits with no logs.

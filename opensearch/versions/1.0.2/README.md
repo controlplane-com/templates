@@ -56,7 +56,7 @@ volumeset:
 
 ```yaml
 internal_access:
-  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  type: same-gvc # options: same-gvc, same-org, workload-list
   workloads:  # Note: can only be used if type is same-gvc or workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```

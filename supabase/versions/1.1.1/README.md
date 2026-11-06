@@ -40,7 +40,7 @@ Self-hosted Supabase — a PostgreSQL backend-as-a-service with built-in authent
      --entry secretKeyBase="$(openssl rand -hex 32)"
    ```
 
-   Keep `anonKey` — your client apps need it. Read the values back later with `cpln secret reveal my-supabase-jwt`.
+   Keep `anonKey` — your client apps need it. Read the values back later with `cpln secret reveal my-supabase-jwt -o yaml`.
 
 2. **Postgres credentials** (`postgres.credentialsSecretName`) — a **dictionary** secret with exactly the keys `password` and `database`. The login role name is **fixed at `postgres`** by the Supabase image and is not configurable, so it is not part of the secret:
 
@@ -205,7 +205,7 @@ one per provider before installing:
 printf '%s' 'YOUR_GITHUB_CLIENT_SECRET' | cpln secret create-opaque --name my-supabase-github-oauth --encoding plain -f -
 ```
 
-Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab, Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X, WorkOS, Zoom. In your provider's console set the JavaScript origin to `kong.publicAccess.siteUrl` and the redirect URI to `{siteUrl}/auth/v1/callback`. OAuth requires `kong.publicAccess.enabled: true` — providers will not redirect to internal hostnames.
+This template wires **GitHub** and **Google** only — Auth (GoTrue) supports more providers, but any other key under `auth.providers` is not passed to Auth and has no effect. In your provider's console set the JavaScript origin to `kong.publicAccess.siteUrl` and the redirect URI to `{siteUrl}/auth/v1/callback`. OAuth requires `kong.publicAccess.enabled: true` — providers will not redirect to internal hostnames.
 
 ### Storage
 
@@ -426,13 +426,13 @@ The Storage API reaches GCS over its S3-compatible API, so it uses HMAC keys ins
 
 | What | Where |
 |---|---|
-| API (public) | `{kong.publicAccess.siteUrl}`, or the assigned `*.cpln.app` endpoint on the Kong workload |
+| API (public) | `{kong.publicAccess.siteUrl}`, or the Kong workload's canonical endpoint (read `status.canonicalEndpoint`) |
 | API (internal) | `{release-name}-kong.{gvc}.cpln.local:8000` |
 | Postgres (direct) | `{release-name}-postgres.{gvc}.cpln.local:5432`, user `postgres` |
 | Postgres (pooled) | `{release-name}-pgbouncer.{gvc}.cpln.local:5432`, user `postgres` |
-| Studio dashboard | `/` on the same Kong endpoint as the API — log in with `studio.username` and the password from `cpln secret reveal {studio.passwordSecretName}` |
-| API keys | `cpln secret reveal {jwt.secretName}` — keys `anonKey` and `serviceRoleKey` |
-| Database password | `cpln secret reveal {postgres.credentialsSecretName}` — key `password` |
+| Studio dashboard | `/` on the same Kong endpoint as the API — log in with `studio.username` and the password from `cpln secret reveal {studio.passwordSecretName} -o yaml` |
+| API keys | `cpln secret reveal {jwt.secretName} -o yaml` — keys `anonKey` and `serviceRoleKey` |
+| Database password | `cpln secret reveal {postgres.credentialsSecretName} -o yaml` — key `password` |
 
 API paths through Kong: `/rest/v1/` (PostgREST), `/auth/v1/` (GoTrue), `/storage/v1/` (Storage), `/realtime/v1/` (Realtime), `/pg/` (pg_meta, `serviceRoleKey` only).
 
@@ -462,27 +462,33 @@ Two values are consumed only once, when the Postgres data directory is first ini
 
 ## Restoring a backup
 
-**Logical** — run from a machine with bucket access and a tunnel to Postgres (`cpln port-forward {release-name}-postgres 5432:5432 --gvc {gvc}`, then use `--host=localhost`):
+**Logical** — run from a machine with bucket access. First open a tunnel to Postgres and leave it running in another terminal:
+
+```sh
+cpln port-forward {release-name}-postgres 5432:5432 --gvc {gvc}
+```
+
+Then stream the dump through the tunnel:
 
 ```sh
 export PGPASSWORD="YOUR_POSTGRES_PASSWORD"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql --host={release-name}-postgres.{gvc}.cpln.local --port=5432 --username=postgres --dbname=postgres
+  | psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres
 
 unset PGPASSWORD
 ```
 
 For GCS, swap the first command for `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" -`.
 
-**WAL-G** — a restore needs an empty data directory:
+**WAL-G** — this template has **no verified WAL-G restore procedure**. You can list the base backups it has pushed:
 
-1. List backups: `cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list`
-2. Stop the Postgres workload, and create a **new** volume set to restore into.
-3. Run a one-off workload with that volume set mounted at `/var/lib/postgresql/data` and run `wal-g backup-fetch /var/lib/postgresql/data/pg_data BACKUP_NAME`.
-4. Point the Postgres workload at the restored volume set and start it.
-5. Set a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups, so the restored cluster does not collide with the original's WAL stream.
+```sh
+cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list
+```
+
+A restore means `wal-g backup-fetch` into an **empty** data directory plus WAL replay, and the chart provides no built-in path for that — treat it as a manual recovery following the [WAL-G PostgreSQL docs](https://github.com/wal-g/wal-g/blob/master/docs/PostgreSQL.md), never against the live volume set. If you restore into a new cluster, give it a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups so it does not collide with the original's WAL stream.
 
 ## Important Notes
 

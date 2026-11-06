@@ -1,0 +1,19 @@
+# postgis 1.3.2 — the last version with credentials inline in `config`.
+# Used as the starting point of an upgrade to a newer version.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+generated:
+  pgpw: hex
+
+vars:
+  pg_workload: "{release}-postgis"
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  config:
+    username: e2e
+    password: "{gen.pgpw}"
+    database: e2e

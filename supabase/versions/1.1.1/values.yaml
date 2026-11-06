@@ -95,9 +95,8 @@ auth:
     senderEmail: noreply@example.com
 
   # OAuth providers — uncomment and fill in credentials for any you want to enable.
-  # Supported: Apple, Azure, Bitbucket, Discord, Facebook, Figma, GitHub, GitLab,
-  # Google, Kakao, Keycloak, LinkedIn, Notion, Slack, Spotify, Twitch, Twitter/X,
-  # WorkOS, Zoom
+  # Only github and google are wired into Auth by this template; other keys here
+  # have no effect.
   # The client ID is not sensitive and stays here; the client SECRET is issued by
   # the provider, so it goes in a PREREQUISITE opaque secret (encoding: plain)
   # whose payload is the secret itself, named per provider.

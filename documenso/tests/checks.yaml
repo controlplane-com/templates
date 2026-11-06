@@ -1,0 +1,267 @@
+# Feature checks for the documenso template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# The Documenso image has node but no curl or psql, so the app checks are Node scripts run in the
+# Documenso container against 127.0.0.1:3000; the database checks run psql in the bundled postgres
+# container (local socket, as the POSTGRES_USER the credentials secret sets). The runner reads any
+# {word} as a placeholder, so the scripts use string concatenation, not template literals.
+checks:
+  - id: health-database-ok
+    description: /api/health reports the database check ok.
+    exec:
+      workload: "{release}-documenso"
+      container: documenso
+      script: |
+        node -e "fetch('http://127.0.0.1:3000/api/health').then(r => r.text().then(t => console.log('HEALTH ' + r.status + ' ' + t)))"
+    expect:
+      stdout: "^HEALTH 200 .*database.{0,4}:.{0,4}status.{0,4}:.{0,4}ok"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: certificate-available
+    description: The signing certificate opens with its passphrase (/api/certificate-status isAvailable true).
+    exec:
+      workload: "{release}-documenso"
+      container: documenso
+      script: |
+        node -e "fetch('http://127.0.0.1:3000/api/certificate-status').then(r => r.text().then(t => console.log('CERT ' + r.status + ' ' + t)))"
+    expect:
+      stdout: "^CERT 200 .*isAvailable.{0,3}:.{0,3}true"
+    retries: 3
+
+  - id: seal-document
+    description: >-
+      A document is created, sent and signed through the real API, and sealed with the certificate
+      (envelope COMPLETED); a wrong password is refused at sign-in.
+    exec:
+      workload: "{release}-documenso"
+      container: documenso
+      script: |
+        cat > /tmp/e2e-seal.mjs <<'EOF'
+        // Documenso v2.21.1 end-to-end seal check: sign up -> verify email (SQL) -> sign in -> API token ->
+        // create + distribute envelope (API v2) -> sign as recipient (public tRPC) -> poll until COMPLETED.
+        // Written without single quotes, backticks or dollar signs so it survives any shell quoting.
+        import crypto from "node:crypto";
+        import { execFileSync } from "node:child_process";
+
+        const TITLE = "e2e-seal-" + "{version}";
+        let basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+        if (basePath.endsWith("/")) basePath = basePath.slice(0, -1);
+        const BASE = "http://127.0.0.1:3000" + basePath;
+        // apps/remix/server/csrf-middleware.ts: cookie-authed POSTs need Origin === origin of NEXT_PUBLIC_WEBAPP_URL.
+        const ORIGIN = new URL(process.env.NEXT_PUBLIC_WEBAPP_URL || "http://localhost:3000").origin;
+        // packages/lib/universal/get-ip-address.ts: rate limits key on X-Forwarded-For (signup: 3 per IP per 3h,
+        // packages/lib/server-only/rate-limit/rate-limits.ts). A random per-run IP keeps reruns from hitting 429.
+        const FAKE_IP = "10." + [1, 2, 3].map(() => crypto.randomInt(1, 254)).join(".");
+        const RND = crypto.randomBytes(6).toString("hex");
+        const EMAIL = "e2e-" + RND + "@example.com";
+        const PASSWORD = "E2e-Seal-" + RND + "-9Aa"; // ZPasswordSchema: upper, lower, digit, special, 8-72
+        const SIGNER = "e2e-signer-" + RND + "@example.com";
+        const jar = new Map();
+
+        function fail(step, status, body) {
+          const short = String(body || "").replace(/\s+/g, " ").slice(0, 200);
+          console.log("FAIL " + step + " " + status + " " + short);
+          process.exit(1);
+        }
+
+        async function http(step, method, path, opts) {
+          const o = opts || {};
+          const headers = Object.assign({ "x-forwarded-for": FAKE_IP }, o.headers || {});
+          if (jar.size) headers.cookie = Array.from(jar, (kv) => kv[0] + "=" + kv[1]).join("; ");
+          if (method !== "GET") headers.origin = ORIGIN;
+          let body = o.body;
+          if (o.json !== undefined) {
+            headers["content-type"] = "application/json";
+            body = JSON.stringify(o.json);
+          }
+          let res;
+          try {
+            res = await fetch(BASE + path, { method: method, headers: headers, body: body, redirect: "manual" });
+          } catch (e) {
+            fail(step, 0, e.message);
+          }
+          for (const c of res.headers.getSetCookie()) {
+            const pair = c.split(";")[0];
+            const i = pair.indexOf("=");
+            jar.set(pair.slice(0, i), pair.slice(i + 1));
+          }
+          const text = await res.text();
+          if (!o.allowFail && (res.status < 200 || res.status > 299)) fail(step, res.status, text);
+          let data = null;
+          try { data = JSON.parse(text); } catch (e) { data = null; }
+          return { status: res.status, text: text, data: data };
+        }
+
+        // tRPC v11 + superjson (packages/trpc/server/trpc.ts, packages/trpc/utils/data-transformer.ts), non-batched,
+        // mounted at /api/trpc by apps/remix/server/trpc/hono-trpc-remix.ts. Body/query input is { json: <input> }.
+        async function trpc(step, proc, input, mutation) {
+          const wire = input === undefined ? { json: null, meta: { values: ["undefined"] } } : { json: input };
+          const r = mutation
+            ? await http(step, "POST", "/api/trpc/" + proc, { json: wire })
+            : await http(step, "GET", "/api/trpc/" + proc + "?input=" + encodeURIComponent(JSON.stringify(wire)));
+          if (!r.data || !r.data.result) fail(step, r.status, r.text);
+          return r.data.result.data.json;
+        }
+
+        async function csrf() {
+          // packages/auth/server/index.ts GET /api/auth/csrf -> sets signed csrfToken cookie, returns { csrfToken }
+          return (await http("csrf", "GET", "/api/auth/csrf")).data.csrfToken;
+        }
+
+        // One-page PDF built by hand with exact xref byte offsets.
+        function tinyPdf() {
+          const content = "BT /F1 24 Tf 72 700 Td (Documenso e2e seal) Tj ET";
+          const objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            "<< /Length " + content.length + " >>\nstream\n" + content + "\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+          ];
+          let out = "%PDF-1.4\n";
+          const offsets = [];
+          objs.forEach((o, i) => {
+            offsets.push(out.length);
+            out += (i + 1) + " 0 obj\n" + o + "\nendobj\n";
+          });
+          const xref = out.length;
+          out += "xref\n0 " + (objs.length + 1) + "\n0000000000 65535 f \n";
+          for (const off of offsets) out += String(off).padStart(10, "0") + " 00000 n \n";
+          out += "trailer\n<< /Size " + (objs.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n";
+          return Buffer.from(out, "latin1");
+        }
+
+        // 1. Sign up -- packages/auth/server/routes/email-password.ts POST /signup (ZSignUpSchema in types/email-password.ts)
+        await http("signup", "POST", "/api/auth/email-password/signup", { json: { name: "E2E Seal", email: EMAIL, password: PASSWORD } });
+
+        // 2. Mark email verified -- /authorize rejects UNVERIFIED_EMAIL. Table/column per packages/prisma/schema.prisma (no @@map).
+        //    Same Prisma CLI + schema docker/start.sh uses for "prisma migrate deploy" on every boot.
+        const Q = String.fromCharCode(39);
+        try {
+          execFileSync("npx", ["prisma", "db", "execute", "--stdin", "--schema", "/app/packages/prisma/schema.prisma"], {
+            cwd: "/app/apps/remix",
+            input: "UPDATE \"User\" SET \"emailVerified\" = NOW() WHERE \"email\" = " + Q + EMAIL + Q + ";",
+            env: Object.assign({}, process.env, {
+              CHECKPOINT_DISABLE: "1",
+              NEXT_PRIVATE_DIRECT_DATABASE_URL: process.env.NEXT_PRIVATE_DIRECT_DATABASE_URL || process.env.NEXT_PRIVATE_DATABASE_URL,
+            }),
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (e) {
+          fail("verify-email", 0, String(e.stderr || e.message));
+        }
+
+        // 3. Sign in -- POST /authorize with { email, password, csrfToken }; csrfToken must equal the signed cookie.
+        await http("signin", "POST", "/api/auth/email-password/authorize", { json: { email: EMAIL, password: PASSWORD, csrfToken: await csrf() } });
+        const sess = await http("session", "GET", "/api/auth/session"); // packages/auth/server/routes/session.ts
+        if (!sess.data || !sess.data.user || sess.data.user.email !== EMAIL) fail("session", sess.status, sess.text);
+
+        // Negative control: a wrong password must be refused and must not issue a session.
+        {
+          const saved = new Map(jar);
+          jar.clear();
+          const bad = await http("negative", "POST", "/api/auth/email-password/authorize", {
+            json: { email: EMAIL, password: PASSWORD + "x", csrfToken: await csrf() },
+            allowFail: true,
+          });
+          const gotSession = Array.from(jar.keys()).some((k) => k.endsWith("sessionId"));
+          const refused = (bad.status < 200 || bad.status > 299) && !gotSession;
+          console.log("NEGATIVE " + (refused ? "REFUSED" : "ACCEPTED"));
+          if (!refused) fail("negative", bad.status, bad.text);
+          jar.clear();
+          saved.forEach((v, k) => jar.set(k, v));
+        }
+
+        // 4. Personal team -> API token. organisation.getMany (organisation-router/get-organisations.ts, void input),
+        //    team.find (team-router/find-teams.ts), apiToken.create (api-token-router/create-api-token.types.ts).
+        const orgs = await trpc("org-list", "organisation.getMany", undefined, false);
+        if (!orgs || !orgs.length) fail("org-list", 200, JSON.stringify(orgs));
+        const teams = await trpc("team-list", "team.find", { organisationId: orgs[0].id }, false);
+        if (!teams || !teams.data || !teams.data.length) fail("team-list", 200, JSON.stringify(teams));
+        const tok = await trpc("api-token", "apiToken.create", { teamId: teams.data[0].id, tokenName: "e2e seal", expirationDate: null }, true);
+        const AUTH = { authorization: "Bearer " + tok.token }; // Bearer is CSRF-exempt (csrf-middleware.ts)
+
+        // 5. Create envelope -- POST /api/v2/envelope/create multipart { payload: JSON, files: [pdf] }
+        //    (envelope-router/create-envelope.types.ts; e2e/api/v2/envelopes-api.spec.ts). Field coords are percentages.
+        const payload = {
+          title: TITLE,
+          type: "DOCUMENT",
+          recipients: [{
+            email: SIGNER, name: "E2E Signer", role: "SIGNER",
+            fields: [{ type: "SIGNATURE", page: 1, positionX: 10, positionY: 10, width: 30, height: 8 }],
+          }],
+          meta: { distributionMethod: "NONE", typedSignatureEnabled: true }, // NONE = no email
+        };
+        const form = new FormData();
+        form.append("payload", JSON.stringify(payload));
+        form.append("files", new File([tinyPdf()], "e2e.pdf", { type: "application/pdf" }));
+        const created = await http("create", "POST", "/api/v2/envelope/create", { headers: AUTH, body: form });
+        const envelopeId = created.data && created.data.id;
+        if (!envelopeId) fail("create", created.status, created.text);
+
+        // Distribute -- POST /api/v2/envelope/distribute (distribute-envelope.types.ts) returns recipients[].token
+        const dist = await http("distribute", "POST", "/api/v2/envelope/distribute", { headers: AUTH, json: { envelopeId: envelopeId } });
+        const recipient = dist.data && dist.data.recipients && dist.data.recipients[0];
+        if (!recipient || !recipient.token) fail("distribute", dist.status, dist.text);
+
+        // GET /api/v2/envelope/:id (get-envelope.types.ts -> ZEnvelopeSchema: secondaryId, status, fields[])
+        const env1 = await http("get-envelope", "GET", "/api/v2/envelope/" + envelopeId, { headers: AUTH });
+        const field = (env1.data.fields || []).find((f) => f.type === "SIGNATURE");
+        if (!field) fail("get-envelope", env1.status, env1.text);
+        const documentId = parseInt(String(env1.data.secondaryId).split("_")[1], 10); // lib/utils/envelope.ts mapSecondaryIdToDocumentId
+
+        // 6. Sign as the recipient with the public token procedures the signing page calls (no session cookie).
+        jar.clear();
+        // envelope-router/sign-envelope-field.ts: { token, fieldId, fieldValue: { type, value } }; non-base64 value = typed signature
+        await trpc("sign-field", "envelope.field.sign", { token: recipient.token, fieldId: field.id, fieldValue: { type: "SIGNATURE", value: "E2E Signer" } }, true);
+        // recipient-router/router.ts completeDocumentWithToken: { token, documentId } -> { status: SIGNED }
+        const done = await trpc("complete", "recipient.completeDocumentWithToken", { token: recipient.token, documentId: documentId }, true);
+        if (!done || (done.status !== "SIGNED" && done.status !== "ALREADY_SIGNED")) fail("complete", 200, JSON.stringify(done));
+
+        // 7. Poll until the internal.seal-document job sets Envelope.status = COMPLETED.
+        const deadline = Date.now() + 120000;
+        let last = "";
+        while (Date.now() < deadline) {
+          const r = await http("poll", "GET", "/api/v2/envelope/" + envelopeId, { headers: AUTH });
+          last = r.data && r.data.status;
+          if (last === "COMPLETED") {
+            console.log("SEALED " + envelopeId);
+            process.exit(0);
+          }
+          if (last === "REJECTED" || last === "CANCELLED") break;
+          await new Promise((r2) => setTimeout(r2, 3000));
+        }
+        fail("seal", 200, "envelope status " + last + " after 120s");
+        EOF
+        cd /app/apps/remix && node /tmp/e2e-seal.mjs
+    expect:
+      stdout: "(?s)NEGATIVE REFUSED.*^SEALED envelope_"
+      notStdout: "^FAIL "
+    retries: 2
+    retryDelaySeconds: 20
+    timeoutSeconds: 300
+
+  - id: seal-job-completed
+    description: The background "Seal Document" job for that document finished COMPLETED (not FAILED).
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SEAL_JOB ' || j.status FROM \"BackgroundJob\" j JOIN \"Envelope\" e ON j.payload->>'documentId' = split_part(e.\"secondaryId\", '_', 2) WHERE j.\"jobId\" = 'internal.seal-document' AND e.title = 'e2e-seal-{version}'"
+    expect:
+      stdout: "^SEAL_JOB COMPLETED$"
+      notStdout: "^SEAL_JOB (FAILED|PENDING|PROCESSING)$"
+    retries: 3
+
+  - id: signed-document-survives
+    description: The document sealed by the first installed version is still COMPLETED after every upgrade.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SURVIVED ' || status FROM \"Envelope\" WHERE title = 'e2e-seal-{installed_version}' AND type = 'DOCUMENT' AND \"completedAt\" IS NOT NULL"
+    expect:
+      stdout: "^SURVIVED COMPLETED$"
+    retries: 3

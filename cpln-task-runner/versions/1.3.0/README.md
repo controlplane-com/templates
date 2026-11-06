@@ -4,8 +4,8 @@ A self-hosted HTTP task queue and scheduler, similar to Google Cloud Tasks. Enqu
 
 ## Architecture
 
-- **API workload** — HTTP endpoint for enqueuing tasks and for the admin endpoints; public by default
-- **Worker workload** — background processor that delivers tasks to their target URLs; internal only
+- **API workload** — HTTP endpoint for enqueuing tasks and for the admin endpoints; private by default (`api.public.enabled: false`), reachable from the same GVC
+- **Worker workload** — background processor that delivers tasks to their target URLs; no public access
 - **Redis + Sentinel** (bundled subchart) — highly available task persistence and coordination
 - **Secret** (optional, on by default) — holds the bundled Redis and Sentinel passwords
 - **Identity + policy** — grants both workloads `reveal` on exactly the secrets they read
@@ -50,7 +50,7 @@ api:
   port: 8080
   public:
     enabled: false           # DEFAULT. /v1/enqueue authenticates nothing — see Important Notes before enabling
-    pathPrefix: ""           # path prefix for the public endpoint (empty = root)
+    pathPrefix: ""           # not used for routing by this chart version
   admin:
     # REQUIRED prerequisite secret — an `opaque` secret (encoding: plain) whose
     # payload is the admin API key. "" disables admin auth and is rejected while
@@ -95,7 +95,7 @@ worker:
 
 ```yaml
 createSecret: true                  # false = supply your own secret instead
-secretName: task-runner-secrets     # name of the secret this chart creates
+secretName: task-runner-secrets     # org-level name of the secret this chart creates (not release-prefixed)
 
 redis:
   redisPassword: change-me-cpln-task-runner-redis
@@ -118,23 +118,44 @@ redis:
       enabled: true
 ```
 
-With `createSecret: false`, create a `dictionary` secret yourself holding the keys named by `passwordKey` above, and point both `fromSecret.name` values at it.
+With `createSecret: false`, create a `dictionary` secret yourself holding the keys named by `passwordKey` above, and point both `fromSecret.name` values at it:
+
+```bash
+cpln secret create-dictionary --name SECRET_NAME \
+  --entry redis-password='YOUR-REDIS-PASSWORD' \
+  --entry redis-sentinel-password='YOUR-SENTINEL-PASSWORD'
+```
+
+`secretName` is an org-level name and is not prefixed with the release name, so a second install in the same org needs a different `secretName`, with both `fromSecret.name` values changed to match.
 
 ## Connecting
 
 | What | Address | Credentials |
 |---|---|---|
-| API (public) | the workload's `*.cpln.app` canonical endpoint | none for `/v1/*`; `X-Admin-Key` for `/admin/*` |
-| API (internal) | `{release}-task-runner-api.{gvc}.cpln.local:8080` | same |
-| Redis Sentinel | `{release}-sentinel.{gvc}.cpln.local:26379` | the Sentinel password above |
+| API (public, only with `api.public.enabled: true`) | `status.canonicalEndpoint` of `RELEASE_NAME-task-runner-api` | none for `/v1/*`; `X-Admin-Key` for `/admin/*` |
+| API (internal) | `RELEASE_NAME-task-runner-api.GVC_NAME.cpln.local:8080` | same |
+| Redis Sentinel | `RELEASE_NAME-sentinel.GVC_NAME.cpln.local:26379` (master name `mymaster`) | the Sentinel password above |
 | Admin key | your `opaque` secret | `cpln secret reveal my-cpln-task-runner-admin-key -o yaml` |
 
-Find the public endpoint under `status.canonicalEndpoint` of `cpln workload get {release}-task-runner-api --gvc {gvc} -o yaml`.
+Read the public endpoint, when enabled:
+
+```bash
+cpln workload get RELEASE_NAME-task-runner-api --gvc GVC_NAME -o yaml
+```
+
+To reach the private API from your machine, open a tunnel:
+
+```bash
+cpln port-forward RELEASE_NAME-task-runner-api 8080:8080 --gvc GVC_NAME
+curl http://127.0.0.1:8080/health/ready
+```
+
+The examples below use `CANONICAL_ENDPOINT`; substitute the `status.canonicalEndpoint` value (a full `https://` URL), or `http://127.0.0.1:8080` through the tunnel.
 
 ### Enqueue a task
 
 ```bash
-curl -X POST https://your-api-endpoint/v1/enqueue \
+curl -X POST CANONICAL_ENDPOINT/v1/enqueue \
   -H "Content-Type: application/json" \
   -d '{
     "client_id": "my-service",
@@ -154,11 +175,11 @@ Every `/admin/*` request needs the `X-Admin-Key` header:
 
 ```bash
 # List clients
-curl https://your-api-endpoint/admin/clients \
+curl CANONICAL_ENDPOINT/admin/clients \
   -H "X-Admin-Key: YOUR-ADMIN-KEY"
 
 # Create or update a client
-curl -X POST https://your-api-endpoint/admin/clients/set \
+curl -X POST CANONICAL_ENDPOINT/admin/clients/set \
   -H "X-Admin-Key: YOUR-ADMIN-KEY" \
   -H "Content-Type: application/json" \
   -d '{"client_id": "new-service", "tier": "premium", "enabled": true}'
@@ -181,19 +202,20 @@ Set `otelEndpoint` on either workload to export traces, and set the GVC's **Trac
 
 ## Upgrading from 1.2.x
 
-One behaviour changes, and it will break an existing workflow if you relied on the old default:
+Two behaviours change, and either will break an existing workflow if you relied on the old default:
 
 - **Admin authentication is now enforced.** 1.2.x shipped `api.env.adminApiKey: ""`, which left `/admin/*` **unauthenticated on a public API** — anyone who found the endpoint could create clients and change rate-limit tiers. That key is now a prerequisite secret named by `api.admin.apiKeySecretName`, and an install that still sets `api.env.adminApiKey` (or `redis.admin.fromSecret`) fails immediately with a message naming the replacement. Create the secret with the *same* key you were using, and admin scripts keep working; create a new one and every caller must be updated. Leaving `apiKeySecretName` empty is still possible for an internal-only deployment, but is rejected while `api.public.enabled` is true.
+- **`api.public.enabled` now defaults to `false`** (it was `true`). An upgrade that relied on the old default loses its public endpoint; set `api.public.enabled: true` explicitly to keep it, knowing `/v1/enqueue` is unauthenticated (see Important Notes).
 - The bundled Redis and Sentinel passwords now default to `change-me-…` instead of `mypassword`. An existing install keeps whatever you set; a fresh install with the defaults untouched runs on a password published in this repo.
 
 ## Important Notes
 
-- A missing prerequisite secret wedges the deployment **silently**: `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments {release}-task-runner-api --gvc {gvc} -o yaml` → `status.versions[].message`, which names the missing secret. After creating it, recovery takes 5.5–8.5 minutes, or run `cpln workload force-redeployment {release}-task-runner-api --gvc {gvc}` to cut that to about 90 seconds.
-- **`/v1/enqueue` has NO authentication, and an unknown `client_id` is auto-registered rather than rejected.** Measured: posting a never-seen ID returns `status: enqueued` and creates that client. So nothing gates the queue — with public access on, any stranger can make a worker issue arbitrary outbound HTTP with a method, headers and body of their choosing. This is why `public.enabled` now defaults to `false`. No setting fixes it; the application has no client authentication. If you need public submission, front it with your own authenticating proxy.
+- A missing prerequisite secret wedges the deployment **silently**: `cpln logs` returns zero lines because the container never starts. The only diagnostic is `status.versions[].message` from `cpln workload get-deployments RELEASE_NAME-task-runner-api --gvc GVC_NAME -o yaml`, which names the missing secret. After creating it the workload recovers on its own after several minutes, or immediately with `cpln workload force-redeployment RELEASE_NAME-task-runner-api --gvc GVC_NAME`.
+- **`/v1/enqueue` has NO authentication, and an unknown `client_id` is auto-registered rather than rejected.** Posting a never-seen ID returns `status: enqueued` and creates that client. So nothing gates the queue — with public access on, any stranger can make a worker issue arbitrary outbound HTTP with a method, headers and body of their choosing. This is why `public.enabled` now defaults to `false`. No setting fixes it; the application has no client authentication. If you need public submission, front it with your own authenticating proxy.
 - Workers fetch the URLs they are given. `allowPrivateUrls: false` keeps them off internal addresses; turning it on lets any enqueued task reach anything the worker can route to.
 - Change the `change-me-…` Redis and Sentinel passwords before the first install. Once the volumes are initialised, changing them requires uninstalling (which deletes the volume sets) and reinstalling.
-- The first `helm upgrade` after an install re-applies the bundled Redis resources even with identical values, which restarts them; the API returns errors for a minute or two while Redis comes back. Later upgrades are clean.
-- Access changes take roughly 30 seconds to a few minutes to propagate, so a freshly toggled `public.enabled` looks unchanged at first.
+- The first `helm upgrade` after an install can re-apply the bundled Redis resources even with identical values, which restarts them; the API returns errors while Redis comes back.
+- Access changes can take a few minutes to propagate, so a freshly toggled `public.enabled` looks unchanged at first.
 
 ## Links
 

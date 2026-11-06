@@ -12,7 +12,7 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
 - **PgBouncer workload** (`{release}-postgres-pgbouncer`, standard) — one tier per location, pooling into HAProxy. Optional (`pgbouncer.enabled`).
 - **Logical backup workload** (`{release}-postgres-backup`, cron) — nightly `pg_dumpall` to object storage, in one location. Optional (`backup.mode: logical`).
 - **WAL-G sidecar** — continuous WAL archiving plus periodic base backups from whichever member is primary. Optional (`backup.mode: wal-g`).
-- **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`, snapshots with 7-day retention.
+- **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`. No snapshots are scheduled; uninstalling keeps one final snapshot for 7 days.
 - **etcd** (`etcd-multi-location` subchart) — the consensus store, one member per location.
 - **Identity, policies and secrets** — `reveal` on exactly the secrets this release uses, `view` on exactly the one install GVC (for the boot-time location check), plus a bucket-scoped cloud binding when backups are on.
 
@@ -40,7 +40,7 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
    ```
 
    Then set `postgres.credentialsSecretName` to that name. Reveal it later with
-   `cpln secret reveal my-postgres-credentials`. Use a plain identifier for `database` and
+   `cpln secret reveal my-postgres-credentials -o yaml`. Use a plain identifier for `database` and
    `username` — they are used unquoted when the database is created.
 
 3. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
@@ -199,11 +199,11 @@ pgbouncer:
 ```
 
 **`maxDbConnections` is enforced per PgBouncer pod, not across the deployment.** PgBouncer instances do not
-coordinate, so the real ceiling on server connections is `maxReplicas × maxDbConnections`. With the shipped
-values that is 4 × 100 = 400 against a Postgres `max_connections` of 100, of which
-`superuser_reserved_connections` reserves 3 — so under enough load clients get
-`remaining connection slots are reserved` rather than being queued. Size it so
-`maxReplicas × maxDbConnections` stays comfortably under 97, and treat `defaultPoolSize` the same way.
+coordinate, and `maxReplicas` applies in every location, so the real ceiling on server connections is
+`locations × maxReplicas × maxDbConnections`. With the shipped values that is 3 × 4 × 100 = 1200 against a
+Postgres `max_connections` of 100, of which `superuser_reserved_connections` reserves 3 — so under enough
+load clients get `remaining connection slots are reserved` rather than being queued. Size it so
+`locations × maxReplicas × maxDbConnections` stays comfortably under 97, and treat `defaultPoolSize` the same way.
 
 
 - `transaction` — the connection is held for one transaction. Best for most web and API workloads.
@@ -431,7 +431,7 @@ for MinIO.
 | PostgreSQL, direct to one member | `replica-{i}.{release}-postgres.{location}.{gvc}.cpln.local:5432` |
 | Patroni REST API | port `8008` on the same per-member names (`/primary`, `/replica`, `/health`, `/liveness`) |
 | HAProxy health / stats | `:8404/healthz` and `:8405/stats` on the proxy |
-| Credentials | the `dictionary` secret named by `postgres.credentialsSecretName` — `cpln secret reveal <name>` |
+| Credentials | the `dictionary` secret named by `postgres.credentialsSecretName` — `cpln secret reveal SECRET_NAME -o yaml` |
 
 `{gvc}` is the GVC you installed into. Internal only — there is no public access in this version.
 

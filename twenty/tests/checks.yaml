@@ -1,0 +1,227 @@
+# Feature checks for the twenty template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db).
+#
+# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3.
+# Twenty is called at its internal address; the database is read through the HAProxy endpoint, the
+# address Twenty itself uses, so those checks only pass when the proxy routes to the current leader.
+# (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+checks:
+  - id: cluster-healthy
+    description: Patroni reports exactly one leader and every other member streaming from it.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        leaders = [x["name"] for x in m if x["role"] == "leader"]
+        streaming = [x["name"] for x in m if x["role"] in ("replica", "sync_standby")
+                     and (x["state"] == "streaming" or (x["state"] == "running" and isinstance(x.get("lag"), int)))]
+        print(f"MEMBERS {len(m)} LEADERS {len(leaders)} STREAMING {len(streaming)}")
+        '
+    expect:
+      stdout: "^MEMBERS 3 LEADERS 1 STREAMING 2$"
+    retries: 20
+    retryDelaySeconds: 15
+
+  - id: twenty-healthy
+    description: The Twenty server answers its health endpoint on its internal address.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-twenty.{gvc}.cpln.local:3000/healthz
+    expect:
+      stdout: '"status":\s*"ok"'
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: migrations-ran
+    description: >-
+      Twenty's boot migrations created its core schema (workspaces and users) in the HA database, read
+      through the HAProxy endpoint.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA -c "
+          select 'CORE ' || count(*) filter (where table_name in ('workspace', 'user'))
+          from information_schema.tables where table_schema = 'core'" 2>&1
+    expect:
+      stdout: "^CORE 2$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: api-requires-auth
+    description: >-
+      The REST API is served and refuses a call without a token, rather than the gateway answering for a
+      server that is not there.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 15 -o /dev/null -D - http://{release}-twenty.{gvc}.cpln.local:3000/rest/companies |
+          awk 'NR==1 {print "REST " $2}'
+    expect:
+      stdout: "^REST 40[13]$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      A row written to the database on the version this scenario installed first is still there. On a
+      fresh install that is the same version; after an upgrade it proves the HA database's data carried
+      over the member restarts.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        psql -h "$P" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists public.e2e_marker (version text primary key)" \
+          -c "insert into public.e2e_marker values ('{version}') on conflict do nothing" >/dev/null 2>&1
+        n=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA \
+          -c "select count(*) from public.e2e_marker where version = '{installed_version}'" 2>&1)
+        [ "$n" = 1 ] && echo PERSISTED || echo "MISSING (rows for {installed_version}: $n)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: crm-record-survives-upgrade
+    description: >-
+      Through Twenty's own API: the first user signs up and creates the workspace (on the first run), signs in
+      with the real password while a wrong one is refused, writes a Company named after the running version,
+      and reads back the Company the scenario's first version wrote. After an upgrade that proves CRM data
+      written by the old version survives the HA database's member restarts and the app's own migrations.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request, urllib.error
+        B = "http://{release}-twenty.{gvc}.cpln.local:3000"
+        EMAIL, PW = "e2e-admin@example.com", "E2e-" + "{pg_password}"[:20]
+
+        def gql(path, query, variables, token=None):
+            req = urllib.request.Request(B + path, json.dumps(dict(query=query, variables=variables)).encode(),
+                                         dict([("content-type", "application/json")] +
+                                              ([("authorization", "Bearer " + token)] if token else [])))
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                return json.loads(e.read() or b"null") or dict(errors=[dict(message="HTTP %d" % e.code)])
+
+        def data(resp, key):
+            if resp.get("errors"):
+                raise SystemExit("API ERROR %s: %s" % (key, resp["errors"][0].get("message")))
+            return resp["data"][key]
+
+        def login(password):
+            return gql("/metadata", "mutation($e: String!, $p: String!, $o: String!) "
+                       "{ getLoginTokenFromCredentials(email: $e, password: $p, origin: $o) { loginToken { token } } }",
+                       dict(e=EMAIL, p=password, o=B))
+
+        def access(login_token):
+            r = gql("/metadata", "mutation($t: String!, $o: String!) { getAuthTokensFromLoginToken(loginToken: $t, "
+                    "origin: $o) { tokens { accessOrWorkspaceAgnosticToken { token } } } }", dict(t=login_token, o=B))
+            return data(r, "getAuthTokensFromLoginToken")["tokens"]["accessOrWorkspaceAgnosticToken"]["token"]
+
+        exists = data(gql("/metadata", "query($e: String!) { checkUserExists(email: $e) { exists } }",
+                          dict(e=EMAIL)), "checkUserExists")["exists"]
+        if not exists:  # first run on this install: the real first-run flow, as the UI drives it
+            t0 = data(gql("/metadata", "mutation($e: String!, $p: String!) { signUp(email: $e, password: $p) "
+                          "{ tokens { accessOrWorkspaceAgnosticToken { token } } } }", dict(e=EMAIL, p=PW)),
+                      "signUp")["tokens"]["accessOrWorkspaceAgnosticToken"]["token"]
+            lt = data(gql("/metadata", "mutation($i: SignUpInNewWorkspaceInput) { signUpInNewWorkspace(input: $i) "
+                          "{ loginToken { token } } }", dict(i=dict(displayName="E2E")), t0),
+                      "signUpInNewWorkspace")["loginToken"]["token"]
+            data(gql("/metadata", "mutation($i: ActivateWorkspaceInput!) { activateWorkspace(data: $i) { id } }",
+                     dict(i=dict()), access(lt)), "activateWorkspace")
+
+        wrong = login(PW + "-wrong")
+        refused = bool(wrong.get("errors")) and not (wrong.get("data") or dict()).get("getLoginTokenFromCredentials")
+        tok = access(data(login(PW), "getLoginTokenFromCredentials")["loginToken"]["token"])
+
+        def companies(name):
+            r = gql("/graphql", "query($n: String!) { companies(filter: { name: { eq: $n } }) { totalCount } }",
+                    dict(n=name), tok)
+            return data(r, "companies")["totalCount"]
+
+        if companies("e2e-{version}") == 0:
+            data(gql("/graphql", "mutation($n: String!) { createCompany(data: { name: $n }) { id } }",
+                     dict(n="e2e-{version}"), tok), "createCompany")
+        n = companies("e2e-{installed_version}")
+        none = companies("e2e-never-written")
+        print("COMPANY e2e-{installed_version} %d | CONTROL %d | WRONG-PASSWORD %s"
+              % (n, none, "REFUSED" if refused else "ACCEPTED"))
+        PY
+    expect:
+      stdout: "^COMPANY e2e-\\S+ 1 \\| CONTROL 0 \\| WRONG-PASSWORD REFUSED$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: pgvector-0-8-7-available
+    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.4.1.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
+      without this a member that never comes back (seen once in testing: the old leader stuck initializing for
+      17 min) goes unseen.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

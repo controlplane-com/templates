@@ -1,0 +1,144 @@
+# ─── Temporal Server ──────────────────────────────────────────────────────────
+# Temporal upgrades ONE MINOR VERSION AT A TIME (1.30 → 1.31 → 1.32). This chart
+# runs tags 1.30.x, 1.31.x and 1.32.x; `image` and `adminTools.image` must carry
+# the same tag. Coming from temporal 1.x? See "Upgrading from 1.x" in the README.
+image: temporalio/server:1.32.1 # server binary; configured from env (archival adds a generated config file)
+
+replicas: 1 # 1-5; 3 survives a replica loss. >1 rolling restarts are noisy — see README
+
+resources:
+  maxCpu: 1000m
+  maxMemory: 2Gi
+  minCpu: 500m
+  minMemory: 1Gi
+
+adminTools:
+  image: temporalio/admin-tools:1.32.1 # schema migrations + `temporal` CLI sidecar; same tag as image
+
+# ─── Cluster Settings ─────────────────────────────────────────────────────────
+historyShards: 512 # fixed at first install; a later change is ignored (the cluster keeps its original count)
+namespaceRetention: 72h # retention of the `default` namespace, applied when it is first created
+
+# ─── Web UI ───────────────────────────────────────────────────────────────────
+# Internal-only: the Temporal UI has no built-in authentication. Reach it with
+# `cpln port-forward` (see README) or from workloads in the internal access scope.
+ui:
+  enabled: true
+  image: temporalio/ui:2.55.0
+  allowedCIDRs: [] # IP ranges that may open the UI in a browser (e.g. 203.0.113.10/32); empty = internal-only. The UI has no login
+  resources:
+    maxCpu: 500m
+    maxMemory: 512Mi
+    minCpu: 125m
+    minMemory: 128Mi
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+internalAccess: # internal firewall scope for the server (gRPC :7233, HTTP API :7243, cluster ports) and the UI (:8080)
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list; the server and UI workloads are always added
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Archival (optional) ──────────────────────────────────────────────────────
+# Copies closed workflow histories and visibility records to S3 before retention
+# deletes them; read them back with `temporal workflow list --archived`. Access is
+# keyless through the workload identity. Needs server 1.31 or later. See
+# "Archival storage setup" in the README. To STOP archiving set defaultNamespace:
+# false. Once archival has been used, never set enabled back to false.
+archival:
+  enabled: false # declares the S3 archiver on the server and binds the identity to AWS
+  defaultNamespace: true # archive the `default` namespace (false = stop archiving it)
+  s3:
+    bucket: my-temporal-archival-bucket
+    region: us-east-1
+    prefix: temporal # folder in the bucket; history and visibility go below it
+    cloudAccountName: my-s3-cloud-account
+    policyName: my-temporal-archival-policy # AWS IAM policy scoped to the bucket
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader-routing endpoint Temporal connects to.
+postgresHA:
+  enabled: true
+  config:
+    # Name of the dictionary secret this chart creates (from postgres.credentials.*)
+    # and the bundled postgres-highly-available reads. Org-wide: unique per release.
+    credentialsSecretName: my-temporal-db-credentials
+  replicas: 3
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # optional database backups — see README storage setup
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi # 128Mi OOMKills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"
+    walg:
+      intervalSeconds: 21600
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: temporal-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: temporal-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: temporal-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: temporal-pg-backup-bucket
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey`. See README.
+      credentialsSecretName: my-temporal-minio-credentials
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  # Credentials for the bundled database, used in BOTH database modes: this chart
+  # creates the secret from them, so there is nothing to create before installing.
+  # The password is set once, when the database volume is initialised.
+  # `database` MUST stay `temporal` (render-enforced in both modes).
+  credentials:
+    username: temporal
+    password: change-me-temporal-db-password # change before installing
+    database: temporal
+  config:
+    # Name of the dictionary secret this chart creates and the bundled postgres reads.
+    # Org-wide: unique per release (a second release on this name is refused at install).
+    credentialsSecretName: my-temporal-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # optional database backups (Postgres 17+) — see README storage setup
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # options: aws, gcp, minio
+    aws:
+      bucket: temporal-pg-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-s3-cloud-account
+      policyName: temporal-pg-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: temporal-pg-backup-bucket
+      cloudAccountName: my-gcs-cloud-account
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: temporal-pg-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when this backup is enabled with provider: minio. See README.
+      credentialsSecretName: my-temporal-minio-credentials
+      prefix: postgres/backups

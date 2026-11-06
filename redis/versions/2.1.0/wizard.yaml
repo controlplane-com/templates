@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Redis
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: topology
+    title: Topology
+    description: How many Redis nodes and Sentinels, and their resources.
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              This version runs the `valkey/valkey:8` image on both tiers, with a 20 GiB volume per node. The
+              image and the volumes cannot be changed here.
+          - type: note
+            severity: warning
+            text: >-
+              Setting `locations` in YAML switches the chart to multi-location mode, which creates one GVC per
+              location, named after the release and the location. Uninstalling the release deletes those GVCs
+              with everything inside them.
+          - type: note
+            text: >-
+              To require a password, set `redis.password` (Redis) and `sentinel.password` (Sentinel) in YAML.
+              The chart writes them into the server configuration, and they are stored in the release values.
+      - title: Redis
+        description: Node 0 starts as the primary; the other nodes replicate from it.
+        fields:
+          - path: redis.replicas
+            type: integer
+            label: Redis nodes
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            description: Per node.
+            rules:
+              - rule: "!string(self.redis.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+                severity: warning
+                paths: [redis.resources]
+                message: >-
+                  Give the Redis CPU value a unit, such as `1000m` for one core. This version writes it unquoted,
+                  so a bare number reaches the platform as a number and the workload is rejected at install.
+      - title: Sentinel
+        fields:
+          - type: note
+            text: The chart runs one Sentinel more than the quorum, or one Sentinel when the quorum is 1.
+            textExpression: >-
+              self.sentinel.quorum == 1 ? 'The chart runs 1 Sentinel, so failover needs it alone.' :
+              'The chart runs ' + string(self.sentinel.quorum + 1) + ' Sentinels; failover needs ' +
+              string(self.sentinel.quorum) + ' of them to agree.'
+          - path: sentinel.quorum
+            type: integer
+            label: Quorum
+            min: 1
+            required: true
+            suggestions: [1, 2, 4]
+            description: How many Sentinels must agree before a failover.
+          - path: sentinel.resources
+            type: resources
+            label: Sentinel resources
+            required: true
+            description: Per Sentinel.
+            rules:
+              - rule: "!string(self.sentinel.resources.cpu).matches('^[0-9]+([.][0-9]+)?$')"
+                severity: warning
+                paths: [sentinel.resources]
+                message: >-
+                  Give the Sentinel CPU value a unit, such as `1000m` for one core. This version writes it unquoted,
+                  so a bare number reaches the platform as a number and the workload is rejected at install.
+        rules:
+          - rule: self.sentinel.quorum == 1 || self.sentinel.quorum % 2 == 0
+            severity: info
+            paths: [sentinel.quorum]
+            message: >-
+              An even quorum (or 1) is recommended: the chart then runs an odd number of Sentinels.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    messageExpression: >-
+      'Do not upgrade a ' + context.fromVersion + ' release in place: 2.x names its workload and volume set
+      differently, so the upgrade deletes the ones the release runs on, with their data. Install this version as a
+      new release, copy the data across, then uninstall the old release.'
+    message: >-
+      Do not upgrade a 1.x release in place: 2.x names its workload and volume set differently, so the upgrade
+      deletes the ones the release runs on, with their data. Install this version as a new release, copy the data
+      across, then uninstall the old release.

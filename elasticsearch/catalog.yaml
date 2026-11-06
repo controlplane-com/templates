@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Elasticsearch
+category: search
+topology: distributed
+
+summary: >-
+  An Elasticsearch cluster of an odd number of nodes, three by default, each on its own persistent
+  volume, with optional Kibana (on by default) for exploring data and managing the cluster.
+  Optional snapshot lifecycle management backs indices up to S3 or GCS on a schedule. Security is
+  disabled, so it has no authentication and is reachable only from inside Control Plane. Pick it
+  for full-text search and analytics with Elastic's own engine, clients and Kibana.
+
+keywords:
+  - full-text search
+  - search engine
+  - kibana
+  - lucene
+  - inverted index
+  - query dsl
+  - aggregations
+  - log search
+  - log analytics
+  - document search
+  - search cluster
+  - index snapshots
+  - snapshot lifecycle management
+  - s3 snapshots
+
+useCases:
+  - Full-text search over product catalogs, documents or site content
+  - Store and search application logs and explore them in Kibana
+  - Aggregations and analytics over large sets of JSON documents
+  - Backend for apps and tools written against the Elasticsearch API
+  - Search cluster that keeps serving when one node restarts
+
+alternativeTo:
+  - Elastic Cloud
+  - Amazon OpenSearch Service
+  - Apache Solr
+  - Azure AI Search
+
+compatibleWith: [elasticsearch-api]
+
+pickInsteadIf:
+  - need: an Apache-2.0 licensed search and log analytics cluster with OpenSearch Dashboards
+    template: opensearch
+  - need: instant typo-tolerant search for a website or app on one small server
+    template: meilisearch
+  - need: full-text search over CSV data bulk-loaded from S3 and queried with SQL
+    template: manticore
+  - need: vector similarity search on embeddings for RAG
+    template: qdrant
+  - need: fast SQL analytics over large event or log tables
+    template: clickhouse
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled index snapshots.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the snapshot bucket. On GCP, its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the snapshot bucket (bucket and bucket/* ARNs), referenced by name from the identity.

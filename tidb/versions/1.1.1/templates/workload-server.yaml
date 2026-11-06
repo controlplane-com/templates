@@ -1,0 +1,111 @@
+---
+kind: workload
+name: {{ .Release.Name }}-server
+description: tidb server
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: tidb-server
+      cpu: "{{ .Values.resources.server.cpu }}"
+      image: pingcap/tidb:v8.5.3
+      command: "/bin/bash"
+      args:
+        - "/scripts/server-startup.sh"
+      inheritEnv: false
+      env:
+        - name: ROOT_PW
+          value: cpln://secret/{{ .Release.Name }}-tidb-user.rootPassword
+        - name: APP_DB
+          value: cpln://secret/{{ .Release.Name }}-tidb-user.db
+        - name: APP_USER
+          value: cpln://secret/{{ .Release.Name }}-tidb-user.user
+        - name: APP_PW
+          value: cpln://secret/{{ .Release.Name }}-tidb-user.password
+      memory: {{ .Values.resources.server.memory }}
+      ports:
+        - number: 10080
+          protocol: http
+        - number: 4000
+          protocol: tcp
+      readinessProbe:
+        {{- /*
+          Gate on THIS server's own health (TiDB's /status on :10080), never on
+          cluster-wide TiKV state. The workload has no liveness probe, so the
+          platform also uses this probe as liveness. The 1.1.0 probe required
+          every TiKV store to be Up, so one store going down (a node scale-down
+          evicting a TiKV replica) failed it on every server at once and the
+          platform restarted the whole SQL tier in every location together.
+          /status is local: a server keeps serving through a store loss and
+          routes around it. Same probe as 2.1.0+.
+        */}}
+        exec:
+          command:
+            - /bin/sh
+            - '-c'
+            - >-
+              curl -sf --max-time 4 http://localhost:10080/status
+              | grep -q '"version"'
+        failureThreshold: 3
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /scripts/server-startup.sh
+          uri: cpln://secret/{{ .Release.Name }}-tidb-server-startup.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ .Release.Name }}-tidb-identity
+  defaultOptions:
+    autoscaling:
+      keda: {}
+      maxConcurrency: 0
+      maxScale: 5
+      metric: cpu
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: true
+    suspend: false
+    timeoutSeconds: 5
+  localOptions:
+    {{- range $location := .Values.gvc.locations }}
+    - autoscaling:
+        maxConcurrency: 0
+        maxScale: {{ if eq ($location.replicas | int) 0 }}1{{ else }}{{ $location.replicas | int }}{{ end }}
+        metric: disabled
+        minScale: {{ if eq ($location.replicas | int) 0 }}0{{ else }}{{ $location.replicas | int }}{{ end }}
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ $location.name }}
+      suspend: {{ if eq ($location.replicas | int) 0 }}true{{ else }}false{{ end }}
+      timeoutSeconds: 10
+    {{- end }}
+  firewallConfig:
+    external:
+      {{- if .Values.exposeServer }}
+      inboundAllowCIDR:
+        - "0.0.0.0/0"
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

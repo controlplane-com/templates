@@ -1,0 +1,627 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Elasticsearch
+# Every node builds its seed hosts and initial master nodes from its own location (secret-startup.yaml:13-16,
+# 29-34, 56-61), so each GVC location would run its own independent cluster with its own volumes.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: cluster
+    title: Cluster
+    description: The Elasticsearch image, the number of nodes and the compute of each node.
+    sections:
+      - title: Cluster
+        docs: "#cluster"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Elasticsearch image
+            required: true
+          - path: replicas
+            type: integer
+            label: Nodes
+            required: true
+            min: 1
+            suggestions: [1, 3, 5, 7]
+            description: Every node is master-eligible and holds data on its own volume.
+            help: >-
+              Scaling up adds nodes that join the cluster and take a share of the shards. Scaling down removes
+              nodes without moving their shards off first: take a snapshot, check `GET /_cat/shards?v`, and
+              only then lower the count.
+          - path: clusterName
+            type: string
+            label: Cluster name
+            required: true
+            description: Shown by the cluster APIs and in Kibana. Clients do not need it to connect.
+          - path: multiZone.enabled
+            type: boolean
+            label: Spread nodes across availability zones
+            description: >-
+              Schedules the nodes in different availability zones of the location, so the loss of one zone
+              leaves the others holding the quorum.
+            docs: "#multi-zone"
+        rules:
+          - rule: self.replicas >= 1 && self.replicas % 2 == 1
+            mirrors: elasticsearch.validate
+            paths: [replicas]
+            messageExpression: >-
+              'Elasticsearch needs an odd number of nodes to elect a master; ' + string(self.replicas) +
+              ' is even. Use ' + string(self.replicas - 1) + ' or ' + string(self.replicas + 1) + '.'
+            message: Elasticsearch needs an odd number of nodes to elect a master. Use 1, 3, 5 or another odd number.
+          - when: self.replicas % 2 == 1
+            rule: self.replicas != 1
+            severity: info
+            paths: [replicas]
+            message: >-
+              A single node has no failover: while it restarts, for example during an upgrade, the cluster is
+              unavailable, and indices with replica shards stay yellow.
+          - rule: oldSelf == null || self.replicas >= oldSelf.replicas
+            severity: info
+            paths: [replicas]
+            messageExpression: >-
+              'Lowering the nodes from ' + string(oldSelf.replicas) + ' to ' + string(self.replicas) +
+              ' removes nodes without moving their shards off first. Take a snapshot and check GET /_cat/shards?v' +
+              ' before you upgrade, so no shard is left only on a node that goes away.'
+            message: >-
+              Lowering the nodes removes nodes without moving their shards off first. Take a snapshot and check
+              GET /_cat/shards?v before you upgrade, so no shard is left only on a node that goes away.
+          - rule: oldSelf == null || self.image == oldSelf.image
+            severity: info
+            paths: [image]
+            message: >-
+              A new image restarts every Elasticsearch node. Elasticsearch cannot go back to an older version
+              once a newer one has written to the data, so take a snapshot before you move to a newer version.
+      - title: Node resources
+        docs: "#resources"
+        fields:
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per node.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: jvmHeap
+            type: string
+            label: JVM heap
+            required: true
+            placeholder: 3g
+            suggestions: [1g, 2g, 3g, 4g, 8g, 16g, 30g]
+            description: >-
+              Per node, and not derived from the resources: raising the memory limit does not raise the heap.
+              Memory beyond the heap goes to off-heap structures and the file system cache.
+            pattern: '^[0-9]+[kKmMgGtT]?$'
+            patternMessage: Enter a number with the unit k, m, g or t, such as 3g or 512m.
+        rules:
+          # The heap in bytes, from the JVM size syntax (a number with an optional k, m, g or t suffix).
+          - when: self.jvmHeap.matches('^[0-9]+[kKmMgGtT]?$')
+            rule: >-
+              (self.jvmHeap.matches('^[0-9]+$') ? int(self.jvmHeap) :
+              int(self.jvmHeap.substring(0, size(self.jvmHeap) - 1)) *
+              (self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'k' ? 1024 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'm' ? 1048576 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'g' ? 1073741824 :
+              1099511627776)) < memoryBytes(self.resources.maxMemory)
+            severity: warning
+            paths: [jvmHeap]
+            message: >-
+              The JVM heap must be smaller than the maximum memory of a node, or the node is OOM-killed as it
+              starts. Keep the heap at about half the maximum memory.
+          - when: self.jvmHeap.matches('^[0-9]+[kKmMgGtT]?$')
+            rule: >-
+              (self.jvmHeap.matches('^[0-9]+$') ? int(self.jvmHeap) :
+              int(self.jvmHeap.substring(0, size(self.jvmHeap) - 1)) *
+              (self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'k' ? 1024 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'm' ? 1048576 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'g' ? 1073741824 :
+              1099511627776)) * 2 <= memoryBytes(self.resources.maxMemory)
+            severity: info
+            paths: [jvmHeap]
+            message: >-
+              The JVM heap is more than half the maximum memory of a node. Elasticsearch also needs memory
+              outside the heap, and a heap this close to the limit can get the node OOM-killed.
+          - when: self.jvmHeap.matches('^[0-9]+[kKmMgGtT]?$')
+            rule: >-
+              (self.jvmHeap.matches('^[0-9]+$') ? int(self.jvmHeap) :
+              int(self.jvmHeap.substring(0, size(self.jvmHeap) - 1)) *
+              (self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'k' ? 1024 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'm' ? 1048576 :
+              self.jvmHeap.substring(size(self.jvmHeap) - 1).lowerAscii() == 'g' ? 1073741824 :
+              1099511627776)) <= 32212254720
+            severity: info
+            paths: [jvmHeap]
+            message: >-
+              A heap above 30g loses the JVM's compressed object pointers, so it holds less than a 30g heap
+              does. Keep it at 30g or below, and add nodes instead.
+
+  - id: storage
+    title: Storage
+    description: The volume set that holds each node's data.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per node; each node has its own volume.
+            help: >-
+              The data lives on the volume set and survives redeploys. Uninstalling the release deletes the
+              volume set; the platform takes a final snapshot of each volume first and keeps it for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || oldSelf.volumeset.capacity == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+
+  # Before Network: the firewall rule there checks for the backup setup job's workload.
+  - id: backup
+    title: Backups
+    description: Scheduled index snapshots to object storage.
+    sections:
+      - id: backup
+        title: Scheduled snapshots
+        toggle: backup.enabled
+        description: >-
+          Elasticsearch's Snapshot Lifecycle Management takes incremental snapshots of your indices on a
+          schedule and writes them to an S3 or GCS bucket through a Control Plane cloud account. A setup job
+          registers the bucket and the snapshot policy. The bucket and the cloud account (for S3 also the IAM
+          policy) must exist before you turn it on.
+        docs: "#backup"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade' && oldSelf != null && oldSelf.backup.enabled != true
+            text: >-
+              Turning snapshots on for a running cluster restarts every Elasticsearch node, so it can reach the
+              bucket. Until every node has restarted, the setup job logs `ERROR: Failed to register repository`
+              and retries; that settles on its own within several minutes.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+        rules:
+          - rule: self.backup.provider in ['aws', 'gcp']
+            mirrors: elasticsearch.validate
+            paths: [backup.provider]
+            message: Choose AWS S3 or Google Cloud Storage as the snapshot destination.
+          - rule: >-
+              oldSelf == null || oldSelf.backup.enabled != true ||
+              (oldSelf.backup.provider == self.backup.provider &&
+              (self.backup.provider == 'aws' ?
+              oldSelf.backup.aws.bucket == self.backup.aws.bucket && oldSelf.backup.aws.prefix == self.backup.aws.prefix :
+              oldSelf.backup.gcp.bucket == self.backup.gcp.bucket && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix))
+            severity: info
+            paths: [backup.provider]
+            message: >-
+              A new destination replaces the snapshot repository: snapshots already taken stay where they are
+              and are no longer listed or pruned by this cluster.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        docs: "#aws-s3"
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.0.1') < 0 && oldSelf != null &&
+              oldSelf.backup.enabled == true && oldSelf.backup.provider == 'aws'
+            text: >-
+              This version removes `aws::ReadOnlyAccess` from the backup identity. That managed policy
+              granted read access to every bucket in your AWS account and was silently supplying any read
+              action your bucket-scoped policy omitted. **Before you upgrade**, update your IAM policy to
+              the full action list in [AWS S3](#aws-s3); if it already matches, no action is needed. See
+              [Upgrading from 1.0.0](#upgrading-from-1-0-0).
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+            help: >-
+              The policy needs all ten S3 actions listed under [AWS S3](#aws-s3), on both
+              `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. The identity carries only `cpln-connector` and
+              this policy, so an action missing from it is missing for Elasticsearch.
+            pattern: '^[A-Za-z0-9+=,.@_-]+$'
+            patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: self.backup.aws.bucket != null && self.backup.aws.bucket != ''
+            mirrors: elasticsearch.validate
+            paths: [backup.aws.bucket]
+            message: The S3 bucket is required.
+          - rule: self.backup.aws.cloudAccountName != null && self.backup.aws.cloudAccountName != ''
+            mirrors: elasticsearch.validate
+            paths: [backup.aws.cloudAccountName]
+            message: The AWS cloud account is required.
+          - rule: self.backup.aws.policyName != null && self.backup.aws.policyName != ''
+            mirrors: elasticsearch.validate
+            paths: [backup.aws.policyName]
+            message: The IAM policy name is required.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        docs: "#gcs"
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the
+              Storage Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+        rules:
+          - rule: self.backup.gcp.bucket != null && self.backup.gcp.bucket != ''
+            mirrors: elasticsearch.validate
+            paths: [backup.gcp.bucket]
+            message: The GCS bucket is required.
+          - rule: self.backup.gcp.cloudAccountName != null && self.backup.gcp.cloudAccountName != ''
+            mirrors: elasticsearch.validate
+            paths: [backup.gcp.cloudAccountName]
+            message: The GCP cloud account is required.
+
+      - title: Schedule and retention
+        when: self.backup.enabled
+        docs: "#backing-up"
+        fields:
+          - path: backup.schedule
+            type: string
+            label: Schedule (UTC)
+            required: true
+            placeholder: 0 0 2 * * ?
+            description: >-
+              A Quartz schedule with a leading seconds field, not a five-field cron schedule. `0 0 2 * * ?`
+              runs daily at 02:00 UTC.
+            pattern: '^\S+( \S+){5,6}$'
+            patternMessage: >-
+              Enter a Quartz schedule with 6 fields (seconds, minutes, hours, day of month, month, day of week),
+              such as 0 0 2 * * ?.
+          - path: backup.retention.maxAge
+            type: string
+            label: Delete snapshots older than
+            required: true
+            suggestions: [7d, 14d, 30d, 90d]
+            pattern: '^[0-9]+(d|h|m|s|ms|micros|nanos)$'
+            patternMessage: Enter a number and a unit, such as 30d or 12h.
+          - path: backup.retention.maxCount
+            type: integer
+            label: Keep at most
+            unit: snapshots
+            required: true
+            min: 1
+            suggestions: [7, 14, 30, 90]
+            description: The newest snapshot is always kept, whatever its age.
+          - path: backup.remove_setup_workload
+            type: boolean
+            label: Remove the setup job
+            when: context.mode == 'upgrade' || self.backup.remove_setup_workload
+            description: >-
+              The setup job registers the bucket and creates the snapshot policy, then has nothing left to do.
+              Turn this on in a later upgrade, once its logs show `Backup Configuration Complete!`.
+            help: >-
+              Read the job's logs with
+              `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
+            docs: "#backing-up"
+        rules:
+          # workload-backup-setup.yaml:1-2 renders the job only while remove_setup_workload is off, and
+          # nothing else registers the repository or creates the SLM policy.
+          - rule: >-
+              !self.backup.remove_setup_workload ||
+              (oldSelf != null && oldSelf.backup.enabled == true &&
+              oldSelf.backup.provider == self.backup.provider &&
+              (self.backup.provider == 'aws' ?
+              oldSelf.backup.aws.bucket == self.backup.aws.bucket && oldSelf.backup.aws.prefix == self.backup.aws.prefix &&
+              oldSelf.backup.aws.region == self.backup.aws.region :
+              oldSelf.backup.gcp.bucket == self.backup.gcp.bucket && oldSelf.backup.gcp.prefix == self.backup.gcp.prefix))
+            severity: warning
+            paths: [backup.remove_setup_workload]
+            message: >-
+              Without the setup job the snapshot repository is never registered for this bucket, so no
+              snapshots are taken. Keep the job until its logs show Backup Configuration Complete!, then
+              remove it in a later upgrade.
+          - rule: >-
+              oldSelf == null || oldSelf.backup.enabled != true || self.backup.remove_setup_workload ||
+              (oldSelf.backup.schedule == self.backup.schedule &&
+              oldSelf.backup.retention.maxAge == self.backup.retention.maxAge &&
+              oldSelf.backup.retention.maxCount == self.backup.retention.maxCount)
+            severity: info
+            paths: [backup.schedule]
+            message: >-
+              The setup job creates the snapshot policy only when none exists, so a changed schedule or
+              retention does not reach a running cluster. Before you upgrade, delete the policy from an
+              Elasticsearch container with curl -X DELETE 'http://localhost:9200/_slm/policy/automated-snapshots';
+              the setup job then creates it again with the new settings.
+  - id: network
+    title: Kibana and access
+    description: The optional Kibana UI, and which workloads can reach Elasticsearch.
+    sections:
+      - id: kibana
+        title: Kibana
+        toggle: kibana.enabled
+        description: >-
+          A web UI for exploring data and managing the cluster. It has no login: anyone who reaches it has
+          full access to every index.
+        docs: "#kibana"
+        fields:
+          - type: note
+            text: >-
+              Kibana is never published to the internet by this template. Open it from your machine with
+              `cpln port-forward RELEASE_NAME-kibana 5601:5601 --gvc GVC_NAME`, then `http://localhost:5601`.
+            textExpression: >-
+              'Kibana is never published to the internet by this template. Open it from your machine with `cpln port-forward ' +
+              context.releaseName + '-kibana 5601:5601 --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+              '`, then `http://localhost:5601`.'
+          - path: kibana.internal_access.type
+            type: enum
+            label: Who can reach Kibana
+            widget: cards
+            required: true
+            description: >-
+              This governs Kibana only; Elasticsearch has its own setting below. A port-forward works with
+              every option. Access changes take up to a few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          # Shown for every type in use: workload-kibana.yaml:47-49 writes any non-empty list into
+          # inboundAllowWorkload; the platform applies it with same-gvc and workload-list.
+          - path: kibana.internal_access.workloads
+            when: self.kibana.internal_access.type in ['same-gvc', 'workload-list'] || size(self.kibana.internal_access.workloads) > 0
+            type: list
+            label: Allowed Kibana workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Same GVC, extra workloads from other GVCs. With Specific workloads, the only workloads that
+              can reach Kibana.
+            item:
+              type: ref
+              label: Kibana workload
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.kibana.internal_access.type == 'same-gvc'
+          - path: kibana.image
+            type: string
+            format: image
+            label: Kibana image
+            required: true
+            advanced: true
+          - path: kibana.resources
+            type: resources
+            label: Kibana resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - when: self.kibana.image.contains(':') && self.image.contains(':')
+            rule: >-
+              self.kibana.image.split(':')[size(self.kibana.image.split(':')) - 1] ==
+              self.image.split(':')[size(self.image.split(':')) - 1]
+            severity: info
+            paths: [kibana.image]
+            message: >-
+              The Kibana and Elasticsearch images have different tags. Kibana must run the same version as
+              Elasticsearch, or it refuses to connect.
+          # workload-kibana.yaml:20 caps the Node.js heap at 1500 MB (NODE_OPTIONS --max-old-space-size=1500).
+          - rule: memoryBytes(self.kibana.resources.memory) >= 2147483648
+            severity: info
+            paths: [kibana.resources]
+            message: >-
+              The chart sizes Kibana's Node.js heap at 1500 MB, so a memory limit below 2Gi leaves little room
+              outside the heap and Kibana can be OOM-killed.
+          - when: self.kibana.internal_access.type == 'workload-list'
+            rule: size(self.kibana.internal_access.workloads) > 0
+            severity: info
+            paths: [kibana.internal_access.workloads]
+            message: >-
+              With Specific workloads and an empty list, no workload can reach Kibana; only a port-forward
+              opens it.
+          - when: self.kibana.internal_access.type == 'same-gvc' && context.gvc != null
+            rule: "!self.kibana.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [kibana.internal_access.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.kibana.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.kibana.internal_access.type == 'same-org'
+            rule: size(self.kibana.internal_access.workloads) == 0
+            severity: info
+            paths: [kibana.internal_access.workloads]
+            message: >-
+              Same org already lets every workload of the org reach Kibana, so the workloads listed for Kibana
+              add nothing.
+      - title: Elasticsearch access
+        docs: "#internal-access"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Security is disabled in this template: there are no users or passwords, and any workload allowed
+              here has full admin access to every index. Keep this as narrow as your applications allow.
+          - path: internal_access.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: >-
+              Elasticsearch is never published to the internet by this template. Access changes take up to a
+              few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, including this release's own.
+          # Shown for every type in use: workload-elasticsearch.yaml:91-93 writes any non-empty list into
+          # inboundAllowWorkload; the platform applies it with same-gvc and workload-list.
+          - path: internal_access.workloads
+            when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              With Same GVC, extra workloads from other GVCs. With Specific workloads, the whole allow-list:
+              it must include this release's own workloads that connect, which the chart does not add.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internal_access.type == 'same-gvc'
+    rules:
+      # The nodes reach each other on 9300 through this same firewall (as etcd's members do; measured on
+      # etcd-multi-location), Kibana connects on 9200 (workload-kibana.yaml:16) and so does the setup job
+      # (workload-backup-setup.yaml:27). The chart adds none of them to the list.
+      - when: self.internal_access.type == 'workload-list' && context.gvc != null
+        rule: >-
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-elasticsearch') in self.internal_access.workloads &&
+          (!self.kibana.enabled ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-kibana') in self.internal_access.workloads) &&
+          (!self.backup.enabled || self.backup.remove_setup_workload ||
+          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup') in self.internal_access.workloads)
+        severity: warning
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'The chart does not add its own workloads to the list. Add ' +
+          (['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-elasticsearch'] +
+          (self.kibana.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-kibana'] : []) +
+          (self.backup.enabled && !self.backup.remove_setup_workload ?
+          ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup'] : []))
+          .filter(w, !(w in self.internal_access.workloads)).join(', ') +
+          ', or they cannot connect. The Elasticsearch nodes reach each other through this list too.'
+        message: >-
+          The chart does not add its own workloads to the list; add the Elasticsearch workload itself (the
+          nodes reach each other through it) and the optional Kibana and backup setup workloads, or they
+          cannot connect.
+        fix:
+          path: internal_access.workloads
+          items: >-
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-elasticsearch'] +
+            (self.kibana.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-kibana'] : []) +
+            (self.backup.enabled && !self.backup.remove_setup_workload ?
+            ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup'] : [])
+      - when: self.internal_access.type == 'same-gvc' && context.gvc != null
+        rule: "!self.internal_access.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+        severity: info
+        paths: [internal_access.workloads]
+        messageExpression: >-
+          'Same GVC already allows every workload in this GVC: ' +
+          self.internal_access.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+          ' can be removed from the list.'
+        message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - when: self.internal_access.type == 'same-org'
+        rule: size(self.internal_access.workloads) == 0
+        severity: info
+        paths: [internal_access.workloads]
+        message: >-
+          Same org already lets every workload of the org connect to Elasticsearch, so the workloads listed for
+          Elasticsearch add nothing.

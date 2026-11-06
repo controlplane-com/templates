@@ -1,0 +1,6 @@
+---
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "tyk.identity.name" . }}
+description: {{ include "tyk.identity.name" . }}
+tags: {{- include "tyk.tags" . | nindent 4 }}

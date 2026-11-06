@@ -1,0 +1,13 @@
+---
+kind: volumeset
+name: {{ include "langfuse.clickhouse.volumeset.name" . }}
+description: ClickHouse local metadata volumeset
+tags: {{- include "langfuse.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.clickhouse.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

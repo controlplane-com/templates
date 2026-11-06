@@ -1,0 +1,14 @@
+{{- include "spark.validate" . -}}
+kind: policy
+name: {{ include "spark.policy.name" . }}
+description: Apache Spark policy — reveal on the conf secret only
+tags:
+  {{- include "spark.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "spark.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "spark.secret.conf.name" . }}

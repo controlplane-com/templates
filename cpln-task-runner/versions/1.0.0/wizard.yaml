@@ -1,0 +1,471 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Control Plane Task Runner
+
+# The API and Worker are serverless, but the bundled Redis and Sentinel are stateful workloads with no
+# location handling: every extra GVC location would run its own, separate Redis cluster.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: redis-credentials
+    title: Redis credentials
+    description: The passwords of the bundled Redis and Sentinel, which only the API and Worker use.
+    sections:
+      - title: Secret
+        fields:
+          - path: createSecret
+            type: boolean
+            label: Create the secret from passwords entered here
+            description: >-
+              On, the chart creates a dictionary secret holding both passwords and the admin API key. Off, they
+              come from dictionary secrets you create first.
+          - type: note
+            severity: warning
+            when: oldSelf != null && oldSelf.createSecret != self.createSecret
+            text: >-
+              The secret Redis, Sentinel, the API and Worker read after this change must hold the passwords the
+              release runs with today. A secret the chart created is deleted when the chart stops creating it.
+          - path: secretName
+            type: string
+            label: Name of the secret the chart creates
+            required: true
+            when: self.createSecret
+            description: >-
+              Secret names are org-wide and this one is not prefixed with the release name, so a second install in
+              the same org needs a different name. Use one no other secret has.
+            help: >-
+              The Redis and Sentinel secret names below must be this same name, and their password keys
+              `redis-password` and `redis-sentinel-password`.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.secretName == self.secretName) ||
+                  (self.secretName.size() <= 64 && self.secretName.matches('^[a-z]([-a-z0-9])*[a-z0-9]$'))
+                message: >-
+                  Use lowercase letters, digits and hyphens, starting with a letter and ending with a letter or
+                  digit, at most 64 characters; Control Plane refuses other secret names.
+          - type: note
+            severity: warning
+            when: self.createSecret
+            text: >-
+              The passwords below are stored in the Helm release values. Version 1.4.0 and later take them from
+              prerequisite secrets instead.
+          - path: redis.redisPassword
+            type: string
+            label: Redis password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            when: self.createSecret
+            help: >-
+              Choose it now: this version documents no way to change it on a running release.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.redisPassword == self.redis.redisPassword) ||
+                  self.redis.redisPassword.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled Redis writes the password into a
+                  configuration line.
+          - path: redis.sentinelPassword
+            type: string
+            label: Sentinel password
+            widget: password
+            required: true
+            example: true
+            sensitive: true
+            when: self.createSecret
+            help: >-
+              Choose it now: this version documents no way to change it on a running release.
+            rules:
+              - rule: >-
+                  (oldSelf != null && oldSelf.redis.sentinelPassword == self.redis.sentinelPassword) ||
+                  self.redis.sentinelPassword.matches("^[^\\s\\x22\\x27\\\\\\x00-\\x1f\\x7f]+$")
+                message: >-
+                  Leave out spaces, quotes and backslashes. The bundled Sentinel writes the password into a
+                  configuration line.
+          - type: note
+            severity: warning
+            when: "!self.createSecret"
+            text: >-
+              The secrets named below must exist **before** you install, holding the passwords under the keys
+              named below. If one is missing, the deployment waits and `cpln logs` shows nothing at all.
+      - title: Where Redis and Sentinel read the passwords
+        fields:
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: >-
+              With the chart creating the secret, the name above. Otherwise a dictionary secret you created.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: "off"
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Redis password key
+            required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+            description: >-
+              The key holding the Redis password. With the chart creating the secret, `redis-password`.
+          - path: redis.sentinel.auth.fromSecret.name
+            type: ref
+            label: Sentinel password secret
+            required: true
+            description: >-
+              With the chart creating the secret, the name above. Otherwise a dictionary secret you created; it
+              can be the same secret as Redis.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: "off"
+              requiredKeysFrom: "[self.redis.sentinel.auth.fromSecret.passwordKey]"
+          - path: redis.sentinel.auth.fromSecret.passwordKey
+            type: string
+            label: Sentinel password key
+            required: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+            description: >-
+              The key holding the Sentinel password. With the chart creating the secret,
+              `redis-sentinel-password`.
+        rules:
+          # createSecret true: the chart creates secretName with the keys redis-password and redis-sentinel-password
+          # and points the API and Worker at it, while the bundled Redis and Sentinel read the fromSecret values.
+          - when: self.createSecret
+            rule: >-
+              self.redis.redis.auth.fromSecret.name == self.secretName &&
+              self.redis.sentinel.auth.fromSecret.name == self.secretName
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name, redis.sentinel.auth.fromSecret.name]
+            message: >-
+              With the chart creating the secret, Redis and Sentinel must read that secret: set both names to the
+              secret name above. Otherwise they read a different secret than the API and Worker.
+          - when: self.createSecret
+            rule: >-
+              self.redis.redis.auth.fromSecret.passwordKey == 'redis-password' &&
+              self.redis.sentinel.auth.fromSecret.passwordKey == 'redis-sentinel-password'
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.passwordKey, redis.sentinel.auth.fromSecret.passwordKey]
+            message: >-
+              The secret the chart creates holds the keys redis-password and redis-sentinel-password; use those.
+    rules:
+      # Changing the passwords of a running release. The bundled Redis 3.0.2 rewrites redis.conf and sentinel.conf
+      # from the secret at every start, so a change reaches each node as it restarts; nodes on the old and new
+      # password cannot talk to each other until all have restarted. Not a documented procedure in this version.
+      - when: oldSelf != null && oldSelf.createSecret && self.createSecret
+        rule: >-
+          self.redis.redisPassword == oldSelf.redis.redisPassword &&
+          self.redis.sentinelPassword == oldSelf.redis.sentinelPassword
+        severity: info
+        paths: [redis.redisPassword, redis.sentinelPassword]
+        message: >-
+          Redis and Sentinel nodes pick up a changed password one at a time as they restart, and nodes on the old
+          and the new password cannot reach each other until all have restarted. This version documents no
+          procedure for it; reinstalling is the safe way.
+
+  - id: admin
+    title: Admin API key
+    description: The key that guards the admin endpoints.
+    fields:
+      - path: api.env.adminApiKey
+        type: string
+        label: Admin API key
+        widget: password
+        sensitive: true
+        description: >-
+          The `X-Admin-Key` value for `/admin/*`, which creates, edits and deletes clients and rate-limit tiers.
+          Empty turns admin authentication off.
+        help: >-
+          With the chart creating the secret (Redis credentials), the key is stored in it under `admin-api-key`.
+          With your own secret, any non-empty value here turns admin authentication on, and the key itself is read
+          from the secret named below.
+      - type: note
+        severity: warning
+        when: self.createSecret && self.api.env.adminApiKey != ''
+        text: >-
+          The admin key is stored in the Helm release values. Version 1.3.0 and later take it from an opaque
+          secret you create instead.
+      - path: redis.admin.fromSecret.name
+        type: ref
+        label: Admin API key secret
+        required: true
+        when: "!self.createSecret"
+        description: A dictionary secret you created; the key named below holds the admin API key.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: "off"
+          requiredKeysFrom: "[self.redis.admin.fromSecret.apiKeyKey]"
+      - path: redis.admin.fromSecret.apiKeyKey
+        type: string
+        label: Key holding the admin API key
+        required: true
+        pattern: '^[-._a-zA-Z0-9]+$'
+        patternMessage: Use letters, digits, -, . and _.
+        when: "!self.createSecret"
+        description: The key in that secret that holds the admin API key.
+      - type: note
+        severity: warning
+        when: self.api.enabled && !self.api.public.enabled && self.api.env.adminApiKey == ''
+        text: >-
+          No admin API key: anything in this GVC can create, edit and delete clients and rate-limit tiers
+          through `/admin/*`. Set one unless that is acceptable.
+    rules:
+      # 1.2.x default: public on and an empty key, so /admin/* is open to the internet (fixed in 1.3.0, which refuses
+      # this combination; CHANGELOG 1.3.0).
+      - when: self.api.enabled && self.api.public.enabled
+        rule: >-
+          (oldSelf != null && oldSelf.api.enabled && oldSelf.api.public.enabled && oldSelf.api.env.adminApiKey == '') ||
+          self.api.env.adminApiKey != ''
+        severity: warning
+        paths: [api.env.adminApiKey, api.public.enabled]
+        message: >-
+          With public access on and no admin key, anyone on the internet can create, edit and delete clients and
+          rate-limit tiers. Set an admin key, or turn public access off. Version 1.3.0 refuses this combination.
+      # The release already runs public without an admin key: do not block an unrelated edit, but show the risk.
+      - when: >-
+          self.api.enabled && self.api.public.enabled && oldSelf != null && oldSelf.api.enabled &&
+          oldSelf.api.public.enabled && oldSelf.api.env.adminApiKey == ''
+        rule: self.api.env.adminApiKey != ''
+        severity: info
+        paths: [api.env.adminApiKey, api.public.enabled]
+        message: >-
+          This release serves /admin/* to the internet without an admin key: anyone can create, edit and delete
+          clients and rate-limit tiers. Set an admin key, or turn public access off.
+
+  - id: api
+    title: API
+    description: The HTTP endpoint that accepts tasks and serves the admin endpoints.
+    sections:
+      - id: api
+        title: API workload
+        toggle: api.enabled
+        fields:
+          - path: api.public.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              `/v1/enqueue` has no authentication and registers unknown clients, so anyone who reaches it can
+              make the workers send arbitrary HTTP requests. Keep it off unless an authenticating proxy fronts it
+              (this version turns it on by default; 1.3.0 and later default to off).
+          - path: api.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            suggestions: [1, 2]
+          - path: api.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+          - path: api.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: api.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: api.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            description: "Leave empty to disable tracing. The built-in collector is `tracing.controlplane:4318`."
+            docs: "#opentelemetry"
+          - path: api.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: api.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: api.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.api.replicas.max >= self.api.replicas.min
+            paths: [api.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.api.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [api.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
+
+  - id: worker
+    title: Worker
+    description: The workers that deliver each task to its target URL.
+    sections:
+      - id: worker
+        title: Worker workload
+        toggle: worker.enabled
+        docs: "#worker-workload"
+        fields:
+          - path: worker.replicas.min
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            description: The workers pull tasks from Redis and receive no requests, so at least one must run.
+            suggestions: [1, 2]
+          - path: worker.replicas.max
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [5, 10]
+          - path: worker.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: worker.env.concurrency
+            type: integer
+            label: Concurrent tasks per replica
+            required: true
+            min: 1
+          - path: worker.env.taskTimeoutSec
+            type: integer
+            label: Task timeout
+            unit: seconds
+            required: true
+            min: 1
+          - path: worker.env.maxRetry
+            type: integer
+            label: Delivery attempts before a task is archived
+            required: true
+            min: 0
+          - path: worker.env.allowPrivateUrls
+            type: boolean
+            label: Allow tasks to target private URLs
+            description: >-
+              On, any enqueued task can reach anything the worker can route to, including internal addresses.
+          - path: worker.env.cbFailureThreshold
+            type: integer
+            label: Circuit breaker failure threshold
+            required: true
+            min: 1
+            advanced: true
+            description: Failures before the circuit opens.
+          - path: worker.env.cbTimeoutSec
+            type: integer
+            label: Circuit breaker timeout
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+            description: How long the circuit stays open before retrying.
+          - path: worker.env.logLevel
+            type: enum
+            label: Log level
+            widget: segmented
+            required: true
+            advanced: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: worker.env.otelEndpoint
+            type: string
+            label: OpenTelemetry endpoint
+            advanced: true
+            description: Leave empty to disable tracing.
+          - path: worker.port
+            type: integer
+            label: Health check port
+            required: true
+            min: 1
+            max: 65535
+            advanced: true
+          - path: worker.env.connectRetries
+            type: integer
+            label: Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+            description: At startup.
+          - path: worker.env.retryIntervalSec
+            type: integer
+            label: Seconds between Redis connection attempts
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.worker.replicas.max >= self.worker.replicas.min
+            paths: [worker.replicas.max]
+            message: Set the maximum replicas at or above the minimum.
+          - rule: "!(self.worker.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])"
+            paths: [worker.port]
+            message: >-
+              Control Plane reserves this port (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090 and
+              41000 are refused at install); choose another.
+
+  - id: redis
+    title: Redis
+    description: The bundled Redis with Sentinel failover that stores the queues.
+    sections:
+      - title: Persistence
+        fields:
+          - path: redis.redis.persistence.enabled
+            type: boolean
+            label: Keep Redis data on a volume
+            description: >-
+              Off, queued tasks are lost whenever a Redis node restarts. Choose now: changing it after install
+              replaces the storage and can lose queued tasks.
+          - path: redis.sentinel.persistence.enabled
+            type: boolean
+            label: Keep Sentinel state on a volume
+            description: >-
+              Gives each Sentinel a volume. In this version each Sentinel rewrites its configuration from the chart
+              at every start, so the volume does not carry Sentinel's state across restarts. Choose now: changing it
+              after install replaces the storage.
+        rules:
+          - rule: >-
+              oldSelf == null ||
+              (self.redis.redis.persistence.enabled == oldSelf.redis.redis.persistence.enabled &&
+              self.redis.sentinel.persistence.enabled == oldSelf.redis.sentinel.persistence.enabled)
+            severity: warning
+            paths: [redis.redis.persistence.enabled, redis.sentinel.persistence.enabled]
+            message: >-
+              Changing persistence on a running release replaces the Redis and Sentinel workloads' storage;
+              queued tasks can be lost. Keep the installed setting.
+
+yamlOnly:
+  - path: api.public.pathPrefix
+    reason: Has no routing effect in this chart version.
+  - path: redis.redis.auth.fromSecret.enabled
+    reason: Leave true; the API and Worker always authenticate to Redis.
+  - path: redis.sentinel.auth.fromSecret.enabled
+    reason: Leave true; the API and Worker always authenticate to Sentinel.

@@ -40,7 +40,7 @@ The requirement is one-directional: the GVC may have *more* locations than you l
 ClickHouse-related runs in those. Check what a GVC has before you install:
 
 ```bash
-cpln gvc get GVC_NAME -o json
+cpln gvc get GVC_NAME -o yaml
 ```
 
 The locations are under `spec.staticPlacement.locationLinks`. If you list a location the GVC does not
@@ -94,9 +94,10 @@ values file fails before touching anything. A 2.x install made on pure defaults 
 **not** protected — nothing at render time can see it. Migrate instead:
 
 1. Create (or pick) the GVC you want 3.0.0 to live in, with the locations you intend to use.
-2. Install 3.0.0 as a **new release** with a **new release name** into that GVC. Point it at the **same
-   bucket with a different prefix**, or at a new bucket. Secret names are organization-wide and would
-   otherwise collide with the 2.x release's.
+2. Install 3.0.0 as a **new release** with a **new release name** into that GVC, and give it its **own
+   bucket or container** — the chart has no prefix knob (the S3 and Hetzner endpoints end in a fixed
+   `/data/`, GCS in `/BUCKET/`), so two releases pointed at one bucket would share a data path. Secret
+   names are organization-wide and would otherwise collide with the 2.x release's.
 3. Re-ingest your data into the new cluster. Do **not** try to adopt the old release's volume set: it holds
    metadata whose `<macros><shard>` identity and Keeper paths belong to the old topology, and it cannot be
    moved between releases.
@@ -108,6 +109,47 @@ Renamed in 3.0.0: `gvc.locations` is now the top-level `locations`, and `server.
 `keeper.internal_access` are now `server.internalAccess` / `keeper.internalAccess`. The `workloads` list
 under those keys is now actually applied — in 2.x it was ignored, so `type: workload-list` silently blocked
 all internal traffic.
+
+## Upgrading in place from 2.8.0
+
+A plain `helm upgrade` from 2.x deletes the GVC the 2.x release created, and everything in it. These steps keep that GVC, so the cluster keeps its metadata, Keeper state and bucket. They cover a 2.8.0 release (upgrade an older 2.x to 2.8.0 first) whose locations all have at least 1 replica; if one has `replicas: 0`, use [Migrating from 2.x](#migrating-from-2x) instead.
+
+```bash
+cpln helm get values RELEASE_NAME -o yaml > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (see below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/clickhouse --version 3.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- `OLD_GVC_NAME` is the GVC the 2.x release created (its `gvc.name`), not the GVC you ran the original install against.
+- The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`. If it does not, stop: the GVC was not protected.
+
+`values-new.yaml` is `values-old.yaml` with these changes:
+
+```yaml
+# gvc: delete the whole block
+locations:                     # the old gvc.locations: same entries, SAME ORDER (it sets shard numbers and Keeper members)
+  - name: aws-us-east-2
+    replicas: 1
+server:
+  internalAccess:              # renamed from server.internal_access, same content
+    type: same-gvc
+    workloads: []
+keeper:
+  internalAccess:              # renamed from keeper.internal_access, same content
+    type: same-gvc
+    workloads: []
+```
+
+- If `values-old.yaml` has no `gvc` key, the release ran on 2.8.0's defaults: `OLD_GVC_NAME` is `clickhouse-gvc`, and `locations` is `aws-us-east-2`, `aws-us-west-2`, `aws-us-east-1` in that order, 1 replica each.
+- Keep your storage settings exactly as they are. If `values-old.yaml` has no `aws` block, 2.8.0 used `bucket: clickhouse-s3-bucket`, `cloudAccountName: clickhouse-s3-cloudaccount` and `policyName: clickhouse-s3-policy`; write those out, because 3.0.0's defaults name a different bucket.
+- With `type: workload-list`, `workloads` is now enforced (2.x ignored it): list every client that connects. This release's own workloads are added for you.
+
+Every server and Keeper restarts, in every location at once, so queries fail for a few minutes.
+
+Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME`. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
 
 ## Configuration
 
@@ -386,7 +428,7 @@ position in `locations`.
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more
 - **Object storage is required in every mode**, including single-node. There is no local-only shape
-- **The credentials secret has no `username` key**, and credentials apply on first initialization only — rotate inside ClickHouse first, then update the secret, then force a redeployment. Updating a `cpln://` secret does not restart the workload by itself
+- **The credentials secret has no `username` key.** To rotate the password: update the secret's value, run `cpln workload force-redeployment RELEASE_NAME-clickhouse-server --gvc GVC_NAME`, then update your clients. The startup script rewrites `users.xml` from the secret on every start, so the new password takes effect at the redeploy — and because `default` is defined in `users.xml`, it cannot be changed with `ALTER USER`. Updating a `cpln://` secret does not restart the workload by itself
 - **Switch object-storage providers with a fresh install, not an upgrade.** An identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
 - **`helm upgrade` restarts every replica in every location at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned query interruption

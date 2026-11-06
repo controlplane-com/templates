@@ -1,0 +1,230 @@
+{{- include "hermes-agent.validate" . }}
+kind: workload
+name: {{ include "hermes-agent.name" . }}
+description: Hermes Agent — self-hosted AI agent gateway (API + dashboard)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hermes-agent.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "hermes-agent.identity.name" . }}
+  containers:
+    - name: hermes
+      image: {{ .Values.image }}
+      # The image's main-hermes s6 service is a no-op (`exec sleep infinity`) and the
+      # image has no ENTRYPOINT — /init is its CMD, and the default CMD is the
+      # interactive TUI, which exits on non-TTY stdin. The gateway must therefore be
+      # the container's program, and must run THROUGH /init so s6-overlay keeps
+      # supervising the dashboard service. Dropping `command: /init` silently kills
+      # the dashboard while leaving the API working.
+      command: /init
+      args:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          # The container's boot env carries only PATH — the image's own
+          # HERMES_HOME does not reach it (exec sessions DO get it, which makes
+          # this easy to mis-verify). Without it, `hermes config set` silently
+          # writes to /opt/data/.hermes/config.yaml, which the gateway never reads.
+          export HERMES_HOME=/opt/data
+          {{- include "hermes-agent.configSeed" . | nindent 10 }}
+          exec hermes gateway run
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        # ── LLM provider (key comes from the prerequisite secret) ──
+        - name: {{ include "hermes-agent.apiKeyEnv" . }}
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.apiKey }}'
+        - name: HERMES_INFERENCE_PROVIDER
+          value: {{ .Values.model.provider | quote }}
+        {{- if .Values.model.name }}
+        - name: HERMES_MODEL
+          value: {{ .Values.model.name | quote }}
+        - name: API_SERVER_MODEL_NAME
+          value: {{ .Values.model.name | quote }}
+        {{- end }}
+        {{- if eq .Values.model.provider "custom" }}
+        - name: OPENAI_BASE_URL
+          value: {{ .Values.model.baseUrl | quote }}
+        {{- end }}
+        # ── OpenAI-compatible gateway API (public via canonical endpoint) ──
+        - name: API_SERVER_ENABLED
+          value: '1'
+        - name: API_SERVER_HOST
+          value: 0.0.0.0
+        - name: API_SERVER_PORT
+          value: '8642'
+        - name: API_SERVER_KEY
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.apiServerKey }}'
+        {{- if .Values.dashboard.enabled }}
+        # ── Web dashboard (basic auth) ──
+        - name: HERMES_DASHBOARD
+          value: '1'
+        - name: HERMES_DASHBOARD_HOST
+          value: 0.0.0.0
+        - name: HERMES_DASHBOARD_PORT
+          value: '9119'
+        - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+          value: {{ .Values.dashboard.username | quote }}
+        - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.dashboardPassword }}'
+        {{- /* The platform terminates TLS at the edge, so without a public URL the
+               dashboard sees itself as http:// and registers CLEARTEXT OAuth
+               callbacks for MCP servers, which auth providers refuse ("cleartext
+               http redirect_uris are only allowed for loopback hosts", measured
+               2026-09-01 against auth.cpln.io). dashboard.publicUrl overrides it
+               (custom domains); otherwise the canonical endpoint is used when the
+               dashboard fronts it. CPLN_GLOBAL_ENDPOINT is the full https URL,
+               injected per-workload and expanded from $(VAR) at container start. */}}
+        {{- if .Values.dashboard.publicUrl }}
+        - name: HERMES_DASHBOARD_PUBLIC_URL
+          value: {{ .Values.dashboard.publicUrl | quote }}
+        {{- else if and .Values.publicAccess.enabled (eq .Values.publicAccess.expose "dashboard") }}
+        - name: HERMES_DASHBOARD_PUBLIC_URL
+          value: $(CPLN_GLOBAL_ENDPOINT)
+        {{- end }}
+        {{- end }}
+        {{- if .Values.webhooks.enabled }}
+        # ── External webhook listener (HMAC-signed events on 8644) ──
+        # The signing secret rides the same prerequisite secret as everything else,
+        # so least privilege is unchanged (still exactly one secret target).
+        - name: WEBHOOK_ENABLED
+          value: 'true'
+        - name: WEBHOOK_PORT
+          value: '8644'
+        - name: WEBHOOK_SECRET
+          value: 'cpln://secret/{{ .Values.secret.name }}.{{ .Values.secret.keys.webhookSecret }}'
+        {{- end }}
+      ports:
+        # The FIRST declared port is the one the public canonical HTTPS endpoint
+        # fronts — publicAccess.expose picks which surface that is. Probes and
+        # internal DNS address ports by number, so ordering affects only the
+        # canonical endpoint.
+        {{- if eq .Values.publicAccess.expose "dashboard" }}
+        - number: 9119
+          protocol: http
+        - number: 8642
+          protocol: http
+        {{- if .Values.webhooks.enabled }}
+        - number: 8644
+          protocol: http
+        {{- end }}
+        {{- else if eq .Values.publicAccess.expose "webhooks" }}
+        - number: 8644
+          protocol: http
+        - number: 8642
+          protocol: http
+        {{- if .Values.dashboard.enabled }}
+        - number: 9119
+          protocol: http
+        {{- end }}
+        {{- else }}
+        - number: 8642
+          protocol: http
+        {{- if .Values.dashboard.enabled }}
+        - number: 9119
+          protocol: http
+        {{- end }}
+        {{- if .Values.webhooks.enabled }}
+        - number: 8644
+          protocol: http
+        {{- end }}
+        {{- end }}
+      volumes:
+        - path: /opt/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "hermes-agent.volume.name" . }}
+        # Shared memory for the app's own tooling (default 64 MB /dev/shm is small).
+        - path: /dev/shm
+          uri: scratch://dev-shm
+      # /health is unauthenticated and only 200s once the API server is actually
+      # serving — unlike a TCP check, it catches a gateway that started but whose
+      # API refused to bind. failureThreshold max is 20 (platform-enforced).
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8642
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8642
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 5
+        timeoutSeconds: 5
+    {{- if .Values.browser.enabled }}
+    # ── Headless-Chromium CDP sidecar (loopback only) ──
+    # Browser tools are non-functional on the Nous image alone; this container is
+    # the Chrome the agent attaches to over CDP (browser.cdp_url, seeded in the
+    # config). Community image per the community-image ruling — Nous ships no
+    # CDP-capable browser. We drive the binary directly instead of inheriting the
+    # image's run.sh entrypoint, so behaviour is pinned to flags we control.
+    - name: chromium
+      image: {{ .Values.browser.image | quote }}
+      command: /headless-shell/headless-shell
+      args:
+        - --no-sandbox
+        - --use-gl=angle
+        - --use-angle=swiftshader
+        # Chromium forcibly remaps this to 127.0.0.1 since M113; the sidecar is
+        # reachable only over the shared workload netns, which is what we want.
+        - --remote-debugging-address=0.0.0.0
+        - --remote-debugging-port={{ .Values.browser.cdpPort }}
+        # CDP websocket clients (browser-use) are refused without an Origin allow.
+        - --remote-allow-origins=*
+        # Ephemeral profile on the container layer — no browser state persists.
+        - --user-data-dir=/tmp/chrome
+      inheritEnv: false
+      minCpu: {{ .Values.browser.resources.minCpu | quote }}
+      minMemory: {{ .Values.browser.resources.minMemory | quote }}
+      cpu: {{ .Values.browser.resources.maxCpu | quote }}
+      memory: {{ .Values.browser.resources.maxMemory | quote }}
+      # No `ports` and no probes on purpose: CDP binds 127.0.0.1 (M113 remap), which
+      # the platform probe (outside the container netns) cannot reach — a probe on
+      # the CDP port would fail-loop a healthy sidecar. A crash exits the container
+      # and the platform restarts it; a hung-but-alive Chrome surfaces to the agent
+      # as a CDP error and degrades gracefully to web_extract.
+      volumes:
+        # Chromium needs a large /dev/shm (the default 64 MB crashes it). Its own
+        # scratch mount, isolated from the app container's.
+        - path: /dev/shm
+          uri: scratch://chrome-shm
+    {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}

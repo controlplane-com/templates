@@ -1,0 +1,1088 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Manticore Search
+# A stateful Galera cluster with no location handling: every GVC location would run an independent cluster,
+# and the replicas find each other by bare per-replica names.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: prerequisites
+    title: Token and source bucket
+    description: The agent token secret and the S3 bucket the CSV files are imported from.
+    sections:
+      - title: Agent token
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version takes the agent token as a plain value: the chart writes it into a secret it creates,
+              and the value is stored in the Helm release. The default in values.yaml is a working token
+              published in the template repository, so every install that keeps it shares one public
+              credential. Enter a fresh token. From 2.1.0 the token comes from a secret you create instead.
+          - type: note
+            severity: warning
+            text: >-
+              In this version the chart's secret policy matches every secret in the org, not only its own, so the
+              Manticore, orchestrator and backup identities can reveal any secret in the org, including ones
+              created later. Fixed in 2.1.0.
+          - path: orchestrator.agent.token
+            type: string
+            label: Agent token
+            required: true
+            sensitive: true
+            example: true
+            description: >-
+              The bearer token the orchestrator, the agents and the UI authenticate to each other with.
+            help: >-
+              Generate one with `openssl rand -base64 32`. Changing it on a running release redeploys the
+              workloads that read it.
+        rules:
+          - when: >-
+              oldSelf == null || self.orchestrator.agent.token != oldSelf.orchestrator.agent.token
+            rule: >-
+              !self.orchestrator.agent.token.matches('^\\s') && !self.orchestrator.agent.token.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+              !self.orchestrator.agent.token.matches('^[-?:](\\s|$)') && !self.orchestrator.agent.token.matches('\\t') &&
+              !self.orchestrator.agent.token.contains(': ') && !self.orchestrator.agent.token.contains(' #') &&
+              !self.orchestrator.agent.token.endsWith(':') && !self.orchestrator.agent.token.endsWith(' ') &&
+              !(self.orchestrator.agent.token in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !self.orchestrator.agent.token.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.orchestrator.agent.token.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.orchestrator.agent.token.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.orchestrator.agent.token.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.orchestrator.agent.token.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [orchestrator.agent.token]
+            message: >-
+              The chart writes the token into its secret without quotes, so this value would be read as another
+              YAML type or break the manifest. Use a token like the output of openssl rand -base64 32.
+      - title: Source bucket
+        description: >-
+          The S3 bucket that holds the CSV files to import, mounted read-only. Only AWS S3 is supported.
+        docs: "#buckets"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              Create these before you install: the S3 bucket with your CSV files, an IAM policy granting read
+              access to it, and an AWS cloud account in this org. The cloud account picker below lists only
+              existing AWS cloud accounts.
+          - path: buckets.sourceBucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: buckets.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: buckets.awsPolicyRefs
+            type: list
+            label: IAM policies
+            required: true
+            widget: tags
+            unique: true
+            description: >-
+              AWS IAM policies (AWS objects, not Control Plane policies) granting `s3:ListBucket`,
+              `s3:GetBucketLocation` and `s3:GetObject` on the bucket. AWS managed policies take the `aws::`
+              prefix; your own policies are named without it.
+            item:
+              type: string
+              label: IAM policy
+              pattern: '^(aws::)?[A-Za-z0-9+=,.@_-]+$'
+              patternMessage: "Enter a policy name using letters, digits and + = , . @ _ -, with aws:: only for AWS managed policies."
+        rules:
+          - rule: "!('aws::AmazonS3ReadOnlyAccess' in self.buckets.awsPolicyRefs)"
+            severity: info
+            paths: [buckets.awsPolicyRefs]
+            message: >-
+              The default AWS managed policy AmazonS3ReadOnlyAccess lets the workload read every bucket in the
+              AWS account. A policy scoped to the source bucket grants only what imports need.
+
+  - id: tables
+    title: Tables
+    description: The searchable tables, their CSV files in the source bucket and their columns.
+    sections:
+      - title: Table definitions
+        fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.2.0') < 0
+            text: >-
+              Since 1.2.0 every table needs `config.segmentCount`: 1 for a single `csvPath`, or the number of
+              entries when `csvPath` is a list. Tables you defined are kept and need it added; a release that
+              kept the example tables takes this version's example.
+          - type: note
+            when: self.tables.exists(t, ('name' in t) && string(t.name) == 'addresses')
+            text: >-
+              The default `addresses` table is an example: replace its name, CSV paths and columns with your
+              own data before you install.
+          - path: tables
+            type: yaml
+            yamlType: list
+            label: Tables
+            required: true
+            description: >-
+              One entry per table: `name`, `csvPath` (a path in the source bucket, or a list of paths for a
+              multi-segment table), `config` and `schema.columns`. Editing the tables on a running release
+              restarts every replica one at a time.
+            help: >-
+              Column types: `field` and `field_string` (full-text), `attr_uint`, `attr_bigint`, `attr_float`,
+              `attr_bool`, `attr_string`, `attr_timestamp`, `attr_multi`, `attr_multi_64` and `attr_json`. If the
+              first CSV column is numeric it becomes the document ID and must not be declared. Set
+              `config.segmentCount` to the number of `csvPath` entries (1 for a single path).
+        rules:
+          - rule: >-
+              self.tables.all(t, ('config' in t) && t.config != null &&
+              (('segmentCount' in t.config) && t.config.segmentCount != null ? int(t.config.segmentCount) : 0) ==
+              (('csvPath' in t) && type(t.csvPath) == list ? size(t.csvPath) : 1))
+            mirrors: manticore.validateTables
+            paths: [tables]
+            message: >-
+              Each table's config.segmentCount must equal the number of its csvPath entries, and be 1 when
+              csvPath is a single path.
+            messageExpression: >-
+              'Each table needs config.segmentCount equal to the number of its csvPath entries (1 for a single
+              path); check ' + self.tables.filter(t, !(('config' in t) && t.config != null &&
+              (('segmentCount' in t.config) && t.config.segmentCount != null ? int(t.config.segmentCount) : 0) ==
+              (('csvPath' in t) && type(t.csvPath) == list ? size(t.csvPath) : 1))).map(t, ('name' in t) ?
+              string(t.name) : '(unnamed)').join(', ') + '.'
+          - rule: self.tables.all(t, ('name' in t) && t.name != null && string(t.name) != '')
+            paths: [tables]
+            message: Every table needs a name.
+
+  - id: cluster
+    title: Cluster
+    description: The Manticore image, the replicas, their compute and their storage.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that changes the Manticore workload restarts its replicas in the Restart order set under
+              Advanced (one at a time by default). Plan for the full rollout.
+          - path: manticore.image
+            type: string
+            format: image
+            label: Manticore image
+            required: true
+          - path: manticore.clusterName
+            type: string
+            label: Cluster name
+            required: true
+            immutable: The replicas joined the Galera cluster under this name when it was initialized.
+            description: The Galera cluster name. It is fixed once the cluster is initialized.
+            pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+            patternMessage: Use letters, digits and underscores, starting with a letter or underscore.
+          - path: manticore.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+      - title: Replicas
+        fields:
+          - path: manticore.autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 1
+            description: The orchestrator coordinates imports across this many replicas.
+            suggestions: [1, 3, 5]
+          - path: manticore.autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [2, 4, 6]
+          - path: manticore.autoscaling.metric
+            type: enum
+            label: Scale on
+            required: true
+            options:
+              - { value: rps, label: Requests per second }
+              - { value: cpu, label: CPU }
+              - { value: memory, label: Memory }
+              - { value: latency, label: Latency }
+          - path: manticore.autoscaling.target
+            type: integer
+            label: Target
+            required: true
+            min: 1
+            description: The metric value per replica that triggers scaling (a percentage for CPU and memory).
+        rules:
+          - rule: self.manticore.autoscaling.maxScale >= self.manticore.autoscaling.minScale
+            paths: [manticore.autoscaling.maxScale]
+            message: The maximum replicas must be at least the minimum replicas.
+          - rule: >-
+              oldSelf == null || oldSelf.manticore.autoscaling.minScale == null ||
+              self.manticore.autoscaling.minScale == oldSelf.manticore.autoscaling.minScale
+            severity: info
+            paths: [manticore.autoscaling.minScale]
+            message: >-
+              The orchestrator coordinates imports across the minimum replicas. After changing it on an
+              initialized cluster, check the cluster in the UI and run the repair action if it reports a split.
+      - title: Storage
+        description: >-
+          Each replica has its own data volume, and one shared volume hands import artifacts from the job to
+          the replicas. Uninstalling the release deletes both volume sets and all indexed data.
+        fields:
+          - path: manticore.volumeset.capacity
+            type: integer
+            label: Data volume per replica
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 200, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: manticore.sharedVolumeset.capacity
+            type: integer
+            label: Shared volume
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            description: Holds the CSV conversions and built indexes of an import.
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.manticore.volumeset.capacity == null ||
+              self.manticore.volumeset.capacity >= oldSelf.manticore.volumeset.capacity
+            paths: [manticore.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volumes.
+          - rule: >-
+              oldSelf == null || oldSelf.manticore.sharedVolumeset.capacity == null ||
+              self.manticore.sharedVolumeset.capacity >= oldSelf.manticore.sharedVolumeset.capacity
+            paths: [manticore.sharedVolumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: orchestrator
+    title: Orchestrator
+    description: What the orchestrator job runs, when it runs, and how the API and the agents pace imports.
+    sections:
+      - title: Orchestrator job
+        description: >-
+          The job runs one action per run: init bootstraps the Galera cluster, import loads the CSV files of a
+          table into a fresh slot and swaps it in, health reports the cluster state, and repair recovers from a
+          split. The UI runs imports, backups, restores and repairs on demand.
+        fields:
+          - type: note
+            when: context.mode == 'install'
+            text: >-
+              An install indexes nothing: the tables stay empty until an import runs. Run Import from the UI, or
+              start the job with Action set to Import. If the cluster is not initialized yet, start the job once
+              with Action set to Init first.
+          - path: orchestrator.action
+            type: enum
+            label: Action
+            widget: cards
+            required: true
+            options:
+              - { value: init, label: Init, description: Bootstrap the Galera cluster. Run it once. }
+              - { value: import, label: Import, description: Load the table's CSV files and swap them in. }
+              - { value: health, label: Health, description: Report the cluster state. }
+              - { value: repair, label: Repair, description: Recover the cluster from a split. }
+          - path: orchestrator.tableName
+            type: enum
+            label: Table
+            required: true
+            description: The table an import loads.
+            optionsFrom: >-
+              self.tables.filter(t, ('name' in t) && t.name != null && string(t.name) != '').map(t, string(t.name))
+          - path: orchestrator.suspend
+            type: boolean
+            label: Suspend the schedule
+            description: >-
+              While suspended, the job runs only when started from the UI or with `cpln workload cron start`.
+            help: >-
+              Start a run with `cpln workload cron start RELEASE_NAME-orchestrator-job --gvc GVC_NAME`, and follow
+              it with `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-orchestrator-job"}' --since 10m`.
+          - path: orchestrator.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: "!self.orchestrator.suspend"
+            description: >-
+              Each scheduled run performs the Action above on the chosen table; with Import, that rebuilds the
+              table from its CSV files and swaps it in.
+          - path: orchestrator.importMemLimit
+            type: string
+            label: Indexer memory limit
+            required: true
+            placeholder: 2G
+            description: The memory the indexer may use while building a table.
+          - path: orchestrator.timeoutSeconds
+            type: integer
+            label: Container timeout
+            unit: seconds
+            min: 1
+            max: 3600
+            required: true
+            advanced: true
+          - path: orchestrator.activeDeadlineSeconds
+            type: integer
+            label: Maximum run time
+            unit: seconds
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [3600, 7200, 14400, 28800]
+      - title: Orchestrator API
+        description: The REST API the UI, the job and the agents coordinate through.
+        fields:
+          - path: orchestrator.api.importPollInterval
+            type: string
+            format: duration
+            label: Import poll interval
+            required: true
+            description: How often the API checks a running import.
+          - path: orchestrator.api.importPollTimeout
+            type: string
+            format: duration
+            label: Import poll timeout
+            required: true
+            description: How long the API waits for an import before it gives up.
+          - path: orchestrator.api.autoscaling.minScale
+            type: integer
+            label: Minimum API replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: orchestrator.api.autoscaling.maxScale
+            type: integer
+            label: Maximum API replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: orchestrator.api.autoscaling.metric
+            type: enum
+            label: API scales on
+            required: true
+            advanced: true
+            options:
+              - { value: cpu, label: CPU }
+              - { value: memory, label: Memory }
+              - { value: rps, label: Requests per second }
+              - { value: concurrency, label: Concurrent requests }
+              - { value: latency, label: Latency }
+          - path: orchestrator.api.autoscaling.target
+            type: integer
+            label: API scaling target
+            required: true
+            min: 1
+            advanced: true
+            description: The metric value per replica that triggers scaling (a percentage for CPU and memory).
+        rules:
+          - rule: self.orchestrator.api.autoscaling.maxScale >= self.orchestrator.api.autoscaling.minScale
+            paths: [orchestrator.api.autoscaling.maxScale]
+            message: The maximum API replicas must be at least the minimum API replicas.
+      - title: Agents
+        description: The sidecar next to each Manticore replica that loads the data and recovers the replica.
+        fields:
+          - path: orchestrator.agent.import.batchSize
+            type: integer
+            label: Rows per insert
+            required: true
+            min: 1
+            suggestions: [1000, 5000, 20000, 50000]
+          - path: orchestrator.agent.recovery.maxRetries
+            type: integer
+            label: Recovery attempts
+            required: true
+            min: 1
+            advanced: true
+          - path: orchestrator.agent.recovery.initialBackoffSec
+            type: integer
+            label: First retry delay
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+          - path: orchestrator.agent.recovery.maxBackoffSec
+            type: integer
+            label: Longest retry delay
+            unit: seconds
+            required: true
+            min: 1
+            advanced: true
+        rules:
+          - rule: self.orchestrator.agent.recovery.maxBackoffSec >= self.orchestrator.agent.recovery.initialBackoffSec
+            severity: info
+            paths: [orchestrator.agent.recovery.maxBackoffSec]
+            message: The longest retry delay is shorter than the first one, so the delays never grow.
+
+  - id: access
+    title: Access
+    description: Who can reach Manticore and the UI, and an optional custom domain.
+    sections:
+      - title: Manticore access
+        description: >-
+          Manticore's SQL (9306) and HTTP (9308) ports have no authentication; this firewall is their only
+          protection. Access changes take up to a few minutes to take effect.
+        docs: /reference/workload/firewall
+        fields:
+          - path: manticore.firewall.internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC. Galera replication between the replicas relies on it.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+          # workload-list and none are not offered: Galera replication, the orchestrator API reaching the
+          # agents and the backup job reaching Manticore all need same-gvc (wizard round 2026-10-23), and the
+          # release's own workloads cannot be listed on install (they do not exist yet).
+          # Shown for every type: workload.yaml writes any non-empty list into inboundAllowWorkload, and the
+          # platform validates every entry, though it applies the links only with same-gvc and workload-list.
+          - path: manticore.firewall.internalAccess.workloads
+            when: >-
+              self.manticore.firewall.internalAccess.type in ['same-gvc', 'workload-list'] ||
+              size(self.manticore.firewall.internalAccess.workloads) > 0
+            type: list
+            label: Allowed workloads
+            widget: tags
+            unique: true
+            description: >-
+              Extra workloads from other GVCs that may connect.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.manticore.firewall.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.manticore.firewall.internalAccess.type in ['same-gvc', 'same-org']
+            severity: warning
+            paths: [manticore.firewall.internalAccess.type]
+            message: >-
+              Galera replication between the Manticore replicas relies on Same GVC; with this setting the
+              replicas cannot replicate with each other. Choose Same GVC.
+          - when: self.manticore.firewall.internalAccess.type == 'same-org'
+            rule: "false"
+            severity: info
+            paths: [manticore.firewall.internalAccess.type]
+            message: >-
+              Same org opens Manticore's unauthenticated SQL and HTTP ports to every workload in the org.
+          - when: self.manticore.firewall.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: >-
+              !self.manticore.firewall.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))
+            severity: info
+            paths: [manticore.firewall.internalAccess.workloads]
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.manticore.firewall.internalAccess.type == 'same-org'
+            rule: size(self.manticore.firewall.internalAccess.workloads) == 0
+            severity: info
+            paths: [manticore.firewall.internalAccess.workloads]
+            message: Same org already lets every workload of the org connect, so the listed workloads add nothing.
+      - title: Web UI
+        description: >-
+          The UI has no login of its own: it attaches the agent token to every request it makes, so anyone who
+          reaches it holds full cluster admin, including imports, restores and repairs. In this version every
+          workload in the GVC can reach it.
+        fields:
+          - path: orchestrator.ui.allowExternalAccess
+            type: boolean
+            label: Publish the UI to the internet
+            description: >-
+              Gives the UI a public `*.cpln.app` endpoint with no authentication in front of it. This version
+              turns it on by default; from 2.1.0 the default is off.
+          - type: note
+            severity: warning
+            when: self.orchestrator.ui.allowExternalAccess
+            text: >-
+              With this on, anyone on the internet who finds the endpoint can run imports, restores and repairs.
+              Turn it off unless your own authenticating proxy sits in front of the UI.
+      - id: domain
+        title: Custom domain
+        toggle: domain.enabled
+        description: >-
+          Serves the orchestrator API under /api/ and the UI under every other path on a hostname you control.
+          The UI has no login of its own, so put your own authenticating proxy in front of it before routing a
+          domain to it.
+        docs: "#domain"
+        fields:
+          - path: domain.name
+            type: string
+            format: hostname
+            label: Hostname
+            required: true
+            placeholder: manticore.example.com
+            description: The chart creates the Control Plane domain; add the DNS records it asks for.
+          - path: domain.dnsMode
+            type: enum
+            label: DNS mode
+            widget: cards
+            required: true
+            options:
+              - { value: cname, label: CNAME, description: A subdomain you point at Control Plane with a CNAME record. }
+              - { value: ns, label: NS, description: A zone you delegate to Control Plane with NS records. }
+
+  - id: extras
+    title: Backups and load test
+    description: Optional scheduled backups to S3 and an optional k6 load test.
+    sections:
+      - id: backup
+        title: Scheduled backups
+        toggle: orchestrator.backup.enabled
+        description: >-
+          Delta and full logical backups of a table to a second S3 bucket, written by a backup job under its
+          own identity. The bucket, its IAM policy and a cloud account must exist before you turn it on; the
+          policy needs write access.
+        fields:
+          - path: orchestrator.backup.s3Bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            description: A separate bucket from the source bucket.
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: orchestrator.backup.s3Region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            description: The region the orchestrator API passes for backups it starts.
+          - path: buckets.awsRegion
+            type: string
+            label: Backup job region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+            description: >-
+              The region the scheduled backup job passes. In this version that job reads it from
+              buckets.awsRegion, so set it to the backup bucket's region.
+          - path: orchestrator.backup.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) for the AWS account that holds the backup bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: orchestrator.backup.s3Policy
+            type: list
+            label: IAM policies
+            required: true
+            widget: tags
+            unique: true
+            description: >-
+              AWS IAM policies (AWS objects, not Control Plane policies) granting `s3:ListBucket`,
+              `s3:GetBucketLocation`, `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the backup bucket.
+            item:
+              type: string
+              label: IAM policy
+              pattern: '^(aws::)?[A-Za-z0-9+=,.@_-]+$'
+              patternMessage: "Enter a policy name using letters, digits and + = , . @ _ -, with aws:: only for AWS managed policies."
+          - path: orchestrator.backup.prefix
+            type: string
+            label: Folder prefix
+            required: true
+            pattern: '^(?!/)'
+            patternMessage: Leave out the leading /.
+          - path: orchestrator.backup.dataSet
+            type: enum
+            label: Table the backup job backs up
+            required: true
+            description: The backup job takes a delta backup of this table.
+            optionsFrom: >-
+              self.tables.filter(t, ('name' in t) && t.name != null && string(t.name) != '').map(t, string(t.name))
+          - path: orchestrator.backup.schedules
+            type: list
+            label: Backup schedules
+            required: true
+            widget: table
+            newItem: { table: "", type: delta, schedule: "0 2 * * *" }
+            itemLabel: "item.type + ' backup of ' + item.table + ' at ' + item.schedule"
+            description: The delta (incremental) and main (full) backups the orchestrator runs, each on its own schedule (UTC).
+            item:
+              type: object
+              fields:
+                - path: table
+                  type: enum
+                  label: Table
+                  required: true
+                  optionsFrom: >-
+                    self.tables.filter(t, ('name' in t) && t.name != null && string(t.name) != '').map(t, string(t.name))
+                - path: type
+                  type: enum
+                  label: Type
+                  required: true
+                  options:
+                    - { value: delta, label: Delta }
+                    - { value: main, label: Main (full) }
+                - path: schedule
+                  type: string
+                  format: cron
+                  label: Schedule (UTC)
+                  required: true
+          - path: orchestrator.backup.activeDeadlineSeconds
+            type: integer
+            label: Maximum backup run time
+            unit: seconds
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [3600, 7200, 14400, 28800]
+          - path: orchestrator.backup.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            description: The repository; the tag is the version below.
+          - path: orchestrator.backup.version
+            type: string
+            label: Backup image version
+            required: true
+            advanced: true
+          - path: orchestrator.backup.resources
+            type: resources
+            label: Backup job resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              !('my-backup-policy' in self.orchestrator.backup.s3Policy) ||
+              (oldSelf != null && 'my-backup-policy' in oldSelf.orchestrator.backup.s3Policy)
+            severity: warning
+            paths: [orchestrator.backup.s3Policy]
+            message: Still has the example policy name my-backup-policy; replace it with your own IAM policy.
+          - rule: self.buckets.awsRegion == self.orchestrator.backup.s3Region
+            severity: info
+            paths: [buckets.awsRegion]
+            message: The backup job region differs from the bucket region the orchestrator API uses.
+          - when: oldSelf == null || self.orchestrator.backup.prefix != oldSelf.orchestrator.backup.prefix
+            rule: >-
+              !self.orchestrator.backup.prefix.matches('^\\s') && !self.orchestrator.backup.prefix.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+              !self.orchestrator.backup.prefix.matches('^[-?:](\\s|$)') && !self.orchestrator.backup.prefix.matches('\\t') &&
+              !self.orchestrator.backup.prefix.contains(': ') && !self.orchestrator.backup.prefix.contains(' #') && !self.orchestrator.backup.prefix.endsWith(':') && !self.orchestrator.backup.prefix.endsWith(' ') &&
+              !(self.orchestrator.backup.prefix in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.orchestrator.backup.prefix.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.orchestrator.backup.prefix.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.orchestrator.backup.prefix.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [orchestrator.backup.prefix]
+            message: >-
+              The chart writes the prefix into the backup environment without quotes, so this value would be read
+              as another YAML type or break the manifest. Use a plain folder name such as manticore-backups.
+          - when: oldSelf == null || self.orchestrator.backup.s3Bucket != oldSelf.orchestrator.backup.s3Bucket
+            rule: >-
+              !self.orchestrator.backup.s3Bucket.matches('^\\s') && !self.orchestrator.backup.s3Bucket.matches('^[!&*%@`\'"\\[\\]{}|>,#]') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-?:](\\s|$)') && !self.orchestrator.backup.s3Bucket.matches('\\t') &&
+              !self.orchestrator.backup.s3Bucket.contains(': ') && !self.orchestrator.backup.s3Bucket.contains(' #') && !self.orchestrator.backup.s3Bucket.endsWith(':') && !self.orchestrator.backup.s3Bucket.endsWith(' ') &&
+              !(self.orchestrator.backup.s3Bucket in ['true','True','TRUE','false','False','FALSE','null','Null','NULL','~']) &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[-+]?\\.(inf|Inf|INF)$') && !self.orchestrator.backup.s3Bucket.matches('^\\.(nan|NaN|NAN)$') &&
+              !self.orchestrator.backup.s3Bucket.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)')
+            severity: warning
+            paths: [orchestrator.backup.s3Bucket]
+            message: >-
+              The chart writes the bucket name into the backup environment without quotes, so a name made only of
+              digits would be read as a number. Use a bucket name that contains a letter or a hyphen.
+          - rule: self.orchestrator.backup.s3Bucket != self.buckets.sourceBucket
+            severity: info
+            paths: [orchestrator.backup.s3Bucket]
+            message: >-
+              The backup bucket is the source bucket. Its policy needs write access, which the source bucket
+              otherwise never needs; a separate bucket keeps the source read-only.
+      - id: load-test
+        title: Load test
+        toggle: loadTest.enabled
+        description: >-
+          A k6 runner that sends search requests to Manticore, and a controller job that scales it up for the
+          test duration plus the scale-down buffer and back to zero. k6 prints its summary, including each
+          threshold, to the runner's logs.
+        fields:
+          - type: note
+            text: >-
+              Start a test with `cpln workload cron start RELEASE_NAME-load-test-controller --gvc GVC_NAME`.
+            textExpression: >-
+              'Start a test with `cpln workload cron start ' + context.releaseName + '-load-test-controller --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: loadTest.vus
+            type: integer
+            label: Virtual users
+            required: true
+            min: 1
+            suggestions: [1, 10, 50, 100]
+          - path: loadTest.duration
+            type: string
+            label: Test duration
+            required: true
+            placeholder: 5m
+            description: Seconds, minutes or hours, such as `30s`, `5m` or `1h`.
+          - path: loadTest.rps
+            type: integer
+            label: Requests per second
+            min: 1
+            description: The rate the test aims for; leave it empty for as fast as possible.
+          - path: loadTest.replicas
+            type: integer
+            label: k6 runners
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5]
+          - path: loadTest.controller.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            description: Leave it empty to start tests only by hand.
+          - path: loadTest.target.endpoint
+            type: enum
+            label: Endpoint
+            widget: segmented
+            required: true
+            options:
+              - { value: search, label: /search }
+              - { value: sql, label: /sql }
+          - path: loadTest.query
+            type: yaml
+            yamlType: map
+            label: Request body
+            required: true
+            description: Sent as JSON to the endpoint on every request; `index` names the table to search.
+          - path: loadTest.thresholds.p95ResponseTime
+            type: integer
+            label: 95th percentile response time limit
+            unit: ms
+            required: true
+            min: 1
+          - path: loadTest.thresholds.errorRate
+            type: number
+            label: Error rate limit
+            required: true
+            min: 0
+            max: 1
+            step: 0.01
+            description: A fraction of the requests, such as 0.01 for 1 %.
+          - path: loadTest.controller.testDurationBuffer
+            type: integer
+            label: Scale-down buffer
+            unit: seconds
+            required: true
+            min: 0
+            advanced: true
+            description: Added to the test duration before the controller scales the runners back to zero.
+          - path: loadTest.image
+            type: string
+            format: image
+            label: k6 image
+            required: true
+            advanced: true
+          - path: loadTest.resources
+            type: resources
+            label: k6 runner resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: loadTest.controller.image
+            type: string
+            format: image
+            label: Controller image
+            required: true
+            advanced: true
+            description: Needs `curl` and `sh`.
+        rules:
+          # loadTest.totalDurationSeconds parses only a single number with an s, m or h suffix; anything else
+          # counts as 0 seconds, and the controller scales the runners down after the buffer alone.
+          - rule: >-
+              (oldSelf != null && self.loadTest.duration == oldSelf.loadTest.duration) ||
+              self.loadTest.duration.matches('^[0-9]+[smh]$')
+            severity: warning
+            paths: [loadTest.duration]
+            message: >-
+              Write the test duration as one number with s, m or h, such as 90s or 5m. The controller reads
+              nothing else and would stop the test after the scale-down buffer alone.
+          - when: type(self.loadTest.query) == map && 'index' in self.loadTest.query
+            rule: >-
+              self.tables.exists(t, ('name' in t) && t.name != null && string(t.name) == string(self.loadTest.query.index))
+            severity: info
+            paths: [loadTest.query]
+            message: The request body's index is not one of the tables, so every request would fail.
+
+  - id: advanced
+    title: Advanced
+    description: Images, resources, rollout and logging of the components that always run.
+    sections:
+      - title: Orchestrator images
+        description: >-
+          Each image is a repository plus its version tag. The orchestrator, API, agent, UI and backup images are
+          released together; keep their versions the same.
+        fields:
+          - path: orchestrator.image
+            type: string
+            format: image
+            label: Orchestrator job image
+            required: true
+          - path: orchestrator.version
+            type: string
+            label: Orchestrator job version
+            required: true
+          - path: orchestrator.api.image
+            type: string
+            format: image
+            label: API image
+            required: true
+          - path: orchestrator.api.version
+            type: string
+            label: API version
+            required: true
+          - path: orchestrator.agent.image
+            type: string
+            format: image
+            label: Agent image
+            required: true
+          - path: orchestrator.agent.version
+            type: string
+            label: Agent version
+            required: true
+          - path: orchestrator.ui.image
+            type: string
+            format: image
+            label: UI image
+            required: true
+          - path: orchestrator.ui.version
+            type: string
+            label: UI version
+            required: true
+        rules:
+          - rule: >-
+              self.orchestrator.api.version == self.orchestrator.version &&
+              self.orchestrator.agent.version == self.orchestrator.version &&
+              self.orchestrator.ui.version == self.orchestrator.version &&
+              (!self.orchestrator.backup.enabled || self.orchestrator.backup.version == self.orchestrator.version)
+            severity: info
+            paths: [orchestrator.version]
+            message: >-
+              The orchestrator components have different versions. They are released together and talk to each
+              other, so keep them on the same version.
+      - title: Resources
+        fields:
+          # Mixed block in this version: cpu/memory are the limits next to minCpu/minMemory, so plain
+          # quantity fields (type: resources would write maxCpu/maxMemory, which this version does not read).
+          - path: orchestrator.agent.resources.cpu
+            type: quantity
+            quantity: cpu
+            label: Agent CPU limit
+            required: true
+            min: 25m
+            description: A sidecar next to each Manticore replica.
+          - path: orchestrator.agent.resources.minCpu
+            type: quantity
+            quantity: cpu
+            label: Agent minimum CPU
+            required: true
+            min: 25m
+          - path: orchestrator.agent.resources.memory
+            type: quantity
+            quantity: memory
+            label: Agent memory limit
+            required: true
+            min: 32Mi
+          - path: orchestrator.agent.resources.minMemory
+            type: quantity
+            quantity: memory
+            label: Agent minimum memory
+            required: true
+            min: 32Mi
+          - path: orchestrator.resources
+            type: resources
+            label: Orchestrator job resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: orchestrator.api.resources
+            type: resources
+            label: API resources
+            required: true
+            description: Per API replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: orchestrator.ui.resources
+            type: resources
+            label: UI resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: cpuMillicores(self.orchestrator.agent.resources.cpu) >= cpuMillicores(self.orchestrator.agent.resources.minCpu)
+            paths: [orchestrator.agent.resources.minCpu]
+            message: The agent's minimum CPU must not exceed its CPU limit.
+          - rule: memoryBytes(self.orchestrator.agent.resources.memory) >= memoryBytes(self.orchestrator.agent.resources.minMemory)
+            paths: [orchestrator.agent.resources.minMemory]
+            message: The agent's minimum memory must not exceed its memory limit.
+          - rule: cpuMillicores(self.orchestrator.agent.resources.cpu) <= 4 * cpuMillicores(self.orchestrator.agent.resources.minCpu)
+            paths: [orchestrator.agent.resources.minCpu]
+            message: >-
+              The agent runs in the stateful Manticore workload, where the CPU limit can be at most 4 times the
+              minimum CPU. Raise the minimum or lower the limit.
+          - rule: memoryBytes(self.orchestrator.agent.resources.memory) <= 4 * memoryBytes(self.orchestrator.agent.resources.minMemory)
+            paths: [orchestrator.agent.resources.minMemory]
+            message: >-
+              The agent runs in the stateful Manticore workload, where the memory limit can be at most 4 times the
+              minimum memory. Raise the minimum or lower the limit.
+          - rule: >-
+              cpuMillicores(self.orchestrator.agent.resources.cpu) -
+              cpuMillicores(self.orchestrator.agent.resources.minCpu) <= 4000
+            paths: [orchestrator.agent.resources.minCpu]
+            message: >-
+              On a stateful workload the agent's CPU limit can be at most 4 cores above its minimum CPU. Raise
+              the minimum or lower the limit.
+          - rule: >-
+              memoryBytes(self.orchestrator.agent.resources.memory) -
+              memoryBytes(self.orchestrator.agent.resources.minMemory) <= 4096 * 1048576
+            paths: [orchestrator.agent.resources.minMemory]
+            message: >-
+              On a stateful workload the agent's memory limit can be at most 4Gi above its minimum memory. Raise
+              the minimum or lower the limit.
+          - rule: >-
+              memoryBytes(self.orchestrator.agent.resources.memory) <=
+              8 * 1048576 * cpuMillicores(self.orchestrator.agent.resources.cpu)
+            paths: [orchestrator.agent.resources.memory]
+            message: >-
+              The agent's memory limit can be at most 8Gi per CPU core of its CPU limit. Lower the memory or raise
+              the CPU limit.
+      - title: UI replicas
+        fields:
+          - path: orchestrator.ui.autoscaling.minScale
+            type: integer
+            label: Minimum UI replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: orchestrator.ui.autoscaling.maxScale
+            type: integer
+            label: Maximum UI replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: orchestrator.ui.autoscaling.metric
+            type: enum
+            label: UI scales on
+            required: true
+            options:
+              - { value: cpu, label: CPU }
+              - { value: memory, label: Memory }
+              - { value: rps, label: Requests per second }
+              - { value: concurrency, label: Concurrent requests }
+              - { value: latency, label: Latency }
+          - path: orchestrator.ui.autoscaling.target
+            type: integer
+            label: UI scaling target
+            required: true
+            min: 1
+            description: The metric value per replica that triggers scaling (a percentage for CPU and memory).
+        rules:
+          - rule: self.orchestrator.ui.autoscaling.maxScale >= self.orchestrator.ui.autoscaling.minScale
+            paths: [orchestrator.ui.autoscaling.maxScale]
+            message: The maximum UI replicas must be at least the minimum UI replicas.
+      - title: Rolling restarts
+        description: How the Manticore replicas are replaced on an upgrade.
+        fields:
+          - path: manticore.rolloutOptions.scalingPolicy
+            type: enum
+            label: Restart order
+            widget: cards
+            required: true
+            options:
+              - value: OrderedReady
+                label: One at a time
+                description: Each replica waits for the previous one to be ready; searches keep serving.
+              - value: Parallel
+                label: All at once
+                description: Every replica restarts together; the cluster is down while they do.
+          - path: manticore.rolloutOptions.maxSurgeReplicas
+            type: string
+            label: Extra replicas during a rollout
+            required: true
+            placeholder: 25%
+          - path: manticore.rolloutOptions.minReadySeconds
+            type: integer
+            label: Minimum ready time
+            unit: seconds
+            required: true
+            min: 0
+            description: How long a new replica must stay ready before the rollout moves on.
+          - path: manticore.rolloutOptions.terminationGracePeriodSeconds
+            type: integer
+            label: Shutdown grace period
+            unit: seconds
+            required: true
+            min: 0
+            max: 900
+            description: How long a stopping replica gets to leave the cluster cleanly.
+        rules:
+          - when: >-
+              oldSelf == null ||
+              self.manticore.rolloutOptions.maxSurgeReplicas != oldSelf.manticore.rolloutOptions.maxSurgeReplicas
+            rule: self.manticore.rolloutOptions.maxSurgeReplicas.matches('^[0-9]+%$')
+            severity: warning
+            paths: [manticore.rolloutOptions.maxSurgeReplicas]
+            message: >-
+              Enter a percentage such as 25%. The chart writes this value without quotes, so a bare number
+              reaches the platform as a number, where it expects text.
+          - rule: self.manticore.rolloutOptions.scalingPolicy != 'Parallel'
+            severity: info
+            paths: [manticore.rolloutOptions.scalingPolicy]
+            message: With All at once, every upgrade restarts every replica together and searches stop until they are back.
+      - title: Logging
+        fields:
+          - path: orchestrator.logLevel
+            type: enum
+            label: Orchestrator job log level
+            widget: segmented
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+          - path: orchestrator.api.logLevel
+            type: enum
+            label: API log level
+            widget: segmented
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warn }
+              - { value: error, label: Error }
+
+yamlOnly:
+  - path: manticore.rolloutOptions.maxUnavailableReplicas
+    reason: >-
+      The chart sends it, but the platform drops it on a stateful workload, so it never limits the rollout. The
+      Restart order under Advanced controls it.
+  - path: manticore.autoscaling.scaleToZeroDelay
+    reason: The minimum is at least one replica, so the cluster never scales to zero and the delay never applies.
+  - path: loadTest.target.port
+    reason: The k6 script posts JSON over HTTP, which Manticore serves only on 9308 in this chart.

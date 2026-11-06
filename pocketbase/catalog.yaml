@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PocketBase
+category: database
+topology: single
+
+summary: >-
+  PocketBase as one stateful server: an embedded SQLite database with an auto-generated REST API
+  over your collections, realtime subscriptions over Server-Sent Events, user authentication with
+  email or OAuth2 providers, file storage and a web admin dashboard, served on a public HTTPS
+  endpoint. Data lives on a persistent volume with scheduled snapshots. Pick it as a lightweight
+  backend for a web or mobile app or a prototype; it runs one instance and does not scale out.
+
+keywords:
+  - backend as a service
+  - baas
+  - sqlite
+  - rest api
+  - realtime api
+  - server-sent events
+  - user authentication
+  - oauth2
+  - file storage
+  - admin dashboard
+  - mobile backend
+
+useCases:
+  - Backend for a web or mobile app with auth, database and file uploads in one service
+  - REST API over your data without writing server code
+  - Push record changes to clients in real time
+  - User sign-up and login with email and password or OAuth2 providers
+  - Prototype or MVP backend for a small app
+
+alternativeTo:
+  - Firebase
+  - Appwrite
+  - AWS Amplify
+  - Parse Platform
+  - Back4App
+
+pickInsteadIf:
+  - need: a Postgres-based backend with auth, REST, realtime and file storage
+    template: supabase
+  - need: a plain SQL database for an app that has its own backend code
+    template: postgres
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [email, password, encryptionKey]
+    valuesPath: credentials.secretName
+    required: true
+    description: Superuser login (password at least 8 characters) and a 32-character settings encryption key. Create it before installing; when it is missing the workload waits with no logs.

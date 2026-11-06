@@ -1,0 +1,41 @@
+# unleash 1.5.1 — the default install: highly available PostgreSQL (three Patroni members, three etcd
+# members, two HAProxy replicas), one Unleash replica, one location, both prerequisite secrets created by CI.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before Unleash can run its migrations (about 5-7 minutes).
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  adminpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: unleash
+      password: "{gen.pgpw}"
+      database: unleash
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      # Mixed character classes, in case Unleash applies its password policy to the seeded admin.
+      password: "Aa1-{gen.adminpw}"
+
+vars:
+  pg_user: unleash
+  pg_password: "{gen.pgpw}"
+  pg_db: unleash
+  admin_user: e2eadmin
+  admin_password: "Aa1-{gen.adminpw}"
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 1.5.0 is the previous version (same values; its HA database still runs patroni-postgres 0.7).
+upgradeFrom:
+  - version: 1.5.0

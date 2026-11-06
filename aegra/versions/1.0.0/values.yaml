@@ -12,7 +12,7 @@ aegra:
     maxCpu: 1000m
     minMemory: 512Mi
     maxMemory: 1Gi
-  requestTimeoutSeconds: 600    # longest /runs/wait or /runs/stream request before it is cut (1-3600)
+  requestTimeoutSeconds: 600    # longest /runs/wait or /runs/stream request on the public URL before it is cut (1-3600)
   # Plain (non-secret) settings for Aegra or your agent, e.g. AEGRA_CONFIG, LOG_LEVEL, WORKER_COUNT.
   extraEnv: []
   # extraEnv:

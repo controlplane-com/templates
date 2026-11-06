@@ -66,7 +66,7 @@ aegra:
     maxCpu: 1000m
     minMemory: 512Mi
     maxMemory: 1Gi
-  requestTimeoutSeconds: 600    # longest /runs/wait or /runs/stream request before it is cut (1-3600)
+  requestTimeoutSeconds: 600    # longest /runs/wait or /runs/stream request on the public URL before it is cut (1-3600)
   extraEnv: []                  # plain settings, e.g. [{name: LOG_LEVEL, value: DEBUG}]
 ```
 
@@ -196,6 +196,7 @@ Point the LangGraph SDK (`langgraph_sdk.get_client(url=...)`) or Agent Chat UI a
 - Aegra has no authentication unless your image configures an auth handler in `aegra.json`. Keep `publicAccess` off without one: anyone with the URL could run your agents and read every thread.
 - Langfuse in another GVC: set that Langfuse release's `internalAccess` to `same-org`, or Aegra cannot reach it.
 - Rotating a secret does not restart Aegra; run `cpln workload force-redeployment RELEASE_NAME-aegra --gvc GVC_NAME` afterwards.
+- A run whose database stays unreachable for more than 30 seconds ends in `error`; submit it again. Aegra itself restarts until the database is back.
 - Aegra does not drain runs on shutdown: a run on a replica that stops is picked up again by a live replica once its lease expires, and retried.
 - The first `helm upgrade` after an install can restart the bundled database and Redis, which briefly interrupts the API.
 - Firewall changes (`publicAccess`, `internalAccess`) take from 30 seconds to several minutes to take effect.

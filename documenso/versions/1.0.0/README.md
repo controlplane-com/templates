@@ -207,7 +207,7 @@ cpln secret create-dictionary --name my-documenso-s3-keys \
 - **Check the certificate after installing**: `/api/certificate-status` must return `{"isAvailable":true}`. The boot line `Certificate not found or not readable` refers to a certificate file and can be ignored.
 - **Rotating a secret does not restart Documenso**: run `cpln workload force-redeployment {release}-documenso --gvc {gvc}` afterwards. Never replace `encryptionKey`; it protects two-factor secrets and API tokens.
 - **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Documenso with it; use `postgresHA` when that matters.
-- **Install into a GVC with one location** and set `location` to it: a location the GVC lacks runs nothing, and the bundled PostgreSQL starts in every GVC location.
+- **Install into a GVC with one location** and set `location` to it (the default is `aws-us-east-1`): if the GVC lacks that location, Documenso runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL starts in every GVC location.
 - **Without SMTP no mail is sent**: copy each signing link out of the UI and send it yourself.
 
 ## Links

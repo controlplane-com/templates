@@ -102,18 +102,20 @@ steps:
                 label: Highly available PostgreSQL
                 description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
                 set: { postgresHA.enabled: true, postgres.enabled: false }
-          # Declared so the imports' conditions are fields; the chooser above writes them.
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
+            when: "false"
             description: Set by the database choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
+            when: "false"
             description: Set by the database choice above.
           - type: note
             severity: warning
@@ -193,16 +195,6 @@ steps:
               create:
                 suggestName: "context.releaseName + '-aegra-db-credentials'"
     rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: aegra.validateDatabase
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
-      - rule: >-
-          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-          dyn(self.postgresHA)['proxy']['enabled'] == true
-        mirrors: aegra.validateDatabase
-        paths: [postgresHA.enabled]
-        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Aegra's database endpoint.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
@@ -539,6 +531,16 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: aegra.validateDatabase
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: aegra.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Aegra's database endpoint.
   - when: self.postgres.enabled
     rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]

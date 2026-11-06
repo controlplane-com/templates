@@ -39,12 +39,15 @@ app can read its own location list at boot.
 {{- end }}
 
 {{/*
-Startup-script secret name. The script replaces the image's own
-`scripts/start.sh`; see secret-startup.yaml for why.
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args (even inside single quotes), so
+every $ is doubled and the shell receives the script byte for byte. A |- block
+scalar keeps heredoc terminators at column 0. Copied from pgedge.inlineScript.
 */}}
-{{- define "calcom.secret.startup.name" -}}
-{{- printf "%s-calcom-startup" .Release.Name }}
-{{- end }}
+{{- define "calcom.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
+{{- end -}}
 
 
 {{/* Mode-aware Database Helpers */}}
@@ -67,37 +70,16 @@ for a `standard` one — and this chart's app tier is standard.
 {{- end }}
 
 {{/*
-Database name for the active backing store.
-*/}}
-{{- define "calcom.db.database" -}}
-{{- .Values.postgres.database }}
-{{- end }}
-
-{{/*
-Name of the bundled database's credential secret in the DEFAULT (single-instance)
-path. THIS chart creates that secret (secret-db.yaml) and the postgres subchart
-receives only its NAME — since postgres 3.4.0 the subchart creates no secret of
-its own. A subchart value cannot be templated by its parent, which is why the
-name is a plain value both sides read rather than something derived from the
-release name.
-*/}}
-{{- define "calcom.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
-{{/*
-Credentials secret of the ACTIVE backing store. This chart creates it in both
-paths: postgres 3.4.0+ and postgres-highly-available 2.5.0+ both stopped
-creating a credentials secret and now take only its name, so the two stores are
-fed the same secret, built from postgres.credentials.* — which stay values
-because a bundled database serving only Cal.com is internal plumbing no human
-types elsewhere.
+Credentials secret of the ACTIVE database — a PREREQUISITE the user creates
+(dictionary: username, password, database). Both database subcharts require it
+by name and initialize from it; Cal.com connects with the same keys. A parent
+cannot template a subchart value, so each mode names it under its own key.
 */}}
 {{- define "calcom.db.secretName" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- .Values.postgresHA.config.credentialsSecretName }}
 {{- else -}}
-{{- include "calcom.secret.db.name" . }}
+{{- .Values.postgres.config.credentialsSecretName }}
 {{- end }}
 {{- end }}
 
@@ -232,15 +214,6 @@ inboundAllowWorkload: []
 {{- if lt $replicas 1 -}}
 {{- fail "calcom: calcom.replicas must be at least 1" -}}
 {{- end -}}
-{{- if and .Values.postgres.enabled .Values.postgresHA.enabled -}}
-{{- fail "calcom: enable exactly one backing store — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
-{{- end -}}
-{{- if and (not .Values.postgres.enabled) (not .Values.postgresHA.enabled) -}}
-{{- fail "calcom: enable exactly one backing store — postgres.enabled (default) or postgresHA.enabled (Patroni HA)" -}}
-{{- end -}}
-{{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
-{{- fail "calcom: postgresHA.proxy.enabled must remain true — Cal.com reaches the leader through the HAProxy endpoint for writes and for its boot-time Prisma migrations" -}}
-{{- end -}}
 {{- if not .Values.calcom.auth.secretName -}}
 {{- fail "calcom: calcom.auth.secretName is required — the name of a `dictionary` secret that must EXIST BEFORE INSTALL, holding nextAuthSecret, encryptionKey, cronSecret and cronApiKey. Create it with: cpln secret create-dictionary --name my-calcom-auth --entry nextAuthSecret=\"$(openssl rand -base64 32)\" --entry encryptionKey=\"$(openssl rand -base64 24)\" --entry cronSecret=\"$(openssl rand -hex 32)\" --entry cronApiKey=\"$(openssl rand -hex 32)\"" -}}
 {{- end -}}
@@ -250,29 +223,7 @@ inboundAllowWorkload: []
 {{- if and .Values.cron.enabled (eq .Values.internalAccess.type "none") -}}
 {{- fail "calcom: cron.enabled requires internalAccess.type other than `none` — the cron caller's requests arrive on the app's internal inbound and would be dropped, so every scheduled job would silently never run while the app still reported healthy. Set internalAccess.type (same-gvc is the default) or set cron.enabled: false and drive the endpoints yourself" -}}
 {{- end -}}
-{{- /*
-  Cal.com reaches PostgreSQL over the GVC's internal network, and the bundled
-  `postgres` subchart carries its OWN internalAccess knob that this chart cannot
-  inject into — a parent cannot template a subchart value. A workload-list that
-  omits this release's app workload cuts Cal.com off from its own database, and
-  it fails as a boot hang rather than an error: Prisma's migrate step blocks and
-  no surface names the firewall. A render-time fail is the only tool available,
-  so name the exact link the user has to add. Mirrors wordpress's mariadb guard.
-  (postgres-highly-available exposes no internalAccess knob, so the HA path has
-  nothing to guard.)
-*/ -}}
-{{- if and .Values.postgres.enabled .Values.postgres.internalAccess -}}
-{{- $pg := .Values.postgres.internalAccess -}}
-{{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "calcom.name" .) -}}
-{{- if eq ($pg.type | default "") "none" -}}
-{{- fail "calcom: postgres.internalAccess.type must not be 'none' — Cal.com reaches the bundled database over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Cal.com workload" -}}
-{{- end -}}
-{{- if eq ($pg.type | default "") "workload-list" -}}
-{{- if not (has $self ($pg.workloads | default list)) -}}
-{{- fail (printf "calcom: postgres.internalAccess.type is 'workload-list' but the list does not include this release's Cal.com workload — add '%s', or the app cannot reach its own database" $self) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
+{{- include "calcom.validateDatabase" . -}}
 {{- if .Values.email.enabled -}}
 {{- if not .Values.email.host -}}
 {{- fail "calcom: email.host is required when email.enabled is true" -}}
@@ -284,6 +235,56 @@ inboundAllowWorkload: []
 {{- if .Values.calcom.appUrl -}}
 {{- if not (or (hasPrefix "http://" .Values.calcom.appUrl) (hasPrefix "https://" .Values.calcom.appUrl)) -}}
 {{- fail (printf "calcom: calcom.appUrl must include a scheme, e.g. https://cal.example.com (got %q)" .Values.calcom.appUrl) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+
+{{/*
+Exactly one database, its HAProxy endpoint kept on in HA mode, its prerequisite
+credentials secret named, and the database's own firewall still letting Cal.com
+in. Both subcharts carry their OWN internal firewall knob (postgres:
+internalAccess, postgres-highly-available: internal_access) that this chart
+cannot template, and a list that omits the Cal.com workload is a boot hang (the
+database wait never succeeds) rather than an error — so it is refused here,
+naming the exact link to add. The secret's values are not visible at render
+time: they must be URL-safe because Cal.com splices them into its connection
+URL (README).
+*/}}
+{{- define "calcom.validateDatabase" -}}
+{{- if and .Values.postgres.enabled .Values.postgresHA.enabled -}}
+{{- fail "calcom: enable exactly one backing store — set either postgres.enabled or postgresHA.enabled to true, not both" -}}
+{{- end -}}
+{{- if and (not .Values.postgres.enabled) (not .Values.postgresHA.enabled) -}}
+{{- fail "calcom: enable exactly one backing store — postgres.enabled (default) or postgresHA.enabled (Patroni HA)" -}}
+{{- end -}}
+{{- if and .Values.postgresHA.enabled (not (dig "proxy" "enabled" true .Values.postgresHA)) -}}
+{{- fail "calcom: postgresHA.proxy.enabled must remain true — Cal.com reaches the leader through the HAProxy endpoint for writes and for its boot-time Prisma migrations" -}}
+{{- end -}}
+{{- if not (include "calcom.db.secretName" .) -}}
+{{- fail "calcom: the database credentials secret name is required — set postgres.config.credentialsSecretName (single-instance mode) or postgresHA.config.credentialsSecretName (HA mode) to your pre-created `dictionary` secret holding username, password and database. See Prerequisites in the README." -}}
+{{- end -}}
+{{- $self := printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "calcom.name" .) -}}
+{{- if and .Values.postgres.enabled .Values.postgres.internalAccess -}}
+{{- $pg := .Values.postgres.internalAccess -}}
+{{- if eq ($pg.type | default "") "none" -}}
+{{- fail "calcom: postgres.internalAccess.type must not be 'none' — Cal.com reaches the bundled database over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Cal.com workload" -}}
+{{- end -}}
+{{- if eq ($pg.type | default "") "workload-list" -}}
+{{- if not (has $self ($pg.workloads | default list)) -}}
+{{- fail (printf "calcom: postgres.internalAccess.type is 'workload-list' but the list does not include this release's Cal.com workload — add '%s', or the app cannot reach its own database" $self) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.postgresHA.enabled .Values.postgresHA.internal_access -}}
+{{- $ha := .Values.postgresHA.internal_access -}}
+{{- if eq ($ha.type | default "") "none" -}}
+{{- fail "calcom: postgresHA.internal_access.type must not be 'none' — Cal.com reaches the HAProxy leader endpoint over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Cal.com workload" -}}
+{{- end -}}
+{{- if eq ($ha.type | default "") "workload-list" -}}
+{{- if not (has $self ($ha.workloads | default list)) -}}
+{{- fail (printf "calcom: postgresHA.internal_access.type is 'workload-list' but the list does not include this release's Cal.com workload — add '%s', or the app cannot reach its own database" $self) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

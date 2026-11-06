@@ -45,29 +45,23 @@ spec:
                only CPLN_-prefixed names are reserved). */}}
         - name: HOSTNAME
           value: "0.0.0.0"
-        {{- /* The username and password land in their OWN env vars so the
-               platform resolves the cpln:// reference; DATABASE_URL is then
-               composed with $(VAR), the platform's own interpolation, which is
-               applied after the references resolve. A cpln:// reference placed
-               directly inside a Helm-assembled string is literal text — the
-               nocodb/polaris defect — so the host and database NAME, which are
-               not secret, are interpolated at render time instead. */}}
+        {{- /* All three parts come from the user's prerequisite credentials secret
+               (the one the active database initialized from) and are spliced
+               into the URLs by $(VAR) expansion at container start, so no
+               credential is ever rendered by Helm. Prisma uses the DIRECT url
+               for migrations; neither backing store puts a pooler in this path,
+               so both are the same. DATABASE_HOST is deliberately unset: its
+               only consumer in the image is the replaced scripts/start.sh. */}}
         - name: DB_USER
-          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.username'
+          value: cpln://secret/{{ include "calcom.db.secretName" . }}.username
         - name: DB_PASSWORD
-          value: 'cpln://secret/{{ include "calcom.db.secretName" . }}.password'
+          value: cpln://secret/{{ include "calcom.db.secretName" . }}.password
+        - name: DB_NAME
+          value: cpln://secret/{{ include "calcom.db.secretName" . }}.database
         - name: DATABASE_URL
-          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
-        {{- /* Prisma uses the DIRECT url for migrations (it must bypass a
-               connection pooler). Same target here — neither backing store puts
-               PgBouncer in this path by default. */}}
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/$(DB_NAME)
         - name: DATABASE_DIRECT_URL
-          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/{{ include "calcom.db.database" . }}
-        {{- /* DATABASE_HOST is deliberately NOT set. Its only consumer in the
-               whole image is `scripts/start.sh` (verified by grepping the pinned
-               image: one hit, that file), and this workload replaces start.sh —
-               see the startup-script secret. Setting it would advertise a wait
-               that no longer runs. */}}
+          value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "calcom.db.host" . }}:5432/$(DB_NAME)
         - name: NEXT_PUBLIC_WEBAPP_URL
           value: {{ include "calcom.appUrl" . | quote }}
         - name: NEXTAUTH_URL
@@ -104,87 +98,33 @@ spec:
           value: {{ .Values.email.port | quote }}
         {{- if .Values.email.auth.secretName }}
         - name: EMAIL_SERVER_USER
-          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_USER'
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.username'
         - name: EMAIL_SERVER_PASSWORD
-          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.EMAIL_SERVER_PASSWORD'
+          value: 'cpln://secret/{{ .Values.email.auth.secretName }}.password'
         {{- end }}
         {{- end }}
-      {{- /* The image's entrypoint is REPLACED. `start.sh` gates the boot on
-             `wait-for-it.sh`, a bare TCP connect that the mesh sidecar answers
-             for anything, and it runs without `set -e` — so a failed
-             `prisma migrate deploy` did not stop the boot and Cal.com served
-             HTTP against an EMPTY database with every surface reading green.
-             The replacement waits by exchanging real Postgres protocol bytes
-             and hard-fails the migration. Full rationale, and the negative
-             controls, are in secret-startup.yaml.
-
-             `/bin/bash` explicitly: `/bin/sh` in this image is dash, and the
-             script's readiness probe uses bash's `/dev/tcp` (both verified in
-             the pinned tag). Mounted under /cpln rather than into
-             /calcom/scripts so nothing in the image's own directory is
-             shadowed — the pattern postgres-multi-location uses for
-             /patroni/start.sh. */}}
+      {{- /* The image's entrypoint is REPLACED by calcom.script.start (see
+             _script-start.tpl for why), inline so no secret or reveal grant is
+             needed. `/bin/bash`: /bin/sh in this image is dash. */}}
       command: /bin/bash
       args:
-        - /cpln/start.sh
-      volumes:
-        - path: /cpln/start.sh
-          recoveryPolicy: retain   # API backfill, declared so rendered == stored
-          uri: cpln://secret/{{ include "calcom.secret.startup.name" . }}.payload
+        - "-c"
+        - {{- include "calcom.inlineScript" (include "calcom.script.start" .) | nindent 10 }}
       ports:
         - number: 3000
           protocol: http
       {{- /* /api/version is unauthenticated, touches no database, and returns
-             {"version":"6.2.0"} — so the probe body doubles as proof the running
-             image is the tag the chart claims.
+             {"version":"6.2.0"}. It cannot detect a missing schema (v6.2.0 has
+             no health endpoint that does), so the schema invariant is enforced
+             at BOOT: the script reaches `yarn start` only after
+             `prisma migrate deploy` exits 0 under `set -e`.
 
-             It CANNOT detect a missing schema, and there is no endpoint at this
-             tag that can: the v6.2.0 tree carries no /api/health, /api/ready or
-             equivalent under apps/web (checked against the full tag tree), and
-             /auth/setup answers 307 against an empty database. So the schema
-             invariant is enforced at BOOT instead — the startup script only
-             reaches `yarn start` after `prisma migrate deploy` has exited 0
-             under `set -e`, which makes "HTTP is listening" imply "migrations
-             applied" for the process that is serving. That claim was FALSE
-             before this fix and is what the empty-database failure turned on;
-             it is now true by construction rather than by assumption.
-
-             READINESS IS WHAT RESTARTS A CONTAINER THAT NEVER BECOMES READY,
-             NOT LIVENESS. An earlier version of this comment claimed the
-             opposite — that readiness exhausting its threshold during a slow
-             database wait is benign because it keeps probing — and the whole
-             wait budget was sized against liveness on that assumption. It is
-             false on this platform. Measured 2026-08-31 on four throwaway
-             workloads with an unsatisfiable readiness probe and NO liveness
-             probe at all: the platform restarts the container some minutes
-             AFTER readiness's own deadline (initialDelaySeconds +
-             failureThreshold * periodSeconds), and the restart time tracks that
-             deadline — 5 s deadline -> 238 s, 330 s deadline -> 563 s, 660 s
-             deadline -> 1044 s. The control with no readiness probe was never
-             restarted (and reported ready with nothing listening), which is
-             what pins the cause on readiness rather than on a platform-wide
-             "must become ready" timer. The extra grace was 233 s at both the
-             5 s and 330 s deadlines and 384 s at 660 s, so it is NOT a clean
-             constant — treat the DEADLINE as the number to design against,
-             since it is the floor the kill can never precede.
-
-             So these numbers are a CEILING ON BOOT TIME, not just a rotation
-             policy: 30 + 20 * 15 = 330 s here, and the container is terminated
-             ~515 s in (measured on this chart) with `Health Check Failed` and a
-             signal — no mention of the database, and the startup script's own
-             FATAL never prints. The startup script's wait budget is therefore
-             sized to fire INSIDE this, at 240 s; see secret-startup.yaml. Do
-             not lengthen that budget without moving these numbers first.
-
-             Readiness is left tight on purpose rather than widened to cover a
-             long wait: failureThreshold * periodSeconds is also how long a sick
-             replica stays in rotation, and buying boot time here would be paid
-             for on every day the app is healthy.
-
-             Liveness cannot fire first (600 + 10 * 30 = 900 s) and is not the
-             load-bearing bound. initialDelaySeconds is capped at 600 by the
-             platform (a cpln apply 400, invisible to helm template — measured
-             2026-08-31, when 780 made the chart uninstallable). */}}
+             The platform derives a startup probe from readiness and restarts a
+             never-ready container after about initialDelaySeconds + 30 x
+             periodSeconds = 30 + 30 x 15 = 480 s; the boot script's gates fire
+             inside that. failureThreshold x periodSeconds (300 s) is how long a
+             sick replica stays in rotation. Liveness starts at 600 s, the
+             platform maximum for initialDelaySeconds. */}}
       readinessProbe:
         httpGet:
           path: /api/version

@@ -32,47 +32,8 @@ spec:
       memory: {{ .Values.cron.resources.memory | quote }}
       command: /bin/sh
       args:
-        - -c
-        - |
-          # `set -u` only. NOT `set -e`: `expr N % 5` exits 1 whenever the result
-          # is 0, which is exactly the tick we act on.
-          set -u
-
-          # Every call is bounded. GNU wget's retry machinery is invisible against
-          # an NXDOMAIN control and costs ~200 s per call against a hanging server
-          # (measured on clickhouse), so an unbounded loop here would stall the
-          # whole schedule silently.
-          call() {
-            out=`wget -O /dev/null -S -T 30 -t 1 --header="Authorization: Bearer $CRON_SECRET" "$CALCOM_URL$1" 2>&1`
-            code=`echo "$out" | awk '/HTTP\/1/ {c=$2} END {print c}'`
-            echo "calcom-cron $1 -> ${code:-unreachable}"
-          }
-
-          # One 60 s tick drives every cadence in apps/web/vercel.json@v6.2.0:
-          #   every tick  -> /api/tasks/cron                       (* * * * *)
-          #   every 5     -> calendar-subscriptions, credentials,
-          #                  selected-calendars                    (*/5 * * * *)
-          #   every 720   -> queuedFormResponseCleanup             (0 */12 * * *)
-          #   every 1440  -> tasks/cleanup, calendar-subscriptions-cleanup (daily)
-          tick=0
-          while true; do
-            tick=`expr $tick + 1`
-            call /api/tasks/cron
-            if [ `expr $tick % 5` -eq 0 ]; then
-              call /api/cron/calendar-subscriptions
-              call /api/cron/credentials
-              call /api/cron/selected-calendars
-            fi
-            if [ `expr $tick % 720` -eq 0 ]; then
-              call /api/cron/queuedFormResponseCleanup
-            fi
-            if [ $tick -ge 1440 ]; then
-              call /api/tasks/cleanup
-              call /api/cron/calendar-subscriptions-cleanup
-              tick=0
-            fi
-            sleep 60
-          done
+        - "-c"
+        - {{- include "calcom.inlineScript" (include "calcom.script.cron" .) | nindent 10 }}
       env:
         {{- /* Internal service DNS on the container port. NOT
                CPLN_GLOBAL_ENDPOINT: that variable is per-workload, so this tier

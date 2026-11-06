@@ -9,13 +9,11 @@ bindings:
       - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
 targetKind: secret
 targetLinks:
-  {{- /* Exactly the secrets this release's workloads mount — the user's auth
-         secret, the chart-created database credentials, and the SMTP secret only
-         when that optional feature names one. No cloud-account link, no
-         `target: all`. */}}
+  {{- /* Exactly the secrets this release's workloads read — the auth secret,
+         the active database's credentials secret, and the SMTP secret only when
+         that optional feature names one. All three are user prerequisites. */}}
   - //secret/{{ .Values.calcom.auth.secretName }}
   - //secret/{{ include "calcom.db.secretName" . }}
-  - //secret/{{ include "calcom.secret.startup.name" . }}
   {{- if and .Values.email.enabled .Values.email.auth.secretName }}
   - //secret/{{ .Values.email.auth.secretName }}
   {{- end }}

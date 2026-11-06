@@ -3,7 +3,7 @@
 ## What it is
 
 - **Cal.com**: self-hosted scheduling and booking pages, the open-source Calendly alternative. **AGPL-3.0**, free to self-host, nothing to register; we ship the unmodified official image `calcom/cal.com:v6.2.0`.
-- **Licence key**: none is set. Organizations and SAML/SSO are not available in the official image without one; which other features (teams, workflows) need a key has not been verified, so neither the README nor the docs claim either way. The separate v2 API service (own image, own Redis) is not shipped.
+- **Licence key**: none is set. Teams work without one (proven live); Workflows and Organizations show as commercial features and stay locked. Google/Outlook calendar and Zoom/Meet integrations need the user's own OAuth app credentials, which the template does not configure. The separate v2 API service (own image, own Redis) is not shipped.
 - **Upstream is mid-rebrand**: the Docker docs moved to `cal.diy/docker` and name `calcom/cal.diy`, a Docker Hub repo with no tags. Re-check the image name at the next version bump.
 
 ## Architecture on cpln

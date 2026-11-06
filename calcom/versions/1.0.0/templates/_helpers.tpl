@@ -186,14 +186,6 @@ inboundAllowWorkload: []
 {{- /*
   Cal.com runs in exactly ONE location, and `location` names it.
 
-  A workload runs in EVERY location its GVC has. Before this was pinned, a
-  default install into a 3-location GVC produced three app replicas, each bound
-  by service DNS to its own local Postgres — three separate databases, with a
-  shared NEXTAUTH_SECRET, so a session minted in one location validated against
-  a database that did not contain the user. Every status surface read green.
-  (Measured on a 3-location test GVC: a table created in aws-us-east-1 did not
-  exist in the other two.)
-
   The confinement is `defaultOptions.minScale/maxScale: 0` plus a `localOptions`
   entry for this one location — so a GVC location this release did not ask for
   starts NOTHING, by construction.
@@ -215,7 +207,7 @@ inboundAllowWorkload: []
 {{- fail "calcom: calcom.replicas must be at least 1" -}}
 {{- end -}}
 {{- if not .Values.calcom.auth.secretName -}}
-{{- fail "calcom: calcom.auth.secretName is required — the name of a `dictionary` secret that must EXIST BEFORE INSTALL, holding nextAuthSecret, encryptionKey, cronSecret and cronApiKey. Create it with: cpln secret create-dictionary --name my-calcom-auth --entry nextAuthSecret=\"$(openssl rand -base64 32)\" --entry encryptionKey=\"$(openssl rand -base64 24)\" --entry cronSecret=\"$(openssl rand -hex 32)\" --entry cronApiKey=\"$(openssl rand -hex 32)\"" -}}
+{{- fail "calcom: calcom.auth.secretName is required — the name of a `dictionary` secret that must EXIST BEFORE INSTALL, holding nextAuthSecret, encryptionKey, cronSecret and cronApiKey. Create it with: cpln secret create-dictionary --name my-calcom-auth --entry nextAuthSecret=\"$(openssl rand -hex 32)\" --entry encryptionKey=\"$(openssl rand -hex 16)\" --entry cronSecret=\"$(openssl rand -hex 32)\" --entry cronApiKey=\"$(openssl rand -hex 32)\"" -}}
 {{- end -}}
 {{- if not (has .Values.internalAccess.type (list "none" "same-gvc" "same-org" "workload-list")) -}}
 {{- fail (printf "calcom: internalAccess.type must be one of none, same-gvc, same-org, workload-list (got %q)" .Values.internalAccess.type) -}}

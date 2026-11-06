@@ -131,8 +131,9 @@ Whoever completes `/auth/setup` first becomes the instance admin, so the install
 - **Keep the scheduled-job caller on** unless you call the endpoints yourself: without it queued email, calendar sync and credential refresh never run while Cal.com still reports healthy.
 - **Turn email on before inviting anyone**: without SMTP, booking confirmations, invites and password resets are not sent.
 - **If PostgreSQL does not answer within 240 seconds, the app exits** with `[calcom] FATAL: PostgreSQL at ... did not answer` and retries; check the database workload.
-- **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Cal.com with it; use `postgresHA` when that matters.
-- **This template runs the official image without a Cal.com license key**; features that need one stay locked. The separate v2 API service is not included.
+- **Created a missing prerequisite secret after install?** The deployment does not retry on its own: run `cpln workload force-redeployment {release}-postgres --gvc {gvc}` and the same for `{release}-calcom`.
+- **Any firewall change restarts Cal.com**; at `calcom.replicas: 1` that is about a minute of downtime, so set `replicas: 2` for zero-downtime changes.
+- **This template runs the official image without a Cal.com license key**: teams work, while Workflows, Organizations and other licensed features stay locked. Calendar and video integrations (Google, Outlook, Zoom) need your own OAuth app credentials, which this template does not configure. The separate v2 API service is not included.
 
 ## Links
 

@@ -197,7 +197,7 @@ steps:
             options:
               - value: single
                 label: Single-instance PostgreSQL
-                description: One PostgreSQL replica; restarts briefly on upgrades.
+                description: One PostgreSQL replica; a restart means brief downtime.
                 set: { postgresHA.enabled: false, postgres.enabled: true }
               - value: ha
                 label: Highly available PostgreSQL

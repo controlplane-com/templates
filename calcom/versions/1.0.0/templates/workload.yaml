@@ -145,20 +145,10 @@ spec:
         failureThreshold: 10
         successThreshold: 1
         timeoutSeconds: 5
-  {{- /* A workload runs in EVERY location its GVC has. Before this was pinned,
-         a default install into a 3-location GVC produced three app replicas,
-         each bound by service DNS to its own local Postgres — three separate
-         databases sharing one NEXTAUTH_SECRET, so a session minted in one
-         location validated against a database that did not contain the user.
-         Measured: a table created in aws-us-east-1 did not exist in the other
-         two, and every status surface read green throughout.
-
-         0/0 here means a GVC location this release did not ask for starts
-         NOTHING, by construction — its deployment message reads "This workload
-         location is deactivated because maxScale is set to 0." (the platform's
-         message ends with a period; gate on the text, since `desiredScale` is
-         ABSENT on a deactivated location rather than present-and-0). localOptions
-         below supplies the real count for the one configured location. */}}
+  {{- /* A workload runs in EVERY location its GVC has: 0/0 here means a location
+         this release did not ask for starts nothing ("This workload location is
+         deactivated because maxScale is set to 0."); localOptions supplies the
+         real count for the one configured location. */}}
   defaultOptions:
     autoscaling:
       {{- include "calcom.autoscaling" (dict "scale" 0) | nindent 6 }}

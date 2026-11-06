@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: WordPress
+category: apps
+topology: single
+
+summary: >-
+  WordPress content management system for websites and blogs: Apache with PHP serving the site
+  and wp-admin, a shared volume for core, plugins, themes and the media library, and a bundled
+  MariaDB database. The administrator account is created from a secret before the site accepts
+  any request. Optional scheduled database backups to AWS S3 or Google Cloud Storage. Pick it for
+  a self-hosted WordPress site with its themes and plugin ecosystem.
+
+keywords:
+  - wordpress
+  - cms
+  - content management
+  - website builder
+  - blog
+  - blogging platform
+  - publishing platform
+  - wp-admin
+  - plugins
+  - themes
+  - php
+  - mariadb
+  - mysql
+
+useCases:
+  - Run a company website, blog or online publication on WordPress
+  - Host a site that relies on WordPress themes and plugins
+  - Move an existing WordPress site off shared hosting
+  - Give editors a familiar admin dashboard to manage pages, posts and media
+
+alternativeTo:
+  - WordPress.com
+  - WP Engine
+  - Kinsta
+  - Squarespace
+  - Wix
+  - Webflow
+
+pickInsteadIf:
+  - need: a newsletter and paid-membership publication with a built-in editor
+    template: ghost
+
+related:
+  - template: umami
+    relation: companion
+    note: Cookieless visitor analytics for the site
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, email]
+    valuesPath: admin.secretName
+    required: true
+    description: The WordPress administrator, created from it on first boot only. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: mariadb.credentialsSecretName
+    required: true
+    description: Database user, password and name; MariaDB initializes with it on first boot and WordPress connects with it. When it is missing the workloads wait with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: mariadb.rootPasswordSecretName
+    required: true
+    description: MariaDB root password as a plain opaque secret, kept apart from the credentials WordPress reads. When it is missing the database waits.
+  - kind: bucket
+    valuesPath: [mariadb.backup.aws.bucket, mariadb.backup.gcp.bucket]
+    required: false
+    when: mariadb.backup.enabled
+    description: AWS S3 or Google Cloud Storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath: [mariadb.backup.aws.cloudAccountName, mariadb.backup.gcp.cloudAccountName]
+    required: false
+    when: mariadb.backup.enabled
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (mariadb.backup.aws.policyName).

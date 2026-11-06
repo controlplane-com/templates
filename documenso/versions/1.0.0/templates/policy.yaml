@@ -1,0 +1,21 @@
+---
+kind: policy
+name: {{ include "documenso.policy.name" . }}
+description: Documenso secret access
+tags: {{- include "documenso.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "documenso.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "documenso.secret.db.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  - //secret/{{ .Values.signing.certificateSecretName }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}
+  {{- if and .Values.smtp.enabled .Values.smtp.auth.secretName }}
+  - //secret/{{ .Values.smtp.auth.secretName }}
+  {{- end }}

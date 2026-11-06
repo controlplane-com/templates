@@ -191,6 +191,8 @@ redis:
 
 Point the LangGraph SDK (`langgraph_sdk.get_client(url=...)`) or Agent Chat UI at the URL and use the graph name as the assistant id.
 
+Aegra has no UI of its own. To chat with an agent in a browser, open the hosted [Agent Chat UI](https://agentchat.vercel.app) with your public URL and a graph name, for example `https://agentchat.vercel.app/?apiUrl=PUBLIC_URL&assistantId=stress_test`. The browser calls Aegra directly, so it needs the public URL, and anyone with that URL can call your agents unless your image adds an auth handler.
+
 ## Important Notes
 
 - Aegra has no authentication unless your image configures an auth handler in `aegra.json`. Keep `publicAccess` off without one: anyone with the URL could run your agents and read every thread.
@@ -210,3 +212,4 @@ Point the LangGraph SDK (`langgraph_sdk.get_client(url=...)`) or Agent Chat UI a
 - [Aegra authentication](https://docs.aegra.dev/guides/authentication)
 - [Aegra observability](https://docs.aegra.dev/guides/observability)
 - [Aegra on GitHub](https://github.com/aegra/aegra)
+- [Agent Chat UI](https://github.com/langchain-ai/agent-chat-ui)

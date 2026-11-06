@@ -36,4 +36,4 @@
 - **`storage.type: database`** grows the Postgres volume with every PDF; raise `volumeset.capacity` or use S3. With S3, a DB backup holds only object keys.
 - **First `helm upgrade`** can briefly restart the single-instance Postgres, and Documenso with it.
 - **Keyless S3 to static keys on an existing release** leaves the AWS binding on the identity; reinstall to clear it.
-- **Unverified at v2.21.1:** whether a `-legacy` `.p12` loads, and the exact `isAvailable:false` behaviour for a bad certificate (read from source, not yet seen live).
+- **Signing certificate:** a `-legacy` (RC2) `.p12` loads at v2.21.1. A wrong passphrase or unreadable `.p12` reports `isAvailable: false` and health `warning`, but the workload stays ready; check the certificate status after install.

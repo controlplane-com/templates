@@ -1,0 +1,19 @@
+kind: policy
+name: {{ include "calcom.policy.name" . }}
+description: Cal.com policy
+tags: {{- include "calcom.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "calcom.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /* Exactly the secrets this release's workloads read — the auth secret,
+         the active database's credentials secret, and the SMTP secret only when
+         that optional feature names one. All three are user prerequisites. */}}
+  - //secret/{{ .Values.calcom.auth.secretName }}
+  - //secret/{{ include "calcom.db.secretName" . }}
+  {{- if and .Values.email.enabled .Values.email.auth.secretName }}
+  - //secret/{{ .Values.email.auth.secretName }}
+  {{- end }}

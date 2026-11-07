@@ -1,0 +1,27 @@
+# Default install: one WordPress replica, bundled MariaDB, public endpoint, no backups.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  rootpw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    keys: [password]
+    entries: {username: e2eadmin, email: e2e-admin@example.com}
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: wordpress, database: wordpress}
+  root:
+    type: opaque
+    payload: "{gen.rootpw}"
+
+values:
+  location: aws-us-east-1
+  admin:
+    secretName: "{secrets.admin.name}"
+  mariadb:
+    credentialsSecretName: "{secrets.db.name}"
+    rootPasswordSecretName: "{secrets.root.name}"

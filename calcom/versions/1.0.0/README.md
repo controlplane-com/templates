@@ -132,7 +132,7 @@ Whoever completes `/auth/setup` first becomes the instance admin, so the install
 - **Webhooks** deliver to public URLs and to `*.cpln.local` workloads in the GVC, signed in `X-Cal-Signature-256` (HMAC-SHA256 of the body with the webhook's secret).
 - **Turn email on before inviting anyone**: without SMTP, booking confirmations, invites and password resets are not sent.
 - **If PostgreSQL does not answer within 240 seconds, the app exits** with `[calcom] FATAL: PostgreSQL at ... did not answer` and retries; check the database workload.
-- **Created a missing prerequisite secret after install?** The deployment does not retry on its own: run `cpln workload force-redeployment {release}-postgres --gvc {gvc}` and the same for `{release}-calcom`.
+- **Created a missing prerequisite secret after install?** The deployment does not retry on its own: run `cpln workload force-redeployment {workload} --gvc {gvc}` on `{release}-postgres` (`-postgres-ha` in HA mode) and `{release}-calcom` for the database credentials, or on `{release}-calcom` and `{release}-calcom-cron` for the application keys.
 - **Any firewall change restarts Cal.com**; at `calcom.replicas: 1` that is about a minute of downtime, so set `replicas: 2` for zero-downtime changes.
 - **This template runs the official image without a Cal.com license key**: teams work, while Workflows, Organizations and other licensed features stay locked. Calendar and video integrations (Google, Outlook, Zoom) need your own OAuth app: enter its keys at `/settings/admin/apps` (stored in the database) and register the callback `https://{your-url}/api/integrations/{googlecalendar|office365calendar|zoomvideo}/callback`. The separate v2 API service is not included.
 

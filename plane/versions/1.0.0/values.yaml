@@ -78,7 +78,7 @@ storage:
   s3:                     # external S3 or S3-compatible bucket (storage.type: s3)
     bucket: my-plane-bucket
     region: us-east-1
-    endpoint: ""          # S3-compatible servers only, e.g. http://my-minio.GVC_NAME.cpln.local:9000
+    endpoint: ""          # S3-compatible servers only; users' browsers must reach it, e.g. https://s3.example.com
     cloudAccountName: my-s3-cloud-account   # AWS keyless: a Control Plane cloud account
     policyName: my-plane-s3-policy          # AWS keyless: your bucket-scoped IAM policy (README)
     auth:

@@ -57,7 +57,7 @@ locations: [aws-us-east-1]          # the GVC CI creates; a multi-location templ
 timeoutSeconds: 900                 # per install / upgrade
 
 generated:                          # random per run, masked in the logs → {gen.NAME}
-  adminpw: hex                      # hex | kraft-cluster-id | pkcs12
+  adminpw: hex                      # hex | kraft-cluster-id | fernet | pkcs12
   cert: pkcs12                      # a throwaway self-signed .p12 (openssl pkcs12 -export): {gen.cert} is
                                     # its base64 text, {gen.cert.passphrase} its random password
 

@@ -39,13 +39,18 @@
 ## Troubleshooting / considerations
 
 - **Celery concurrency is pinned.** Upstream's worker entrypoint omits `--concurrency`, so Celery sizes the pool from the HOST CPU count: 16 children, repeated silent OOM kills, and no notifications, exports or invites while the UI reports success. The inline worker script passes `--concurrency`; raise `maxMemory` with it.
-- **RabbitMQ 4.x needs `deprecated_features.permit.transient_nonexcl_queues = true`** (chart-created conf.d drop-in). Without it Celery's control mailbox fails `queue.declare` with `541 INTERNAL_ERROR` and the worker never consumes. Found and fixed against a local stack during the 1.0.0 rework.
+- **RabbitMQ 4.x needs `deprecated_features.permit.transient_nonexcl_queues = true`** (chart-created conf.d drop-in). Without it Celery's control mailbox fails `queue.declare` with `541 INTERNAL_ERROR` and the worker never consumes.
 - **God mode is claimed by the first visitor.** Install closed, claim over `cpln port-forward {r}-plane 8080:80`, then upgrade with public access on.
 - **"Waiting for migrations" forever = beat is not running.** api and worker wait with no timeout; read beat's logs first.
+- **First install runs ~164 migrations in beat before the api turns ready.** `beat.resources.maxCpu` (default `1000m`, `minCpu` `50m`) is what they run on; the api startup window is 30 + 30×30 = 930 s and liveness starts at 600 s, both sized to cover a 250m ceiling. beat's applied-migrations probe retries, then exits on error rather than guessing.
+- **Missing secret created late, or an upgrade that changes the reveal policy:** the paused revision needs `cpln workload force-redeployment` on `-plane`, `-plane-worker`, `-plane-beat` and the affected datastore.
 - **Missing prerequisite secret = silent wedge.** No logs; `status.versions[].message` from `get-deployments` names it. Five secrets (four always, the MinIO one with `storage.type: minio`); the chart refuses empty names and a legacy `postgres.credentials`.
 - **Credentials are interpolated into URLs** (`$(DB_USER)`, `$(REDIS_PASSWORD)`, `$(RABBITMQ_PASSWORD)`), so they must be URL-safe. Rotation needs `force-redeployment`; RabbitMQ and PostgreSQL read their users only on first init.
 - **MinIO port is `protocol: tcp` on purpose.** Presigned URLs are signed against the public Host; an `http` port makes the mesh route by Host and 503 every `/{bucket}` request.
 - **`CORS_ALLOWED_ORIGINS` doubles as `CSRF_TRUSTED_ORIGINS`**; Plane sets no `SECURE_PROXY_SSL_HEADER`. A scheme-less `appUrl` breaks every POST, so it is refused.
 - **The postgres subchart is not location-pinned** (an unused copy per extra GVC location; beat logs a warning) and has its own `internalAccess`: `none` or a `workload-list` missing `-plane`, `-plane-worker`, `-plane-beat` is refused at render and in the wizard.
 - **Rate limits:** app sign-in 10/min and anonymous API 30/min per IP. The e2e checks sign in once each.
+- **e2e checks clear the cookies' `Secure` flag** in the Python client: they talk to the proxy over `http://127.0.0.1`, where `requests` would not send Plane's Secure `csrftoken`. Test-only; the chart sets no insecure-cookie option.
+- **S3-compatible `storage.s3.endpoint` must be browser-reachable** (public HTTPS): presigned URLs are built from it verbatim.
+- **Silo is started as `silo`** explicitly (`command -v silo || command -v minio`), not through the image entrypoint's argv translation.
 - **Telemetry** goes to `telemetry.plane.so` from the worker; off only in God Mode (database flag, no env var).

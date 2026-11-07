@@ -46,27 +46,39 @@ python manage.py wait_for_db
 # the count of rows in django_migrations. Zero applied => a brand-new install and
 # a topology mistake is FATAL; one or more applied => WARN and continue, so this
 # check can never be the reason a live Plane stops scheduling.
-APPLIED_MIGRATIONS="$(python - <<'PYEOF'
+#
+# An error is NOT an answer: the probe prints the count only on success and
+# exits non-zero (traceback on stderr) otherwise. It is retried, logged, and if
+# it never answers beat exits so the container restarts -- `migrate` would fail
+# against the same database anyway, and guessing "initialised" would silently
+# disarm the fresh-install FATAL below.
+APPLIED_MIGRATIONS=""
+for attempt in 1 2 3 4 5 6; do
+  APPLIED_MIGRATIONS="$(python - <<'PYEOF'
 import os
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "plane.settings.production")
 import django
 django.setup()
 from django.db import connections, DEFAULT_DB_ALIAS
 from django.db.migrations.recorder import MigrationRecorder
-try:
-    recorder = MigrationRecorder(connections[DEFAULT_DB_ALIAS])
-    # has_table() is the distinction that matters: querying the count directly
-    # RAISES on a brand-new database (django_migrations does not exist yet),
-    # which would land in the except branch and report "initialised".
-    print(recorder.migration_qs.count() if recorder.has_table() else 0)
-except Exception:
-    # A genuine failure is UNKNOWN => treat as initialised (warn, never refuse).
-    print(1)
+recorder = MigrationRecorder(connections[DEFAULT_DB_ALIAS])
+# has_table() is the distinction that matters: querying the count directly
+# RAISES on a brand-new database (django_migrations does not exist yet).
+print(recorder.migration_qs.count() if recorder.has_table() else 0)
 PYEOF
-)"
-case "${APPLIED_MIGRATIONS}" in
-  ''|*[!0-9]*) APPLIED_MIGRATIONS=1 ;;
-esac
+)" || APPLIED_MIGRATIONS=""
+  case "${APPLIED_MIGRATIONS}" in
+    ''|*[!0-9]*) ;;
+    *) break ;;
+  esac
+  APPLIED_MIGRATIONS=""
+  echo "[plane] could not read the applied-migrations count (attempt ${attempt}/6)." >&2
+  if [ "${attempt}" -lt 6 ]; then sleep 10; fi
+done
+if [ -z "${APPLIED_MIGRATIONS}" ]; then
+  echo "[plane] FATAL: could not read django_migrations after 6 attempts; exiting so the container restarts. The error is above." >&2
+  exit 1
+fi
 if [ "${APPLIED_MIGRATIONS}" -gt 0 ]; then HAS_DATA=true; else HAS_DATA=false; fi
 
 refuse_or_warn() {

@@ -44,9 +44,12 @@
   publishes a public image; the minio/minio image is unpullable). Same pin as
   the minio 1.4.0 template; upstream Plane 1.4.3 switched to Silo too. Verified
   against the pinned tag: it runs as root (`id` -> uid=0), so the root-owned
-  volumeset mount needs no securityOptions.filesystemGroupId; its entrypoint
-  maps a leading `server` argument to the `silo` binary (as MinIO's did); and
-  /minio/health/live answers 200.
+  volumeset mount needs no securityOptions.filesystemGroupId; its server binary
+  is /usr/bin/silo (an upstream MinIO image names it `minio`); and
+  /minio/health/live answers 200. The command names the binary itself rather
+  than relying on the image entrypoint's argv translation, with the minio 1.4.0
+  `command -v silo || command -v minio` fallback so an overridden image works.
+  Every `$` is doubled: container args collapse `$$` and expand `$(VAR)`.
 */}}
 kind: workload
 name: {{ include "plane.minio.name" . }}
@@ -62,11 +65,12 @@ spec:
       inheritEnv: false
       cpu: {{ .Values.storage.minio.resources.cpu | quote }}
       memory: {{ .Values.storage.minio.resources.memory | quote }}
+      command: /bin/sh
       args:
-        - server
-        - /export
-        - --console-address
-        - ":9001"
+        - -c
+        - >-
+          BIN=$$(command -v silo || command -v minio) || { echo "[minio] FATAL: neither silo nor minio is on PATH" >&2; exit 1; };
+          exec "$$BIN" server /export --console-address :9001
       env:
         - name: MINIO_ROOT_USER
           value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey

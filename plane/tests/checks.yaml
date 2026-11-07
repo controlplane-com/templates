@@ -8,6 +8,8 @@
 # god-mode-claim check creates. Plane rate-limits per IP (app sign-in 10 a minute, anonymous API calls 30
 # a minute), so each check signs in once and makes few anonymous calls; one pass uses about a third. The database checks run psql in the bundled postgres container. The runner reads any {word} as a
 # placeholder, so the scripts use dict() and % formatting, never braces around a bare name.
+# Plane sets its cookies Secure, and requests will not send a Secure cookie over http://127.0.0.1, so each
+# script wraps RequestsCookieJar.set_cookie to clear the flag (test client only; the chart is unchanged).
 checks:
   - id: api-serving
     description: The proxy routes /api to the Django API, which answers the public instance endpoint from the database.
@@ -17,6 +19,11 @@ checks:
       script: |
         python - <<'PY'
         import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
         r = requests.get('http://127.0.0.1:80/api/instances/', timeout=30)
         j = r.json() if r.headers.get('content-type', '').startswith('application/json') else dict()
         print('INSTANCE %s config=%s instance=%s' % (r.status_code, 'config' in j, 'instance' in j))
@@ -47,6 +54,11 @@ checks:
       script: |
         python - <<'PY'
         import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
         B = 'http://127.0.0.1:80'
         EMAIL, PW = 'e2e-admin@example.com', '{admin_password}'
         def post(path, **data):
@@ -78,6 +90,11 @@ checks:
       script: |
         python - <<'PY'
         import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
         B = 'http://127.0.0.1:80'
         s = requests.Session()
         tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
@@ -124,6 +141,11 @@ checks:
       script: |
         python - <<'PY'
         import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
         B = 'http://127.0.0.1:80'
         s = requests.Session()
         tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
@@ -160,6 +182,11 @@ checks:
       script: |
         python - <<'PY'
         import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
         B = 'http://127.0.0.1:80'
         s = requests.Session()
         tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']

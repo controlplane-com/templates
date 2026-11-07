@@ -432,7 +432,7 @@ Redis, RabbitMQ and MinIO while every replica still reported `ready: true`.
 {{- fail (printf "plane: internalAccess.type must be one of same-gvc, same-org or workload-list. Found %q." $t) -}}
 {{- end -}}
 {{- if and (ne $t "workload-list") (.Values.internalAccess.workloads | default (list)) -}}
-{{- fail "plane: internalAccess.workloads may only be set when internalAccess.type is `workload-list` — the platform ignores it otherwise, which reads as a firewall rule that is in force when it is not." -}}
+{{- fail "plane: internalAccess.workloads may only be set when internalAccess.type is `workload-list` — this chart applies `workloads` only with `workload-list`, so with any other type the list would read as a firewall rule that is not in force." -}}
 {{- end -}}
 {{- end -}}
 

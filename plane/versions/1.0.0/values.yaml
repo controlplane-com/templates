@@ -46,11 +46,12 @@ worker:
     maxMemory: 2Gi        # sized for `concurrency` children plus the parent; raise it with concurrency
 
 # The Celery scheduler, always ONE replica (two would run every periodic task twice).
-# It also applies the database migrations.
+# It also applies the database migrations. maxCpu is the ceiling the first
+# install's full migration history runs on; minCpu keeps it cheap at idle.
 beat:
   resources:
     minCpu: 50m
-    maxCpu: 250m
+    maxCpu: 1000m
     minMemory: 192Mi
     maxMemory: 512Mi
 

@@ -233,16 +233,20 @@ spec:
           value: "{{ include "plane.corsOrigins" . }}"
       readinessProbe:
         # plane/web/urls.py maps "" -> health_check -> {"status": "OK"}.
-        # Budget 30 + 20x15 = 330s: a fresh install waits here while the beat
-        # workload applies Plane's full migration history. failureThreshold is
-        # at the platform cap of 20 and the budget is bought with periodSeconds.
+        # The platform derives a startup probe from this one and kills a
+        # never-ready container after ~initialDelaySeconds + 30 x periodSeconds
+        # (failureThreshold does not count): 30 + 30x30 = 930s. A fresh install
+        # waits here while beat applies Plane's full migration history (~164
+        # migrations); 930s covers that even with beat back at a 250m CPU
+        # ceiling, plus margin. failureThreshold stays small so a sick replica
+        # leaves rotation in ~90s.
         httpGet:
           path: /
           port: 8000
           scheme: HTTP
         initialDelaySeconds: 30
-        periodSeconds: 15
-        failureThreshold: 20
+        periodSeconds: 30
+        failureThreshold: 3
         successThreshold: 1
         timeoutSeconds: 5
       livenessProbe:
@@ -250,7 +254,10 @@ spec:
           path: /
           port: 8000
           scheme: HTTP
-        initialDelaySeconds: 360
+        # Delay at the platform's 600s cap: a container that has not served yet
+        # is not killed by liveness before 600 + 10x30 = 900s, in line with the
+        # startup window above.
+        initialDelaySeconds: 600
         periodSeconds: 30
         failureThreshold: 10
         successThreshold: 1

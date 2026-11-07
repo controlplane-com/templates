@@ -4,7 +4,7 @@
     * Django's cache backend (CACHES -> django_redis, LOCATION: REDIS_URL);
     * the live collaborative editor's cross-replica channel. The live server
       does NOT merely degrade without Redis — it throws `Redis client not
-      initialized` and exits (measured against makeplane/plane-live:v1.4.2).
+      initialized` and exits (measured against makeplane/plane-live:v1.4.3).
 
   Bundled single-node rather than the `redis` template: that template is a
   3-replica Redis + 3-replica Sentinel cluster, and Plane takes a single

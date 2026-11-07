@@ -6,7 +6,7 @@
 
 - **`{release}-plane`**: one workload, six containers on one network namespace: `proxy` (Caddy, the only exposed port), `web`, `space`, `admin` (God Mode), `live` (collaborative editor) and `api` (Django). Plane's frontends call the API on their own origin, so all six sit behind the one proxy.
 - **`{release}-plane-worker`**: Celery workers for notifications, activity, imports, exports and invites.
-- **`{release}-plane-beat`**: the Celery scheduler, always one replica. It also applies the database migrations on every start.
+- **`{release}-plane-beat`**: the Celery scheduler, always one replica. It also applies the database migrations on every start; on a first install the API turns ready once they have run.
 - **`{release}-plane-redis`**: Valkey on a volume set, the Django cache and the live editor's channel.
 - **`{release}-plane-mq`**: RabbitMQ on a volume set, the Celery broker.
 - **`{release}-plane-minio`**: a single-node object store on a volume set ([Silo](https://github.com/pgsty/silo), the maintained MinIO fork). Not created with `storage.type: s3`.
@@ -60,13 +60,11 @@ secrets:
 
 worker:
   replicas: 1
-  concurrency: 4          # Celery child processes per replica; raise maxMemory with it
+  concurrency: 4          # Celery children per replica (Celery's default follows the host CPU count); raise maxMemory with it
   resources: { minCpu: 200m, maxCpu: 1000m, minMemory: 384Mi, maxMemory: 2Gi }
 beat:                     # always one replica
-  resources: { minCpu: 50m, maxCpu: 250m, minMemory: 192Mi, maxMemory: 512Mi }
+  resources: { minCpu: 50m, maxCpu: 1000m, minMemory: 192Mi, maxMemory: 512Mi }   # migrations run on the CPU ceiling
 ```
-
-`concurrency` is set explicitly because Celery's own default follows the host's CPU count, not the container's limit, and runs out of memory.
 
 ### Storage and datastores
 
@@ -80,7 +78,7 @@ storage:
   s3:
     bucket: my-plane-bucket
     region: us-east-1
-    endpoint: ""          # S3-compatible servers only, e.g. http://my-minio.GVC_NAME.cpln.local:9000
+    endpoint: ""          # S3-compatible servers only; users' browsers must reach it, e.g. https://s3.example.com
     cloudAccountName: my-s3-cloud-account   # AWS keyless
     policyName: my-plane-s3-policy          # AWS keyless
     auth:
@@ -111,26 +109,27 @@ internalAccess:
   workloads: []           # workload-list only; this release's own workloads are always allowed
 ```
 
-The bundled PostgreSQL has its own `postgres.internalAccess`. With `workload-list` there, list `//gvc/GVC_NAME/workload/RELEASE-plane`, `RELEASE-plane-worker` and `RELEASE-plane-beat`; the chart refuses a list without them.
+The bundled PostgreSQL has its own `postgres.internalAccess`. With `workload-list` there, list `//gvc/{gvc}/workload/{release}-plane`, `{release}-plane-worker` and `{release}-plane-beat`; the chart refuses a list without them.
 
 ## Connecting
 
 Plane has no bootstrap credential: whoever completes `/god-mode` first becomes the instance admin. Claim it privately, then publish:
 
 ```bash
-cpln port-forward RELEASE-plane 8080:80 --gvc GVC_NAME
+cpln port-forward {release}-plane 8080:80 --gvc {gvc}
 # open http://localhost:8080/god-mode/ and create the admin, then http://localhost:8080/ for your workspace
-cpln helm upgrade RELEASE oci://ghcr.io/controlplane-com/templates/plane --version 1.0.0 --gvc GVC_NAME \
+cpln helm upgrade {release} oci://ghcr.io/controlplane-com/templates/plane --version 1.0.0 --gvc {gvc} \
   -f values.yaml --set publicAccess.enabled=true   # the public firewall can take a few minutes to open
 ```
 
 | What | Where |
 |---|---|
-| Plane UI | `status.canonicalEndpoint` of `RELEASE-plane` (`cpln workload get RELEASE-plane --gvc GVC_NAME -o yaml`) |
-| God Mode | `PLANE_URL/god-mode/` |
-| Published views | `PLANE_URL/spaces/` |
-| REST API | `PLANE_URL/api/v1/`, with a personal API token from the UI's settings |
-| PostgreSQL (internal) | `RELEASE-postgres.GVC_NAME.cpln.local:5432` |
+| Plane UI | `status.canonicalEndpoint` of `{release}-plane` (`cpln workload get {release}-plane --gvc {gvc} -o yaml`) |
+| God Mode | `{plane-url}/god-mode/` |
+| Published views | `{plane-url}/spaces/` |
+| REST API | `{plane-url}/api/v1/`, with a personal API token from the UI's settings |
+| Plane (internal, same GVC) | `http://{release}-plane.{gvc}.cpln.local:80` |
+| PostgreSQL (internal) | `{release}-postgres.{gvc}.cpln.local:5432` |
 
 ## Storage setup
 
@@ -138,20 +137,20 @@ Only for `storage.type: s3`. Browsers upload to and download from the bucket dir
 
 ```json
 [{ "AllowedHeaders": ["*"], "AllowedMethods": ["GET", "PUT", "POST", "HEAD"],
-   "AllowedOrigins": ["https://YOUR-PLANE-URL"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3000 }]
+   "AllowedOrigins": ["{plane-url}"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3000 }]
 ```
 
-**AWS S3 (keyless).** Create the bucket and its CORS rule, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for AWS, and create this IAM policy (replace `YOUR-BUCKET`). Set `storage.s3.bucket`, `region`, `cloudAccountName` and `policyName` (the IAM policy's name); leave `auth.secretName` empty.
+**AWS S3 (keyless).** Create the bucket and its CORS rule, create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for AWS, and create this IAM policy (replace `{bucket}`). Set `storage.s3.bucket`, `region`, `cloudAccountName` and `policyName` (the IAM policy's name); leave `auth.secretName` empty.
 
 ```json
 { "Version": "2012-10-17", "Statement": [
-  { "Sid": "PlaneBucketObjects", "Effect": "Allow", "Resource": "arn:aws:s3:::YOUR-BUCKET/*",
+  { "Sid": "PlaneBucketObjects", "Effect": "Allow", "Resource": "arn:aws:s3:::{bucket}/*",
     "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"] },
-  { "Sid": "PlaneBucketList", "Effect": "Allow", "Resource": "arn:aws:s3:::YOUR-BUCKET",
+  { "Sid": "PlaneBucketList", "Effect": "Allow", "Resource": "arn:aws:s3:::{bucket}",
     "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"] } ] }
 ```
 
-**S3-compatible servers** (MinIO, SeaweedFS, Google Cloud Storage [interoperability](https://cloud.google.com/storage/docs/interoperability) with an HMAC key). Create the bucket and its CORS rule, store the keys as `cpln secret create-dictionary --name my-plane-s3-keys --entry AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY --entry AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY`, and set `storage.s3.bucket`, `storage.s3.endpoint` (full URL with scheme) and `storage.s3.auth.secretName: my-plane-s3-keys`.
+**S3-compatible servers** (MinIO, SeaweedFS, Google Cloud Storage [interoperability](https://cloud.google.com/storage/docs/interoperability) with an HMAC key). Create the bucket and its CORS rule, store the keys as `cpln secret create-dictionary --name my-plane-s3-keys --entry AWS_ACCESS_KEY_ID={access-key} --entry AWS_SECRET_ACCESS_KEY={secret-key}`, and set `storage.s3.bucket`, `storage.s3.endpoint` and `storage.s3.auth.secretName: my-plane-s3-keys`. Plane gives browsers presigned URLs built from `endpoint`, so it must be a full URL that users' browsers can reach, such as a public HTTPS endpoint; an internal `*.cpln.local` address serves the API but not browser uploads and downloads.
 
 ## Important Notes
 
@@ -159,7 +158,7 @@ Only for `storage.type: s3`. Browsers upload to and download from the bucket dir
 - **"Waiting for migrations" on the api or worker means `{release}-plane-beat` is not running**: only the scheduler applies migrations.
 - **No highly available database or scheduled backups**: the `postgres-highly-available` template and the `postgres` backups need PostgreSQL 17, and Plane's own deployments run 15 and 16. Back up with `pg_dump` in the `postgresql` container; attachments live in the object store, so back that up too.
 - **The bundled PostgreSQL is not pinned to `location`**: in a multi-location GVC an unused copy runs in every other location. Use a one-location GVC.
-- **Secrets are read at replica start**: after changing one, run `cpln workload force-redeployment` on the workloads that read it. RabbitMQ creates its user on first boot only, and PostgreSQL its user on first initialization.
+- **Secrets are read at replica start, and a paused deployment does not retry on its own**: after creating a missing prerequisite secret late, changing one, or an upgrade that changes which secrets the release reads, run `cpln workload force-redeployment {release}-plane --gvc {gvc}` and the same for `{release}-plane-worker`, `{release}-plane-beat` and the datastore whose secret it is (`{release}-postgres`, `{release}-plane-redis`, `{release}-plane-mq` or `{release}-plane-minio`). RabbitMQ creates its user on first boot only, and PostgreSQL its user on first initialization.
 - **Plane sends usage telemetry to `telemetry.plane.so`**: turn it off in God Mode under the instance settings. Plane's integrations service (also named Silo, unrelated to the object store), Intake and Monitor are not in the Community Edition.
 
 ## Links

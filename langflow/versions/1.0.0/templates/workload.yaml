@@ -1,0 +1,146 @@
+{{- include "langflow.validate" . }}
+{{- $db := include "langflow.db.secretName" . }}
+kind: workload
+name: {{ include "langflow.name" . }}
+description: Langflow visual builder (UI, API and MCP server)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "langflow.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "langflow.identity.name" . }}
+  containers:
+    - name: langflow
+      image: {{ .Values.langflow.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.langflow.resources.minCpu | quote }}
+      minMemory: {{ .Values.langflow.resources.minMemory | quote }}
+      cpu: {{ .Values.langflow.resources.maxCpu | quote }}
+      memory: {{ .Values.langflow.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - -c
+        - {{ include "langflow.inlineScript" (include "langflow.startScript" .) | quote }}
+      env:
+        - name: LANGFLOW_HOST
+          value: "0.0.0.0"
+        - name: LANGFLOW_PORT
+          value: "7860"
+        - name: LANGFLOW_WORKERS
+          value: "1"
+        - name: LANGFLOW_CONFIG_DIR
+          value: /app/langflow
+        - name: LANGFLOW_KNOWLEDGE_BASES_DIR
+          value: /app/langflow/knowledge_bases
+        - name: LF_DB_USER
+          value: 'cpln://secret/{{ $db }}.username'
+        - name: LF_DB_PASSWORD
+          value: 'cpln://secret/{{ $db }}.password'
+        - name: LF_DB_NAME
+          value: 'cpln://secret/{{ $db }}.database'
+        - name: LANGFLOW_DATABASE_URL
+          value: 'postgresql://$(LF_DB_USER):$(LF_DB_PASSWORD)@{{ include "langflow.db.host" . }}:5432/$(LF_DB_NAME)'
+        - name: LANGFLOW_DB_CONNECTION_SETTINGS
+          value: '{"pool_size":10,"max_overflow":10,"pool_timeout":30,"pool_pre_ping":true,"pool_recycle":1800,"echo":false}'
+        - name: LANGFLOW_AUTO_LOGIN
+          value: "false"
+        # Self-signups on the public URL stay inactive until an admin activates them (upstream default, pinned).
+        - name: LANGFLOW_NEW_USER_IS_ACTIVE
+          value: "false"
+        - name: LANGFLOW_SUPERUSER
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
+        - name: LANGFLOW_SUPERUSER_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+        - name: LANGFLOW_SECRET_KEY
+          value: 'cpln://secret/{{ .Values.secretKey.secretName }}.payload'
+        - name: LANGFLOW_PROMETHEUS_PORT
+          value: "9095"
+        # Every request reaches Langflow through the platform's proxy, which appends the caller's address to
+        # X-Forwarded-For; without this the login rate limit is one bucket shared by every user.
+        - name: LANGFLOW_RATE_LIMIT_TRUST_PROXY
+          value: "true"
+        {{- if .Values.redis.enabled }}
+        {{- if include "langflow.redis.authEnabled" . }}
+        - name: LF_REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "langflow.redis.secretName" . }}.{{ include "langflow.redis.secretKey" . }}'
+        {{- end }}
+        - name: LANGFLOW_JOB_QUEUE_TYPE
+          value: redis
+        - name: LANGFLOW_REDIS_QUEUE_URL
+          value: {{ include "langflow.redis.url" (list . 1) | quote }}
+        - name: LANGFLOW_RATE_LIMIT_STORAGE_URI
+          value: {{ include "langflow.redis.url" (list . 2) | quote }}
+        {{- end }}
+        {{- with .Values.variableSecrets.keys }}
+        - name: LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT
+          value: {{ join "," . | quote }}
+        {{- end }}
+        {{- range .Values.variableSecrets.keys }}
+        - name: {{ . }}
+          value: 'cpln://secret/{{ $.Values.variableSecrets.secretName }}.{{ . }}'
+        {{- end }}
+        {{- range .Values.langflow.extraEnv }}
+        - name: {{ .name }}
+          value: {{ .value | toString | quote }}
+        {{- end }}
+      ports:
+        - number: 7860
+          protocol: http
+      volumes:
+        - path: /app/langflow
+          uri: cpln://volumeset/{{ include "langflow.volumeset.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /health_check
+          port: 7860
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 7860
+          scheme: HTTP
+        initialDelaySeconds: 120
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.langflow.replicas }}
+      metric: disabled
+      minScale: {{ .Values.langflow.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.langflow.requestTimeoutSeconds }}
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  securityOptions:
+    filesystemGroupId: 1000
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

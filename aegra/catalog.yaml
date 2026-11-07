@@ -46,7 +46,9 @@ alternativeTo:
   - LangGraph Cloud
 
 pickInsteadIf:
-  - need: a visual low-code agent and workflow builder
+  - need: a visual low-code builder for LLM agents, RAG and MCP flows
+    template: langflow
+  - need: general workflow automation across SaaS apps
     template: n8n
   - need: a chat UI for people to talk to models
     template: open-webui

@@ -1,5 +1,6 @@
 # kafka 4.1.0 — a customer install as it looks today: passwords inline in values (this version has no
 # credentials secret). Used as the starting point of an upgrade to a newer version.
+# Includes one Kafka Connect worker, so upgrades into 4.4.1+ run the connect-stdout-only check.
 locations: [aws-us-east-1]
 timeoutSeconds: 900
 
@@ -68,3 +69,32 @@ values:
       };
     password_properties:
       e2e: "{gen.restpw},user"
+  kafka_connectors:
+    - name: e2e
+      image: apache/kafka:3.9.1
+      replicas: 1
+      cpu: 500m
+      memory: 1500Mi
+      minCpu: 250m
+      minMemory: 375Mi
+      timeoutSeconds: 15
+      listener: client
+      env:
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms700m -Xmx700m"
+      firewall:
+        internal_inboundAllowType: same-gvc
+      connector_properties:
+        group.id: e2e-connect
+        security.protocol: SASL_PLAINTEXT
+        sasl.mechanism: PLAIN
+        sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{gen.adminpw}";'
+        key.converter: org.apache.kafka.connect.storage.StringConverter
+        value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+        offset.storage.topic: e2e-connect-offsets
+        offset.storage.replication.factor: "3"
+        config.storage.topic: e2e-connect-configs
+        config.storage.replication.factor: "3"
+        status.storage.topic: e2e-connect-status
+        status.storage.replication.factor: "3"
+        plugin.path: /opt/kafka/plugins

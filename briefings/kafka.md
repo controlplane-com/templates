@@ -34,7 +34,8 @@ non-working `your-…` placeholders.
 - **Replication factor derives from `kafka.replicas`**; a single broker replicates nothing. Single-broker
   installs also need `offsets.topic.replication.factor=1` (and the transaction-log equivalents).
 - **`server.log` is off via `KAFKA_LOG4J_ROOT_LOGLEVEL=INFO`** (4.2.0, official `apache/kafka:3.x.y` only); on a
-  4.x image that variable strips every appender. Connect's `connect.log` still rolls without deletion.
+  4.x image that variable strips every appender. Connect ignores that variable; since 4.4.1 its start script drops
+  `connectAppender` from the root logger of a copy of `connect-log4j.properties` (3.x images).
 - **`cdc-pipeline` 1.1.0 pins kafka 4.3.0** (and imports its wizard) and reaches the same EnvVarConfigProvider result by hand
   (`${env:CDC_KAFKA_*}` values + `kafka.env` + `extra_configurations`), refusing the sidecars that need the
   admin password in clear. Bumping it to 4.4.0 would let it drop that scaffolding and turn the health sidecar

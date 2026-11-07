@@ -40,12 +40,17 @@
   that repairs uploads (a presigned POST signs the policy, not the Host) and
   breaks every presigned GET, which does sign the Host.
 
-  The image runs as root (verified: `id` -> uid=0 on this tag), so the
-  root-owned volumeset mount needs no securityOptions.filesystemGroupId.
+  IMAGE: pgsty/silo, the maintained AGPL fork of MinIO (MinIO no longer
+  publishes a public image; the minio/minio image is unpullable). Same pin as
+  the minio 1.4.0 template; upstream Plane 1.4.3 switched to Silo too. Verified
+  against the pinned tag: it runs as root (`id` -> uid=0), so the root-owned
+  volumeset mount needs no securityOptions.filesystemGroupId; its entrypoint
+  maps a leading `server` argument to the `silo` binary (as MinIO's did); and
+  /minio/health/live answers 200.
 */}}
 kind: workload
 name: {{ include "plane.minio.name" . }}
-description: Plane MinIO — bundled attachment and asset storage
+description: Plane object store (Silo, MinIO-compatible) — bundled attachment and asset storage
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "plane.tags" . | nindent 4 }}
 spec:
@@ -64,9 +69,9 @@ spec:
         - ":9001"
       env:
         - name: MINIO_ROOT_USER
-          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioAccessKey
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey
         - name: MINIO_ROOT_PASSWORD
-          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioSecretKey
+          value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.secretKey
       ports:
         # `tcp`, NOT `http` — see PORT PROTOCOL above. Load-bearing.
         - number: 9000
@@ -89,6 +94,17 @@ spec:
     {{- include "plane.defaultOptions" (dict "timeout" 30) | nindent 4 }}
   localOptions:
     {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 30) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+      stateful workload, so sending it produces permanent drift AND implies a
+      rolling-restart limit that is not in force (minio 1.4.0 shape).
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}

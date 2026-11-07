@@ -1,66 +1,35 @@
 # ─── Location ─────────────────────────────────────────────────────────────────
-# This chart deploys into the GVC you install into — it does NOT create one.
-# Plane runs in exactly ONE location, and this names it. It MUST already be a
-# location of that GVC, and NOTHING WILL TELL YOU IF IT IS NOT: the platform
-# accepts a location the GVC does not have without any error, Helm reports
-# success, and the release then runs NOTHING, anywhere. Every workload reports
-# `ready: false` with the message `This workload location is deactivated
-# because maxScale is set to 0.` and `cpln logs` returns zero lines — that
-# message is the only diagnostic (see Important Notes in the README).
-# Every workload this chart OWNS is pinned here. The bundled `postgres` SUBCHART
-# is NOT — a parent cannot template a subchart's placement — so an extra GVC
-# location starts a second Postgres there, with its own empty volume. Prefer a
-# single-location GVC.
-#
-# One location is not a simplification. Redis, RabbitMQ and MinIO are each a
-# single volume bound to a single replica; a second location would get its own
-# empty copy of all three and a Plane that cannot see the first.
+# The ONE location of your GVC that Plane runs in; it must already be a GVC location.
+# A location the GVC lacks runs nothing (see Important Notes in the README).
 location: aws-us-east-1
 
 # ─── Plane ────────────────────────────────────────────────────────────────────
 plane:
-  # ONE tag for all six Plane images — they are released together and mixing
-  # versions across the API, frontends and live server is unsupported upstream.
-  # Repositories: makeplane/plane-proxy, -frontend, -space, -admin, -live, -backend
-  imageTag: v1.4.2
-
-  # Replicas of the whole HTTP tier (proxy + web + space + admin + live + api).
-  # 1 is the default; >=2 gives a rolling restart with no downtime. `live`
-  # coordinates across replicas through Redis, so no sticky sessions are needed.
-  replicas: 1
-
-  # Public base URL used in notification emails, webhook payloads and CORS.
-  # Empty = derive from the platform canonical endpoint (correct in almost all
-  # cases). A custom domain MUST carry the scheme — the chart refuses to render
-  # without one, since this value is also a CORS *and* CSRF trusted origin.
-  appUrl: ""
-
-  # Max upload size in bytes (5 MiB). Enforced by the proxy (Caddy's
-  # `request_body max_size`) and by the `content-length-range` condition in the
-  # presigned upload, which the object store checks — NOT by the API, which
-  # still mints a presign for a larger file.
-  fileSizeLimit: 5242880
-
+  # ONE tag for all six Plane images (proxy, frontend, space, admin, live, backend);
+  # they are released together and never mixed.
+  imageTag: v1.4.3
+  replicas: 1             # the whole HTTP tier; 2+ keeps Plane up through a rolling restart
+  appUrl: ""              # empty = the canonical endpoint; a custom domain WITH its scheme, e.g. https://plane.example.com
+  fileSizeLimit: 5242880  # max upload in bytes (5 MiB), enforced by the proxy and the object store
   api:
-    gunicornWorkers: 1  # gunicorn worker processes; each is ~1 extra CPU and ~300Mi
-
+    gunicornWorkers: 1    # gunicorn worker processes; each needs ~1 more CPU and ~300Mi
   resources:
-    proxy:                 # Caddy — the single public entry point
+    proxy:                # Caddy, the single public entry point
       minCpu: 50m
       maxCpu: 200m
       minMemory: 64Mi
       maxMemory: 256Mi
-    ui:                    # applied to EACH of web, space and admin
+    ui:                   # applied to EACH of web, space and admin
       minCpu: 50m
       maxCpu: 250m
       minMemory: 96Mi
       maxMemory: 384Mi
-    live:                  # Hocuspocus collaborative-editing server
+    live:                 # collaborative-editing server
       minCpu: 100m
       maxCpu: 500m
       minMemory: 192Mi
       maxMemory: 512Mi
-    api:                   # Django + gunicorn — the heavy tier
+    api:                  # Django + gunicorn
       minCpu: 250m
       maxCpu: 1000m
       minMemory: 512Mi
@@ -68,31 +37,16 @@ plane:
 
 # ─── Background processing ────────────────────────────────────────────────────
 worker:
-  replicas: 1  # Celery workers; >=1. Scale up for heavy imports/exports
-
-  # Prefork CHILD PROCESSES PER REPLICA. Pinned on purpose: Celery's own default
-  # is inferred from the HOST's CPU count, not from this container's `cpu` — and
-  # on this platform that started 16 Django children and OOM-killed the worker
-  # 65 times in 5.5 hours, with no error anywhere (an OOM kill is invisible from
-  # inside the container, and this tier has no probe). `worker.replicas` does
-  # NOT substitute: replicas multiply pools, they do not narrow one. Each child
-  # is a full Django process, so raise maxMemory alongside this.
-  concurrency: 4
-
+  replicas: 1             # Celery workers: notifications, imports, exports, invites
+  concurrency: 4          # prefork children PER replica; Celery's own default follows the HOST's CPU count and OOM-kills
   resources:
     minCpu: 200m
     maxCpu: 1000m
     minMemory: 384Mi
-    # Sized for `concurrency` children plus the parent: measured 767Mi of summed
-    # process RSS (376Mi by cgroup accounting) at idle with 4 children, so this
-    # leaves headroom for task payloads. 1Gi with an unpinned 16-wide pool is
-    # what crash-looped.
-    maxMemory: 2Gi
+    maxMemory: 2Gi        # sized for `concurrency` children plus the parent; raise it with concurrency
 
-# The Celery scheduler. ALWAYS exactly one replica — two schedulers run every
-# periodic task twice — so there is deliberately no replicas knob. This workload
-# ALSO applies the database migrations; if it cannot start, nothing migrates and
-# the API waits forever at "waiting for migrations".
+# The Celery scheduler, always ONE replica (two would run every periodic task twice).
+# It also applies the database migrations.
 beat:
   resources:
     minCpu: 50m
@@ -100,64 +54,43 @@ beat:
     minMemory: 192Mi
     maxMemory: 512Mi
 
-# ─── Prerequisite secret (USER-CREATED — MUST EXIST BEFORE INSTALL) ───────────
-# A `dictionary` secret holding exactly two keys:
-#   SECRET_KEY             — Django signing key. It also ENCRYPTS your instance
-#                            configuration (SMTP password, OAuth secrets), so it
-#                            cannot be rotated without making those unreadable.
-#   LIVE_SERVER_SECRET_KEY — required by the live collaborative-editing server;
-#                            it refuses to start without one.
-# Both: `openssl rand -hex 32`. If the secret does not exist at install time the
-# deployment WEDGES silently and `cpln logs` returns nothing at all — see
-# Prerequisites in the README for the exact command and the diagnostic.
+# ─── Application keys (REQUIRED — MUST EXIST BEFORE INSTALL) ──────────────────
+# A `dictionary` secret with SECRET_KEY and LIVE_SERVER_SECRET_KEY. If it is
+# missing the deployment WEDGES silently. See Prerequisites in the README.
 secrets:
   name: my-plane-secrets
 
 # ─── Attachment / asset storage ───────────────────────────────────────────────
 storage:
-  type: minio           # minio | s3
-  minio:                # bundled single-node MinIO (default)
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    credentials:        # internal plumbing; never typed into a client
-      accessKey: change-me-plane-minio-access
-      secretKey: change-me-plane-minio-secret
+  type: minio             # minio (bundled) | s3 (your bucket)
+  minio:                  # bundled single-node object store (Silo, the maintained MinIO fork)
+    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    # REQUIRED with type minio — MUST EXIST BEFORE INSTALL: a `dictionary` secret
+    # with accessKey (3+ characters) and secretKey (8+ characters).
+    credentialsSecretName: my-plane-minio-credentials
     bucket: uploads
     resources:
       cpu: 500m
       memory: 512Mi
     volumeset:
-      capacity: 10      # GiB (minimum 10); mounted at /export
-  s3:                   # external S3 or S3-compatible (set storage.type: s3)
+      capacity: 10        # GiB (minimum 10)
+  s3:                     # external S3 or S3-compatible bucket (storage.type: s3)
     bucket: my-plane-bucket
     region: us-east-1
-    endpoint: ""        # set for S3-compatible servers, e.g. http://my-minio.GVC.cpln.local:9000
-    # Keyless auth (AWS, preferred): a Control Plane cloud account plus your
-    # pre-created bucket-scoped IAM policy (full JSON in the README). Used only
-    # when auth.secretName is empty.
-    cloudAccountName: my-s3-cloud-account
-    policyName: my-plane-s3-policy
+    endpoint: ""          # S3-compatible servers only, e.g. http://my-minio.GVC_NAME.cpln.local:9000
+    cloudAccountName: my-s3-cloud-account   # AWS keyless: a Control Plane cloud account
+    policyName: my-plane-s3-policy          # AWS keyless: your bucket-scoped IAM policy (README)
     auth:
-      # OPTIONAL prerequisite `dictionary` secret holding AWS_ACCESS_KEY_ID and
-      # AWS_SECRET_ACCESS_KEY — ONLY for S3-compatible servers (requires
-      # endpoint set). AWS S3 is always keyless. e.g. my-plane-s3-keys
-      secretName: ""
+      secretName: ""      # S3-compatible only: dictionary with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, e.g. my-plane-s3-keys
 
-# ─── PostgreSQL (subchart: postgres) — all Plane data ─────────────────────────
-# Pinned to postgres:16 because Plane supports "PostgreSQL 15.7+ or 16.x" only.
-# NOTE: the postgres template's scheduled-backup feature requires PG 17+, so it
-# is NOT usable at a Plane-supported version and is not surfaced here. The README
-# carries a verified pg_dump / pg_restore procedure instead.
+# ─── PostgreSQL (subchart: postgres) ──────────────────────────────────────────
+# Plane's upstream deployments run PostgreSQL 15 and 16, so this stays on 16.
+# A highly available database is not offered: postgres-highly-available is PostgreSQL 17.
 postgres:
-  image: postgres:16
-  credentials:
-    username: plane
-    password: change-me-plane-db   # template-managed cred for the bundled DB
-    database: plane
+  image: postgres:16.15
   config:
-    # Name of the dictionary secret this chart CREATES and the bundled postgres
-    # reads. Secret names are org-wide: give each plane release its own name. A
-    # second release left on this name is REFUSED at install (it is owned by the
-    # first) — nothing is shared, overwritten or deleted.
+    # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with the URL-safe
+    # keys username, password and database (see README Prerequisites).
     credentialsSecretName: my-plane-db-credentials
   resources:
     minCpu: 250m
@@ -165,49 +98,37 @@ postgres:
     minMemory: 512Mi
     maxMemory: 1Gi
   volumeset:
-    capacity: 10        # GiB (minimum 10)
+    capacity: 10          # GiB (minimum 10)
 
-# ─── Redis / Valkey — Django cache and live-editor cross-replica sync ─────────
-# REQUIRED. The live server refuses to start without it. Single node with AOF
-# persistence; Plane takes a single REDIS_URL and has no Sentinel support, so
-# the HA redis template is not used.
+# ─── Redis (Valkey) — Django cache and live-editor sync; required ─────────────
 redis:
-  image: valkey/valkey:8.1.9
-  password: change-me-plane-redis   # template-managed; wired into REDIS_URL
+  image: valkey/valkey:8.1.11
+  # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with one URL-safe key, password.
+  credentialsSecretName: my-plane-redis-credentials
   resources:
     cpu: 250m
     memory: 512Mi
   volumeset:
-    capacity: 10        # GiB (minimum 10); AOF at /data
+    capacity: 10          # GiB (minimum 10)
 
-# ─── RabbitMQ — the Celery broker ─────────────────────────────────────────────
-# REQUIRED. Plane 1.x runs Celery over AMQP, not Redis; there is no Redis-broker
-# code path. Tag matches the one upstream ships and tests.
+# ─── RabbitMQ — the Celery broker; required ───────────────────────────────────
 rabbitmq:
-  image: rabbitmq:3.13.6-management-alpine
-  username: plane
-  password: change-me-plane-mq      # template-managed; wired into AMQP_URL
+  image: rabbitmq:4.3.7-management-alpine
+  # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with the URL-safe keys
+  # username and password. Read on the broker's FIRST boot only.
+  credentialsSecretName: my-plane-mq-credentials
   vhost: plane
   resources:
     cpu: 500m
     memory: 768Mi
   volumeset:
-    capacity: 10        # GiB (minimum 10); mnesia at /var/lib/rabbitmq
+    capacity: 10          # GiB (minimum 10)
 
 # ─── Access ───────────────────────────────────────────────────────────────────
-# Plane has NO admin bootstrap credential: the first visitor to /god-mode claims
-# the instance. So it ships CLOSED to the internet. Reach it over a port-forward
-# tunnel, create the admin at http://localhost:8080/god-mode/, then set this to
-# true and `helm upgrade` — see "First run" in the README for the exact commands.
-# A firewall change takes 30 s to ~10 min to propagate.
 publicAccess:
-  enabled: false
-
-# Who may reach Plane's workloads from inside the org. Every workload THIS
-# release creates is ALWAYS allowed, whatever is set here — the API, workers and
-# scheduler have to reach the database, cache, broker and object store.
-# NOTE: the bundled PostgreSQL has its own scope under postgres.internalAccess
-# (default same-gvc) — see "Restricting internal access" in the README.
+  enabled: false          # the first visitor to /god-mode claims the instance: claim it over port-forward, then set true
 internalAccess:
-  type: same-gvc        # options: same-gvc, same-org, workload-list
-  workloads: []         # only with workload-list, e.g. - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  type: same-gvc          # same-gvc | same-org | workload-list
+  workloads: []           # workload-list only; this release's own workloads are always added
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

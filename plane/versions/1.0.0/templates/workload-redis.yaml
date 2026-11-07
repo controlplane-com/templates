@@ -40,7 +40,7 @@ spec:
         - /data
       env:
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
       ports:
         - number: 6379
           protocol: tcp
@@ -63,6 +63,17 @@ spec:
     {{- include "plane.defaultOptions" (dict "timeout" 5) | nindent 4 }}
   localOptions:
     {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 5) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+      stateful workload, so sending it produces permanent drift AND implies a
+      rolling-restart limit that is not in force (minio 1.4.0 shape).
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}

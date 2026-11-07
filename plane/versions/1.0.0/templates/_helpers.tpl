@@ -39,38 +39,12 @@ The single HTTP workload: proxy + web + space + admin + live + api.
 {{- printf "%s-plane-minio-vs" .Release.Name }}
 {{- end }}
 
-{{- define "plane.secret.creds.name" -}}
-{{- printf "%s-plane-creds" .Release.Name }}
-{{- end }}
-
-{{/*
-Name of the DB-credentials secret this chart creates for the bundled postgres
-subchart. postgres 3.4.0 stopped creating its own secret and now takes only a
-NAME, and a parent cannot template a subchart value — so the name is a plain
-value that both sides read.
-*/}}
-{{- define "plane.secret.db.name" -}}
-{{- .Values.postgres.config.credentialsSecretName }}
-{{- end }}
-
 {{- define "plane.secret.caddyfile.name" -}}
 {{- printf "%s-plane-caddyfile" .Release.Name }}
 {{- end }}
 
 {{- define "plane.secret.adminNginx.name" -}}
 {{- printf "%s-plane-admin-nginx" .Release.Name }}
-{{- end }}
-
-{{- define "plane.secret.mqConf.name" -}}
-{{- printf "%s-plane-mq-conf" .Release.Name }}
-{{- end }}
-
-{{- define "plane.secret.beatStart.name" -}}
-{{- printf "%s-plane-beat-start" .Release.Name }}
-{{- end }}
-
-{{- define "plane.secret.workerStart.name" -}}
-{{- printf "%s-plane-worker-start" .Release.Name }}
 {{- end }}
 
 {{- define "plane.identity.name" -}}
@@ -84,6 +58,17 @@ value that both sides read.
 {{- define "plane.gvcPolicy.name" -}}
 {{- printf "%s-plane-gvc-policy" .Release.Name }}
 {{- end }}
+
+{{/*
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args (even inside single quotes), so
+every $ is doubled and the shell receives the script byte for byte. A |- block
+scalar keeps heredoc terminators at column 0. Copied from pgedge.inlineScript.
+*/}}
+{{- define "plane.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
+{{- end -}}
 
 
 {{/* Dependency Helpers — fully-qualified internal DNS, never the bare short name.
@@ -314,27 +299,14 @@ defaultOptions'.
 {{/* Validation */}}
 
 {{- define "plane.validate" -}}
-{{- include "plane.validateNoLegacyGvc" . -}}
 {{- include "plane.validateLocation" . -}}
 {{- include "plane.validateSecrets" . -}}
 {{- include "plane.validateReplicas" . -}}
 {{- include "plane.validateAppUrl" . -}}
 {{- include "plane.validateStorage" . -}}
 {{- include "plane.validateInternalAccess" . -}}
+{{- include "plane.validateDatabase" . -}}
 {{- end }}
-
-{{/*
-This chart has never created a GVC and never will. The guard costs nothing and
-makes the rule mechanical: a chart that creates a GVC and later stops declaring
-it makes `helm upgrade` PRUNE it, taking every workload, volumeset and identity
-inside -- measured elsewhere at 6 seconds, while printing `upgraded
-successfully`.
-*/}}
-{{- define "plane.validateNoLegacyGvc" -}}
-{{- if hasKey .Values "gvc" -}}
-{{- fail "plane: `gvc` is not a key of this chart. Plane does not create a GVC — it deploys into the GVC you install into, and the single top-level `location` names which of that GVC's locations it runs in. Remove the `gvc` key from your values." -}}
-{{- end -}}
-{{- end -}}
 
 {{/*
 Plane runs in exactly ONE location.
@@ -350,20 +322,29 @@ that cannot see each other's queue, cache or attachments.
 {{- if not (kindIs "string" .Values.location) -}}
 {{- fail "plane: `location` must be a single location NAME, e.g. `location: aws-us-east-1`. Plane runs in exactly one location — Redis, RabbitMQ and MinIO are each one volume bound to one replica, so a second location would get its own empty copy of all three." -}}
 {{- end -}}
+{{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" .Values.location) -}}
+{{- fail (printf "plane: `location` must be a bare location NAME like `aws-us-east-1`, got '%s'. A link form (`//location/x`) or a comma-separated list is accepted by Helm AND by the API, and stores a placement that matches no real location — so Plane starts NOWHERE, every workload reports `deactivated because maxScale is set to 0`, and the logs are silent." .Values.location) -}}
+{{- end -}}
 {{- if hasKey .Values "locations" -}}
 {{- fail "plane: `locations` (plural) is not a key of this chart. Plane runs in exactly ONE location — use the singular `location`, e.g. `location: aws-us-east-1`." -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-The prerequisite secret is REQUIRED: without SECRET_KEY Django silently
-generates a random one on every start (sessions break on every restart, and the
-encrypted instance configuration becomes unreadable), and the live server
-refuses to start at all without LIVE_SERVER_SECRET_KEY.
+Every credential this release reads is a PREREQUISITE secret the user creates
+before install, referenced by name. A missing name would render a
+`cpln://secret/` reference to nothing; a missing SECRET is invisible (the
+deployment wedges with no logs), which is why the README and values say so.
 */}}
 {{- define "plane.validateSecrets" -}}
 {{- if not .Values.secrets.name -}}
 {{- fail "plane: secrets.name is required — it names the prerequisite `dictionary` secret holding SECRET_KEY and LIVE_SERVER_SECRET_KEY. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.redis.credentialsSecretName -}}
+{{- fail "plane: redis.credentialsSecretName is required — it names the prerequisite `dictionary` secret holding the Redis `password` (URL-safe). Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- if not .Values.rabbitmq.credentialsSecretName -}}
+{{- fail "plane: rabbitmq.credentialsSecretName is required — it names the prerequisite `dictionary` secret holding the RabbitMQ `username` and `password` (URL-safe). Create that secret BEFORE installing; see Prerequisites in the README." -}}
 {{- end -}}
 {{- end -}}
 
@@ -413,6 +394,9 @@ the scheme at render time rather than documenting it.
 {{- if not .Values.storage.minio.bucket -}}
 {{- fail "plane: storage.minio.bucket is required — the API creates it on first boot and the proxy routes /BUCKET/* to MinIO." -}}
 {{- end -}}
+{{- if not .Values.storage.minio.credentialsSecretName -}}
+{{- fail "plane: storage.minio.credentialsSecretName is required with storage.type minio — it names the prerequisite `dictionary` secret holding `accessKey` and `secretKey`. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
 {{- end -}}
 {{- if eq .Values.storage.type "s3" -}}
 {{- if not .Values.storage.s3.bucket -}}
@@ -445,6 +429,37 @@ Redis, RabbitMQ and MinIO while every replica still reported `ready: true`.
 {{- end -}}
 {{- if and (ne $t "workload-list") (.Values.internalAccess.workloads | default (list)) -}}
 {{- fail "plane: internalAccess.workloads may only be set when internalAccess.type is `workload-list` — the platform ignores it otherwise, which reads as a firewall rule that is in force when it is not." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The bundled database: its prerequisite credentials secret, the legacy inline
+credentials refused, and the subchart's OWN firewall still letting Plane in.
+The postgres subchart carries its own `internalAccess` that this chart cannot
+template; a value that shuts out the api, worker or scheduler is a boot hang
+(`wait_for_db` loops) rather than an error, so it is refused here, naming the
+exact links to add.
+*/}}
+{{- define "plane.validateDatabase" -}}
+{{- if hasKey .Values.postgres "credentials" -}}
+{{- fail "plane: postgres.credentials is not a key of this chart. Database credentials are never values: create a `dictionary` secret holding the URL-safe keys `username`, `password` and `database`, and set postgres.config.credentialsSecretName to its name. See Prerequisites in the README." -}}
+{{- end -}}
+{{- if not (dig "config" "credentialsSecretName" "" .Values.postgres) -}}
+{{- fail "plane: postgres.config.credentialsSecretName is required — it names the prerequisite `dictionary` secret holding `username`, `password` and `database` that the bundled PostgreSQL initializes with and Plane connects with. Create that secret BEFORE installing; see Prerequisites in the README." -}}
+{{- end -}}
+{{- $pg := .Values.postgres.internalAccess | default dict -}}
+{{- if eq ($pg.type | default "") "none" -}}
+{{- fail "plane: postgres.internalAccess.type must not be 'none' — the Plane API, worker and scheduler reach the bundled database over the GVC internal network. Use 'same-gvc' (default) or 'workload-list' including this release's Plane workloads." -}}
+{{- end -}}
+{{- if eq ($pg.type | default "") "workload-list" -}}
+{{- $gvc := .Values.global.cpln.gvc -}}
+{{- $list := $pg.workloads | default list -}}
+{{- range $w := list (include "plane.name" $) (include "plane.worker.name" $) (include "plane.beat.name" $) -}}
+{{- $link := printf "//gvc/%s/workload/%s" $gvc $w -}}
+{{- if not (has $link $list) -}}
+{{- fail (printf "plane: postgres.internalAccess.type is 'workload-list' but the list does not include '%s' — the Plane API, worker and scheduler all connect to the bundled database. Add //gvc/%s/workload/%s, //gvc/%s/workload/%s and //gvc/%s/workload/%s." $link $gvc (include "plane.name" $) $gvc (include "plane.worker.name" $) $gvc (include "plane.beat.name" $)) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -488,7 +503,7 @@ export LIVE_BASE_URL="${WEB_URL}"
 
 {{/*
 Env shared by every container running the Plane BACKEND image (api, worker,
-beat). Read from apps/api/plane/settings/common.py and storage.py @ v1.4.2.
+beat). Read from apps/api/plane/settings/common.py and storage.py @ v1.4.3.
 
 RENDER-TIME STRINGS vs cpln:// REFERENCES — decided per CONSUMER, not per
 template. `cpln://secret/...` is resolved by the platform only when it injects
@@ -497,8 +512,9 @@ nocodb/polaris bug). So the three connection URLs are built with $(VAR)
 interpolation over env vars that ARE cpln:// references, never by pasting the
 reference into the URL.
 
-Caveat that follows: a password containing URL-reserved characters (@ : / ? #)
-would break these URLs. The values comments say so.
+Caveat that follows: a credential containing URL-reserved characters (@ : / ? #)
+would break these URLs, so the database, Redis and RabbitMQ secrets must hold
+URL-safe values. The values comments and README say so.
 */}}
 {{- define "plane.backendEnv" -}}
 {{- $bucket := include "plane.bucket" . -}}
@@ -508,22 +524,24 @@ would break these URLs. The values comments say so.
 - name: DEBUG
   value: "0"
 # ── Database (postgres subchart) ──
-- name: POSTGRES_USER
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.postgresUsername
-- name: POSTGRES_PASSWORD
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.postgresPassword
+- name: DB_USER
+  value: cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.username
+- name: DB_PASSWORD
+  value: cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.password
+- name: DB_NAME
+  value: cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.database
 - name: DATABASE_URL
-  value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "plane.postgres.host" . }}:5432/{{ .Values.postgres.credentials.database }}
+  value: postgresql://$(DB_USER):$(DB_PASSWORD)@{{ include "plane.postgres.host" . }}:5432/$(DB_NAME)
 # ── Redis (bundled) — Django cache; also the live editor's channel ──
 - name: REDIS_PASSWORD
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.redisPassword
+  value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
 - name: REDIS_URL
   value: redis://:$(REDIS_PASSWORD)@{{ include "plane.redis.host" . }}:6379/
 # ── RabbitMQ (bundled) — the Celery broker ──
 - name: RABBITMQ_USER
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.mqUsername
+  value: cpln://secret/{{ .Values.rabbitmq.credentialsSecretName }}.username
 - name: RABBITMQ_PASSWORD
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.mqPassword
+  value: cpln://secret/{{ .Values.rabbitmq.credentialsSecretName }}.password
 - name: AMQP_URL
   value: amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@{{ include "plane.mq.host" . }}:5672/{{ .Values.rabbitmq.vhost }}
 # ── Uploads ──
@@ -550,9 +568,9 @@ would break these URLs. The values comments say so.
 - name: AWS_S3_ENDPOINT_URL
   value: http://{{ include "plane.minio.host" . }}:9000
 - name: AWS_ACCESS_KEY_ID
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioAccessKey
+  value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.accessKey
 - name: AWS_SECRET_ACCESS_KEY
-  value: cpln://secret/{{ include "plane.secret.creds.name" . }}.minioSecretKey
+  value: cpln://secret/{{ .Values.storage.minio.credentialsSecretName }}.secretKey
 {{- /*
   Plane sets NO SECURE_PROXY_SSL_HEADER, so behind the mesh `request.scheme` is
   always http and presigned URLs would come back as http:// on an https page —

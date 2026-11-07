@@ -24,13 +24,13 @@ spec:
   containers:
     - name: worker
       image: makeplane/plane-backend:{{ .Values.plane.imageTag }}
-      # Wrapper, not the image entrypoint: it derives the APP workload's public
-      # URL before handing off, because CPLN_GLOBAL_ENDPOINT is per-workload and
-      # this one has no inbound at all. Invoked as `bash <path>` because a
-      # secret-mounted file is not executable.
+      # Wrapper, not the image entrypoint (plane.script.worker): it derives the
+      # APP workload's public URL and pins the Celery pool width. Inline, so no
+      # secret or reveal grant is needed for it.
       command: /bin/bash
       args:
-        - /cpln/start.sh
+        - "-c"
+        - {{- include "plane.inlineScript" (include "plane.script.worker" .) | nindent 10 }}
       inheritEnv: false
       minCpu: {{ .Values.worker.resources.minCpu | quote }}
       cpu: {{ .Values.worker.resources.maxCpu | quote }}
@@ -38,14 +38,22 @@ spec:
       memory: {{ .Values.worker.resources.maxMemory | quote }}
       env:
         {{- include "plane.backendEnv" . | nindent 8 }}
-      volumes:
-        - path: /cpln/start.sh
-          recoveryPolicy: retain
-          uri: cpln://secret/{{ include "plane.secret.workerStart.name" . }}.payload
   defaultOptions:
     {{- include "plane.defaultOptions" (dict "timeout" 300) | nindent 4 }}
   localOptions:
     {{- include "plane.localOptions" (dict "root" . "replicas" (int .Values.worker.replicas) "timeout" 300) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is RETAINED on a `standard` workload (the API drops
+      it only on stateful ones). 25% of 1 replica rounds down to 0 unavailable
+      and the surge up to 1, so a single replica is replaced before it stops.
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}

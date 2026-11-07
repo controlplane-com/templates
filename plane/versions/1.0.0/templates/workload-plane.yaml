@@ -179,7 +179,7 @@ spec:
         # `Redis client not initialized` and exits. This is what synchronises
         # documents across replicas, so plane.replicas > 1 needs no stickiness.
         - name: REDIS_PASSWORD
-          value: cpln://secret/{{ include "plane.secret.creds.name" . }}.redisPassword
+          value: cpln://secret/{{ .Values.redis.credentialsSecretName }}.password
         - name: REDIS_URL
           value: redis://:$(REDIS_PASSWORD)@{{ include "plane.redis.host" . }}:6379/
       readinessProbe:
@@ -259,6 +259,18 @@ spec:
     {{- include "plane.defaultOptions" (dict "timeout" 300) | nindent 4 }}
   localOptions:
     {{- include "plane.localOptions" (dict "root" . "replicas" (int .Values.plane.replicas) "timeout" 300) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is RETAINED on a `standard` workload (the API drops
+      it only on stateful ones). 25% of 1 replica rounds down to 0 unavailable
+      and the surge up to 1, so a single replica is replaced before it stops.
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    maxUnavailableReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       {{- include "plane.externalFirewall" (dict "root" . "public" true) | nindent 6 }}

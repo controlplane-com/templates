@@ -80,7 +80,7 @@ steps:
             options:
               - value: aws
                 label: AWS S3
-                description: Keyless access through a Control Plane cloud account and an IAM policy.
+                description: Keyless access through a Control Plane cloud account and an IAM policy. Choosing it clears an S3-compatible endpoint and keys secret.
                 set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
               - value: compatible
                 label: S3-compatible

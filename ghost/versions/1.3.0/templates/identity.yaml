@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "ghost.identity.name" . }}
+description: Ghost workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "ghost.tags" . | nindent 4 }}

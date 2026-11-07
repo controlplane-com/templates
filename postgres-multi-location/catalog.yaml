@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: PostgreSQL (multi-location)
+category: database
+family: postgres
+topology: multi-location
+
+summary: >-
+  One Patroni-managed PostgreSQL cluster with members in several locations of an existing GVC:
+  a single primary, asynchronous streaming replicas elsewhere and a bundled etcd member per
+  location. With three or more locations a replica in a surviving location is promoted
+  automatically when the primary's location is lost; two give a warm standby with manual
+  promotion. HAProxy in each location routes to the primary, with optional PgBouncer and
+  backups to S3, GCS or MinIO. Pick it when Postgres must survive a region outage.
+
+keywords:
+  - postgresql
+  - pg
+  - sql
+  - multi-region
+  - cross-region replication
+  - region failover
+  - disaster recovery
+  - geo-redundant database
+  - automatic failover
+  - warm standby
+  - patroni
+  - etcd
+  - haproxy
+  - streaming replication
+  - pgbouncer
+  - connection pooling
+  - wal-g
+  - point-in-time recovery
+  - database backups
+
+useCases:
+  - Relational database that keeps serving after a cloud region outage
+  - Disaster recovery for Postgres with standbys in other regions
+  - One Postgres primary for an app that already runs in several locations
+  - Cross-region Postgres with continuous WAL archiving to object storage
+
+alternativeTo:
+  - Amazon Aurora Global Database
+  - Amazon RDS for PostgreSQL
+  - Google Cloud SQL for PostgreSQL
+  - Azure Database for PostgreSQL
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: active-active writes accepted in every region
+    template: pgedge
+  - need: automatic failover inside one location without cross-region traffic
+    template: postgres-highly-available
+  - need: a single Postgres server in one location
+    template: postgres
+  - need: distributed SQL that scales writes out and survives a region loss, with PostgreSQL drivers
+    template: cockroach
+
+related:
+  - template: redis-multi-location
+    relation: companion
+    note: Redis or Valkey cache that also spans locations and survives a location loss
+  - template: dbeaver
+    relation: companion
+    note: Browser-based SQL client for querying and administering the database
+
+prerequisites:
+  - kind: other
+    valuesPath: global.locations
+    required: true
+    description: An existing GVC with at least two locations (three for automatic failover); every location in global.locations must be one of them or members refuse to start.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.credentialsSecretName
+    required: true
+    description: Database credentials. Create it before installing; when it is missing the deployment waits on it and looks broken.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket, backup.minio.bucket]
+    required: false
+    when: backup.enabled
+    description: Object storage bucket for the logical dumps or WAL-G archives; for wal-g with MinIO it must be reachable from every location.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled with backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (object read, write, delete and list actions); the README has the JSON.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: backup.minio.credentialsSecretName
+    required: false
+    when: backup.enabled with backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

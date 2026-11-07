@@ -1,0 +1,219 @@
+# Feature checks for the aegra template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (redis_password, probe, aegra_version).
+#
+# The checks are Python (standard library only) run in the Aegra container against its own API on
+# 127.0.0.1:2026; Redis is reached with raw RESP over a socket (the image has no redis-cli). The runner
+# reads any {word} as a placeholder, so the scripts use % formatting and concatenation, never f-strings.
+checks:
+  - id: assistants-registered
+    description: Aegra reports the version in the baseline var aegra_version and the default image's example graphs are registered as assistants.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:2026'
+        def call(m, p, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(B + p, data=data, method=m, headers={'content-type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read() or b'null')
+        info = call('GET', '/info')
+        graphs = sorted(a['graph_id'] for a in call('POST', '/assistants/search', dict(limit=100)))
+        ok = str(info.get('version', '')) == '{aegra_version}' and 'stress_test' in graphs
+        print('ASSISTANTS_OK' if ok else 'ASSISTANTS_BAD %s %s' % (info.get('version'), graphs))
+        PY
+    expect:
+      stdout: "^ASSISTANTS_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: run-completes
+    description: >-
+      A run of the stress_test graph completes with its three steps through PostgreSQL and the worker
+      executor, and a run told to fail is recorded with status error.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.request
+        B = 'http://127.0.0.1:2026'
+        def call(m, p, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(B + p, data=data, method=m, headers={'content-type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read() or b'null')
+        def msg(cfg):
+            return dict(messages=[dict(role='user', content=json.dumps(cfg))])
+        t = call('POST', '/threads', dict())['thread_id']
+        out = call('POST', '/threads/' + t + '/runs/wait', dict(assistant_id='stress_test', input=msg(dict(delay=0.2, steps=3))))
+        last = json.loads(out['messages'][-1]['content'])
+        print('RUN_OK' if out.get('step_count') == 3 and last.get('status') == 'completed' else 'RUN_BAD %s' % json.dumps(out)[:300])
+        t2 = call('POST', '/threads', dict())['thread_id']
+        r = call('POST', '/threads/' + t2 + '/runs', dict(assistant_id='stress_test', input=msg(dict(delay=0.2, steps=1, fail=True))))
+        st = None
+        for _ in range(60):
+            st = call('GET', '/threads/' + t2 + '/runs/' + r['run_id'])['status']
+            if st not in ('pending', 'running'):
+                break
+            time.sleep(1)
+        print('FAIL_RECORDED' if st == 'error' else 'FAIL_NOT_RECORDED %s' % st)
+        PY
+    expect:
+      stdout: "(?s)^RUN_OK\nFAIL_RECORDED$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
+  - id: background-run-uses-redis
+    description: >-
+      While a background run executes, its event stream lives in the bundled Redis (the Redis broker is on,
+      not the in-process executor), and the run then succeeds.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import json, socket, time, urllib.request
+        B = 'http://127.0.0.1:2026'
+        HOST = '{release}-redis.{gvc}.cpln.local'
+        PW = '{redis_password}'
+        def call(m, p, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(B + p, data=data, method=m, headers={'content-type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read() or b'null')
+        def reply(f):
+            line = f.readline().decode().rstrip('\r\n')
+            kind, rest = line[0], line[1:]
+            if kind == '$':
+                n = int(rest)
+                return None if n < 0 else f.read(n + 2)[:-2].decode()
+            if kind == '*':
+                return [reply(f) for _ in range(int(rest))]
+            return line
+        def redis(*cmds):
+            s = socket.create_connection((HOST, 6379), timeout=10)
+            f = s.makefile('rb')
+            out = []
+            for c in cmds:
+                s.sendall(('*%d\r\n' % len(c) + ''.join('$%d\r\n%s\r\n' % (len(x.encode()), x) for x in c)).encode())
+                out.append(reply(f))
+            s.close()
+            return out
+        t = call('POST', '/threads', dict())['thread_id']
+        cfg = json.dumps(dict(delay=1, steps=8))
+        r = call('POST', '/threads/' + t + '/runs', dict(assistant_id='stress_test', input=dict(messages=[dict(role='user', content=cfg)]), stream_resumable=True))
+        keys = []
+        for _ in range(8):
+            time.sleep(1)
+            keys = [k for k in redis(['AUTH', PW], ['SCAN', '0', 'MATCH', 'aegra:*', 'COUNT', '1000'])[1][1] if r['run_id'] in k]
+            if keys:
+                break
+        print('BROKER_KEYS' if keys else 'NO_BROKER_KEYS')
+        st = None
+        for _ in range(60):
+            st = call('GET', '/threads/' + t + '/runs/' + r['run_id'])['status']
+            if st not in ('pending', 'running'):
+                break
+            time.sleep(1)
+        print('BG_OK' if st == 'success' else 'BG_BAD %s' % st)
+        PY
+    expect:
+      stdout: "(?s)^BROKER_KEYS\nBG_OK$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
+  - id: redis-requires-auth
+    description: The bundled Redis refuses a command without the password and answers with it.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import socket
+        HOST = '{release}-redis.{gvc}.cpln.local'
+        def replies(cmds):
+            s = socket.create_connection((HOST, 6379), timeout=10)
+            f = s.makefile('rb')
+            out = []
+            for c in cmds:
+                s.sendall(('*%d\r\n' % len(c) + ''.join('$%d\r\n%s\r\n' % (len(x.encode()), x) for x in c)).encode())
+                out.append(f.readline().decode().rstrip('\r\n'))
+            s.close()
+            return out
+        noauth = replies([['PING']])[0]
+        authed = replies([['AUTH', '{redis_password}'], ['PING']])
+        print('NOAUTH' if noauth.startswith('-NOAUTH') else 'OPEN %r' % noauth)
+        print('PONG' if authed == ['+OK', '+PONG'] else 'AUTH_BAD %r' % authed)
+        PY
+    expect:
+      stdout: "(?s)^NOAUTH\nPONG$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: agent-secret-delivered
+    description: Each key listed in agentSecrets.keys reaches the agent as an env var holding the secret's value.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import os
+        v = os.environ.get('E2E_PROBE', '')
+        print('SECRET_OK' if v == '{probe}' and 'cpln://' not in v else 'SECRET_BAD len=%d' % len(v))
+        PY
+    expect:
+      stdout: "^SECRET_OK$"
+
+  - id: thread-written
+    description: >-
+      A thread tagged with the running version is stored in PostgreSQL and found again by search.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:2026'
+        def call(m, p, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(B + p, data=data, method=m, headers={'content-type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read() or b'null')
+        t = call('POST', '/threads', dict(metadata=dict(e2e='persist-{version}')))
+        found = call('POST', '/threads/search', dict(metadata=dict(e2e='persist-{version}'), limit=100))
+        ids = [x.get('thread_id') for x in found or []]
+        print('WRITTEN %s' % t['thread_id'] if t.get('thread_id') in ids else 'WRITE_BAD %s' % ids)
+        PY
+    expect:
+      stdout: "^WRITTEN "
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: thread-persists
+    description: >-
+      The thread written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the database carried over. Never writes.
+    exec:
+      workload: "{release}-aegra"
+      container: aegra
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:2026'
+        req = urllib.request.Request(B + '/threads/search', method='POST', headers={'content-type': 'application/json'},
+                                     data=json.dumps(dict(metadata=dict(e2e='persist-{installed_version}'), limit=10)).encode())
+        with urllib.request.urlopen(req, timeout=60) as r:
+            found = json.loads(r.read() or b'null')
+        print('PERSISTED' if found else 'MISSING (no thread tagged persist-{installed_version})')
+        PY
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

@@ -50,7 +50,7 @@ customDomain: ""              # full URL of a custom domain (e.g. https://vault.
 ```yaml
 signups:
   allowed: true               # open registration — turn off after onboarding your users
-  domainsWhitelist: []        # email domains that may register even when allowed=false, e.g. [mycompany.com]
+  domainsWhitelist: []        # when set, ONLY these email domains can register (overrides allowed) and receive org invites, e.g. [mycompany.com]
   verify: false               # require email verification at registration (needs smtp.host)
 
 invitations:
@@ -105,7 +105,7 @@ internalAccess:               # internal firewall scope — keep closed for a pa
 
 ## Important Notes
 
-- **Lock down registration after onboarding.** Sign-ups are open by default so the install works immediately — but that means anyone reaching the public endpoint can register. Once your users are on board, set `signups.allowed=false`, or restrict with `signups.domainsWhitelist` (whitelisted domains can register even with signups off).
+- **Lock down registration after onboarding.** Sign-ups are open by default so the install works immediately — but that means anyone reaching the public endpoint can register. Once your users are on board, set `signups.allowed=false`, or restrict with `signups.domainsWhitelist` (a non-empty list overrides `signups.allowed`: only those email domains can register or be invited to an organization).
 - **Vault contents are end-to-end encrypted** with each user's master password — but master passwords are unrecoverable: without SMTP (password hint emails are off) a forgotten master password means a lost vault.
 - **Admin panel settings override Helm values.** Saving settings in `/admin` writes `/data/config.json`, which silently wins over env vars from then on. If a values change does not take effect, delete that file to return control to values.
 - **Do not change the domain casually** — passkey/WebAuthn logins are bound to the exact URL; switching between the canonical endpoint and a custom domain breaks them until re-registered.

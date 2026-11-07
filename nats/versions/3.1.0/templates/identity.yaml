@@ -1,0 +1,6 @@
+{{- include "nats.validate" . }}
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "nats.identity.name" . }}
+description: NATS identity
+tags: {{- include "nats.tags" . | nindent 4 }}

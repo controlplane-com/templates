@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: External Secret Syncer (ESS)
+category: secrets
+topology: stateless
+
+summary: >-
+  External Secret Syncer: one workload that polls HashiCorp Vault, AWS Secrets Manager, AWS Parameter
+  Store, GCP Secret Manager, Doppler, 1Password, 1Password Connect and Infisical on a schedule and
+  creates or updates matching Control Plane opaque or dictionary secrets. It can sync single values,
+  flatten JSON into dictionaries, pull whole Doppler or GCP projects, and mirror every secret in a GCP
+  project. Pick it to keep an existing external secrets manager as the source of truth for workloads.
+
+keywords:
+  - external secrets
+  - secret sync
+  - secrets synchronization
+  - hashicorp vault
+  - aws secrets manager
+  - aws parameter store
+  - ssm parameter store
+  - gcp secret manager
+  - google secret manager
+  - doppler
+  - 1password
+  - 1password connect
+  - infisical
+  - secret mirroring
+
+useCases:
+  - Sync secrets from HashiCorp Vault into Control Plane secrets on a schedule
+  - Use AWS Secrets Manager or Parameter Store values in workloads without copying them by hand
+  - Mirror every secret of a GCP Secret Manager project into Control Plane secrets
+  - Pull a Doppler project config or a 1Password vault item into workload secrets
+  - Pick up rotated credentials from an external secrets manager automatically
+
+alternativeTo:
+  - External Secrets Operator
+  - Vault Secrets Operator
+  - Secrets Store CSI Driver
+  - Vault Agent
+
+pickInsteadIf:
+  - need: run your own secrets manager with a UI and API to store and version app secrets
+    template: infisical
+  - need: a Vault-compatible secrets engine with dynamic secrets, PKI and transit encryption
+    template: openbao
+  - need: copy keys of Control Plane dictionary secrets into GVC or workload environment variables
+    template: secret-env-var-syncer
+
+related:
+  - template: infisical
+    relation: companion
+    note: Self-hosted Infisical that ESS can use as a source provider
+  - template: secret-env-var-syncer
+    relation: companion
+    note: Turns the dictionary secrets ESS writes into environment variables on GVCs or workloads
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: configSecretName
+    required: true
+    description: Your full sync.yaml (providers with their credentials, and the secrets to sync). Create it before installing; when missing the workload waits with no logs.

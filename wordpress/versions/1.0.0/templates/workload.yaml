@@ -1,0 +1,188 @@
+{{- include "wordpress.validate" . }}
+kind: workload
+name: {{ include "wordpress.name" . }}
+description: WordPress — Apache + mod_php serving the site and wp-admin
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "wordpress.tags" . | nindent 4 }}
+spec:
+  # `standard`, not `stateful`: this tier is a stateless PHP server. All state is
+  # in the database and on the read-write-many docroot volume. Standard workloads
+  # may mount a `shared` volumeset.
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "wordpress.identity.name" . }}
+  containers:
+    - name: wordpress
+      image: {{ .Values.wordpress.image }}
+      # The inline start script (templates/_script-start.tpl) elects one replica to
+      # seed the shared docroot and create the admin account BEFORE Apache binds,
+      # then execs the image's own apache2-foreground.
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{- include "wordpress.inlineScript" (include "wordpress.script.start" .) | nindent 10 }}
+      inheritEnv: false
+      minCpu: {{ .Values.wordpress.resources.minCpu | quote }}
+      minMemory: {{ .Values.wordpress.resources.minMemory | quote }}
+      cpu: {{ .Values.wordpress.resources.maxCpu | quote }}
+      memory: {{ .Values.wordpress.resources.maxMemory | quote }}
+      env:
+        # ── Database (mariadb subchart) ──
+        # wp-config-docker.php resolves these with getenv() on every request, so
+        # they stay platform-resolved secret references and are never
+        # interpolated into a string at render time.
+        - name: WORDPRESS_DB_HOST
+          value: {{ include "wordpress.mariadb.host" . }}
+        - name: WORDPRESS_DB_USER
+          value: 'cpln://secret/{{ include "wordpress.secret.db.name" . }}.username'
+        - name: WORDPRESS_DB_PASSWORD
+          value: 'cpln://secret/{{ include "wordpress.secret.db.name" . }}.password'
+        - name: WORDPRESS_DB_NAME
+          value: 'cpln://secret/{{ include "wordpress.secret.db.name" . }}.database'
+        - name: WORDPRESS_TABLE_PREFIX
+          value: {{ .Values.wordpress.tablePrefix | quote }}
+        # Any non-empty value is truthy to wp-config-docker.php, so `false` must
+        # render as an EMPTY string, never the word "false".
+        - name: WORDPRESS_DEBUG
+          value: {{ if .Values.wordpress.debug }}"1"{{ else }}""{{ end }}
+        # eval()-ed by wp-config.php on every request.
+        - name: WORDPRESS_CONFIG_EXTRA
+          value: |-
+            // The platform injects X-Forwarded-Proto on INTERNAL GVC hops too, not
+            // only at the public edge. Without this WordPress builds http:// URLs
+            // behind the TLS edge and redirect-loops. Deliberately not gated on
+            // publicAccess.
+            if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { $_SERVER['HTTPS'] = 'on'; }
+            // WordPress decides it may write files by comparing getmyuid() with
+            // fileowner(). On a group-owned network mount that comparison fails and
+            // the admin is asked for FTP credentials on every plugin install.
+            define('FS_METHOD', 'direct');
+            $cpln_site_url = getenv('WP_SITE_URL');
+            if ($cpln_site_url) { define('WP_HOME', $cpln_site_url); define('WP_SITEURL', $cpln_site_url); }
+        # ── First-run bootstrap (read by the start script's installer only) ──
+        - name: WP_SITE_TITLE
+          value: {{ .Values.wordpress.siteTitle | quote }}
+        - name: WP_ADMIN_USERNAME
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
+        - name: WP_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+        - name: WP_ADMIN_EMAIL
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.email'
+      ports:
+        - number: 80
+          protocol: http
+      volumes:
+        - path: /var/www/html
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "wordpress.volume.name" . }}
+      # WordPress ships no health endpoint: / and /wp-login.php redirect before
+      # install and on host/scheme mismatch, and a static asset would prove Apache
+      # is up while PHP or the database is down. The start script writes
+      # cpln-health.php into the docroot instead.
+      #
+      # Readiness runs the DEEP check (PHP + database + is_blog_installed). The
+      # platform derives a startup probe from it: a never-ready container is killed
+      # after about initialDelaySeconds + 30 x periodSeconds = 920 s, which covers
+      # every boot gate in the start script (worst case ~830 s). A sick replica
+      # leaves rotation after 3 x 30 = 90 s.
+      readinessProbe:
+        httpGet:
+          path: /cpln-health.php
+          port: 80
+          scheme: HTTP
+        initialDelaySeconds: 20
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      # Liveness runs the SHALLOW check, deliberately database-independent: a
+      # database blip takes the replica out of rotation (readiness) without
+      # restarting it. Its first possible kill, 600 + 10 x 30 = 900 s, also sits
+      # past every boot gate.
+      livenessProbe:
+        httpGet:
+          path: /cpln-health.php?shallow=1
+          port: 80
+          scheme: HTTP
+        initialDelaySeconds: 600
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    # Sent as a COMPLETE block: the API backfills PARTIAL blocks from its own
+    # platform defaults, not from this workload's settings.
+    #
+    # minScale/maxScale 0 pins WordPress to one location: without this, every extra
+    # GVC location runs a separate WordPress with its own volume. `localOptions` below
+    # supplies the real count for the ONE configured location; any other location
+    # gets desiredScale 0 and reports `This workload location is deactivated
+    # because maxScale is set to 0`.
+    autoscaling:
+      metric: disabled
+      minScale: 0
+      maxScale: 0
+      maxConcurrency: 0
+      target: 95
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  localOptions:
+    # A localOptions entry is a FULL override, not a patch: every field
+    # defaultOptions carries is repeated here, because the API backfills its OWN
+    # platform defaults for anything left out -- not this workload's defaults.
+    - autoscaling:
+        metric: disabled
+        minScale: {{ .Values.wordpress.replicas | int }}
+        maxScale: {{ .Values.wordpress.replicas | int }}
+        maxConcurrency: 0
+        target: 95
+        scaleToZeroDelay: 300
+      capacityAI: false
+      debug: false
+      location: //location/{{ .Values.location }}
+      suspend: false
+      timeoutSeconds: 30
+  # rolloutOptions is omitted ENTIRELY rather than partially: the API backfills a
+  # partial block, and maxUnavailableReplicas is silently dropped on some
+  # workload types, which would imply a rollout limit that is not in force.
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      {{- /* Send the whole block; the API backfills these three. */}}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- /*
+        This release's own workloads are merged in unconditionally: a
+        workload-list naming only the user's clients would otherwise deny the
+        release its own internal paths. A link the user also listed is emitted
+        ONCE — a duplicate array entry is a drift candidate. Same shape as
+        calcom.internalFirewall and documenso's workload.
+      */}}
+      {{- $own := splitList "\n" (trim (include "wordpress.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "wordpress.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else }}
+      {{- /* Emitted as [] on every type; a partial `internal` block is backfilled by the API. */}}
+      inboundAllowWorkload: []
+      {{- end }}
+  # Declared rather than left to the API, which stores `false` either way: an
+  # undeclared field is a permanent rendered-vs-stored difference.
+  supportDynamicTags: false

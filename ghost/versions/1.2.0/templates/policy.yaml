@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "ghost.policy.name" . }}
+description: Ghost secret access
+tags: {{- include "ghost.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ghost.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "ghost.secretStart.name" . }}
+  - //secret/{{ include "ghost.mysql.secretName" . }}
+  {{- if .Values.mail.secretName }}
+  - //secret/{{ .Values.mail.secretName }}
+  {{- end }}

@@ -1,0 +1,76 @@
+# ─── Image & Resources ────────────────────────────────────────────────────────
+image: ghcr.io/open-webui/open-webui:v0.12.4 # tags below v0.12.4 of this image are refused (Critical CVEs)
+
+resources:
+  maxCpu: 1        # max vCPU
+  maxMemory: 2Gi   # max memory (first boot downloads a ~900 MB RAG embedding model from huggingface.co and loads it into RAM)
+  minCpu: 500m
+  minMemory: 1Gi
+
+# ─── Persistence ──────────────────────────────────────────────────────────────
+# One per-replica volume holds everything durable: SQLite webui.db, uploaded
+# files, the default Chroma vector store (RAG), and cache. Mounts /app/backend/data.
+volumeset:
+  capacity: 10 # GiB (platform minimum 10)
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+# Platform-managed crash-consistent snapshots (no cloud account/bucket needed).
+# SQLite recovers cleanly from a snapshot. A final snapshot is taken on uninstall.
+backup:
+  enabled: true
+  schedule: "0 3 * * *" # cron in UTC — daily 03:00 (hourly is the platform max)
+  retention: 7d         # how long each snapshot is kept (e.g. 7d, 720h, 30d)
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+auth:
+  # REQUIRED opaque secret (encoding: plain) holding the session/JWT signing key.
+  # It must EXIST BEFORE INSTALL — the deployment wedges waiting on it otherwise —
+  # and must stay the same forever: replacing it logs every user out.
+  # Create it with: printf '%s' "$(openssl rand -base64 32)" | cpln secret create-opaque --name my-openwebui-secret-key --encoding plain -f -
+  secretKeyName: my-openwebui-secret-key
+
+# REQUIRED dictionary secret with keys `email` and `password`: the admin account,
+# created at first boot before the UI serves anything (sign-up then stays off).
+# It must EXIST BEFORE INSTALL. Read on first boot only; change the password in the UI.
+# Create it with: cpln secret create-dictionary --name my-openwebui-admin --entry email=you@example.com --entry 'password=...'
+admin:
+  secretName: my-openwebui-admin
+
+# ─── Model backends ───────────────────────────────────────────────────────────
+# Point at an existing `ollama` template deployment in this same GVC.
+ollama:
+  enabled: false # true = connect to an existing ollama workload in this GVC
+  workloadName: "" # its workload name, e.g. my-ollama-ollama for an ollama release named my-ollama; required when enabled
+  port: 11434
+  # → OLLAMA_BASE_URL = http://{workloadName}.{gvc}.cpln.local:{port}
+
+# Optional OpenAI-compatible provider. The API key is a PREREQUISITE opaque
+# secret (encoding: plain) you create BEFORE install; reference it by name here.
+# Empty apiKeySecretName = this backend is off.
+openai:
+  baseUrl: https://api.openai.com/v1 # any OpenAI-compatible endpoint
+  apiKeySecretName: "" # e.g. my-openwebui-openai-key ; empty = OpenAI backend off
+
+# ─── Control Plane MCP ────────────────────────────────────────────────────────
+# Adds the Control Plane MCP server (https://mcp.cpln.io) as a tool server, once per
+# install, signing in as the admin from admin.secretName. Each user then connects their
+# own Control Plane account, so tools act with that user's permissions.
+cplnMcp:
+  enabled: true # false = no Control Plane tool server
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+# Sets WEBUI_URL only — it does NOT create a cpln domain. Create and verify the
+# domain separately, or the hostname will not resolve. Read at FIRST BOOT ONLY
+# (see Important Notes); set it at install, not in a later upgrade.
+customDomain: "" # full URL, e.g. https://chat.example.com ; empty = canonical *.cpln.app
+
+publicAccess:
+  # true = the chat UI and its sign-in form are on the canonical *.cpln.app URL.
+  # Safe by default: the admin exists before the UI serves and sign-up is off.
+  enabled: true
+
+internalAccess: # inbound firewall scope for in-GVC callers of the Open WebUI API
+  type: none # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

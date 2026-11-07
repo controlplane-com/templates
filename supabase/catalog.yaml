@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Supabase
+category: database
+topology: single
+
+summary: >-
+  Self-hosted Supabase: one Supabase Postgres server with GoTrue auth, a PostgREST API, Realtime
+  change subscriptions, a Storage API for files and the Studio dashboard, behind a Kong gateway
+  that checks the anon and service-role keys. Storage uses AWS S3 by default, or an
+  S3-compatible store, GCS or a local volume. Options: a public endpoint, SMTP email, OAuth
+  providers, PgBouncer and pg_dump or WAL-G backups to S3 or GCS. Pick it as a Firebase-style
+  backend for apps built on the Supabase client libraries.
+
+keywords:
+  - backend as a service
+  - baas
+  - postgresql
+  - postgres
+  - authentication
+  - gotrue
+  - postgrest
+  - rest api
+  - realtime
+  - websocket subscriptions
+  - file storage
+  - kong
+  - api gateway
+  - studio dashboard
+  - row level security
+  - jwt
+  - oauth login
+  - magic link
+  - pgvector
+  - pgbouncer
+  - wal-g
+  - database backups
+
+useCases:
+  - Backend for a web or mobile app with sign-up, login and a database API
+  - Self-hosted Firebase-style backend that keeps user data in your own Postgres
+  - Auto-generated REST API over Postgres tables secured by row-level security
+  - Push database row changes to browsers over WebSockets
+  - Store user file uploads in S3 behind access rules
+  - Run apps written against the Supabase client libraries on your own infrastructure
+
+alternativeTo:
+  - Firebase
+  - Supabase Cloud
+  - AWS Amplify
+  - Appwrite
+  - Nhost
+
+compatibleWith: [postgres-wire]
+
+pickInsteadIf:
+  - need: a lightweight backend in one binary with SQLite, REST API, auth and file storage
+    template: pocketbase
+  - need: only a PostgreSQL database, without auth or generated APIs
+    template: postgres
+  - need: a dedicated identity provider with SSO, OIDC and SAML
+    template: keycloak
+
+related:
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for the Storage API instead of AWS S3
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [secret, anonKey, serviceRoleKey, secretKeyBase]
+    valuesPath: jwt.secretName
+    required: true
+    description: JWT signing secret plus anon and service-role keys signed by it, and the Realtime key base. Mint them with the README snippet before installing.
+  - kind: secret
+    secretType: dictionary
+    keys: [password, database]
+    valuesPath: postgres.credentialsSecretName
+    required: true
+    description: Postgres password and database name; the login role is fixed as postgres. Create it before installing or the deployment waits on it.
+  - kind: secret
+    secretType: opaque
+    valuesPath: studio.passwordSecretName
+    required: true
+    description: Studio dashboard password, single line, plain encoding. Needed while studio.enabled, which is the default; Kong enforces it as basic auth.
+  - kind: bucket
+    valuesPath: [storage.s3.bucket, storage.gcs.bucket]
+    required: true
+    description: Bucket for uploaded files. The default storage.backend s3 uses AWS S3; set storage.backend local or storage.enabled false to skip it.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: true
+    description: Control Plane AWS cloud account for the S3 storage bucket. Needed with the default AWS S3 storage backend, not with an S3-compatible endpoint, GCS or local.
+  - kind: other
+    valuesPath: storage.s3.policyName
+    required: true
+    description: AWS IAM policy granting GetObject, PutObject and DeleteObject on the storage bucket. Needed with the default AWS S3 storage backend.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: storage.s3.credentialsSecretName
+    required: false
+    when: storage.backend s3 with storage.s3.endpoint set (MinIO, Cloudflare R2, Wasabi, Backblaze B2)
+    description: Access keys for the S3-compatible storage endpoint.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: storage.gcs.credentialsSecretName
+    required: false
+    when: storage.backend gcs
+    description: GCS HMAC key pair for the storage bucket, created under Cloud Storage interoperability settings.
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.smtp.passwordSecretName
+    required: false
+    when: auth.smtp.enabled
+    description: SMTP password for signup confirmation, magic links and password reset emails.
+  - kind: secret
+    secretType: opaque
+    required: false
+    when: auth.providers.<provider> is set
+    description: One secret per OAuth provider holding its client secret, named in auth.providers.<provider>.clientSecretName.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the logical dumps or WAL-G archives.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the backup bucket's AWS account or GCP project; on GCP grant its service account the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket; the README has the JSON.
+  - kind: domain
+    valuesPath: kong.publicAccess.siteUrl
+    required: false
+    when: kong.publicAccess.enabled and the API should answer on your own hostname
+    description: Custom domain routed to the Kong workload, set as siteUrl for OAuth redirects and email links; otherwise the generated cpln.app endpoint is used.

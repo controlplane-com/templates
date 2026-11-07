@@ -1,0 +1,56 @@
+name: Sync Test Branch
+
+# Keeps `test` = main + test-extras + every open PR to main that passes validation, so each PR's templates
+# and install wizards can be tried in the test console (which syncs from `test`) before the PR merges.
+# The PRs themselves stay open against main. Logic and safety rules: .github/scripts/sync_test_branch.sh.
+#
+# This workflow never checks out or runs PR code: it checks out main and only merges PR commits as data.
+# Its push uses GITHUB_TOKEN, which deliberately does NOT trigger publish-charts on `test` — each PR branch
+# already published its chart versions to the test registry when it was pushed.
+on:
+  # A PR's validation finished (pass or fail): add it, refresh it, or drop it.
+  workflow_run:
+    workflows: [Validate Helm Charts, Validate Catalog Entries]
+    types: [completed]
+  # A PR closed without merging, became a draft or was reopened. (A merge also pushes main, below.)
+  pull_request_target:
+    branches: [main]
+    types: [closed, converted_to_draft, ready_for_review, reopened]
+  # main moved (a merge), or the always-on extras changed.
+  push:
+    branches: [main, test-extras]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and report only; do not push or label'
+        type: boolean
+        default: false
+
+# Each run rebuilds from current state, so the newest run supersedes any older one.
+concurrency:
+  group: sync-test-branch
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  sync:
+    # workflow_run also fires for validations started by publish-charts or by hand; only PR runs matter.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rebuild test branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: bash .github/scripts/sync_test_branch.sh

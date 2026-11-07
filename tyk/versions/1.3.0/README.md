@@ -12,14 +12,14 @@ Tyk is an open-source API gateway that fronts your APIs with authentication, rat
 
 ## Prerequisites
 
-**Three secrets must exist BEFORE you install** — the deployment wedges waiting on a secret that does not exist. All three are referenced by name only, so none of their contents pass through Helm values or land in the release.
+**Three secrets must exist BEFORE you install** — the deployment wedges waiting on a secret that does not exist. `apiSecretName` and `policySecretName` default to the placeholder names `my-tyk-apis` and `my-tyk-policies`, so they count unless you set them to `""`. All three are referenced by name only, so none of their contents pass through Helm values or land in the release.
 
 ### 1. Admin API key (`adminSecretName`)
 
 This is `TYK_GW_SECRET`, the key for the Gateway Control API (`/tyk/*`, sent as the `X-Tyk-Authorization` header). Whoever holds it can create, list and revoke every API key on the gateway, so generate a strong random value:
 
 ```bash
-printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-tyk-admin-secret --encoding plain -f -
+printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -
 ```
 
 ### 2. API definitions (`apiSecretName`)
@@ -92,7 +92,7 @@ data:
 cpln apply -f my-tyk-policies.yaml
 ```
 
-You can manage these two secrets independently after install, as long as their names stay the same. To omit either one, set its value to `""` and it will be left out of the workload configuration.
+You can manage these two secrets independently after install, as long as their names stay the same. To omit either one, explicitly set its value to `""` and it is left out of the workload configuration; leaving the default name in place without creating the secret wedges the install.
 
 ## Configuration
 
@@ -181,16 +181,16 @@ This Redis serves only this gateway and is never reachable from outside the GVC,
 
 | Path | Address | Notes |
 |---|---|---|
-| Public gateway | `https://<canonical-endpoint>` | Only when `externalAccess: true`. Read it from `status.canonicalEndpoint` in `cpln workload get <release>-tyk-api-gateway -o yaml`. |
-| Internal gateway | `http://<release>-tyk-api-gateway.<gvc>.cpln.local:8080` | Subject to `internalAccess.type`. Use `listenPort` if you changed it. |
+| Public gateway | `status.canonicalEndpoint` | Only when `externalAccess: true`. Read it with `cpln workload get RELEASE_NAME-tyk-api-gateway --gvc GVC_NAME -o yaml`. |
+| Internal gateway | `http://RELEASE_NAME-tyk-api-gateway.GVC_NAME.cpln.local:8080` | Subject to `internalAccess.type`. Use `listenPort` if you changed it. |
 | Proxied API | `<gateway address>/<listen_path>` | `listen_path` comes from each API definition, e.g. `/app1`. |
 | Admin API | `<gateway address>/tyk/keys`, `/tyk/apis`, `/tyk/reload` | Send header `X-Tyk-Authorization: <the payload of your adminSecretName secret>`. |
-| Redis / Sentinel | `<release>-redis.<gvc>.cpln.local:6379`, `<release>-sentinel.<gvc>.cpln.local:26379` | Internal only; passwords are the `redis.*.auth.password.value` values. |
+| Redis / Sentinel | `RELEASE_NAME-redis.GVC_NAME.cpln.local:6379`, `RELEASE_NAME-sentinel.GVC_NAME.cpln.local:26379` | Internal only; passwords are the `redis.*.auth.password.value` values. |
 
 Reveal the admin key when you need it:
 
 ```bash
-cpln secret reveal my-tyk-admin-secret
+cpln secret reveal SECRET_NAME -o yaml
 ```
 
 ## Important Notes
@@ -201,8 +201,8 @@ cpln secret reveal my-tyk-admin-secret
 - **`externalAccess: true` puts the Tyk admin API on the internet.** `/tyk/*` is served on the same port as your proxied APIs and cannot be split off, so anyone who guesses or leaks the admin key can mint keys for every API. Prefer leaving it `false` and reaching the gateway from inside the GVC.
 - **`allowMasterKeys: true` grants blanket access.** With it on, any key created through `/tyk/keys` without an `access_rights` section can call **every** API on this gateway. It defaults to `false`, matching upstream Tyk; versions of this template before 1.3.0 forced it on.
 - **Egress is closed.** The gateway's outbound firewall is empty, so it can only proxy to upstream targets inside its own GVC (`*.cpln.local`). Add `outboundAllowCIDR`/`outboundAllowHostname` to the workload to reach APIs on the public internet.
-- **API definitions and policies are read at boot.** After editing either secret, redeploy the gateway workload (or call `/tyk/reload`) for the change to take effect.
-- **Access changes take up to a couple of minutes** to propagate after an `externalAccess` or `internalAccess` change.
+- **API definitions and policies are read at boot.** After editing either secret, run `cpln workload force-redeployment RELEASE_NAME-tyk-api-gateway --gvc GVC_NAME`. A running replica's mounted secret does not change until it redeploys, and `/tyk/reload` reloads only the one replica that answers the request, so it is not a substitute.
+- **Access changes can take several minutes** to propagate after an `externalAccess` or `internalAccess` change; re-test before concluding a change did not apply.
 - **The first `helm upgrade` after an install restarts the bundled Redis**, briefly interrupting rate-limit and key lookups even when nothing changed. Later no-op upgrades do not.
 
 ## Links

@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Prometheus
+category: observability
+topology: single
+
+summary: >-
+  A single Prometheus server with the remote-write receiver enabled, scraping the targets you list and
+  keeping samples in a TSDB on a persistent volume. A Thanos sidecar (on by default) exposes the Store
+  API for a Thanos Query tier and can upload blocks to S3, GCS or an S3-compatible bucket; Prometheus
+  can also forward samples to remote-write stores with basic auth. Internal-only, with no
+  authentication of its own. The default metrics store for your own services in one location.
+
+keywords:
+  - metrics
+  - metrics database
+  - time-series database
+  - tsdb
+  - promql
+  - remote write
+  - metrics scraping
+  - scrape config
+  - monitoring
+  - application metrics
+  - custom metrics
+  - thanos sidecar
+  - object storage
+
+useCases:
+  - Collect and store metrics scraped from my own services
+  - Receive Prometheus remote-write metrics from agents and collectors
+  - Query application metrics with PromQL from Grafana or scripts
+  - Run two identical Prometheus instances deduplicated by a Thanos Query tier
+  - Ship metric blocks to an S3 or GCS bucket for durability
+  - Forward metrics to another remote-write store
+
+alternativeTo:
+  - Amazon Managed Service for Prometheus
+  - Google Cloud Managed Service for Prometheus
+  - Azure Monitor managed service for Prometheus
+  - Grafana Cloud
+  - Datadog
+  - VictoriaMetrics
+
+compatibleWith: [prometheus-remote-write, promql]
+
+pickInsteadIf:
+  - need: long-term, multi-tenant metrics store that keeps all blocks in object storage
+    template: mimir
+  - need: one PromQL query across several Prometheus servers or regions with HA deduplication
+    template: thanos
+  - need: dashboards, alerting and a login-protected UI over my metrics
+    template: grafana
+  - need: receive OTLP traces and metrics from OpenTelemetry SDKs
+    template: otel-collector
+
+related:
+  - template: grafana
+    relation: companion
+    note: Dashboards and alerting with this Prometheus as a datasource
+  - template: thanos
+    relation: companion
+    note: Global query and long-term reads over this server's Thanos sidecar
+
+prerequisites:
+  - kind: bucket
+    valuesPath: [thanos.objectStorage.aws.bucket, thanos.objectStorage.gcp.bucket, thanos.objectStorage.minio.bucket]
+    required: false
+    when: thanos.objectStorage.enabled
+    description: Bucket on AWS S3, GCS or an S3-compatible server that receives the TSDB blocks the Thanos sidecar uploads. It must exist before install.
+  - kind: cloud-account
+    valuesPath: [thanos.objectStorage.aws.cloudAccountName, thanos.objectStorage.gcp.cloudAccountName]
+    required: false
+    when: thanos.objectStorage.enabled with thanos.objectStorage.type aws or gcp
+    description: Control Plane cloud account for the AWS or GCP account holding the bucket; access is keyless. The render fails without its name.
+  - kind: other
+    valuesPath: thanos.objectStorage.aws.policyName
+    required: false
+    when: thanos.objectStorage.enabled with thanos.objectStorage.type aws
+    description: AWS IAM policy granting ListBucket, GetObject, PutObject and DeleteObject on the bucket, attached to the workload identity. The render fails without its name.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: thanos.objectStorage.minio.credentialsSecretName
+    required: false
+    when: thanos.objectStorage.enabled with thanos.objectStorage.type minio
+    description: Access keys for the MinIO or S3-compatible bucket endpoint.
+  - kind: secret
+    secretType: opaque
+    required: false
+    when: a remoteWrite entry sets basicAuth
+    description: Password for one remote-write endpoint, named in remoteWrite[].basicAuth.passwordSecretName. The deployment waits without it.

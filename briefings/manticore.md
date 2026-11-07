@@ -26,17 +26,18 @@
 | `identity` ×3–6 + `policy` ×3–5 | S3 via cloud account; `reveal` on exactly four secrets; `exec.runCronWorkload` so the API can trigger the job |
 | `domain` | Optional; `/api/*` → orchestrator API, `/*` → UI |
 
-## Key knobs (defaults as shipped in 2.1.0)
+## Key knobs (defaults as shipped in 2.2.0)
 
 | Knob | Default | Meaning |
 |---|---|---|
 | `orchestrator.agent.tokenSecretName` | `my-manticore-agent-token` | **REQUIRED prerequisite opaque secret** — must exist before install |
 | `orchestrator.ui.publicAccess.enabled` | `false` | Was `allowExternalAccess: true` in 2.0.x. See the trap below |
 | `orchestrator.ui.internalAccess.type` | `same-gvc` | New in 2.1.0; was hardcoded |
+| `orchestrator.agent.resources.maxCpu` / `.maxMemory` | `250m` / `512Mi` | Renamed from `cpu` / `memory` in 2.2.0 (the block also has `minCpu`/`minMemory`); the old names `fail` |
 | `manticore.autoscaling.minScale` / `maxScale` | `3` / `4` | `minScale` is also the replica count the orchestrator coordinates across |
 | `manticore.resources.cpu` / `.memory` | `4` / `8Gi` | Limits only — bare names are correct per the 2026-08-06 ruling |
 | `manticore.volumeset.capacity` / `sharedVolumeset.capacity` | `200` / `100` (GB) | Sized for real datasets; shrink for a trial install |
-| `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below) |
+| `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below). `buckets.awsRegion` is not read by any template |
 | `orchestrator.action` / `schedule` / `suspend` | `import` / hourly / `true` | The cron ships suspended; the schedule only matters once un-suspended |
 | `tables[]` | one `addresses` example | `segmentCount` must equal `len(csvPath)` — enforced by a render-time `fail` |
 | `orchestrator.backup.*` | disabled | Separate bucket, cloud account and policy — the only one needing S3 write |
@@ -63,3 +64,4 @@
 - 2.1.0 is a security fix (token secret, UI default, org-wide policy grant), drift pre-emption, and — after two test rounds — the first version in which `orchestrator.backup.*` has ever worked.
 - Live-tested end to end on `test-gvc-3`: cluster bootstrap, import from S3 under a read-only policy, delta + main backup to a real bucket, restore, `repair`, the k6 load test, both access knobs, and a no-op-upgrade drift gate (all `Updated` resources proved spec-identical; only the release tag moved).
 - **Open for the maintainer:** multi-segment / `clusterMain: true` (above), and a restore that lands on the cluster unevenly — after a restore plus a rolling restart, one replica had the restored rows and another did not while every node reported `synced`. Verify per-replica counts after a restore rather than trusting the cluster status.
+- **In-place validation fix, 2026-09-28 (versions 1.0.0–1.2.0).** These shipped versions failed marketplace/CI validation: `.Values.cpln.gvc` (missing `global`) is a nil-pointer at render (the orchestrator-API hostname), and their `manticore.tags` emitted too few marketplace tags (1.0.0/1.1.0 none; 1.2.0 missing `cpln/marketplace-gvc`). 1.0.0's description was also a 20-word block scalar (card clips past 15). Fixed **in place** (maintainer ruling: patch immutable old versions so every version validates) — gvc reference corrected, `manticore.tags` delegated to `cpln-common.tags` (+ the `cpln-common` dependency), 1.0.0 description trimmed to the 7-word line the later versions use. **1.3.0 and 2.x were already clean and were not touched.** This edits `templates/`, so it is not byte-identical — but no new version, by explicit ruling, since these versions are already broken and unusable as shipped.

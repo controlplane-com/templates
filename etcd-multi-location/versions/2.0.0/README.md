@@ -154,11 +154,41 @@ cpln workload exec {release}-etcd --gvc {gvc} --container etcd -- etcdctl --comm
 
 Every member is named `{release}-etcd-{location}`, so `member list` maps one-to-one onto your location list.
 
+## Upgrading in place from 1.0.2
+
+A plain `helm upgrade` from 1.x deletes the GVC the old release created, with everything in it. These steps keep the GVC, the cluster and its data (they apply to any 1.x release):
+
+```bash
+cpln helm get values RELEASE_NAME > values-old.yaml
+curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/scripts/keep-gvc.py
+python3 keep-gvc.py RELEASE_NAME            # shows what it will change
+python3 keep-gvc.py RELEASE_NAME --apply
+# write values-new.yaml from values-old.yaml (below)
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/etcd-multi-location --version 2.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+```
+
+- **`--gvc` is the GVC the old release created** (`global.gvc.name` in `values-old.yaml`), not the GVC you ran the original install against.
+- **The upgrade output must include `Skipped deletion of /org/ORG_NAME/gvc/OLD_GVC_NAME`.** If it does not, stop: the GVC was not protected.
+
+Write `values-new.yaml` from `values-old.yaml`:
+
+```yaml
+global:
+  locations:          # was global.gvc.locations; copy the list exactly as it is
+    - name: aws-us-east-1
+    - name: aws-us-west-2
+  # delete global.gvc entirely; the chart refuses to render while it is present
+```
+
+Keep every other key as it is, and keep the location list unchanged: a different list reprovisions the cluster. All members restart together, so expect a short loss of quorum, as on any upgrade of this chart.
+
+Afterwards the GVC belongs to you rather than to the release: `helm uninstall` leaves it in place, and you delete it with `cpln gvc delete OLD_GVC_NAME` when you no longer need it. Details: [scripts/README.md](https://github.com/controlplane-com/templates/blob/main/scripts/README.md).
+
 ## Migrating from 1.x
 
-**Never `helm upgrade` a 1.x release onto 2.0.0.** Versions before 2.0.0 created their own GVC. Upgrading in place drops `kind: gvc` from the manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every workload, volumeset and identity inside it**, in seconds, while printing `upgraded successfully`. The chart refuses to render if your values still carry the 1.x `global.gvc` key, so a values-carrying upgrade fails safely; an upgrade run with *no* values at all sees only the new defaults and cannot be caught, which is why this is a migration and not an upgrade.
+**Never run a plain `helm upgrade` from 1.x onto 2.0.0** — follow "Upgrading in place from 1.0.2" above, or migrate to a new release as described here. Versions before 2.0.0 created their own GVC. Upgrading in place drops `kind: gvc` from the manifest, and Helm deletes what a chart no longer declares — which destroys that GVC and **every workload, volumeset and identity inside it**, in seconds, while printing `upgraded successfully`. The chart refuses to render if your values still carry the 1.x `global.gvc` key, so a values-carrying upgrade fails safely; an upgrade run with *no* values at all sees only the new defaults and cannot be caught, which is why the in-place path marks the GVC `keep` first.
 
-Migrate to a new release instead:
+To migrate to a new release instead:
 
 1. Pick an existing GVC (or create one) whose locations are exactly the ones you want members in. `cpln gvc get {gvc} -o yaml` shows `spec.staticPlacement.locationLinks`.
 2. Snapshot the old cluster's keyspace:
@@ -203,7 +233,7 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 
 ## Important Notes
 
-- **Do not `helm upgrade` a 1.x release onto this version.** It deletes the GVC the old release created and everything inside it. See "Migrating from 1.x".
+- **Do not run a plain `helm upgrade` from 1.x onto this version.** It deletes the GVC the old release created and everything inside it. See "Upgrading in place from 1.0.2".
 - **`global.locations` must match the GVC's locations.** A location the GVC lacks makes a fresh member refuse to start with a named `[etcd] FATAL` line rather than bootstrap a cluster that reports healthy with zero fault tolerance. A GVC location you did not list runs nothing.
 - **Quorum arithmetic decides your failure tolerance, not the template.** Two locations survive zero losses. If you want automatic failover, use three.
 - **`IS LEADER: true` is not proof of leadership.** An isolated survivor keeps reporting itself leader for about **6 seconds** (measured) while unable to commit anything. Health-check with a linearizable read (`etcdctl get <key>`, no `--consistency=s`), never with `endpoint status`.

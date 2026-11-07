@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Control Plane Task Runner
+category: messaging
+topology: stateless
+
+summary: >-
+  An HTTP task queue and scheduler: an API that accepts tasks over HTTP and worker replicas that
+  deliver each one to its target URL with retries, delayed or scheduled execution, per-client
+  rate-limit tiers and a circuit breaker, persisted in a bundled Redis with Sentinel failover. The
+  API is internal by default and enqueueing is unauthenticated, so it suits callers inside your
+  org. Pick it to offload webhooks, callbacks and background HTTP calls the way Google Cloud Tasks
+  does.
+
+keywords:
+  - http task queue
+  - push queue
+  - task queue
+  - job queue
+  - background jobs
+  - webhook delivery
+  - outgoing webhooks
+  - delayed tasks
+  - scheduled tasks
+  - deferred tasks
+  - retries
+  - rate limiting
+  - circuit breaker
+  - async http
+  - redis sentinel
+  - cloud tasks
+
+useCases:
+  - Queue HTTP calls to downstream services and retry them until they succeed
+  - Deliver outgoing webhooks with retries, rate limits and a circuit breaker
+  - Run an HTTP request after a delay or at a set time
+  - Throttle background HTTP work per client with rate-limit tiers
+  - Move slow HTTP calls out of an API's request path
+
+alternativeTo:
+  - Google Cloud Tasks
+  - Upstash QStash
+
+pickInsteadIf:
+  - need: an AMQP message broker whose consumers pull messages from queues
+    template: rabbitmq
+  - need: a high-throughput event stream with replay and consumer groups
+    template: kafka
+  - need: multi-step workflows in code whose state survives crashes and runs for days
+    template: temporal
+  - need: scheduled data pipelines defined as Python DAGs with a monitoring UI
+    template: airflow
+  - need: visual automations that connect SaaS apps on triggers and webhooks
+    template: n8n
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: api.admin.apiKeySecretName
+    required: true
+    description: Key for /admin/* (X-Admin-Key header) as the payload, created with printf, not echo. If missing, the API waits with no logs. Empty leaves /admin/* open; refused while public.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: true
+    description: Password of the bundled Redis. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name. If missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.sentinel.auth.fromSecret.name
+    required: true
+    description: Password of the bundled Sentinel. Create before installing; when upgrading from 1.3.0 it holds the current password under a new name. If missing, the deployment waits with no logs.

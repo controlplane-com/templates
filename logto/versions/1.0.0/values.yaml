@@ -1,0 +1,131 @@
+image: ghcr.io/logto-io/logto:1.45.0
+
+# Logto replicas (sign-in pages, OIDC and the Management API). All state lives in
+# PostgreSQL, so replicas are interchangeable. 2 keeps sign-in up through restarts and
+# upgrades; 1 is the lighter shape. Allowed: 1-4.
+replicas: 2
+
+resources: # per Logto process (each replica, and the Admin Console workload)
+  minCpu: 250m
+  minMemory: 512Mi
+  maxCpu: 1000m
+  maxMemory: 1Gi
+
+# ─── Admin Account ────────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`
+# secret with exactly two keys, `username` (letters, digits, _; starts with a
+# letter or _) and `password` (8+ characters; use `openssl rand -hex 32`). Logto
+# creates the Admin Console account from it on FIRST boot only; later changes to
+# the secret change nothing. If it does not exist the deployment WEDGES silently.
+admin:
+  secretName: my-logto-admin
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # sign-in pages + OIDC on the canonical *.cpln.app URL; false = reach Logto only via cpln port-forward
+
+adminConsole:
+  publicAccess:
+    # true = a second workload serves the Admin Console on its own *.cpln.app URL (sign-in only).
+    # false = no public Console; use `cpln port-forward {release}-logto 3002:3002` instead.
+    enabled: true
+
+customDomain: # bare hostnames; the chart creates the domains (apex must be verified, CNAME required — see README)
+  core: ""         # e.g. auth.example.com; empty = canonical *.cpln.app. Becomes the OIDC issuer — set it at install
+  adminConsole: "" # e.g. auth-admin.example.com; needs adminConsole.publicAccess.enabled
+
+internalAccess: # which workloads inside Control Plane can call Logto
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+webhooks:
+  # true = webhooks may call workloads inside Control Plane (*.cpln.local URLs). Off, Logto
+  # refuses internal addresses and sends webhooks only to public URLs.
+  allowInternalTargets: false
+
+# ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader endpoint Logto connects to.
+postgresHA:
+  enabled: true
+  config:
+    # REQUIRED PREREQUISITE SECRET (HA mode) — CREATE IT BEFORE YOU INSTALL. If it
+    # does not exist the deployment WEDGES silently and looks like a platform fault.
+    # A `dictionary` secret with exactly three URL-safe keys: username, password,
+    # database. PostgreSQL reads it once, when its data is first initialized, and
+    # Logto connects with the same keys. See README Prerequisites for the command.
+    credentialsSecretName: my-logto-db-credentials
+  replicas: 3
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  volumeset:
+    capacity: 10 # initial capacity in GiB per replica (minimum is 10)
+
+  backup: # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *" # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600 # every 6 hours
+    provider: aws # Options: aws, gcp, or minio
+    aws:
+      bucket: my-logto-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-logto-backup-cloudaccount
+      policyName: my-logto-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-logto-backup-bucket
+      cloudAccountName: my-logto-backup-cloudaccount
+      prefix: postgres/backups
+    minio: # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-logto-backup-bucket
+      # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
+      # secret holding exactly `accessKey` and `secretKey` (see the postgres-highly-available docs).
+      credentialsSecretName: my-logto-minio-credentials
+      prefix: postgres/backups
+
+# ─── Database: Single-instance PostgreSQL (dev/lightweight) ───────────────────
+# Enable this and disable postgresHA for a lighter non-HA deployment.
+postgres:
+  enabled: false
+  config:
+    # REQUIRED PREREQUISITE SECRET (single-instance mode) — the same kind of
+    # `dictionary` secret as postgresHA.config.credentialsSecretName above
+    # (keys: username, password, database). Create it BEFORE you install.
+    credentialsSecretName: my-logto-db-credentials
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+  backup: # pass-through to the postgres template's backup feature (Postgres 17+)
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *" # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws # Options: aws, gcp, or minio
+    aws:
+      bucket: my-logto-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-logto-backup-cloudaccount
+      policyName: my-logto-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-logto-backup-bucket
+      cloudAccountName: my-logto-backup-cloudaccount
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-logto-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres template docs).
+      credentialsSecretName: my-logto-minio-credentials
+      prefix: postgres/backups

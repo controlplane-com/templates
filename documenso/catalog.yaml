@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Documenso
+category: apps
+topology: stateless
+
+summary: >-
+  Documenso open-source e-signature app: upload a PDF, place signature fields, send it to recipients
+  and get back a digitally signed PDF with an audit trail, signed with a certificate you provide. One
+  stateless server on a bundled single PostgreSQL, or a highly available one, storing documents in the
+  database or an S3 bucket, with optional SMTP email and database backups. Pick it to run your own
+  document signing instead of a hosted e-signature service.
+
+keywords:
+  - e-signature
+  - esignature
+  - electronic signature
+  - digital signature
+  - document signing
+  - sign pdf
+  - pdf signing
+  - signing workflow
+  - audit trail
+  - pkcs12
+  - signature requests
+  - document templates
+
+useCases:
+  - Send contracts and agreements to external recipients for signature
+  - Sign PDFs with a certificate you control and keep a tamper-evident audit trail
+  - Keep signed documents in your own database or S3 bucket
+  - Automate document signing from your own apps through a REST API
+
+alternativeTo:
+  - DocuSign
+  - Adobe Acrobat Sign
+  - Dropbox Sign
+  - PandaDoc
+  - SignNow
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [nextAuthSecret, encryptionKey, encryptionSecondaryKey, signingPassphrase]
+    valuesPath: secrets.name
+    required: true
+    description: Session and encryption keys plus the signing certificate's passphrase. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: signing.certificateSecretName
+    required: true
+    description: Base64 text of the PKCS#12 (.p12) signing certificate, encoding plain. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: URL-safe credentials the bundled PostgreSQL initializes with and Documenso connects with; set the name for the database in use.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type s3
+    description: S3 or S3-compatible bucket that stores the uploaded and signed PDFs.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3 on AWS (storage.s3.auth.secretName empty)
+    description: Control Plane AWS cloud account for keyless bucket access, plus a bucket-scoped IAM policy (storage.s3.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type s3 with an S3-compatible storage.s3.endpoint
+    description: Static access keys for the S3-compatible document storage server.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: smtp.auth.secretName
+    required: false
+    when: smtp.enabled with an authenticated relay
+    description: SMTP relay login for verification and signature-request email.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

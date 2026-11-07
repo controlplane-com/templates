@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Cassandra
+category: database
+topology: distributed
+
+summary: >-
+  An Apache Cassandra wide-column cluster in one location, three nodes by default, each owning a
+  slice of the token ring on its own persistent volume, with a configurable replication factor
+  and a weekly nodetool repair job. Optional scheduled backups go to Amazon S3 or Google Cloud
+  Storage as CQL table exports or per-node SSTable snapshots, and nodes can spread across
+  availability zones. Pick it for write-heavy data partitioned by key and queried with CQL.
+
+keywords:
+  - wide-column database
+  - wide column store
+  - nosql
+  - cql
+  - cqlsh
+  - distributed database
+  - partitioned database
+  - tunable consistency
+  - nodetool repair
+  - sstable snapshots
+  - multi-zone
+  - database backups
+
+useCases:
+  - Write-heavy store for events, telemetry or IoT readings partitioned by key
+  - Wide-column NoSQL database for an app written against CQL drivers
+  - Data store that survives losing a node or an availability zone with replication factor 3
+  - Scheduled backups of a keyspace to an S3 or GCS bucket
+
+alternativeTo:
+  - Amazon Keyspaces (for Apache Cassandra)
+  - DataStax Astra DB
+  - Azure Managed Instance for Apache Cassandra
+  - Azure Cosmos DB for Apache Cassandra
+  - ScyllaDB Cloud
+
+compatibleWith: [cql]
+
+pickInsteadIf:
+  - need: distributed SQL with joins and strongly consistent transactions
+    template: cockroach
+  - need: one database cluster stretched across several locations that survives losing a region
+    template: cockroach
+  - need: column-oriented analytics with fast aggregations over large tables
+    template: clickhouse
+  - need: time-series data queried with SQL
+    template: timescaledb
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [superuserPassword, username, password, keyspace]
+    valuesPath: credentialsSecretName
+    required: true
+    description: Superuser password plus the application role and keyspace created on first boot. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the CQL exports or SSTable snapshots.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

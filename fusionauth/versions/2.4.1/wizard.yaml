@@ -1,0 +1,292 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: FusionAuth
+
+# FusionAuth keeps all state in one bundled single-instance PostgreSQL: every extra GVC location would
+# run its own FusionAuth against its own, separate database.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # FusionAuth creates this secret itself (templates/secret-db.yaml) and names it in the Database step below.
+      - config.credentialsSecretName
+      # FusionAuth connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          FusionAuth connects to its database like any other workload: keep Same GVC, or add the FusionAuth
+          workload under Allowed workloads.
+      backup.enabled:
+        help: Adds one cron workload that runs `pg_dumpall` and uploads a gzipped dump to the bucket.
+
+steps:
+  - id: fusionauth
+    title: FusionAuth
+    description: The FusionAuth image and the compute of each replica.
+    docs: "#image-and-resources"
+    fields:
+      - path: image
+        type: string
+        format: image
+        label: FusionAuth image
+        required: true
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+
+  - id: access
+    title: Access
+    description: Who reaches FusionAuth from the internet and from inside the GVC, and where it may connect out to.
+    docs: "#firewall"
+    sections:
+      - title: Internet
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              FusionAuth has no administrator until its setup wizard is finished, and whoever reaches it first
+              creates that account. With inbound open to `0.0.0.0/0`, complete the setup wizard right after
+              installing.
+          - path: firewall.external.inboundAllowCIDR
+            type: list
+            label: Inbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses that can reach the admin UI and login pages. Empty keeps FusionAuth off the
+              internet.
+            item:
+              type: string
+              format: cidr
+          - path: firewall.external.outboundAllowCIDR
+            type: list
+            label: Outbound CIDRs
+            widget: tags
+            description: >-
+              Internet addresses FusionAuth may connect to. Empty blocks all egress; open it (for example
+              `0.0.0.0/0`) to federate with an external identity provider.
+            item:
+              type: string
+              format: cidr
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: firewall.internal.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # workload.yaml writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: firewall.internal.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.firewall.internal.type == 'same-gvc'
+            rules:
+              - when: self.firewall.internal.type == 'same-org'
+                rule: size(self.firewall.internal.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL's credentials. FusionAuth creates the secret from them; there is nothing to create first.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          This version takes the database credentials as values: they are stored in the Helm release, and
+          FusionAuth creates the dictionary secret named below from them. The password is used as given, so
+          change it. 2.5.0 and later read the credentials from a dictionary secret you create instead.
+      - path: postgres.credentials.username
+        type: string
+        label: Database user
+        required: true
+        immutable: PostgreSQL creates this user once, when its data directory is initialized.
+      - path: postgres.credentials.password
+        type: string
+        label: Database password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        help: >-
+          PostgreSQL reads the password only when its data directory is first initialized. To change it
+          later, run `ALTER ROLE ... PASSWORD` first and then set the same value here.
+      - path: postgres.credentials.database
+        type: string
+        label: Database name
+        required: true
+        immutable: PostgreSQL creates this database once, when its data directory is initialized.
+      - path: postgres.config.credentialsSecretName
+        type: string
+        label: Credentials secret name
+        required: true
+        description: The dictionary secret FusionAuth creates and PostgreSQL reads. Secret names are org-wide.
+        maxLength: 64
+        pattern: '^[a-z]([-a-z0-9])*[a-z0-9]$'
+        patternMessage: Use lowercase letters, numbers and hyphens, starting with a letter and ending with a letter or number.
+    rules:
+      - when: oldSelf == null || self.postgres.credentials.username != oldSelf.postgres.credentials.username
+        rule: self.postgres.credentials.username.matches('^[^\\s]+$')
+        severity: warning
+        paths: [postgres.credentials.username]
+        message: >-
+          Leave out spaces: the database's readiness probe passes the user name to pg_isready unquoted, so a
+          name with a space never becomes ready.
+      - when: oldSelf == null || self.postgres.credentials.database != oldSelf.postgres.credentials.database
+        rule: "!self.postgres.credentials.database.matches('[\\\\s/?#%:+]')"
+        severity: warning
+        paths: [postgres.credentials.database]
+        message: >-
+          This version writes the database name unquoted at the end of FusionAuth's JDBC URL
+          (jdbc:postgresql://…:5432/NAME), and the database's readiness probe passes it to pg_isready
+          unquoted. Leave out spaces and the characters / ? # % : and + (the JDBC driver decodes + to a space).
+      - rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+        severity: info
+        paths: [postgres.credentials.password]
+        message: >-
+          PostgreSQL keeps the password it was initialized with. Run ALTER ROLE ... PASSWORD with the new
+          password first, or FusionAuth loses its database connection after this change.
+      - when: oldSelf != null
+        rule: self.postgres.credentials.password != 'password'
+        severity: info
+        paths: [postgres.credentials.password]
+        message: >-
+          The password is still "password", the default of 2.4.0 and earlier. Change it with ALTER ROLE ...
+          PASSWORD, then set the same value here.
+      - rule: self.postgres.config.credentialsSecretName != 'my-fusionauth-db-credentials'
+        severity: info
+        paths: [postgres.config.credentialsSecretName]
+        messageExpression: >-
+          'Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each FusionAuth release its own name, for example ' + context.releaseName +
+          '-fusionauth-db-credentials.'
+        message: >-
+          Secret names are org-wide: a release on this name is refused while another release manages that
+          secret. Give each FusionAuth release its own name.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, postgres.config.password and postgres.config.database were removed in
+          2.4.0. Move them to postgres.credentials, from which FusionAuth creates the secret, and remove them
+          from postgres.config.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  # cpln helm applies the new revision before deleting removed resources, and the platform refuses a
+  # read-write-once volume set that another workload still holds, so <release>-postgres cannot take over
+  # <release>-pg-vs from <release>-pg-db.
+  - rule: >-
+      context.mode != 'upgrade' || context.fromVersion == null ||
+      semverCompare(context.fromVersion, '2.2.0') >= 0
+    message: >-
+      2.2.0 renamed the database workload, and the new one cannot take over the existing volume set while the
+      old workload still holds it, so the upgrade fails (from the platform and CLI source; not measured live).
+      Install a new release of this version and move the data with a dump and restore.
+  - rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks FusionAuth, which connects to its database like any other workload.'
+  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth, or FusionAuth cannot reach its database.'"
+    fix:
+      path: postgres.internalAccess.workloads
+      items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-fusionauth']"
+    message: Add the FusionAuth workload to the list, or FusionAuth cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: FusionAuth connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - { fromVersions: "<2.4.0", from: postgres.config.username, to: postgres.credentials.username }
+  - { fromVersions: "<2.4.0", from: postgres.config.password, to: postgres.credentials.password }
+  - { fromVersions: "<2.4.0", from: postgres.config.database, to: postgres.credentials.database }
+  # A rename moves changed values only, and 2.4.1 changed the default password (password became
+  # change-me-fusionauth-db): carry the installed password even when it is the old default.
+  - fromVersions: "<2.4.0"
+    to: postgres.credentials.password
+    valueExpr: self.postgres.config.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: ">=2.4.0 <2.4.1"
+    to: postgres.credentials.password
+    valueExpr: self.postgres.credentials.password
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  # Before 2.2.0 the bundled postgres chart (2.0.0 / 2.1.0) ran a fixed postgres:17 image with one cpu/memory pair.
+  # The root rule refuses in-place upgrades from <2.2.0; these <2.2.0 / <2.1.0 migrations only matter if that block is lifted.
+  - fromVersions: "<2.2.0"
+    to: postgres.image
+    valueExpr: "'postgres:17'"
+    note: Before 2.2.0 the database ran postgres:17, and the data directory belongs to that major version, so it is kept.
+  - { fromVersions: "<2.2.0", from: postgres.resources.cpu, to: postgres.resources.maxCpu }
+  - { fromVersions: "<2.2.0", from: postgres.resources.memory, to: postgres.resources.maxMemory }
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxCpu
+    valueExpr: self.postgres.resources.cpu
+    note: The single database CPU value is now the maximum; the minimum is a new setting.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.maxMemory
+    valueExpr: self.postgres.resources.memory
+    note: The single database memory value is now the maximum; the minimum is a new setting, and the maximum can be at most 4 times it.
+  # Keep the carried maximums within the 4:1 stateful ratio and the 4000m / 4096Mi max-min range.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minCpu
+    valueExpr: >-
+      cpuMillicores(self.postgres.resources.cpu) < 200 ? string(cpuMillicores(self.postgres.resources.cpu)) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 5333 ? string(cpuMillicores(self.postgres.resources.cpu) - 4000) + 'm' :
+      cpuMillicores(self.postgres.resources.cpu) > 800 ? string((cpuMillicores(self.postgres.resources.cpu) + 3) / 4) + 'm' : '200m'
+    note: The minimum database CPU is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    to: postgres.resources.minMemory
+    valueExpr: >-
+      memoryBytes(self.postgres.resources.memory) < 134217728 ? string(memoryBytes(self.postgres.resources.memory)) :
+      memoryBytes(self.postgres.resources.memory) > 5726273536 ? string((memoryBytes(self.postgres.resources.memory) - 4294967296 + 1048575) / 1048576) + 'Mi' :
+      memoryBytes(self.postgres.resources.memory) > 536870912 ? string((memoryBytes(self.postgres.resources.memory) + 4194303) / 4194304) + 'Mi' : '128Mi'
+    note: The minimum database memory is set so the maximum stays within 4 times it.
+  - fromVersions: "<2.2.0"
+    from: identityProviders
+    note: >-
+      Before 2.2.0, identityProviders.google.enabled opened outbound HTTPS to oauth2.googleapis.com,
+      www.googleapis.com and accounts.google.com. This version has no hostname setting: add the CIDRs your
+      identity provider needs (or 0.0.0.0/0) under Outbound CIDRs.
+  # 2.0.0 and earlier (bundled postgres 2.0.0) created a 20 GiB volume set that grew up to 1000 GiB.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.capacity
+    valueExpr: "20"
+    note: The database volume set was created with 20 GiB, and the existing volume would not shrink, so 20 is kept.
+  - fromVersions: "<2.1.0"
+    to: postgres.volumeset.autoscaling.enabled
+    valueExpr: "true"
+    note: The database volume set grew automatically up to 1000 GiB; growth stays on with the same limits.
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.maxCapacity, valueExpr: "1000" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.minFreePercentage, valueExpr: "1" }
+  - { fromVersions: "<2.1.0", to: postgres.volumeset.autoscaling.scalingFactor, valueExpr: "1.1" }

@@ -1,0 +1,39 @@
+# logto 1.0.0 — the default install: two Logto replicas and the public Admin Console workload on the
+# bundled postgres-highly-available database (three Patroni members, three etcd members, HAProxy), one
+# location, at the chart's default sizes, no custom domain. The admin and database credentials are
+# prerequisite secrets CI creates (64 hex characters, which always pass Logto's password policy).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  adminpw: hex
+  pgpw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: logto
+      password: "{gen.pgpw}"
+      database: logto
+
+vars:
+  admin_user: e2eadmin
+  admin_password: "{gen.adminpw}"
+  pg_user: logto
+  pg_password: "{gen.pgpw}"
+  pg_db: logto
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# New template: no earlier version to upgrade from.

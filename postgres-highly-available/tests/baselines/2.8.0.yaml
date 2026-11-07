@@ -1,0 +1,31 @@
+# postgres-highly-available 2.8.0 — the recommended install: credentials in a prerequisite secret.
+# Prod shape for this template (three Patroni members, three etcd members, two HAProxy replicas, one
+# location) at its default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  config:
+    credentialsSecretName: "{secrets.creds.name}"
+
+# 2.4.1 is the version customers run. Its `postgres:` block is refused from 2.5.0 on, so the upgrade
+# switches to this baseline's values, with a secret holding the same password, as the README says.
+upgradeFrom:
+  - version: 2.4.1
+    values: new

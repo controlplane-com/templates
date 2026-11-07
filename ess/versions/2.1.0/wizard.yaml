@@ -1,0 +1,327 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: External Secret Syncer (ESS)
+# No gvc block: one standard (stateless) workload. Every location and replica runs as the same workload,
+# so they all write the same syncer.cpln.io/source tag and never conflict.
+
+steps:
+  - id: config
+    title: Sync configuration
+    description: >-
+      The secret store ESS reads from, and the prerequisite secret holding your sync.yaml with its credentials.
+    fields:
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'install' ||
+          (context.fromVersion != null && semverCompare(context.fromVersion, '2.1.0') < 0)
+        text: >-
+          The sync configuration secret must exist **before** you install or upgrade. If it is missing, the deployment
+          waits on it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
+          `cpln workload get-deployments RELEASE_NAME-ess --gvc GVC_NAME -o yaml`. It recovers on its own within
+          about 10 minutes of the secret being created, or at once with
+          `cpln workload force-redeployment RELEASE_NAME-ess --gvc GVC_NAME`.
+        textExpression: >-
+          'The sync configuration secret must exist **before** you install or upgrade. If it is missing, the deployment
+          waits on it and `cpln logs` shows nothing at all; the reason is in `status.versions[].message` of
+          `cpln workload get-deployments ' + context.releaseName + '-ess --gvc ' +
+          (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`. It recovers on its own within about
+          10 minutes of the secret being created, or at once with `cpln workload force-redeployment ' +
+          context.releaseName + '-ess --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+      # 2.0.x and earlier rendered essConfig into a chart-owned opaque secret whose payload is exactly the
+      # sync.yaml this version reads (toYaml .Values.essConfig, no wrapper): RELEASE-ess-config from 1.1.0,
+      # workload.name (default ess) in 1.0.0. The upgrade deletes it.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.1.0') < 0
+        text: >-
+          Version 2.1.0 moved the sync configuration (`essConfig`) out of the values into a secret you own,
+          because it holds provider credentials. **Before you upgrade**, copy the configuration the release runs
+          today into a new opaque secret, because the upgrade deletes the secret that holds it:
+          `cpln secret reveal OLD_SECRET -o json | jq -r .data.payload | cpln secret create-opaque --name NEW_SECRET --encoding plain -f -`,
+          where OLD_SECRET is `RELEASE_NAME-ess-config` (1.0.0: the old `workload.name`, `ess` by default).
+          Its payload is already in sync.yaml form. Then choose the new secret below. Every credential that
+          was in your values file was stored in the Helm release: rotate it, then update the secret. See
+          [Upgrading From 2.0.x](/template-catalog/templates/ess#upgrading-from-2-0-x).
+        textExpression: >-
+          'Version 2.1.0 moved the sync configuration (`essConfig`) out of the values into a secret you own,
+          because it holds provider credentials. **Before you upgrade**, copy the configuration the release runs
+          today into a new opaque secret, because the upgrade deletes the secret that holds it: `cpln secret reveal ' +
+          (semverCompare(context.fromVersion, '1.1.0') < 0 ? 'OLD_WORKLOAD_NAME' : context.releaseName + '-ess-config') +
+          ' -o json | jq -r .data.payload | cpln secret create-opaque --name NEW_SECRET --encoding plain -f -`.
+          ' + (semverCompare(context.fromVersion, '1.1.0') < 0 ? 'OLD_WORKLOAD_NAME is the workload.name of the
+          installed release (ess by default). ' : '') + 'Its payload is already in sync.yaml form. Then choose
+          the new secret below. Every credential that was in your values file was stored in the Helm release:
+          rotate it, then update the secret. See
+          [Upgrading From 2.0.x](/template-catalog/templates/ess#upgrading-from-2-0-x).'
+      # Image v2.0.0 (chart 2.0.0) added base64 detection to discoverAllSecrets (README Patch Notes).
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.0.0') < 0
+        text: >-
+          If your sync configuration uses `discoverAllSecrets`: from 2.0.0, a discovered opaque secret whose
+          value is canonical base64 is re-written with `encoding: base64` on the first sync, and workloads
+          consuming it receive the **decoded** value. If a consumer decodes such a secret itself today, label the
+          GCP secret `cpln-encoding: disable` **before** you upgrade to keep the current behavior.
+      # oldSelf has the workload.name drop applied, so the old name is spelled out instead of read.
+      # 1.0.0 named the workload workload.name (default ess); 1.1.0 and later name it RELEASE-ess. ESS tags every
+      # secret it writes with syncer.cpln.io/source = its workload link and refuses a secret tagged by another
+      # workload ("Secret X is managed by another ESS"), so every secret synced so far stops updating.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.0') < 0
+        text: >-
+          Version 1.1.0 renamed the workload to `RELEASE_NAME-ess`. ESS tags every secret it writes with
+          `syncer.cpln.io/source` (its workload) and refuses to update a secret tagged by another workload, so
+          after the upgrade every secret synced so far stops updating with "is managed by another ESS". After
+          the upgrade, list them with
+          `cpln secret query --tag syncer.cpln.io/source=/org/ORG_NAME/gvc/GVC_NAME/workload/OLD_WORKLOAD_NAME --max 0`
+          (OLD_WORKLOAD_NAME is the workload.name of the installed release, ess by default) and remove the tag from each with `cpln secret tag SECRET_NAME --remove-tag syncer.cpln.io/source`;
+          the new workload then takes them over on its next sync.
+        textExpression: >-
+          'Version 1.1.0 renamed the workload to `' + context.releaseName + '-ess`. ESS tags every secret it
+          writes with `syncer.cpln.io/source` (its workload) and refuses to update a secret tagged by another
+          workload, so after the upgrade every secret synced so far stops updating with "is managed by another
+          ESS". After the upgrade, list them with `cpln secret query --tag syncer.cpln.io/source=/org/' +
+          (context.org != null ? context.org : 'ORG_NAME') + '/gvc/' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
+          '/workload/OLD_WORKLOAD_NAME --max 0` (OLD_WORKLOAD_NAME is the workload.name of the installed
+          release, ess by default) and remove the tag from each with `cpln secret tag SECRET_NAME --remove-tag
+          syncer.cpln.io/source`; the new workload then takes them over on its next sync.'
+      # Session-only: the providers live inside sync.yaml, not in the values. The choice only shows what that
+      # provider's block needs, before the secret that holds it.
+      - id: provider
+        virtual: true
+        type: enum
+        label: Show setup for
+        widget: select
+        init: "'vault'"
+        description: >-
+          Only picks which provider's setup to show below: what its block in your sync.yaml needs. A sync.yaml
+          can list several providers, and this choice is not stored in the release.
+        docs: "#providers"
+        options:
+          - { value: vault, label: HashiCorp Vault }
+          - { value: awsParameterStore, label: AWS Parameter Store }
+          - { value: awsSecretsManager, label: AWS Secrets Manager }
+          - { value: gcpSecretManager, label: GCP Secret Manager }
+          - { value: onePassword, label: 1Password }
+          - { value: onePasswordConnect, label: 1Password Connect }
+          - { value: doppler, label: Doppler }
+          - { value: infisical, label: Infisical }
+      - type: note
+        when: ui.provider == 'vault'
+        text: >-
+          A `vault` block with `address` (for example `https://my-vault.com:8200`) and `token`, a Vault token
+          with read access on the paths you sync. KV paths look like `/v1/secret/data/my-app`, and `parse`
+          paths start with `data.`.
+      - type: note
+        when: ui.provider == 'awsParameterStore'
+        text: >-
+          An `awsParameterStore` block with `region`, `accessKeyId` and `secretAccessKey`, an access key
+          allowed `ssm:GetParameter` on the parameters you sync. The template's identity has no AWS binding, so
+          the keys are required.
+      - type: note
+        when: ui.provider == 'awsSecretsManager'
+        text: >-
+          An `awsSecretsManager` block with `region`, `accessKeyId` and `secretAccessKey`, an access key
+          allowed `secretsmanager:GetSecretValue` on the secrets you sync. The template's identity has no AWS
+          binding, so the keys are required.
+      - type: note
+        when: ui.provider == 'gcpSecretManager'
+        text: >-
+          A `gcpSecretManager` block with `projectId` and `credentials` (`clientEmail` and `privateKey` of a
+          service account with Secret Accessor on the secrets you sync, plus permission to list secrets for
+          `dictionaryFromProject` and `discoverAllSecrets`). The template's identity has no GCP binding, so the
+          credentials are required.
+      - type: note
+        when: ui.provider == 'onePassword'
+        text: >-
+          A `onePassword` block with `serviceAccountToken`, a 1Password service account with read access to
+          the vaults you sync. `integrationName` and `integrationVersion` are optional.
+      - type: note
+        when: ui.provider == 'onePasswordConnect'
+        text: >-
+          A `onePasswordConnect` block with `serverURL` (your Connect server) and `token`, a Connect token for
+          that server.
+      - type: note
+        when: ui.provider == 'doppler'
+        text: >-
+          A `doppler` block with `accessToken`, a Doppler service token (`dp.st.…`). Paths are
+          `project/config/SECRET`, and `project/config` for `dictionaryFromProject`.
+      - type: note
+        when: ui.provider == 'infisical'
+        text: >-
+          An `infisical` block with `clientId`, `clientSecret` and `projectId`, from an Infisical machine
+          identity with read access to the project. Paths are `environment/SECRET`, for example
+          `dev/DATABASE_URL`.
+      - path: configSecretName
+        type: ref
+        label: Sync configuration secret
+        required: true
+        description: >-
+          An opaque secret (encoding plain) whose whole value is your sync.yaml: a `providers` list with their
+          credentials, and a `secrets` list naming the Control Plane secrets to create or update. It is mounted
+          at `/usr/src/app/sync.yaml`.
+        help: >-
+          Secret names are org-wide, so give each release its own. Two ESS releases cannot manage the same
+          Control Plane secret: a sync into a secret another release manages fails. Write sync.yaml, then create the secret
+          with `cat sync.yaml | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`. A running
+          syncer does not see later edits to this secret: after each change run
+          `cpln workload force-redeployment RELEASE_NAME-ess --gvc GVC_NAME`.
+        docs: "#sync-configuration-secret"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [opaque] }
+          mustExist: error
+          allowCreate: true
+          create:
+            encoding: plain
+            suggestName: "context.releaseName + '-ess-sync'"
+            hint: >-
+              Paste your whole sync.yaml: a providers list (name plus one provider block with its credentials)
+              and a secrets list (name, provider and one sync type each).
+    rules:
+      # ess.validate: essConfig must be gone, and configSecretName must be set.
+      - rule: "!has(self.essConfig)"
+        mirrors: ess.validate
+        paths: [configSecretName]
+        message: >-
+          essConfig was removed in 2.1.0: it holds provider credentials. Put its contents (without the
+          essConfig wrapper) in an opaque secret, choose that secret here, and remove essConfig from the values.
+      - rule: self.configSecretName != null && self.configSecretName != ''
+        mirrors: ess.validate
+        paths: [configSecretName]
+        message: The sync configuration secret is required.
+      # The chart-owned config secret of 2.0.x and earlier is deleted by this upgrade; a release pointed at it
+      # would lose its configuration right after the upgrade.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '2.1.0') >= 0 ||
+          (self.configSecretName != context.releaseName + '-ess-config' &&
+          !(semverCompare(context.fromVersion, '1.1.0') < 0 && self.configSecretName == 'ess'))
+        severity: warning
+        paths: [configSecretName]
+        message: >-
+          The installed version created this secret itself, and the upgrade deletes it, leaving ESS without a
+          configuration. Copy its payload into a secret under another name and choose that one.
+      - rule: >-
+          oldSelf == null || context.fromVersion == null || semverCompare(context.fromVersion, '2.1.0') < 0 ||
+          self.configSecretName == oldSelf.configSecretName
+        severity: info
+        paths: [configSecretName]
+        message: >-
+          The workload redeploys with the new secret. Secrets synced so far stay in place: ESS never deletes
+          them, even when the new sync.yaml no longer lists them.
+
+  - id: access
+    title: Admin API access
+    description: Who can reach the ESS admin API on its public endpoint.
+    sections:
+      - title: Admin API
+        docs: "#admin-api-access"
+        fields:
+          - type: note
+            text: >-
+              The template's identity holds `manage` on **every secret in the org**, which a syncer needs to
+              create and update arbitrary secrets. Treat the workload as security-sensitive: anyone who reaches
+              the admin API can trigger syncs, so keep the list below narrow.
+          # A note, not a rule: the placeholder is on the default path, and a rule shows only once the list is touched.
+          - type: note
+            when: self.allowedIp.exists(c, c == '1.2.3.4' || c == '1.2.3.4/32')
+            text: >-
+              `1.2.3.4` is the chart's placeholder, not an address of yours. Replace it with your CIDR, or remove
+              it to keep the admin API closed to the internet.
+          - path: allowedIp
+            type: list
+            label: Allowed CIDRs
+            widget: tags
+            unique: true
+            description: >-
+              Addresses allowed to reach the admin API on its public endpoint. Other workloads in the GVC cannot
+              reach it. With the list empty the API is closed to the internet; reach it with
+              `cpln port-forward` (the command is shown below). Firewall changes take up to a few minutes to take
+              effect.
+            help: >-
+              Read the public address from `status.canonicalEndpoint` in
+              `cpln workload get RELEASE_NAME-ess --gvc GVC_NAME -o yaml`. The health check is `GET /about`.
+            item: { type: string, format: cidr, placeholder: 203.0.113.0/24 }
+            rules:
+              - rule: "!self.allowedIp.exists(c, c == '0.0.0.0/0' || c == '::/0')"
+                severity: info
+                message: >-
+                  This opens the admin API to the whole internet. Allow only the address ranges that need it.
+          - type: note
+            text: >-
+              Reach the admin API privately with
+              `cpln port-forward RELEASE_NAME-ess PORT:PORT --gvc GVC_NAME`, where PORT is the admin API port
+              (3004 by default).
+            textExpression: >-
+              'Reach the admin API privately with `cpln port-forward ' + context.releaseName + '-ess ' +
+              string(self.port) + ':' + string(self.port) + ' --gvc ' +
+              (context.gvc != null ? context.gvc : 'GVC_NAME') + '`.'
+          - path: port
+            type: integer
+            label: Admin API port
+            min: 1
+            max: 65535
+            required: true
+            advanced: true
+            description: The container port of the admin API, also used by the `/about` health check.
+            rules:
+              - rule: >-
+                  !(self.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])
+                message: This port is reserved by the platform; choose another, such as 3004.
+
+  - id: workload
+    title: Workload
+    description: The syncer image and the compute of its replicas.
+    sections:
+      - title: Syncer
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: ESS image
+            required: true
+            description: Change it only to move to a newer ESS release.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Limits per replica; the workload runs 1 to 3 replicas, scaling on CPU.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+
+migrations:
+  # 1.1.0 moved the workload block to the top level and named every resource after the release.
+  - { fromVersions: "<1.1.0", from: workload.image, to: image }
+  - { fromVersions: "<1.1.0", from: workload.resources.cpu, to: resources.cpu }
+  - { fromVersions: "<1.1.0", from: workload.resources.memory, to: resources.memory }
+  - { fromVersions: "<1.1.0", from: workload.port, to: port }
+  - { fromVersions: "<1.1.0", from: workload.allowedIp, to: allowedIp }
+  - fromVersions: "<1.1.0"
+    from: workload.name
+    note: >-
+      The workload, identity and policy are now named after the release (RELEASE_NAME-ess). Secrets synced
+      under the old workload stop updating until you remove their syncer.cpln.io/source tag; see Sync
+      configuration.
+  # 2.1.0 moved the sync configuration into a prerequisite secret.
+  - fromVersions: "<2.1.0"
+    from: essConfig.providers
+    note: >-
+      The sync configuration moved to an opaque secret holding the whole sync.yaml; choose it under Sync
+      configuration. Copy the payload of the secret the installed version created, then rotate every
+      credential that was in your values file.
+  - fromVersions: "<2.1.0"
+    from: essConfig.secrets
+    note: >-
+      The list of secrets to sync moved into the same sync.yaml secret as the providers; choose it under Sync
+      configuration.

@@ -1,0 +1,1149 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Supabase
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The JWT keys and the Postgres password. This version takes them as plain values.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Version 1.0.0 has security defects that 1.1.0 fixes: through Kong the anon key, which client
+          apps embed, reaches the admin endpoints `/auth/v1/admin/` and, with Studio on, `/pg/` (arbitrary
+          SQL); Studio has no login; and every credential is stored in the release values. Install the
+          latest version unless you need this one.
+      - type: note
+        severity: warning
+        text: >-
+          The JWT defaults are Supabase's published demo keys: anyone can use them, and the service role
+          key bypasses row-level security. Replace all four. Every value here is stored in plain text in
+          the Helm release; version 1.1.0 reads them from secrets you create instead.
+      - path: jwt.secret
+        type: string
+        label: JWT secret
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        minLength: 32
+        description: The HMAC-SHA256 key that signs and verifies every Supabase JWT. At least 32 characters.
+        help: >-
+          Long-lived: changing it invalidates the anon and service role keys and every session token
+          signed with it, and the database keeps the JWT settings it was initialized with.
+      - path: jwt.anonKey
+        type: string
+        label: Anon key
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        patternMessage: A JWT (three base64url parts separated by dots).
+        description: An HS256 JWT with role `anon`, signed by the JWT secret. Client apps use it.
+      - path: jwt.serviceRoleKey
+        type: string
+        label: Service role key
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        patternMessage: A JWT (three base64url parts separated by dots).
+        description: >-
+          An HS256 JWT with role `service_role`, signed by the JWT secret. It bypasses row-level
+          security: keep it server-side.
+      - path: jwt.secretKeyBase
+        type: string
+        label: Realtime secret key base
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        minLength: 64
+        description: Realtime's cookie-signing key. At least 64 characters.
+      - path: postgres.password
+        type: string
+        label: Postgres password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: >-
+          The password of the `postgres` login role, also given to the Supabase service roles. Letters,
+          digits and `- . _ ~ ! & ( ) * + , ; =` only.
+        help: >-
+          Read only when the data directory is first initialized; to change it later, run `ALTER ROLE`
+          first for `postgres`, `supabase_admin`, `authenticator`, `supabase_auth_admin` and
+          `supabase_storage_admin`.
+      - path: postgres.database
+        type: string
+        label: Database name
+        required: true
+        immutable: Postgres creates this database once, when its data is first initialized.
+        maxLength: 63
+        pattern: '^[A-Za-z0-9._~-]+$'
+        patternMessage: Letters, digits, -, _, . and ~ only; the services put it in their connection URLs.
+    rules:
+      # Auth, PostgREST and Storage build postgresql://$(DB_USER):$(DB_PASSWORD)@host:5432/$(DB_NAME) with the
+      # password expanded unencoded at container start, and the init scripts put it in a single-quoted SQL
+      # literal (secret-preinit-script.yaml, secret-postinit-script.yaml).
+      - rule: >-
+          (oldSelf != null && self.postgres.password == oldSelf.postgres.password) ||
+          self.postgres.password.matches('^[A-Za-z0-9._~!&()*+,;=-]+$')
+        severity: warning
+        paths: [postgres.password]
+        message: >-
+          Use only letters, digits and - . _ ~ ! & ( ) * + , ; =: the services put the password unencoded
+          in their database connection URLs, and the init scripts in a quoted SQL string.
+      - rule: oldSelf == null || self.postgres.password == oldSelf.postgres.password
+        severity: info
+        paths: [postgres.password]
+        message: >-
+          Postgres keeps the password it was initialized with. Run ALTER ROLE ... PASSWORD with the new
+          password first for postgres, supabase_admin, authenticator, supabase_auth_admin and
+          supabase_storage_admin, or the services lose their database connection.
+      - rule: >-
+          (oldSelf != null && self.jwt.secret == oldSelf.jwt.secret && self.jwt.anonKey == oldSelf.jwt.anonKey &&
+          self.jwt.serviceRoleKey == oldSelf.jwt.serviceRoleKey) ||
+          ((self.jwt.secret == 'your-super-secret-jwt-token-with-at-least-32-characters-long') ==
+          (self.jwt.anonKey == 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.zQomPPgIVgwVRMh3NJhhAl2cJ-GKQgNXpMTbIKxKyoo') &&
+          (self.jwt.secret == 'your-super-secret-jwt-token-with-at-least-32-characters-long') ==
+          (self.jwt.serviceRoleKey == 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4'))
+        severity: warning
+        paths: [jwt.anonKey]
+        message: >-
+          The anon and service role keys must be signed by the JWT secret, or every service returns
+          bad_jwt. The published demo keys are signed by the published demo secret: when you replace the
+          secret, mint new keys with it.
+      - when: oldSelf != null
+        rule: >-
+          self.jwt.secret != 'your-super-secret-jwt-token-with-at-least-32-characters-long' &&
+          self.jwt.serviceRoleKey != 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.4HviqYnTKiRK-RJvWzgAAuaFiq8--foTrXQpl7HYMU4'
+        severity: info
+        paths: [jwt.secret]
+        message: >-
+          This release still uses Supabase's published demo JWT keys, which anyone can use to act as
+          service_role. Replace the secret and mint new keys signed by it.
+      - rule: oldSelf == null || self.jwt.secret == oldSelf.jwt.secret
+        severity: info
+        paths: [jwt.secret]
+        message: >-
+          A new JWT secret invalidates the old anon and service role keys and every signed-in session:
+          give your clients the new anon key. The database keeps the JWT settings it was initialized with.
+
+  - id: database
+    title: Database
+    description: Postgres compute, storage and access, and the optional pooler.
+    sections:
+      - fields:
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            description: A single stateful replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can reach Postgres
+            widget: cards
+            required: true
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+            rules:
+              - rule: self.postgres.internalAccess.type != 'none'
+                severity: warning
+                message: >-
+                  "None" cuts off every Supabase service: Auth, PostgREST, Realtime, Storage, Studio's
+                  pg_meta, PgBouncer and the backup job all connect to Postgres directly. Use Same GVC or
+                  Same org.
+          # workload-postgres.yaml:128-129 and workload-pgbouncer.yaml:52-53 write any non-empty list into
+          # inboundAllowWorkload, whatever the type.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: >-
+              With Same GVC, extra workloads from other GVCs. With Specific workloads, every workload
+              that connects.
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+              - when: self.postgres.internalAccess.type == 'same-org'
+                rule: size(self.postgres.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.postgres.internalAccess.type == 'none'
+                rule: size(self.postgres.internalAccess.workloads) == 0
+                severity: warning
+                message: >-
+                  The chart still writes these workloads into the firewall, where the platform checks every
+                  entry, but "None" lets none of them connect. Remove them.
+        rules:
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: >-
+              (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+              (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+              (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).all(n,
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n) in
+              self.postgres.internalAccess.workloads)
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list, and each of them connects to
+              Postgres directly. Add ' +
+              (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+              (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+              (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+              (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).filter(n,
+              !(('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n) in
+              self.postgres.internalAccess.workloads)).map(n,
+              '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n).join(', ') +
+              ', or they cannot connect.'
+            fix:
+              path: postgres.internalAccess.workloads
+              items: >-
+                (['auth', 'postgrest'] + (self.realtime.enabled ? ['realtime'] : []) +
+                (self.storage.enabled ? ['storage'] : []) + (self.studio.enabled ? ['studio'] : []) +
+                (self.pgbouncer.enabled ? ['pgbouncer'] : []) +
+                (self.backup.enabled && self.backup.mode == 'logical' ? ['backup'] : [])).map(n,
+                '//gvc/' + context.gvc + '/workload/' + context.releaseName + '-' + n)
+            message: >-
+              The chart does not add its own workloads to the list, and each of them connects to
+              Postgres directly: add Auth, PostgREST and every enabled service (Realtime, Storage,
+              Studio, PgBouncer, the logical backup job), or they cannot connect.
+      - id: pgbouncer
+        title: Connection pooler (PgBouncer)
+        toggle: pgbouncer.enabled
+        description: Pools application connections into fewer real Postgres connections.
+        docs: "#pgbouncer"
+        fields:
+          - type: note
+            text: >-
+              PgBouncer uses the Postgres password, and "Who can reach Postgres" as its own firewall.
+          - path: pgbouncer.poolMode
+            type: enum
+            label: Pool mode
+            widget: segmented
+            required: true
+            help: >-
+              **Transaction** suits most web and API workloads but breaks session-level features (`SET`
+              variables, temporary tables, advisory locks); use **Session** if you need those.
+              **Statement** returns the connection after every statement; transactions are not
+              supported.
+            options:
+              - { value: session, label: Session }
+              - { value: transaction, label: Transaction }
+              - { value: statement, label: Statement }
+          - path: pgbouncer.defaultPoolSize
+            type: integer
+            label: Server connections per pool
+            min: 1
+            required: true
+            suggestions: [10, 25, 50, 100]
+          - path: pgbouncer.maxClientConn
+            type: integer
+            label: Max client connections
+            min: 1
+            required: true
+            suggestions: [100, 500, 1000, 5000]
+          - path: pgbouncer.replicas
+            type: integer
+            label: Replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3]
+          - path: pgbouncer.image
+            type: string
+            format: image
+            label: PgBouncer image
+            required: true
+            advanced: true
+          - path: pgbouncer.resources
+            type: resources
+            label: PgBouncer resources
+            required: true
+            advanced: true
+        rules:
+          - rule: self.pgbouncer.defaultPoolSize <= self.pgbouncer.maxClientConn
+            severity: info
+            paths: [pgbouncer.defaultPoolSize]
+            message: The pool is larger than the number of client connections PgBouncer accepts.
+    rules:
+      - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+        paths: [postgres.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: API and auth
+    description: The API endpoint, Realtime, sign-ups, email, OAuth and the Studio dashboard.
+    sections:
+      - id: kong-public
+        title: Public API endpoint
+        toggle: kong.publicAccess.enabled
+        description: Gives Kong a public endpoint for the API.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version Kong lets the anon key, which client apps embed, call the admin endpoints
+              `/auth/v1/admin/` (user administration) and, with Studio on, `/pg/` (arbitrary SQL as
+              `supabase_admin`). With a public endpoint anyone holding the anon key controls your data.
+              Version 1.1.0 restricts them to the service role key.
+          - path: kong.publicAccess.siteUrl
+            type: string
+            format: url
+            label: Public site URL
+            required: true
+            placeholder: https://api.my-app.com
+            description: >-
+              The URL clients reach Kong at. Auth uses it for OAuth redirects and magic-link emails.
+      - id: realtime
+        title: Realtime
+        toggle: realtime.enabled
+        description: WebSocket subscriptions to database changes, served through Kong.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version Realtime has no tenant configured, so it refuses every WebSocket connection
+              (`TenantNotFound`) and no subscription opens. Version 1.1.0 fixes it.
+          - path: realtime.minReplicas
+            type: integer
+            label: Realtime minimum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+          - path: realtime.maxReplicas
+            type: integer
+            label: Realtime maximum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+            rules:
+              - rule: self.realtime.minReplicas <= self.realtime.maxReplicas
+                message: The maximum replicas must be at least the minimum.
+          - path: realtime.image
+            type: string
+            format: image
+            label: Realtime image
+            required: true
+            advanced: true
+          - path: realtime.resources
+            type: resources
+            label: Realtime resources
+            required: true
+            advanced: true
+      - title: Auth
+        fields:
+          - path: auth.disableSignup
+            type: boolean
+            label: Disable sign-ups
+            description: Prevents new user registration.
+      - id: smtp
+        title: Email (SMTP)
+        toggle: auth.smtp.enabled
+        description: >-
+          Needed for magic links, sign-up confirmation and password reset. Without it, sign-ups are
+          confirmed automatically and email flows are unavailable.
+        fields:
+          - path: auth.smtp.host
+            type: string
+            format: hostname
+            label: SMTP host
+            required: true
+            example: true
+          - path: auth.smtp.port
+            type: integer
+            label: SMTP port
+            min: 1
+            max: 65535
+            required: true
+            suggestions:
+              - { value: 587, label: "587 (STARTTLS)" }
+              - { value: 465, label: "465 (TLS)" }
+          - path: auth.smtp.user
+            type: string
+            label: SMTP user
+            required: true
+            example: true
+          - path: auth.smtp.password
+            type: string
+            label: SMTP password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: Stored in plain text in the release values; version 1.1.0 reads it from a secret.
+          - path: auth.smtp.senderName
+            type: string
+            label: Sender name
+          - path: auth.smtp.senderEmail
+            type: string
+            format: email
+            label: Sender email
+            required: true
+            example: true
+      - title: OAuth providers
+        fields:
+          - path: auth.providers
+            type: map
+            absent: true
+            label: OAuth providers
+            widget: kv
+            description: >-
+              Set the provider's JavaScript origin to the public site URL and its redirect URI to
+              `{siteUrl}/auth/v1/callback`.
+            keys:
+              label: Provider
+              options:
+                - { value: github, label: GitHub }
+                - { value: google, label: Google }
+            values:
+              type: object
+              fields:
+                - path: clientId
+                  type: string
+                  label: Client ID
+                  required: true
+                - path: clientSecret
+                  type: string
+                  label: Client secret
+                  required: true
+                  sensitive: true
+                  widget: password
+                  description: Stored in plain text in the release values; version 1.1.0 reads it from a secret.
+            rules:
+              - rule: size(self.auth.providers) == 0 || self.kong.publicAccess.enabled
+                severity: warning
+                message: >-
+                  OAuth needs the public API endpoint: providers do not redirect to internal
+                  hostnames.
+      - id: studio
+        title: Studio dashboard
+        toggle: studio.enabled
+        description: The web dashboard, with pg_meta as a sidecar that Kong serves at `/pg/`.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              In this version Studio has no login: nothing checks studio.username or studio.password, so
+              anyone who reaches it gets the dashboard, which holds the service role key. Kong does not serve
+              it. Version 1.1.0 puts a login in front of it.
+          - path: studio.allowedCidrs
+            type: list
+            label: Direct dashboard access (no login)
+            description: Every range listed here reaches the dashboard without a login.
+            widget: tags
+            item:
+              type: string
+              format: cidr
+            rules:
+              - rule: >-
+                  !('0.0.0.0/0' in self.studio.allowedCidrs || '::/0' in self.studio.allowedCidrs) ||
+                  (oldSelf != null && oldSelf.studio.allowedCidrs != null &&
+                  ('0.0.0.0/0' in oldSelf.studio.allowedCidrs || '::/0' in oldSelf.studio.allowedCidrs))
+                severity: warning
+                message: >-
+                  This gives the whole internet an unauthenticated dashboard that holds the service role
+                  key.
+              - rule: size(self.studio.allowedCidrs) == 0
+                severity: info
+                message: >-
+                  Anyone in these ranges gets the dashboard without a password. Only list networks you
+                  fully trust.
+          - path: studio.internalAccess.type
+            type: enum
+            label: Internal dashboard access
+            widget: cards
+            required: true
+            description: >-
+              Kong is always allowed in, for the pg_meta API at `/pg/`. Every other caller gets the
+              dashboard without a login.
+            options:
+              - value: none
+                label: None
+                description: No internal caller, Kong included.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Kong and listed workloads
+                description: Kong plus the workloads listed below.
+            rules:
+              - rule: >-
+                  self.studio.internalAccess.type in ['workload-list', 'none'] ||
+                  (oldSelf != null && self.studio.internalAccess.type == oldSelf.studio.internalAccess.type)
+                severity: warning
+                message: >-
+                  Studio holds the service role key and has no login: with this setting any workload in the
+                  scope opens the dashboard unauthenticated. Choose "Kong and listed workloads".
+              - rule: >-
+                  self.studio.internalAccess.type in ['workload-list', 'none'] ||
+                  oldSelf == null || self.studio.internalAccess.type != oldSelf.studio.internalAccess.type
+                severity: info
+                message: >-
+                  Studio has no login: any workload in this scope opens the dashboard unauthenticated.
+                  "Kong and listed workloads" limits it to Kong.
+              - rule: self.studio.internalAccess.type != 'none'
+                severity: info
+                message: None blocks Kong as well, so the pg_meta API at /pg/ stops working.
+          # workload-studio.yaml writes Kong and every entry into inboundAllowWorkload, whatever the type.
+          - path: studio.internalAccess.workloads
+            type: list
+            label: Extra dashboard callers
+            description: >-
+              Kong is added automatically; list extra callers only. With Same GVC, callers from other
+              GVCs.
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.studio.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.studio.internalAccess.type == 'same-gvc' && context.gvc != null
+                rule: "!self.studio.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+                severity: info
+                messageExpression: >-
+                  'Same GVC already allows every workload in this GVC: ' +
+                  self.studio.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+                  ' can be removed from the list.'
+                message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+              - when: self.studio.internalAccess.type == 'same-org'
+                rule: size(self.studio.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+              - when: self.studio.internalAccess.type == 'none'
+                rule: size(self.studio.internalAccess.workloads) == 0
+                severity: warning
+                message: >-
+                  The chart still writes these callers into the firewall next to Kong, where the platform checks
+                  every entry, but "None" lets none of them connect. Remove them.
+          - path: studio.image
+            type: string
+            format: image
+            label: Studio image
+            required: true
+            advanced: true
+          - path: studio.resources
+            type: resources
+            label: Studio resources
+            required: true
+            advanced: true
+          - path: studio.meta.image
+            type: string
+            format: image
+            label: pg_meta image
+            required: true
+            advanced: true
+          - path: studio.meta.resources
+            type: resources
+            label: pg_meta resources
+            required: true
+            advanced: true
+
+  - id: storage
+    title: Storage
+    description: Where the Storage API keeps files.
+    sections:
+      - id: storage-api
+        title: Storage API
+        toggle: storage.enabled
+        description: File and object storage. Turn it off if your app stores no files; it saves a workload.
+        fields:
+          - path: storage.backend
+            type: enum
+            label: Backend
+            widget: cards
+            required: true
+            options:
+              - value: s3
+                label: S3
+                description: An AWS S3 bucket. Stateless and scalable.
+              - value: gcs
+                label: Google Cloud Storage
+                description: Through GCS's S3-compatible API with HMAC keys. Stateless and scalable.
+              - value: local
+                label: Local volume
+                description: A volume set on a single stateful replica. For development and simple use.
+          - type: note
+            when: self.storage.backend == 'local'
+            text: >-
+              A local backend makes Storage a stateful workload with one replica: the replica settings
+              are ignored.
+          - path: storage.image
+            type: string
+            format: image
+            label: Storage image
+            required: true
+            advanced: true
+          - path: storage.resources
+            type: resources
+            label: Storage resources
+            required: true
+            advanced: true
+            rules:
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  cpuMillicores(self.storage.resources.maxCpu) <= 4 * cpuMillicores(self.storage.resources.minCpu)
+                message: >-
+                  With a local backend Storage is stateful, where the maximum CPU can be at most 4 times
+                  the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  memoryBytes(self.storage.resources.maxMemory) <= 4 * memoryBytes(self.storage.resources.minMemory)
+                message: >-
+                  With a local backend Storage is stateful, where the maximum memory can be at most 4
+                  times the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  cpuMillicores(self.storage.resources.maxCpu) - cpuMillicores(self.storage.resources.minCpu) <= 4000
+                message: >-
+                  With a local backend Storage is stateful, where the maximum CPU can be at most 4000
+                  millicores above the minimum.
+              - rule: >-
+                  self.storage.backend != 'local' ||
+                  memoryBytes(self.storage.resources.maxMemory) - memoryBytes(self.storage.resources.minMemory) <= 4294967296
+                message: >-
+                  With a local backend Storage is stateful, where the maximum memory can be at most 4096
+                  MiB above the minimum.
+          - path: storage.minReplicas
+            type: integer
+            label: Storage minimum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+            when: self.storage.backend != 'local'
+          - path: storage.maxReplicas
+            type: integer
+            label: Storage maximum replicas
+            min: 1
+            required: true
+            advanced: true
+            suggestions: [1, 2, 3, 5]
+            when: self.storage.backend != 'local'
+            rules:
+              - rule: self.storage.minReplicas <= self.storage.maxReplicas
+                message: The maximum replicas must be at least the minimum.
+      - title: S3
+        when: self.storage.enabled && self.storage.backend == 's3'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy `aws::ReadOnlyAccess` to the Supabase
+              identity, which grants read access to every bucket in the AWS account. Version 1.1.1 removes
+              it.
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Region
+            required: true
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: >-
+              An AWS IAM policy granting GetObject, PutObject and DeleteObject on the bucket (an AWS
+              object, not a Control Plane policy).
+        rules:
+          - rule: >-
+              self.storage.s3.cloudAccountName != null && self.storage.s3.cloudAccountName != '' &&
+              self.storage.s3.policyName != null && self.storage.s3.policyName != ''
+            mirrors: supabase.validate
+            paths: [storage.s3.cloudAccountName]
+            message: S3 storage needs a cloud account and an IAM policy name.
+      - title: Google Cloud Storage
+        when: self.storage.enabled && self.storage.backend == 'gcs'
+        fields:
+          - type: note
+            text: >-
+              The HMAC key pair is stored in plain text in the release values; version 1.1.0 reads it from
+              a secret.
+          - path: storage.gcs.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.gcs.accessKeyId
+            type: string
+            label: HMAC access key ID
+            required: true
+            sensitive: true
+            example: true
+            description: >-
+              An HMAC key for a service account with Storage Object Admin on the bucket, created under
+              Cloud Storage, Settings, Interoperability.
+          - path: storage.gcs.secretAccessKey
+            type: string
+            label: HMAC secret
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+      - title: Local volume
+        when: self.storage.enabled && self.storage.backend == 'local'
+        docs: /reference/volumeset
+        fields:
+          - path: storage.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+      - id: local-autoscaling
+        title: Grow the local volume automatically
+        toggle: storage.volumeset.autoscaling.enabled
+        when: self.storage.enabled && self.storage.backend == 'local'
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: storage.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: storage.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: storage.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.storage.volumeset.autoscaling.maxCapacity >= self.storage.volumeset.capacity
+            paths: [storage.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - when: self.storage.enabled && self.storage.backend == 'local'
+        rule: oldSelf == null || self.storage.volumeset.capacity >= oldSelf.storage.volumeset.capacity
+        paths: [storage.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - when: >-
+          self.storage.enabled && self.storage.backend == 's3' &&
+          self.backup.enabled && self.backup.provider == 'aws'
+        rule: self.backup.aws.cloudAccountName == self.storage.s3.cloudAccountName
+        severity: warning
+        paths: [storage.s3.cloudAccountName]
+        message: >-
+          Keyless S3 storage and AWS backups share one identity with a single AWS cloud account: the
+          storage cloud account is used and the backup's is ignored. Use the same cloud account for
+          both.
+      - when: self.storage.enabled && self.backup.enabled
+        rule: >-
+          !(self.storage.backend == 's3' && self.backup.provider == 'aws' &&
+          self.storage.s3.bucket == self.backup.aws.bucket) &&
+          !(self.storage.backend == 'gcs' && self.backup.provider == 'gcp' &&
+          self.storage.gcs.bucket == self.backup.gcp.bucket)
+        severity: info
+        paths: [storage.backend]
+        message: >-
+          Storage and backups use the same bucket. Separate buckets are recommended; a shared bucket
+          only works with different prefixes.
+      - rule: >-
+          oldSelf == null || !self.storage.enabled || !oldSelf.storage.enabled ||
+          self.storage.backend == oldSelf.storage.backend
+        severity: info
+        paths: [storage.backend]
+        message: >-
+          Switching the storage backend does not move existing files; objects stored on the old
+          backend are no longer served.
+
+  - id: backup
+    title: Backups
+    description: Logical dumps or continuous WAL archiving to object storage.
+    sections:
+      - id: backup
+        title: Backups
+        docs: "#backup"
+        toggle: backup.enabled
+        fields:
+          - path: backup.mode
+            type: enum
+            label: Mode
+            widget: cards
+            required: true
+            options:
+              - value: logical
+                label: Logical
+                description: A scheduled pg_dump.
+              - value: walg
+                label: WAL-G
+                description: Continuous WAL archiving with base backups; supports point-in-time recovery.
+          - path: backup.provider
+            type: enum
+            label: Destination
+            widget: segmented
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.backup.mode == 'logical'
+          - path: backup.walg.intervalSeconds
+            type: integer
+            label: Base backup interval
+            unit: seconds
+            min: 1
+            required: true
+            when: self.backup.mode == 'walg'
+            help: 300 seconds or more is recommended.
+          - path: backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.backup.mode == 'logical'
+            description: pg_dump 17 is backward-compatible with Postgres 15.
+          - path: backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+            description: >-
+              In WAL-G mode the archiving sidecar uses only the maximum CPU and memory; the minimums
+              apply to the logical backup job.
+      - title: AWS S3
+        when: self.backup.enabled && self.backup.provider == 'aws'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This version also attaches the AWS managed policy `aws::ReadOnlyAccess` to the Supabase
+              identity, which grants read access to every bucket in the AWS account. Version 1.1.1 removes
+              it.
+          - path: backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+            rules:
+              # workload-postgres.yaml writes the prefix unquoted into WALG_S3_PREFIX (s3://bucket/prefix).
+              - rule: >-
+                  self.backup.mode != 'walg' ||
+                  (oldSelf != null && self.backup.aws.prefix == oldSelf.backup.aws.prefix) ||
+                  (!self.backup.aws.prefix.contains(': ') && !self.backup.aws.prefix.contains(' #') &&
+                  !self.backup.aws.prefix.endsWith(':') && !self.backup.aws.prefix.endsWith(' ') &&
+                  !self.backup.aws.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  The chart writes the prefix unquoted into the WAL-G destination, so it cannot contain ": " or
+                  " #", a tab, or end with ":" or a space.
+      - title: Google Cloud Storage
+        when: self.backup.enabled && self.backup.provider == 'gcp'
+        fields:
+          - path: backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
+            patternMessage: Lowercase letters, digits, dots, dashes and underscores, starting and ending with a letter or digit.
+          - path: backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage
+              Admin role.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+            rules:
+              # workload-postgres.yaml writes the prefix unquoted into WALG_GS_PREFIX (gs://bucket/prefix).
+              - rule: >-
+                  self.backup.mode != 'walg' ||
+                  (oldSelf != null && self.backup.gcp.prefix == oldSelf.backup.gcp.prefix) ||
+                  (!self.backup.gcp.prefix.contains(': ') && !self.backup.gcp.prefix.contains(' #') &&
+                  !self.backup.gcp.prefix.endsWith(':') && !self.backup.gcp.prefix.endsWith(' ') &&
+                  !self.backup.gcp.prefix.matches('\\t'))
+                severity: warning
+                message: >-
+                  The chart writes the prefix unquoted into the WAL-G destination, so it cannot contain ": " or
+                  " #", a tab, or end with ":" or a space.
+    rules:
+      - rule: >-
+          oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||
+          self.backup.mode == oldSelf.backup.mode
+        severity: info
+        paths: [backup.mode]
+        message: >-
+          Switching the backup mode restarts Postgres: logical and WAL-G need different archive
+          settings.
+      - rule: >-
+          oldSelf == null || !self.backup.enabled || !oldSelf.backup.enabled ||
+          self.backup.provider == oldSelf.backup.provider
+        severity: info
+        paths: [backup.provider]
+        message: >-
+          The existing backups stay with the previous destination. The platform merges identity
+          updates, so the previous provider's cloud binding stays on the workload identity until you
+          edit the identity or reinstall the release.
+
+  - id: advanced
+    title: Advanced
+    description: Images, resources and replica counts of the services that always run.
+    sections:
+      - title: Postgres
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            rules:
+              - rule: >-
+                  self.postgres.image.startsWith('supabase/postgres') ||
+                  self.postgres.image.contains('/supabase/postgres')
+                severity: warning
+                message: >-
+                  Use the Supabase Postgres image: a stock Postgres image lacks the extensions (pgvector,
+                  pg_graphql, pg_net, pgjwt) that Auth, PostgREST, Realtime and Storage require.
+      - title: Kong
+        fields:
+          - path: kong.image
+            type: string
+            format: image
+            label: Kong image
+            required: true
+            description: Pinned to 2.8; Supabase's routing config is tested against it.
+          - path: kong.resources
+            type: resources
+            label: Kong resources
+            required: true
+          - path: kong.minReplicas
+            type: integer
+            label: Kong minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: kong.maxReplicas
+            type: integer
+            label: Kong maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            rules:
+              - rule: self.kong.minReplicas <= self.kong.maxReplicas
+                message: The maximum replicas must be at least the minimum.
+      - title: PostgREST
+        fields:
+          - path: postgrest.image
+            type: string
+            format: image
+            label: PostgREST image
+            required: true
+          - path: postgrest.resources
+            type: resources
+            label: PostgREST resources
+            required: true
+          - path: postgrest.minReplicas
+            type: integer
+            label: PostgREST minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: postgrest.maxReplicas
+            type: integer
+            label: PostgREST maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            rules:
+              - rule: self.postgrest.minReplicas <= self.postgrest.maxReplicas
+                message: The maximum replicas must be at least the minimum.
+      - title: Auth
+        fields:
+          - path: auth.image
+            type: string
+            format: image
+            label: Auth image
+            required: true
+          - path: auth.resources
+            type: resources
+            label: Auth resources
+            required: true
+          - path: auth.minReplicas
+            type: integer
+            label: Auth minimum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+          - path: auth.maxReplicas
+            type: integer
+            label: Auth maximum replicas
+            min: 1
+            required: true
+            suggestions: [1, 2, 3, 5]
+            rules:
+              - rule: self.auth.minReplicas <= self.auth.maxReplicas
+                message: The maximum replicas must be at least the minimum.
+
+yamlOnly:
+  - path: studio.username
+    reason: Nothing checks it in this version, which has no dashboard login (the note in the Studio section says so).
+  - path: studio.password
+    reason: Nothing checks it in this version, which has no dashboard login (the note in the Studio section says so).

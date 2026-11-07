@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Grafana (multi-location)
+category: observability
+family: grafana
+topology: multi-location
+
+summary: >-
+  Grafana OSS with a stateless UI tier in every location of an existing GVC behind one georouted HTTPS
+  endpoint, and all state on one PostgreSQL Patroni cluster stretched across the same locations.
+  Alerting runs on one dedicated evaluator by default, or on every instance coordinated by a stretched
+  Redis Sentinel tier. Options include datasources as code, SMTP alert emails and database backups to
+  S3, GCS or an S3-compatible bucket. Pick it when dashboards and alerting must survive losing a
+  region; 3 or more locations give automatic database failover.
+
+keywords:
+  - dashboards
+  - alerting
+  - multi-region
+  - geo-redundant
+  - region failover
+  - disaster recovery
+  - high availability
+  - georouting
+  - data visualization
+  - metrics dashboards
+  - prometheus datasource
+  - alerting high availability
+  - patroni
+  - grafana oss
+
+useCases:
+  - Keep dashboards available to users when one cloud region fails
+  - Run alert evaluation that continues after losing a location
+  - Serve one Grafana endpoint to users in several regions from the nearest location
+  - Build dashboards and alerts over Prometheus, Thanos or Mimir datasources
+
+alternativeTo:
+  - Grafana Cloud
+  - Amazon Managed Grafana
+  - Azure Managed Grafana
+
+pickInsteadIf:
+  - need: dashboards and alerting in a single location with fewer moving parts
+    template: grafana
+  - need: a database that stores and queries metrics with PromQL
+    template: prometheus
+
+related:
+  - template: thanos
+    relation: companion
+    note: One PromQL datasource across Prometheus servers in several regions
+  - template: prometheus
+    relation: companion
+    note: Metrics source for dashboards and alert rules
+  - template: mimir
+    relation: companion
+    note: Long-term metrics datasource backed by object storage
+
+prerequisites:
+  - kind: other
+    valuesPath: global.locations
+    required: true
+    description: An existing GVC holding every location in global.locations, at least 2 (3 for automatic database failover or alerting HA). The chart creates no GVC.
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.passwordSecretName
+    required: true
+    description: First-boot password for the admin login; the install waits without it. Delete it after first login by setting admin.applyPassword false.
+  - kind: secret
+    secretType: opaque
+    valuesPath: admin.secretKeySecretName
+    required: true
+    description: Key that encrypts stored datasource credentials, read on every boot in every location. The install waits without it; never delete or rotate it.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgresML.postgres.credentialsSecretName
+    required: true
+    description: Credentials for the stretched app database; the chart does not create it and the install waits without it. Use plain identifiers for username and database.
+  - kind: secret
+    secretType: dictionary
+    keys: ["one key per $KEY used in datasources.definitions"]
+    valuesPath: datasources.credentialSecrets
+    required: false
+    when: datasources.credentialSecrets has entries
+    description: Credentials Grafana uses to reach a provisioned datasource, one dictionary secret per credentialSecrets entry, created before install.
+  - kind: secret
+    secretType: opaque
+    valuesPath: smtp.passwordSecretName
+    required: false
+    when: smtp.enabled with smtp.user set
+    description: SMTP password for alert emails, encoding plain. The relay must offer STARTTLS or TLS, or every notification is dropped.
+  - kind: secret
+    secretType: opaque
+    valuesPath: redisML.redis.passwordSecretName
+    required: false
+    when: alerting.highAvailability.enabled with Redis authentication wanted
+    description: Password for the alerting-coordination Redis. Grafana reads the same secret, so a missing one stops the UI tier too.
+  - kind: secret
+    secretType: opaque
+    valuesPath: redisML.sentinel.passwordSecretName
+    required: false
+    when: alerting.highAvailability.enabled with Sentinel authentication wanted
+    description: Password for the alerting-coordination Sentinel tier. Grafana reads the same secret, so a missing one stops the UI tier too.
+  - kind: bucket
+    valuesPath: [postgresML.backup.aws.bucket, postgresML.backup.gcp.bucket, postgresML.backup.minio.bucket]
+    required: false
+    when: postgresML.backup.enabled
+    description: Bucket on AWS S3, GCS or an S3-compatible server for database backups. An S3-compatible endpoint must be reachable from every location.
+  - kind: cloud-account
+    valuesPath: [postgresML.backup.aws.cloudAccountName, postgresML.backup.gcp.cloudAccountName]
+    required: false
+    when: postgresML.backup.enabled with postgresML.backup.provider aws or gcp
+    description: Control Plane cloud account for the backup bucket; on GCP its service account also needs the Storage Admin role.
+  - kind: other
+    valuesPath: postgresML.backup.aws.policyName
+    required: false
+    when: postgresML.backup.enabled with postgresML.backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket (get, put, delete, list and object versions), attached through the cloud account.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: postgresML.backup.minio.credentialsSecretName
+    required: false
+    when: postgresML.backup.enabled with postgresML.backup.provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

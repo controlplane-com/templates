@@ -1,0 +1,19 @@
+{{- /*
+  The container reads its OWN GVC at boot to confirm it has exactly one location.
+  On a multi-location GVC the platform would run one WordPress AND one MariaDB
+  per location, each with its own volume — the media library and the database
+  split silently. Scoped to the ONE install GVC; never `target: all`, which would
+  grant view on every GVC in the org.
+*/}}
+kind: policy
+name: {{ include "wordpress.policy.gvc.name" . }}
+description: WordPress GVC read policy (single-location boot guard)
+tags: {{- include "wordpress.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "wordpress.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

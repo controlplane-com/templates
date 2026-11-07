@@ -1,0 +1,6 @@
+# notes-rls extension
+comment = 'notes-rls fixture'
+default_version = '0.0.1'
+requires = 'plpgsql,pgcrypto'
+relocatable = false
+superuser = false

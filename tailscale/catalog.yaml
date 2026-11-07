@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Tailscale Subnet Router
+category: networking
+topology: stateless
+
+summary: >-
+  A Tailscale subnet router that joins your tailnet from one location in the GVC and advertises the
+  Control Plane internal address ranges and DNS resolver, so devices on the tailnet reach workloads at
+  their private cpln.local names. No public endpoint is needed; an optional httpbin example target is
+  deployed for testing. Pick it for private VPN access from laptops, CI runners or other networks to
+  internal workloads.
+
+keywords:
+  - tailnet
+  - vpn
+  - mesh vpn
+  - wireguard
+  - private network access
+  - zero trust network access
+  - ztna
+  - split dns
+  - cpln.local
+  - remote access
+  - bastion host
+
+useCases:
+  - Reach internal workloads and databases from your laptop without exposing them publicly
+  - Give developers private access to cpln.local endpoints over a VPN
+  - Connect CI runners or on-prem machines on your tailnet to GVC workloads
+  - Replace a bastion host for debugging internal services
+
+alternativeTo:
+  - AWS Client VPN
+  - Azure VPN Gateway
+  - OpenVPN Access Server
+  - Twingate
+  - Cloudflare Zero Trust
+
+pickInsteadIf:
+  - need: open RDP, VNC or SSH sessions to hosts from a browser with no VPN client
+    template: guacamole
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: authKeySecretName
+    required: true
+    description: Tailscale auth key (reusable and ephemeral recommended). Create before installing; when missing the workload waits with no logs. Keys expire.
+  - kind: other
+    required: true
+    description: A Tailscale tailnet where the advertised routes are approved (or auto-approved in the ACL) and cpln.local is added as a split-DNS nameserver; otherwise no traffic reaches the GVC.

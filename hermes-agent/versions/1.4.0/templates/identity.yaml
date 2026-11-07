@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "hermes-agent.identity.name" . }}
+description: Hermes Agent workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hermes-agent.tags" . | nindent 4 }}

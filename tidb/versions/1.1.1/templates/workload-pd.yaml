@@ -1,0 +1,88 @@
+kind: workload
+name: {{ .Release.Name }}-pd
+description: tidb placement driver
+tags: {{- include "tidb.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: tidb-pd
+      cpu: "{{ .Values.resources.pd.cpu }}"
+      image: pingcap/pd:v8.5.3
+      inheritEnv: false
+      memory: {{ .Values.resources.pd.memory }}
+      command: "/bin/bash"
+      args:
+        - "/scripts/pd-startup.sh"
+      ports:
+        - number: 2379
+          protocol: tcp
+        - number: 2380
+          protocol: tcp
+      env:
+       - name: FIRST_LOCATION
+         value: {{ (index .Values.gvc.locations 0).name }}
+       - name: SECOND_LOCATION
+         value: {{ (index .Values.gvc.locations 1).name }}
+       - name: BOOTSTRAP_FQDN
+         value: "replica-0.{{ .Release.Name }}-pd.{{ (index .Values.gvc.locations 0).name }}.{{ .Values.gvc.name }}.cpln.local"
+       - name: SECONDARY_FQDN
+         value: "replica-0.{{ .Release.Name }}-pd.{{ (index .Values.gvc.locations 1).name }}.{{ .Values.gvc.name }}.cpln.local"
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ .Release.Name }}-tidb-pd-vs
+        - path: /scripts/pd-startup.sh
+          uri: cpln://secret/{{ .Release.Name }}-tidb-pd-startup.payload
+  identityLink: //gvc/{{ .Values.gvc.name }}/identity/{{ .Release.Name }}-tidb-identity
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: cpu
+      {{ $locs := .Values.gvc.locations }}
+      {{ $numLocs := len $locs }}
+      {{ if eq (mod $numLocs 2) 0 }}
+      maxScale: 2
+      {{ else }}
+      maxScale: 1
+      {{ end }}
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  {{- $locs := .Values.gvc.locations }}
+  {{- $numLocs := len $locs }}
+  {{- if eq (mod $numLocs 2) 0 }}
+  localOptions:
+    - autoscaling:
+        maxConcurrency: 0
+        metric: cpu
+        minScale: 2
+        maxScale: 2
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      location: //location/{{ (index $locs 0).name }}
+      suspend: false
+      timeoutSeconds: 5
+  {{- end }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: true
+  supportDynamicTags: false

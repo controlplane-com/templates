@@ -1,0 +1,30 @@
+# Default install: single-instance PostgreSQL, documents in the database, public endpoint, no SMTP.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  cert: pkcs12                      # throwaway self-signed .p12 → {gen.cert}, {gen.cert.passphrase}
+
+secrets:
+  app:
+    type: dictionary
+    keys: [nextAuthSecret, encryptionKey, encryptionSecondaryKey]
+    entries:
+      signingPassphrase: "{gen.cert.passphrase}"
+  cert:
+    type: opaque
+    payload: "{gen.cert}"
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: documenso, database: documenso}
+
+values:
+  location: aws-us-east-1
+  secrets:
+    name: "{secrets.app.name}"
+  signing:
+    certificateSecretName: "{secrets.cert.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"

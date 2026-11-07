@@ -1,0 +1,89 @@
+# Feature checks for the calcom template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# The Cal.com image has node and bash; the app checks are Node one-liners run in the app container
+# against 127.0.0.1:3000. The database checks run psql in the bundled postgres container (local socket,
+# as the POSTGRES_USER the credentials secret sets). The runner reads any {word} as a placeholder, so
+# the scripts avoid that shape.
+checks:
+  - id: app-serving
+    description: Cal.com serves /api/version (the HTTP server starts only after migrations succeed).
+    exec:
+      workload: "{release}-calcom"
+      container: calcom
+      script: |
+        node -e "fetch('http://127.0.0.1:3000/api/version').then(r => r.text().then(t => console.log('VERSION ' + r.status + ' ' + t)))"
+    expect:
+      stdout: '^VERSION 200 .*"version":"[0-9]+\.[0-9]+\.[0-9]+"'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: schema-migrated
+    description: Every Prisma migration finished, none failed or rolled back, and the users table exists.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'MIGRATIONS ' || count(*) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL) || ' BAD ' || count(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) || ' USERS ' || coalesce(to_regclass('public.users')::text, 'missing') FROM _prisma_migrations"
+    expect:
+      stdout: "^MIGRATIONS [1-9][0-9]{2,} BAD 0 USERS users$"
+    retries: 3
+
+  - id: app-store-seeded
+    description: The boot script's app-store seed populated the App table.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'APPS ' || count(*) FROM \"App\""
+    expect:
+      stdout: "^APPS [1-9][0-9]*$"
+    retries: 3
+
+  - id: cron-endpoint-auth
+    description: >-
+      /api/tasks/cron accepts the cronSecret from the auth secret and refuses no header and a wrong
+      token, so the endpoint is guarded by the prerequisite secret.
+    exec:
+      workload: "{release}-calcom"
+      container: calcom
+      script: |
+        node -e "const u = 'http://127.0.0.1:3000/api/tasks/cron'; const call = (a) => fetch(u, a ? Object.fromEntries([['headers', Object.fromEntries([['authorization', a]])]]) : undefined); Promise.all([call('Bearer ' + process.env.CRON_SECRET), call(''), call('Bearer wrong-' + Date.now())]).then(rs => console.log('CRON ok=' + rs[0].status + ' none=' + rs[1].status + ' wrong=' + rs[2].status))"
+    expect:
+      stdout: "^CRON ok=200 none=401 wrong=401$"
+    retries: 3
+
+  - id: cron-caller-reaches-app
+    description: The scheduled-job caller workload reaches the app over internal DNS with its secret (HTTP 200).
+    exec:
+      workload: "{release}-calcom-cron"
+      container: cron
+      script: |
+        echo "CALLER $(wget -O /dev/null -S -T 30 -t 1 --header="Authorization: Bearer $CRON_SECRET" "$CALCOM_URL/api/tasks/cron" 2>&1 | awk '/HTTP\/1/ {c=$2} END {print c}')"
+    expect:
+      stdout: "^CALLER 200$"
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: data-written
+    description: A marker row tagged with the running version is written to the Cal.com database and read back.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "CREATE TABLE IF NOT EXISTS e2e_marker (v text PRIMARY KEY)" -c "INSERT INTO e2e_marker VALUES ('e2e-{version}') ON CONFLICT DO NOTHING" -c "SELECT 'MARKER ' || v FROM e2e_marker WHERE v = 'e2e-{version}'"
+    expect:
+      stdout: "^MARKER e2e-[0-9.]+$"
+    retries: 3
+
+  - id: data-survives
+    description: The marker row written by the first installed version is still there after every upgrade.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SURVIVED ' || v FROM e2e_marker WHERE v = 'e2e-{installed_version}'"
+    expect:
+      stdout: "^SURVIVED e2e-[0-9.]+$"
+    retries: 3

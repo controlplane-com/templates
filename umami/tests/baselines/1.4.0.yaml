@@ -1,0 +1,37 @@
+# umami 1.4.0 in HA mode: one Umami replica on the
+# bundled postgres-highly-available database (three Patroni members, three etcd members, HAProxy), one
+# location, at the chart's default sizes. The default single-instance store is the postgres template's
+# own subject. The app secret and database credentials are prerequisite secrets CI creates. Public access
+# stays off, as the chart defaults it: Umami seeds a hardcoded admin/umami login.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  appsecret: hex
+  pgpw: hex
+
+secrets:
+  app:
+    type: opaque
+    payload: "{gen.appsecret}"
+  db:
+    type: dictionary
+    entries:
+      username: umami
+      password: "{gen.pgpw}"
+      database: umami
+
+vars:
+  pg_user: umami
+  pg_password: "{gen.pgpw}"
+  pg_db: umami
+
+values:
+  app:
+    appSecretName: "{secrets.app.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"

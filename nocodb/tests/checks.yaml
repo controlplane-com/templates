@@ -1,0 +1,162 @@
+# Feature checks for the nocodb template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
+# pg_password, pg_db, admin_email, admin_password).
+#
+# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
+# and calls NocoDB at its internal address. NocoDB keeps its users and bases in PostgreSQL, so a sign-in
+# and a base read back only pass when the server and its database both work.
+# (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+checks:
+  - id: cluster-healthy
+    description: Patroni reports exactly one leader and every other member streaming from it.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        leaders = [x["name"] for x in m if x["role"] == "leader"]
+        streaming = [x["name"] for x in m if x["role"] in ("replica", "sync_standby")
+                     and (x["state"] == "streaming" or (x["state"] == "running" and isinstance(x.get("lag"), int)))]
+        print(f"MEMBERS {len(m)} LEADERS {len(leaders)} STREAMING {len(streaming)}")
+        '
+    expect:
+      stdout: "^MEMBERS 3 LEADERS 1 STREAMING 2$"
+    retries: 20
+    retryDelaySeconds: 15
+
+  - id: nocodb-healthy
+    description: NocoDB answers its health endpoint on its internal address.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 10 http://{release}-nocodb.{gvc}.cpln.local:8080/api/v1/health
+    expect:
+      stdout: '"message":\s*"OK"'
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: admin-signin-and-base
+    description: >-
+      The bootstrapped super admin signs in, creates a base named after the running version, and reads it
+      back from the base list.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-nocodb.{gvc}.cpln.local:8080
+        N="e2e-$(echo '{version}' | tr . -)"
+        T=$(curl -s -m 15 -H 'Content-Type: application/json' \
+          -d '{"email":"{admin_email}","password":"{admin_password}"}' "$U/api/v1/auth/user/signin" |
+          python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null)
+        [ -n "$T" ] && echo "SIGNIN ok" || echo "SIGNIN failed"
+        found() {
+          curl -s -m 15 -H "xc-auth: $T" "$U/api/v2/meta/bases/" |
+            python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for b in json.load(sys.stdin)["list"] if b["title"] == n))' "$N"
+        }
+        # Create the base once per version, so a re-run or a no-op upgrade does not add duplicates.
+        if [ "$(found)" = 0 ]; then
+          curl -s -m 30 -o /dev/null -H "xc-auth: $T" -H 'Content-Type: application/json' \
+            -d "{\"title\":\"$N\"}" "$U/api/v2/meta/bases/"
+        fi
+        echo "BASES $N $(found)"
+    expect:
+      stdout: "^SIGNIN ok$[\\s\\S]*^BASES e2e-\\S+ [1-9][0-9]*$"
+    # NocoDB and its Redis restart on every chart upgrade (~2 min measured); 16 x 15 s outlasts it.
+    retries: 16
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong super-admin password gets no token (the control for the check above).
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s -m 15 -H 'Content-Type: application/json' \
+          -d '{"email":"{admin_email}","password":"Wrong-password-1"}' \
+          http://{release}-nocodb.{gvc}.cpln.local:8080/api/v1/auth/user/signin |
+          python3 -c 'import json, sys; b = json.load(sys.stdin); print("TOKEN" if b.get("token") else "REFUSED " + str(b.get("msg") or b.get("message")))'
+    expect:
+      stdout: "^REFUSED "
+      notStdout: "^TOKEN"
+
+  - id: data-survives-upgrade
+    description: >-
+      The base created on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the bases carried over.
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        U=http://{release}-nocodb.{gvc}.cpln.local:8080
+        N="e2e-$(echo '{installed_version}' | tr . -)"
+        T=$(curl -s -m 15 -H 'Content-Type: application/json' \
+          -d '{"email":"{admin_email}","password":"{admin_password}"}' "$U/api/v1/auth/user/signin" |
+          python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null)
+        n=$(curl -s -m 15 -H "xc-auth: $T" "$U/api/v2/meta/bases/" |
+          python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for b in json.load(sys.stdin)["list"] if b["title"] == n))' "$N" 2>&1)
+        echo "BASES $N $n"
+    expect:
+      stdout: "^BASES e2e-\\S+ [1-9][0-9]*$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pgvector-0-8-7-available
+    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.4.1.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'AVAIL ' || default_version from pg_available_extensions where name = 'vector'" 2>&1
+    expect:
+      stdout: "^AVAIL 0\\.8\\.7$"
+    # After the upgrade the members restart one at a time; this runs long enough to reach the new leader.
+    # helm --wait returns while the Patroni members are still restarting, and the old leader restarts
+    # last (~4 min in); 20 x 30 s covers the rollout.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: every-patroni-member-on-0-8
+    description: >-
+      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
+      without this a member that never comes back (seen once in testing: the old leader stuck initializing for
+      17 min) goes unseen.
+    issue: "#5376"
+    since: 1.4.1
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        LOC=$(basename "$CPLN_LOCATION")
+        line="MEMBERS"
+        for i in 0 1 2; do
+          v=$(psql -h replica-$i.{release}-postgres-ha.$LOC.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+            -c "select default_version from pg_available_extensions where name = 'vector'" 2>/dev/null)
+          line="$line $i=$v"
+        done
+        echo "$line HEALTHY $(curl -s -m 10 http://localhost:8008/cluster | python3 -c '
+        import json, sys
+        m = json.load(sys.stdin)["members"]
+        print("%d/%d" % (len([x for x in m if x["state"] in ("running", "streaming")]), len(m)))' 2>&1)"
+    expect:
+      stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
+    # The old leader restarts last, a few minutes after the runner's readiness wait returns.
+    retries: 24
+    retryDelaySeconds: 30

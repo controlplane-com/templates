@@ -1,0 +1,61 @@
+# Feature checks for the mongodb template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (mongo_workload, mongo_user, mongo_password, mongo_db). mongo_workload exists because 1.0.0 and 1.1.0
+# name the workload after the release alone.
+#
+# Every connection goes to the replica's own IP with the root user (authSource admin), so the auth
+# checks exercise the credentials the install applied, not a localhost exception.
+checks:
+  - id: write-read
+    description: A document written over an authenticated TCP connection reads back.
+    exec:
+      workload: "{mongo_workload}"
+      container: mongo
+      shell: bash
+      script: |
+        set -e
+        H=$(hostname -i | awk '{print $1}')
+        M="e2e-$(date +%s%N)"
+        mongosh --quiet "mongodb://{mongo_user}:{mongo_password}@$H:27017/{mongo_db}?authSource=admin" --eval "
+          db.e2e.insertOne({version: '{version}', marker: '$M'});
+          const d = db.e2e.findOne({marker: '$M'});
+          print(d ? 'READ ' + d.marker : 'NOT FOUND');
+        "
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong password is refused over TCP (the control for the check above).
+    exec:
+      workload: "{mongo_workload}"
+      container: mongo
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        mongosh --quiet "mongodb://{mongo_user}:wrong-password@$H:27017/{mongo_db}?authSource=admin" \
+          --eval "db.e2e.countDocuments()" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "Authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The document written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the data directory carried over.
+    exec:
+      workload: "{mongo_workload}"
+      container: mongo
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        n=$(mongosh --quiet "mongodb://{mongo_user}:{mongo_password}@$H:27017/{mongo_db}?authSource=admin" \
+          --eval "db.e2e.countDocuments({version: '{installed_version}'})")
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (documents for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

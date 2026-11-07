@@ -2,7 +2,7 @@
 
 PostgreSQL 18 with the [pgvector](https://github.com/pgvector/pgvector) extension pre-installed
 **and already created**, so a fresh install can store embeddings and run similarity search
-immediately. One server on a persistent, snapshotted volume, with an optional PgBouncer connection
+immediately. One server on a persistent volume, with an optional PgBouncer connection
 pooler and optional scheduled backups to object storage.
 
 ## Architecture
@@ -150,7 +150,7 @@ backup:
     prefix: pgvector/backups # folder name where your backups will be stored
 
   minio: # Backup to a self-hosted MinIO workload (or any S3-compatible endpoint)
-    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME:9000 for an internal MinIO template deployment
+    endpoint: http://my-minio-workload:9000 # e.g. http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000 for an internal MinIO template deployment
     bucket: my-pgvector-bucket
     # REQUIRED PREREQUISITE SECRET when provider is `minio` — a `dictionary`
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
@@ -236,7 +236,7 @@ No cloud account is needed — credentials are supplied as a secret.
 1. Create the bucket in MinIO. Set `backup.minio.bucket` to its name.
 
 2. Set `backup.minio.endpoint` to the S3 API address including the port. For the `minio` template
-   deployed in the same GVC that is `http://WORKLOAD_NAME:9000`.
+   deployed in the same GVC that is `http://WORKLOAD_NAME.GVC_NAME.cpln.local:9000`.
 
 3. Create the credentials secret and set `backup.minio.credentialsSecretName` to its name. For the
    `minio` template these are its `admin.username` and `admin.password`:
@@ -251,14 +251,18 @@ No cloud account is needed — credentials are supplied as a secret.
 
 The dumps are whole-cluster `pg_dumpall` output and contain `CREATE EXTENSION IF NOT EXISTS vector`,
 so **restore into an image that carries pgvector** — replaying one into a stock `postgres:18` fails
-at that line.
+at that line. Replay the script against the `postgres` maintenance database as the superuser from your
+prerequisite secret, from a client that can reach both the bucket and the server — a workload inside
+the GVC, or your own machine with `cpln port-forward RELEASE_NAME-pgvector 5432:5432 --gvc GVC_NAME`
+open and `--host=127.0.0.1` in place of the internal hostname. `already exists` errors for the role,
+database and `vector` extension the server created at first boot are expected.
 
 ```bash
 export PGPASSWORD="PASSWORD"
 
 aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
   | gunzip \
-  | psql --host=WORKLOAD_NAME --port=5432 --username=USERNAME --dbname=postgres
+  | psql --host=RELEASE_NAME-pgvector.GVC_NAME.cpln.local --port=5432 --username=USERNAME --dbname=postgres
 
 unset PGPASSWORD
 ```
@@ -290,7 +294,8 @@ fixes and refinements, not a missing index type.
   log output at all; see Prerequisites for the one diagnostic that shows it.
 - **`config.extraExtensions` and the credentials are read only when the data directory is empty.**
   Changing either later does nothing: add an extension with `CREATE EXTENSION IF NOT EXISTS pg_trgm;`
-  and rotate a password with `ALTER ROLE ... PASSWORD`, updating the secret to match.
+  and rotate a password with `ALTER ROLE ... PASSWORD`, updating the secret to match, then force a
+  redeployment of the PgBouncer and backup workloads so they pick up the new password.
 - **A bad `extraExtensions` name crashes the first boot, and the restart skips initialization.**
   `vector` is created first, so the server returns healthy with `vector` but without your extra
   extension — create it by hand, or reinstall while the volume is still empty.

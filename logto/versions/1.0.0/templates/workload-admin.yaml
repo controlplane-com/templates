@@ -1,0 +1,78 @@
+{{- if .Values.adminConsole.publicAccess.enabled }}
+kind: workload
+name: {{ include "logto.admin.name" . }}
+description: Logto Admin Console
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "logto.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "logto.identity.name" . }}
+  containers:
+    - name: logto
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "logto.inlineScript" (include "logto.script.boot" (dict "root" . "role" "admin")) | nindent 10 }}
+      env:
+        {{- include "logto.env.common" . | nindent 8 }}
+      ports:
+        - number: 3002
+          protocol: http
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            # Ready while it waits for the first admin, so the platform never kills it; nothing
+            # listens on 3002 then, so the public URL serves no Logto page until an admin exists.
+            - '[ -f /tmp/logto-awaiting-claim ] || { [ ! -f /tmp/logto-booting ] && wget -q -T 5 -O /dev/null http://127.0.0.1:3002/api/status; }'
+        initialDelaySeconds: 10
+        periodSeconds: 25
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 10
+      livenessProbe:
+        exec:
+          command: {{- include "logto.probe.live" 3002 | nindent 12 }}
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 10
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+{{- end }}

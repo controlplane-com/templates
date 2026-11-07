@@ -1,0 +1,92 @@
+{{- include "temporal.validateUiAccess" . }}
+{{- if .Values.ui.enabled }}
+kind: workload
+name: {{ include "temporal.ui.name" . }}
+{{- if .Values.ui.allowedCIDRs }}
+description: Temporal Web UI — reachable from ui.allowedCIDRs only (no built-in authentication)
+{{- else }}
+description: Temporal Web UI — internal-only (no built-in authentication)
+{{- end }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "temporal.tags" . | nindent 4 }}
+spec:
+  type: standard
+  # No identityLink: the UI mounts no secrets — zero grants beats an unused
+  # identity.
+  containers:
+    - name: temporal-ui
+      image: {{ .Values.ui.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.ui.resources.minCpu | quote }}
+      minMemory: {{ .Values.ui.resources.minMemory | quote }}
+      cpu: {{ .Values.ui.resources.maxCpu | quote }}
+      memory: {{ .Values.ui.resources.maxMemory | quote }}
+      env:
+        # FQDN required — short workload names do not resolve over the mesh.
+        - name: TEMPORAL_ADDRESS
+          value: {{ include "temporal.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:7233
+        - name: TEMPORAL_UI_PORT
+          value: '8080'
+      ports:
+        - number: 8080
+          protocol: http
+      # The UI server's own health endpoint (GET /healthz -> 200).
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 120
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.ui.allowedCIDRs }}
+      # Only the listed ranges reach the UI's canonical endpoint (port 8080 is
+      # its only port). The UI has no login, so this list is its only
+      # protection; 0.0.0.0/0 and ::/0 are refused at render.
+      inboundAllowCIDR:
+        {{- range .Values.ui.allowedCIDRs }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- else }}
+      # Internal-only, fail-closed: the UI has no built-in authentication and
+      # must never be reachable from the internet. Reach it with
+      # `cpln port-forward` (see README); no publicAccess knob exists by design.
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+{{- end }}

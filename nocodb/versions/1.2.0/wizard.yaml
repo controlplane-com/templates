@@ -1,0 +1,943 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: NocoDB
+
+# Both bundled databases and the bundled Redis are single-location stateful workloads with no location
+# handling: postgres brings this limit with its import, and postgres-highly-available (no descriptor of its
+# own, so its keys are parent fields below) and Redis need the same.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - { id: backup, title: Database backups }
+    exclude:
+      # NocoDB creates this secret itself from postgres.credentials; its name is a parent field in the Database step.
+      - config.credentialsSecretName
+      # NocoDB connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          NocoDB connects to its database like any other workload: keep Same GVC, or add the NocoDB workload
+          under Allowed workloads.
+
+steps:
+  - id: nocodb
+    title: NocoDB
+    description: The NocoDB server, its prerequisite root-keys secret, and an optional bootstrapped super admin.
+    sections:
+      - title: Server
+        fields:
+          - path: nocodb.image
+            type: string
+            format: image
+            label: NocoDB image
+            required: true
+            help: Pin a released tag; never `latest`. Meta-database migrations run automatically on boot.
+          - path: nocodb.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: >-
+              More than one requires S3 attachment storage. Background jobs run inside the server, so a replica
+              restart abandons the import or export it was running.
+          - path: nocodb.siteUrl
+            type: string
+            label: Public base URL
+            placeholder: https://nocodb.example.com
+            pattern: '^(https?://.+)?$'
+            patternMessage: Include the scheme, for example https://nocodb.example.com.
+            description: >-
+              Used in invite and password-reset links and for the auth cookie. Leave empty to use the canonical
+              endpoint; set it only when a custom domain fronts the workload.
+          - type: note
+            severity: info
+            text: >-
+              NocoDB refuses webhooks to private network addresses, so a webhook cannot call another workload in
+              your GVC (`*.cpln.local`). Version 1.3.0 adds a setting that allows it.
+          - path: nocodb.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. Raise both limits together for large imports.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.nocodb.replicas >= 1
+            mirrors: nocodb.validate
+            paths: [nocodb.replicas]
+            message: Replicas must be at least 1.
+          - rule: self.nocodb.replicas <= 1 || self.storage.type == 's3'
+            mirrors: nocodb.validate
+            paths: [nocodb.replicas, storage.type]
+            message: >-
+              More than one replica needs S3 attachment storage: local attachments live on a per-replica volume.
+      - title: Root keys
+        docs: "#prerequisite-secret"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The root-keys secret must exist **before** you install. If it is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Root-keys secret
+            required: true
+            description: A dictionary secret with the keys `NC_AUTH_JWT_SECRET` and `NC_CONNECTION_ENCRYPT_KEY`.
+            help: >-
+              Both keys are write-once: changing `NC_AUTH_JWT_SECRET` signs every user out, and changing
+              `NC_CONNECTION_ENCRYPT_KEY` makes the stored credentials of external data sources unreadable.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [NC_AUTH_JWT_SECRET, NC_CONNECTION_ENCRYPT_KEY]
+              create:
+                suggestName: "context.releaseName + '-nocodb-secrets'"
+        rules:
+          - rule: self.secrets.name != null && self.secrets.name != ''
+            mirrors: nocodb.validate
+            paths: [secrets.name]
+            message: The root-keys secret is required.
+      - title: Super admin
+        docs: "#super-admin-bootstrap"
+        fields:
+          - path: admin.secretName
+            type: ref
+            label: Super-admin secret
+            description: >-
+              Optional. A dictionary secret with the keys `NC_ADMIN_EMAIL` and `NC_ADMIN_PASSWORD`. Leave empty
+              and the first browser signup becomes super admin.
+            help: >-
+              Applied on every start, so a password changed in the UI reverts at the next restart. The password
+              needs 8 or more characters with an uppercase letter, a digit and a special character.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [NC_ADMIN_EMAIL, NC_ADMIN_PASSWORD]
+              create:
+                suggestName: "context.releaseName + '-nocodb-admin'"
+
+  - id: attachments
+    title: Attachments
+    description: Where uploaded files and attachments are stored.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: Attachment storage
+            widget: cards
+            required: true
+            docs: "#attachment-storage"
+            options:
+              - value: local
+                label: Local volume
+                description: A volume on the NocoDB workload. One replica only.
+              - value: s3
+                label: S3
+                description: AWS S3 through a cloud account, or a MinIO or S3-compatible server with static keys.
+          - path: storage.fileUploadSizeLimit
+            type: integer
+            label: Largest attachment
+            unit: bytes
+            required: true
+            min: 1
+            suggestions: [20971520, 104857600, 524288000]
+            description: Larger uploads are rejected with HTTP 413. 20971520 is 20 MiB.
+        rules:
+          - rule: self.storage.type in ['local', 's3']
+            mirrors: nocodb.validate
+            paths: [storage.type]
+            message: Choose where attachments are stored.
+          - rule: self.storage.fileUploadSizeLimit >= 1
+            mirrors: nocodb.validate
+            paths: [storage.fileUploadSizeLimit]
+            message: The largest attachment must be at least 1 byte.
+      - title: Local volume
+        when: self.storage.type == 'local'
+        fields:
+          - path: storage.local.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100]
+            help: Uninstalling the release deletes the volume set, so the files do not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: >-
+              oldSelf == null || oldSelf.storage.type != 'local' ||
+              self.storage.local.volumeset.capacity >= oldSelf.storage.local.volumeset.capacity
+            paths: [storage.local.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - title: S3
+        when: self.storage.type == 's3'
+        docs: "#attachment-storage-on-s3"
+        fields:
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+          - path: storage.s3.endpoint
+            type: string
+            label: S3-compatible endpoint
+            placeholder: http://my-minio-workload:9000
+            pattern: '^(https?://.+)?$'
+            patternMessage: Include the scheme and port, for example http://my-minio-workload:9000.
+            description: Leave empty for AWS S3. For MinIO or another S3 server, its API address with scheme and port.
+          - path: storage.s3.forcePathStyle
+            type: boolean
+            label: Path-style addressing
+            description: On for most S3-compatible servers (MinIO, SeaweedFS).
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            when: self.storage.s3.auth.secretName == null || self.storage.s3.auth.secretName == ''
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket. Used for AWS S3, with no keys."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            when: self.storage.s3.auth.secretName == null || self.storage.s3.auth.secretName == ''
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: Access keys secret
+            description: >-
+              Only for an S3-compatible endpoint. A dictionary secret with the keys `NC_S3_ACCESS_KEY` and
+              `NC_S3_ACCESS_SECRET`. Leave empty for AWS S3, which uses the cloud account.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [NC_S3_ACCESS_KEY, NC_S3_ACCESS_SECRET]
+        rules:
+          - rule: self.storage.s3.bucket != ''
+            mirrors: nocodb.validate
+            paths: [storage.s3.bucket]
+            message: The bucket is required.
+          - rule: >-
+              self.storage.s3.auth.secretName == null || self.storage.s3.auth.secretName == '' ||
+              self.storage.s3.endpoint != ''
+            mirrors: nocodb.validate
+            paths: [storage.s3.auth.secretName, storage.s3.endpoint]
+            message: >-
+              Access keys are only for an S3-compatible endpoint. For AWS S3, leave the access keys secret empty
+              and use the cloud account.
+          - rule: >-
+              (self.storage.s3.auth.secretName != null && self.storage.s3.auth.secretName != '') ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: nocodb.validate
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName]
+            message: >-
+              S3 needs credentials: a cloud account and an IAM policy for AWS S3, or an endpoint and an access keys
+              secret for an S3-compatible server.
+
+  - id: email
+    title: Email
+    description: Outbound mail for member invitations and password resets.
+    sections:
+      - title: SMTP
+        toggle: smtp.enabled
+        docs: "#email"
+        description: Invitations and password resets are sent by email; without SMTP they fail. Configure it before inviting collaborators.
+        fields:
+          - path: smtp.host
+            type: string
+            label: SMTP server
+            required: true
+            example: true
+            placeholder: smtp.example.com
+          - path: smtp.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25, 1025]
+          - path: smtp.from
+            type: string
+            label: Sender
+            required: true
+            example: true
+            placeholder: no-reply@example.com
+          - path: smtp.secure
+            type: boolean
+            label: Implicit TLS
+            description: On for port 465. Off for STARTTLS or plain on 587.
+          - path: smtp.ignoreTls
+            type: boolean
+            label: Skip TLS
+            description: On for a plaintext mail catcher such as Mailpit.
+          - path: smtp.rejectUnauthorized
+            type: boolean
+            label: Require a valid server certificate
+          - path: smtp.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: >-
+              Optional. A dictionary secret with the keys `NC_SMTP_USERNAME` and `NC_SMTP_PASSWORD`. Leave empty
+              for a relay without a login.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [NC_SMTP_USERNAME, NC_SMTP_PASSWORD]
+        rules:
+          - rule: "!self.smtp.enabled || (self.smtp.host != '' && self.smtp.port > 0 && self.smtp.from != '')"
+            mirrors: nocodb.validate
+            paths: [smtp.host, smtp.port, smtp.from]
+            message: The SMTP server, port and sender are required when SMTP is on.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach NocoDB inside Control Plane.
+    docs: "#access"
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The UI, the API and shared views and forms on the canonical endpoint. Anyone who reaches it can sign
+          up until you turn on invite-only in the UI.
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: nocodb.validate
+        paths: [internalAccess.type]
+        message: Choose who can connect internally.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds NocoDB's data, and the credentials NocoDB creates its database secret from.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica on one volume; a failure costs minutes of downtime.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: >-
+                  Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint, for
+                  near-zero-downtime upgrades.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - type: note
+            severity: info
+            when: oldSelf != null
+            text: >-
+              The database cannot be switched on a running release: the other choice is a separate, empty
+              database, and NocoDB would start over.
+      - id: credentials
+        title: Database credentials
+        description: >-
+          Used by whichever PostgreSQL is chosen above. NocoDB creates the dictionary secret named below from these
+          three values, and both PostgreSQL and NocoDB read it; there is nothing to create first.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These values are stored in the Helm release in plain text. Version 1.4.0 takes them from a secret
+              you create instead.
+          - path: postgres.credentials.username
+            type: string
+            label: Database user
+            required: true
+            immutable: PostgreSQL creates this user once, when its data is first initialized.
+          - path: postgres.credentials.password
+            type: string
+            label: Database password
+            required: true
+            sensitive: true
+            widget: password
+            example: true
+            description: >-
+              Letters, digits, `-` and `_` only: NocoDB receives it inside its connection URL. Used as typed, so
+              replace the published default.
+          - path: postgres.credentials.database
+            type: string
+            label: Database name
+            required: true
+            immutable: PostgreSQL creates this database once, when its data is first initialized.
+        rules:
+          - rule: self.postgres.credentials.password.matches('^[A-Za-z0-9_-]+$')
+            mirrors: nocodb.validate
+            paths: [postgres.credentials.password]
+            message: Use only letters, digits, - and _. NocoDB receives the password inside its connection URL.
+          # The user reaches NocoDB through $(NC_PG_USER) inside NC_DB, and the database name is rendered into NC_DB
+          # unquoted and unencoded (templates/workload-nocodb.yaml).
+          - rule: >-
+              (oldSelf != null && self.postgres.credentials.username == oldSelf.postgres.credentials.username &&
+              self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              (self.postgres.credentials.username.matches('^[A-Za-z0-9_-]+$') &&
+              self.postgres.credentials.database.matches('^[A-Za-z0-9_-]+$'))
+            severity: warning
+            paths: [postgres.credentials.username, postgres.credentials.database]
+            message: >-
+              Use only letters, digits, - and _. NocoDB receives the user and the database name inside its
+              connection URL, without encoding.
+          # postgres-highly-available 2.5.0 creates the database with an unquoted CREATE DATABASE
+          # (templates/secret-startup.yaml).
+          - when: self.postgresHA.enabled
+            rule: >-
+              (oldSelf != null && self.postgres.credentials.database == oldSelf.postgres.credentials.database) ||
+              (self.postgres.credentials.database.matches('^[a-z_][a-z0-9_]*$') &&
+              !(self.postgres.credentials.database in ['user', 'order', 'table', 'group', 'select', 'from', 'where', 'all', 'default', 'check', 'primary', 'references', 'column', 'constraint', 'grant']))
+            severity: warning
+            paths: [postgres.credentials.database]
+            message: >-
+              Use lowercase letters, digits and underscores, starting with a letter or underscore, and not an SQL
+              reserved word such as user, order or table. The highly available database creates it with an
+              unquoted CREATE DATABASE, which folds the name to lowercase and refuses reserved words, while NocoDB
+              connects with the name as typed.
+          - when: self.postgres.enabled
+            rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with. Run ALTER ROLE first, or NocoDB loses its
+              database connection after this upgrade.
+          - when: self.postgresHA.enabled
+            rule: oldSelf == null || self.postgres.credentials.password == oldSelf.postgres.credentials.password
+            severity: info
+            paths: [postgres.credentials.password]
+            message: >-
+              PostgreSQL keeps the password it was initialized with, and the replication user repl shares it.
+              Run ALTER ROLE for the user and for repl first, or NocoDB loses its database connection after this
+              upgrade.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica. Its server, storage, network and backups follow in the next steps.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret NocoDB creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+        rules:
+          - rule: self.postgres.config.credentialsSecretName != 'my-nocodb-db-credentials'
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each NocoDB release its own name, for example ' + context.releaseName +
+              '-nocodb-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each NocoDB release its own name.
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas (PostgreSQL 17), 3 etcd replicas and an HAProxy leader endpoint that NocoDB
+          connects through.
+        fields:
+          - path: postgresHA.config.credentialsSecretName
+            type: string
+            label: Credentials secret name
+            required: true
+            description: The dictionary secret NocoDB creates from the database credentials. Secret names are org-wide.
+            pattern: '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and hyphens, starting with a letter.
+          - path: postgresHA.replicas
+            type: integer
+            label: PostgreSQL replicas
+            required: true
+            min: 1
+            suggestions: [3, 5]
+            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
+          - path: postgresHA.resources
+            type: resources
+            label: PostgreSQL resources
+            required: true
+            description: Per Patroni replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: postgresHA.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            description: Per replica.
+            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          # postgres-highly-available 2.5.0 renders a secret named <release>-postgres-config for its backup settings,
+          # and 2.4.x (nocodb 1.1.x and earlier) kept the database credentials in a chart secret of that name.
+          - rule: >-
+              !self.postgresHA.enabled ||
+              (oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.2.0') >= 0 &&
+              self.postgresHA.config.credentialsSecretName == oldSelf.postgresHA.config.credentialsSecretName &&
+              !self.postgresHA.backup.enabled) ||
+              self.postgresHA.config.credentialsSecretName != context.releaseName + '-postgres-config'
+            severity: warning
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              Choose another name. The highly available database renders its own secret under this name when backups
+              are on, and on an upgrade from nocodb 1.1.x or earlier this is the old chart's secret, which the
+              upgrade removes or rewrites.
+          - rule: self.postgresHA.config.credentialsSecretName != 'my-nocodb-db-credentials'
+            severity: info
+            paths: [postgresHA.config.credentialsSecretName]
+            messageExpression: >-
+              'Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each NocoDB release its own name, for example ' + context.releaseName +
+              '-nocodb-db-credentials.'
+            message: >-
+              Secret names are org-wide: a release on this name is refused while another release manages that
+              secret. Give each NocoDB release its own name.
+          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
+            paths: [postgresHA.volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: ha-backup
+        title: Database backups
+        toggle: postgresHA.backup.enabled
+        when: self.postgresHA.enabled
+        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.mode
+            type: enum
+            label: Backup mode
+            widget: segmented
+            required: true
+            options:
+              - { value: logical, label: Logical dumps }
+              - { value: wal-g, label: WAL-G }
+          - type: note
+            severity: warning
+            text: >-
+              MinIO and other S3-compatible destinations do not install in this version: the bundled highly
+              available database refuses the MinIO access keys this version sets. Version 1.2.1 fixes it.
+          - path: postgresHA.backup.provider
+            type: enum
+            label: Destination
+            widget: cards
+            required: true
+            options:
+              - { value: aws, label: AWS S3 }
+              - { value: gcp, label: Google Cloud Storage }
+          - path: postgresHA.backup.logical.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            when: self.postgresHA.backup.mode == 'logical'
+          - path: postgresHA.backup.walg.intervalSeconds
+            type: integer
+            label: Interval between base backups
+            unit: s
+            min: 60
+            required: true
+            when: self.postgresHA.backup.mode == 'wal-g'
+            suggestions: [3600, 21600, 86400]
+          - path: postgresHA.backup.logical.image
+            type: string
+            format: image
+            label: Backup image
+            required: true
+            advanced: true
+            when: self.postgresHA.backup.mode == 'logical'
+            description: Tag 17.x.x for the bundled PostgreSQL 17.
+          - path: postgresHA.backup.resources
+            type: resources
+            label: Backup resources
+            required: true
+            advanced: true
+        rules:
+          - when: self.postgresHA.backup.mode == 'wal-g'
+            rule: >-
+              (oldSelf != null && oldSelf.postgresHA.backup.mode == 'wal-g' &&
+              self.postgresHA.backup.resources.memory == oldSelf.postgresHA.backup.resources.memory) ||
+              memoryBytes(self.postgresHA.backup.resources.memory) >= memoryBytes('512Mi')
+            severity: warning
+            paths: [postgresHA.backup.resources]
+            message: >-
+              Give the WAL-G sidecar at least 512Mi of memory, and at most 8 MiB per millicore of the backup CPU
+              (800Mi at 100m). With less it is killed for running out of memory during the base backup and no
+              backup is written.
+      - title: AWS S3
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.aws.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+          - path: postgresHA.backup.aws.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
+          - path: postgresHA.backup.aws.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: postgresHA.backup.aws.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: postgresHA.backup.aws.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.aws.prefix != null && self.postgresHA.backup.aws.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside s3://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.aws.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.aws.prefix == oldSelf.postgresHA.backup.aws.prefix) ||
+              [self.postgresHA.backup.aws.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.aws.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+      - title: Google Cloud Storage
+        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
+        docs: "#backing-up"
+        fields:
+          - path: postgresHA.backup.gcp.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: postgresHA.backup.gcp.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            help: >-
+              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Object
+              Admin role on the bucket.
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [gcp] }
+              mustExist: error
+          - path: postgresHA.backup.gcp.prefix
+            type: string
+            label: Folder prefix
+            pattern: "^(?!/)"
+            patternMessage: Leave out the leading /.
+        rules:
+          # The logical backup job (postgres-highly-available templates/workload-logical-backup.yaml) writes the
+          # prefix unquoted as its BACKUP_PREFIX env value, and backup.sh exits when it is empty.
+          - when: self.postgresHA.backup.mode == 'logical'
+            rule: self.postgresHA.backup.gcp.prefix != null && self.postgresHA.backup.gcp.prefix != ''
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: The logical backup job stops with an error when the prefix is empty.
+          - when: self.postgresHA.backup.mode == 'logical' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x,
+              !x.matches('^\\s') && !x.matches("^[!&*%@`'\"\\[\\]{}|>,#]") && !x.matches('^[-?:](\\s|$)') &&
+              !x.matches('\\t') && !x.contains(': ') && !x.contains(' #') && !x.endsWith(':') && !x.endsWith(' ') &&
+              !(x in ['true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~']) &&
+              !x.matches('^[-+]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$') &&
+              !x.matches('^[-+]?0(x[0-9a-fA-F]+|o[0-7]+|b[01]+)$') &&
+              !x.matches('^[-+]?\\.(inf|Inf|INF)$') && !x.matches('^\\.(nan|NaN|NAN)$') &&
+              !x.matches('^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt\\s]|$)'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              The logical backup job writes the prefix unquoted into its configuration. Do not start it with a
+              space or a YAML symbol, avoid ": " and " #", and do not use a value that reads as a number, a date,
+              true/false or null (such as 2024).
+          # WAL-G mode writes the prefix unquoted inside gs://<bucket>/<prefix>, so ' #' starts a comment that
+          # silently truncates it and ': ' or a trailing ':' breaks the YAML.
+          - when: self.postgresHA.backup.mode == 'wal-g' && self.postgresHA.backup.gcp.prefix != null
+            rule: >-
+              (oldSelf != null && self.postgresHA.backup.gcp.prefix == oldSelf.postgresHA.backup.gcp.prefix) ||
+              [self.postgresHA.backup.gcp.prefix].all(x, !x.contains(' #') && !x.contains(': ') &&
+              !x.endsWith(':') && !x.endsWith(' ') && !x.matches('\\t'))
+            severity: warning
+            paths: [postgresHA.backup.gcp.prefix]
+            message: >-
+              WAL-G writes the prefix unquoted into its configuration. Leave out " #", ": ", tabs, and a trailing
+              colon or space.
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: nocodb.validate
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true || dyn(self.postgresHA)['proxy']['enabled'] == null
+        mirrors: nocodb.validate
+        paths: [postgresHA.enabled]
+        message: >-
+          The HAProxy leader endpoint is how NocoDB reaches the HA database, so postgresHA.proxy.enabled must
+          stay true.
+      - rule: "!has(self.postgresHA.postgres)"
+        paths: [postgres.credentials.username]
+        message: >-
+          postgresHA.postgres was removed in 1.2.0: move its username, password and database to the database
+          credentials (postgres.credentials) and remove the block from the values.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.credentials.username]
+        message: >-
+          postgres.config.username, password and database were removed in 1.1.0: move them to the database
+          credentials (postgres.credentials) and remove them from postgres.config.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        message: >-
+          Switching the database on an installed release deletes the current one, with all of NocoDB's data, and
+          starts an empty one. Keep the current database, or install a new release with the other database and
+          move the data.
+
+  - id: redis
+    title: Redis
+    description: The bundled single-node Redis for job and event pub-sub, the metadata cache and the rate limiter.
+    fields:
+      - path: redis.image
+        type: string
+        format: image
+        label: Redis image
+        required: true
+      - type: note
+        severity: warning
+        text: >-
+          The Redis password is stored in the Helm release in plain text. Version 1.4.0 takes it from a secret you
+          create instead.
+      - path: redis.auth.password
+        type: string
+        label: Redis password
+        required: true
+        sensitive: true
+        widget: password
+        example: true
+        description: >-
+          Letters, digits, `-` and `_` only: NocoDB receives it inside its Redis connection URL. Used as typed, so
+          replace the published default.
+      - path: redis.resources
+        type: resources
+        label: Redis resources
+        required: true
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: redis.volumeset.capacity
+        type: integer
+        label: Initial capacity
+        unit: GiB
+        min: 10
+        max: 65536
+        required: true
+        suggestions: [10, 20, 50]
+        help: Uninstalling the release deletes the volume set, so the data does not survive a reinstall.
+        docs: "/reference/volumeset#capacity-and-billing"
+    rules:
+      - rule: self.redis.auth.password.matches('^[A-Za-z0-9_-]+$')
+        mirrors: nocodb.validate
+        paths: [redis.auth.password]
+        message: Use only letters, digits, - and _. NocoDB receives the password inside its Redis connection URL.
+      - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+        paths: [redis.volumeset.capacity]
+        message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+
+# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks NocoDB, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nocodb') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-nocodb, or NocoDB cannot reach its database.'"
+    message: Add the NocoDB workload to the list, or NocoDB cannot reach its database.
+
+yamlOnly:
+  - path: postgresHA.backup.minio
+    reason: >-
+      MinIO backups of the highly available database fail to render in this version (postgres-highly-available
+      2.5.0 refuses the accessKey and secretKey this chart sets); 1.2.1 fixes it.
+  - path: postgres.pgbouncer
+    reason: NocoDB connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  - fromVersions: "<1.2.0"
+    from: postgresHA.postgres
+    note: >-
+      The HA database's username, password and database moved to the database credentials (postgres.credentials),
+      from which NocoDB creates the secret; a release on the HA database keeps the values it was initialized with.
+  # The HA database read postgresHA.postgres.* before 1.2.0; from 1.2.0 both modes read postgres.credentials.*.
+  # Carry the values of the mode the release runs, whatever they are, so the database keeps its login.
+  - fromVersions: ">=1.1.0 <1.2.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.credentials.username"
+  - fromVersions: ">=1.1.0 <1.2.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.credentials.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: ">=1.1.0 <1.2.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.credentials.database"
+  - fromVersions: "<1.1.0"
+    from: postgres.config.username
+    to: postgres.credentials.username
+  - fromVersions: "<1.1.0"
+    from: postgres.config.password
+    to: postgres.credentials.password
+  - fromVersions: "<1.1.0"
+    from: postgres.config.database
+    to: postgres.credentials.database
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.username
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.username : self.postgres.config.username"
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.password
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.password : self.postgres.config.password"
+    note: PostgreSQL keeps the password it was initialized with, so the installed one is kept.
+  - fromVersions: "<1.1.0"
+    to: postgres.credentials.database
+    valueExpr: "self.postgresHA.enabled ? self.postgresHA.postgres.database : self.postgres.config.database"
+  - fromVersions: "<1.1.0"
+    from: postgres.backup.minio.accessKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.
+  - fromVersions: "<1.1.0"
+    from: postgres.backup.minio.secretKey
+    note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey; choose it under Database backups.

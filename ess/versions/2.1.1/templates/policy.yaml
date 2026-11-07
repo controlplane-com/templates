@@ -1,0 +1,11 @@
+kind: policy
+name: {{ include "ess.policy.name" . }}
+tags: {{- include "ess.tags" . | nindent 2 }}
+description: ESS policy
+bindings:
+  - permissions:
+      - manage
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "ess.identity.name" . }}
+target: all
+targetKind: secret

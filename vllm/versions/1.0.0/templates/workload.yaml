@@ -1,0 +1,157 @@
+{{- include "vllm.validate" . }}
+{{- $period := include "vllm.probe.periodSeconds" . | int }}
+{{- $delay := include "vllm.probe.initialDelaySeconds" . | int }}
+kind: workload
+name: {{ include "vllm.name" . }}
+description: vLLM OpenAI-compatible inference server
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "vllm.tags" . | nindent 4 }}
+spec:
+  # Stateful: the only proven way to mount the block-storage model cache, and it
+  # replaces replicas one at a time, so a single-GPU replica is stopped before its
+  # replacement needs the GPU (a standard rollout deadlocks on one GPU).
+  type: stateful
+  identityLink: //identity/{{ include "vllm.identity.name" . }}
+  containers:
+    - name: vllm
+      image: {{ .Values.image }}
+      # Depend on the binary, not the image's ENTRYPOINT; the model is positional.
+      command: vllm
+      args:
+        - serve
+        - {{ .Values.model.name | quote }}
+        - --port
+        - "8000"
+        - --max-model-len
+        - {{ .Values.model.maxModelLen | int | quote }}
+        - --gpu-memory-utilization
+        - {{ .Values.model.gpuMemoryUtilization | quote }}
+        - --dtype
+        - {{ .Values.model.dtype | quote }}
+        {{- if .Values.model.servedModelName }}
+        - --served-model-name
+        - {{ .Values.model.servedModelName | quote }}
+        {{- end }}
+        {{- if .Values.model.toolCallParser }}
+        - --enable-auto-tool-choice
+        - --tool-call-parser
+        - {{ .Values.model.toolCallParser | quote }}
+        {{- end }}
+        {{- if gt (int .Values.gpu.quantity) 1 }}
+        - --tensor-parallel-size
+        - {{ .Values.gpu.quantity | int | quote }}
+        {{- end }}
+        {{- range .Values.model.extraArgs }}
+        - {{ . | toString | quote }}
+        {{- end }}
+      inheritEnv: false
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      gpu:
+        {{- if eq .Values.gpu.type "byok" }}
+        # Your own NVIDIA nodes on a BYOK location; the built-in form cannot target them.
+        custom:
+          quantity: {{ .Values.gpu.quantity | int }}
+          resource: nvidia.com/gpu
+          runtimeClass: nvidia
+        {{- else }}
+        nvidia:
+          model: {{ .Values.gpu.model }}
+          quantity: {{ .Values.gpu.quantity | int }}
+        {{- end }}
+      env:
+        # Sorted by name: the API stores env alphabetically (rendered == stored).
+        - name: DO_NOT_TRACK
+          value: "1"
+        - name: HF_HOME
+          value: /models/hf
+        {{- if .Values.huggingFace.tokenSecretName }}
+        - name: HF_TOKEN
+          value: cpln://secret/{{ .Values.huggingFace.tokenSecretName }}.payload
+        {{- end }}
+        # Prerequisite opaque secret; vLLM guards /v1 with it (not /health, /metrics, /tokenize).
+        - name: VLLM_API_KEY
+          value: cpln://secret/{{ .Values.apiKey.secretName }}.payload
+        - name: VLLM_CACHE_ROOT
+          value: /models/vllm
+        - name: VLLM_NO_USAGE_STATS
+          value: "1"
+      ports:
+        - number: 8000
+          protocol: http
+      # vLLM's Prometheus endpoint (queue depth, KV-cache usage, token throughput),
+      # unauthenticated upstream, scraped into the platform's built-in metrics.
+      metrics:
+        path: /metrics
+        port: 8000
+      # Startup window = initialDelaySeconds + 30 x periodSeconds = startupTimeoutSeconds
+      # (failureThreshold does not count toward it); a hung server leaves rotation after
+      # failureThreshold x periodSeconds.
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: HTTP
+        initialDelaySeconds: {{ $delay }}
+        periodSeconds: {{ $period }}
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: HTTP
+        initialDelaySeconds: {{ $delay }}
+        periodSeconds: {{ $period }}
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        {{- if gt (int .Values.gpu.quantity) 1 }}
+        {{- /* Tensor parallelism passes data between GPU workers through /dev/shm, which is 64 MiB
+               on every tested location; vLLM needs more and exits "Insufficient space in /dev/shm".
+               A scratch volume there is sized by the node (measured: TP=2 on 2x T4 started and served). */}}
+        - path: /dev/shm
+          uri: scratch://shm
+        {{- end }}
+        - path: /models
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "vllm.volume.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas | int }}
+      metric: disabled
+      minScale: {{ .Values.replicas | int }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      # Open egress: the model downloads from huggingface.co and its CDNs.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}

@@ -1,0 +1,577 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Aegra
+
+# The bundled PostgreSQL and Redis are single-location stateful workloads, and every Aegra replica
+# shares them: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    # The Database step comes first for its prerequisite secret; the server settings follow Access.
+    after: access
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database step, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Aegra connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Aegra connects to its database like any other workload: keep Same GVC, or add the Aegra workload under
+          Allowed workloads.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    # The Database step comes first for its prerequisite secret; the server settings follow Access.
+    after: access
+    steps:
+      - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold Aegra's threads, runs and checkpoints." }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Aegra connects to the HAProxy leader endpoint directly (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          Aegra connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the Aegra
+          workload under Allowed workloads.
+  - template: redis
+    version: 3.9.0
+    title: Redis
+    after: access
+    steps:
+      - { id: topology, title: Redis engine, description: "The server of the single Redis node that holds Aegra's job queue and run event streams; runs are recovered from PostgreSQL if it restarts." }
+      - { id: resources, title: Redis resources }
+      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
+      - { id: backup, title: Redis backups }
+      - { id: advanced, title: Redis advanced, description: "Images, timeouts, health probes and extra workload settings." }
+    exclude:
+      # Aegra connects to one Redis URL and cannot use Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # Redis authentication is chosen in the Access step; a password in values is refused (aegra.validateRedisPassword).
+      - redisAuth
+      - redis.auth.fromSecret
+      # Aegra reaches Redis on :6379 inside the GVC; public access moves it to other ports (aegra.validateRedisPublic).
+      - redis.publicAccess
+    override:
+      redis.replicaDirect:
+        description: A DNS name per replica. Aegra connects through the workload's own name, so it does not need one.
+
+steps:
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds Aegra's threads, runs and checkpoints, and the prerequisite secret with its credentials.
+    docs: "#prerequisites"
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica with pgvector. Upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every thread, run and checkpoint.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              The first upgrade after an install can restart the bundled database and Redis, which briefly
+              interrupts the API.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica. Its server, storage, network and backups follow the Access step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Aegra connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Aegra.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-aegra-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Aegra connects through. Their settings follow the Access step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Aegra connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of Aegra.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-aegra-db-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: aegra.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        paths: [postgresHA.enabled]
+        message: >-
+          Switching the database type deploys a new, empty database; the threads, runs and checkpoints in the
+          current one are not moved.
+
+  - id: agent
+    title: Agent
+    description: Your agent image, its compute and replica count, and plain settings for Aegra or your graphs.
+    sections:
+      - title: Server
+        docs: "#configuration"
+        fields:
+          - path: aegra.image
+            type: string
+            format: image
+            label: Agent image
+            required: true
+            description: >-
+              Aegra plus your graphs and `aegra.json`, serving on port 2026. The default is a community build of
+              Aegra 0.11.0 with Aegra's example agents (`stress_test` needs no model key).
+          - path: aegra.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 10
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas share PostgreSQL and Redis, so they are interchangeable; a run on a lost replica resumes on
+              another. 2 with highly available PostgreSQL keeps the API up through upgrades.
+          - path: aegra.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 25m }
+            memory: { min: 128Mi }
+          - path: aegra.requestTimeoutSeconds
+            type: integer
+            label: Request timeout (seconds)
+            required: true
+            min: 1
+            max: 3600
+            suggestions: [60, 600, 3600]
+            description: The longest `/runs/wait` or `/runs/stream` request on the public URL before it is cut. Requests from inside the GVC and background runs are not affected.
+        rules:
+          - rule: self.aegra.replicas >= 1 && self.aegra.replicas <= 10
+            mirrors: aegra.validateReplicas
+            paths: [aegra.replicas]
+            message: Use between 1 and 10 replicas.
+          - rule: self.aegra.requestTimeoutSeconds >= 1 && self.aegra.requestTimeoutSeconds <= 3600
+            mirrors: aegra.validateTimeout
+            paths: [aegra.requestTimeoutSeconds]
+            message: Use between 1 and 3600 seconds.
+      - title: Extra environment variables
+        fields:
+          - path: aegra.extraEnv
+            type: list
+            label: Extra environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Plain, non-secret settings for Aegra or your agent, for example `AEGRA_CONFIG` or `LOG_LEVEL`. Put
+              keys and tokens in Agent secrets instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and _, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+
+  - id: secrets
+    title: Agent secrets
+    description: Model provider keys and other secrets your agent reads as environment variables. Optional.
+    sections:
+      - title: Agent secrets
+        docs: "#prerequisites"
+        fields:
+          - path: agentSecrets.secretName
+            type: ref
+            label: Agent secrets
+            description: >-
+              Optional. A dictionary secret you create; each key listed below becomes an environment variable of
+              the same name. Leave empty for none.
+            help: >-
+              Rotating the secret does not restart Aegra; run `cpln workload force-redeployment
+              <release>-aegra` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "self.agentSecrets.keys"
+          - path: agentSecrets.keys
+            type: list
+            label: Keys
+            widget: tags
+            unique: true
+            when: self.agentSecrets.secretName != ''
+            description: The keys of the secret to expose, for example `OPENAI_API_KEY`. Each must exist in the secret.
+            item:
+              type: string
+              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              patternMessage: Use letters, digits and _, not starting with a digit.
+        rules:
+          - rule: (self.agentSecrets.secretName == '') == (size(self.agentSecrets.keys) == 0)
+            mirrors: aegra.validateAgentSecrets
+            paths: [agentSecrets.keys]
+            message: List at least one key of the agent secrets, or clear the secret.
+    rules:
+      - rule: >-
+          (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).all(n,
+          !(n in ['HOST', 'PORT', 'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_USER', 'POSTGRES_PASSWORD',
+          'POSTGRES_DB', 'REDIS_BROKER_ENABLED', 'REDIS_URL', 'AEGRA_REDIS_PASSWORD', 'OTEL_TARGETS',
+          'DATABASE_URL', 'RUN_MIGRATIONS_ON_STARTUP']) && !n.startsWith('LANGFUSE_'))
+        mirrors: aegra.validateEnvNames
+        paths: [agentSecrets.keys, aegra.extraEnv]
+        message: >-
+          The chart sets HOST, PORT, POSTGRES_*, REDIS_*, AEGRA_REDIS_PASSWORD, OTEL_TARGETS, DATABASE_URL,
+          RUN_MIGRATIONS_ON_STARTUP and LANGFUSE_* itself; remove them from the keys and extra variables.
+      - rule: (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).all(n, !n.startsWith('CPLN_'))
+        mirrors: aegra.validateEnvNames
+        paths: [agentSecrets.keys, aegra.extraEnv]
+        message: Names starting with CPLN_ are reserved by Control Plane.
+      - rule: >-
+          (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).all(n,
+          n == '' || n.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
+        mirrors: aegra.validateEnvNames
+        paths: [agentSecrets.keys, aegra.extraEnv]
+        message: Environment variable names use letters, digits and _, and do not start with a digit.
+      - rule: >-
+          (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).all(n,
+          (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).filter(m, m == n).size() == 1)
+        mirrors: aegra.validateEnvNames
+        paths: [agentSecrets.keys, aegra.extraEnv]
+        message: Each name may appear only once across the secret keys and the extra variables.
+
+  - id: access
+    title: Access
+    description: The public endpoint, which workloads can reach Aegra inside Control Plane, and whether the bundled Redis asks for a password.
+    sections:
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Aegra has no authentication unless your image configures an auth handler in `aegra.json`. Without
+              one, anyone with the URL can run your agents. Reach a private server with `cpln port-forward`.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: A public `*.cpln.app` URL. Firewall changes take 30 seconds to a few minutes to take effect.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: aegra.validateInternalAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: aegra.validateInternalAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+      - id: redis-auth
+        title: Require a Redis password
+        toggle: redis.redis.auth.fromSecret.enabled
+        docs: "#prerequisites"
+        description: >-
+          Off, the same-GVC firewall is Redis's only boundary. On, Redis requires a password read from a secret you
+          create first; it goes in a URL, so it must be URL-safe (letters, digits, `-`, `_`, `.`).
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The Redis password secret must exist **before** you install or upgrade. If it is missing, the
+              deployment waits and `cpln logs` shows nothing.
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret; the key named below holds the password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-aegra-redis'"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+        rules:
+          - rule: "!self.redis.redis.auth.fromSecret.enabled || self.redis.redis.auth.fromSecret.name != ''"
+            mirrors: aegra.validateRedisSecret
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+          - rule: >-
+              oldSelf == null ||
+              self.redis.redis.auth.fromSecret.enabled == oldSelf.redis.redis.auth.fromSecret.enabled
+            severity: info
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Turning the Redis password on or off restarts Redis and Aegra; in-flight runs are recovered from PostgreSQL.
+    rules:
+      - rule: self.redis.mode == 'dev'
+        mirrors: aegra.validateRedisMode
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          Redis must run as a single node: set redis.mode to dev. Aegra connects to one Redis URL and cannot use
+          Sentinel.
+      - rule: >-
+          !has(self.redis.redis.auth.password) ||
+          (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+          (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+        mirrors: aegra.validateRedisPassword
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove
+          it and turn on Require a Redis password with a secret instead.
+      - rule: "!has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+        mirrors: aegra.validateRedisPublic
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          Redis public access is not supported: Aegra connects to Redis on port 6379 inside the GVC, and public
+          access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
+
+  - id: tracing
+    title: Tracing
+    description: Optional OpenTelemetry tracing of every run to a Langfuse project.
+    sections:
+      - title: Langfuse
+        docs: "#configuration"
+        fields:
+          - path: langfuse.secretName
+            type: ref
+            label: Langfuse keys secret
+            description: >-
+              Optional. A dictionary secret with the keys `publicKey` and `secretKey` from a Langfuse project. Leave
+              empty to turn tracing off.
+            help: >-
+              Rotating the secret does not restart Aegra; run `cpln workload force-redeployment
+              <release>-aegra` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [publicKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-aegra-langfuse'"
+          - path: langfuse.baseUrl
+            type: string
+            format: url
+            label: Langfuse URL
+            required: true
+            when: self.langfuse.secretName != ''
+            placeholder: https://cloud.langfuse.com
+            description: >-
+              Your Langfuse server, for example the langfuse template in this org
+              (`http://<release>-langfuse-web.<gvc>.cpln.local:3000`) or `https://cloud.langfuse.com`.
+            help: >-
+              Langfuse in another GVC: set that Langfuse release's `internalAccess` to `same-org`, or Aegra cannot
+              reach it.
+        rules:
+          - rule: self.langfuse.secretName == '' || self.langfuse.baseUrl.matches('^https?://[^/\\s]+')
+            mirrors: aegra.validateLangfuse
+            paths: [langfuse.baseUrl]
+            message: Use a URL that starts with http:// or https://.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: aegra.validateDatabase
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: aegra.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Aegra's database endpoint.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Aegra, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra, or Aegra cannot reach its database.'"
+    message: Add the Aegra workload to the list, or Aegra cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra') in self.postgresHA.internal_access.workloads
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra, or Aegra cannot reach its database.'"
+    message: Add the Aegra workload to the list, or Aegra cannot reach its database.
+  - when: self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra') in self.redis.redis.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra, or Aegra cannot reach Redis.'"
+    message: Add the Aegra workload to the list, or Aegra cannot reach Redis.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (aegra.validateRedisMode), since Aegra cannot use Sentinel.
+  - path: postgres.pgbouncer
+    reason: Aegra connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Aegra connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); use Require a Redis password with a secret.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (aegra.validateRedisPublic); Aegra connects to Redis on port 6379 inside the GVC.

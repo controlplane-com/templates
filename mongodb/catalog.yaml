@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: MongoDB
+category: database
+topology: single
+
+summary: >-
+  A single MongoDB server on a persistent volume, with optional scheduled mongodump backups to
+  Amazon S3 or Google Cloud Storage and an optional direct load balancer for clients outside
+  Control Plane. The root user and initial database come from a secret you create. The simplest
+  document database for an app in one location, without replication or automatic failover.
+
+keywords:
+  - mongo
+  - document database
+  - document store
+  - nosql
+  - json documents
+  - bson
+  - schemaless database
+  - mongodump
+  - database backups
+  - s3 backups
+
+useCases:
+  - Document database for an app that stores JSON-like records with a flexible schema
+  - MongoDB backend for a Node.js, Python, Go or Java service using the official drivers
+  - Nightly mongodump backups of a MongoDB database to an S3 or GCS bucket
+  - MongoDB reachable from outside the platform through a dedicated TCP load balancer
+  - Development or staging MongoDB that mirrors production
+
+alternativeTo:
+  - MongoDB Atlas
+  - Amazon DocumentDB
+  - Azure Cosmos DB for MongoDB
+  - DigitalOcean Managed MongoDB
+
+compatibleWith: [mongodb-wire]
+
+pickInsteadIf:
+  - need: a MongoDB replica set with automatic failover
+    template: mongodb-cluster
+  - need: one MongoDB cluster spread across several locations that survives losing a location
+    template: mongodb-cluster
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: config.credentialsSecretName
+    required: true
+    description: Root user and initial database applied on first boot. Create it before installing; when it is missing the workload waits with no logs.
+  - kind: bucket
+    valuesPath: [backup.aws.bucket, backup.gcp.bucket]
+    required: false
+    when: backup.enabled
+    description: S3 or GCS bucket that receives the scheduled mongodump archives.
+  - kind: cloud-account
+    valuesPath: [backup.aws.cloudAccountName, backup.gcp.cloudAccountName]
+    required: false
+    when: backup.enabled
+    description: Control Plane cloud account for the AWS account or GCP project holding the bucket; on GCP its service account needs the Storage Admin role.
+  - kind: other
+    valuesPath: backup.aws.policyName
+    required: false
+    when: backup.enabled with backup.provider aws
+    description: AWS IAM policy scoped to the backup bucket, with the S3 actions listed in the README; the chart attaches it to the backup identity.

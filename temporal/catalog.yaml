@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Temporal
+category: workflow
+topology: stateless
+
+summary: >-
+  A Temporal server running the frontend, history, matching and worker services as one replica or an
+  optional multi-replica cluster, with an admin-tools sidecar that migrates the schema and serves the
+  temporal CLI. It exposes gRPC and an HTTP API inside your org, a Web UI that is internal or open to IP
+  ranges you list, and server metrics. State lives in a bundled three-node PostgreSQL cluster with
+  Patroni failover or a single instance, with optional backups to S3, GCS or S3-compatible storage and
+  optional workflow archival to S3. Pick it to run durable workflows written with the Temporal SDKs.
+
+keywords:
+  - durable execution
+  - workflow engine
+  - workflow orchestration
+  - long-running workflows
+  - durable workflows
+  - sagas
+  - microservice orchestration
+  - temporal sdk
+  - temporal web ui
+  - grpc
+  - retries
+  - state machines
+  - schedules
+  - background jobs
+  - temporal cli
+  - http api
+  - temporal cluster
+  - high availability
+
+useCases:
+  - Run long-running business processes that resume after crashes and deploys
+  - Orchestrate multi-step microservice calls with retries, timeouts and compensation
+  - Replace hand-built job queues and state machines with durable workflows in code
+  - Coordinate AI agent or human-approval steps that wait for hours or days
+  - Schedule recurring or delayed workflows
+
+alternativeTo:
+  - Temporal Cloud
+  - AWS Step Functions
+  - Azure Durable Functions
+  - Google Cloud Workflows
+  - Cadence
+  - Inngest
+
+pickInsteadIf:
+  - need: scheduled data pipelines defined as Python DAGs with a monitoring UI
+    template: airflow
+  - need: visual no-code automations that connect SaaS apps on triggers and webhooks
+    template: n8n
+  - need: a simple HTTP task queue with retries and rate limits, without workflow code
+    template: cpln-task-runner
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgresHA.config.credentialsSecretName
+    required: true
+    when: postgresHA.enabled
+    description: Credentials the bundled HA PostgreSQL initializes with and Temporal connects with; the database key must be temporal. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    when: postgres.enabled
+    description: Credentials the single-instance PostgreSQL initializes with and Temporal connects with; the database key must be temporal. When it is missing the deployment waits with no logs.
+  - kind: bucket
+    valuesPath:
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+    required: false
+    when: postgresHA.backup.enabled or postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+    required: false
+    when: backups enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket; on AWS also a bucket-scoped IAM policy with the README's full action list, named by backup.aws.policyName.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [postgresHA.backup.minio.credentialsSecretName, postgres.backup.minio.credentialsSecretName]
+    required: false
+    when: backups enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.
+  - kind: bucket
+    valuesPath: archival.s3.bucket
+    required: false
+    when: archival.enabled
+    description: S3 bucket that receives archived workflow histories and visibility records (archival needs server 1.31 or later).
+  - kind: cloud-account
+    valuesPath: archival.s3.cloudAccountName
+    required: false
+    when: archival.enabled
+    description: Control Plane AWS cloud account the server identity uses to reach the archival bucket (no keys).
+  - kind: other
+    valuesPath: archival.s3.policyName
+    required: false
+    when: archival.enabled
+    description: AWS IAM policy with s3:ListBucket on the archival bucket and Put/GetObject under its prefix; the chart attaches it to the server identity.

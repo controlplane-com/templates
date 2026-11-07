@@ -1,0 +1,9 @@
+{{- /*
+Renders nothing. It lives two directories deep on purpose: Helm renders the
+deepest template paths first, so at the top level the redis subchart's own
+"Only one authentication method can be enabled at a time" would fire before
+glitchtip.validate whenever a 1.3.x values file (redis.redis.auth.password.*)
+meets this version's fromSecret default. At this depth the parent's message,
+which names the replacement and the upgrade procedure, is the one users see.
+*/ -}}
+{{- include "glitchtip.validateRedisSecret" . }}

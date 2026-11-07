@@ -14,9 +14,9 @@
 | Stateful workload (1 or ≥3 replicas) | All Mimir components in one process (`target: all`); :8080 HTTP (push+query), :9095 gRPC, :7946 memberlist |
 | Volumeset /data (20Gi, per replica) | Ingester WAL/TSDB, compactor workspace — metric blocks live in the BUCKET, not here |
 | Config secret (opaque) | Rendered mimir.yaml |
-| Identity + policy | Keyless bucket access (AWS: cpln-connector + custom policy; GCP: objectAdmin binding); reveal on config secret only |
+| Identity + policy | Keyless bucket access (AWS: cpln-connector + custom policy; GCP: objectAdmin binding); reveal on the config secret, plus the MinIO credentials secret when `storage.type: minio` |
 
-- Storage trio: `aws` (keyless) / `gcp` (keyless) / `minio` (static keys) — bucket is **mandatory**
+- Storage trio: `aws` (keyless) / `gcp` (keyless) / `minio` (static keys in a prerequisite `dictionary` secret named by `storage.minio.credentialsSecretName`) — bucket is **mandatory**. The `minio.endpoint` default `my-minio:9000` is a short-name placeholder; users need the FQDN `{workload}.{gvc}.cpln.local:9000`
 - `replicas: 3+` = memberlist cluster via plain VIP join, RF3; validation rejects 2 (no quorum tolerance)
 
 **Key knobs:** `storage.type` + per-provider blocks · `replicas` · `multitenancy.enabled` · `retention.period` ("0" = forever) · `internalAccess`

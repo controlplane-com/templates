@@ -11,6 +11,10 @@ and any rules you add, and is forwarded to the workload behind it.
 - **Custom-rules secret** — your own rules, layered on top of the Core Rule Set.
 - **Identity and policy** — `reveal` on those two secrets.
 
+The chart fixes several settings that have no values knob: the rule engine runs in blocking mode
+(`CORAZA_RULE_ENGINE: On`) with the image's default CRS paranoia level, autoscaling is 1-3 replicas on CPU,
+the public endpoint is always open to `0.0.0.0/0`, and internal access is `same-gvc`.
+
 This template does not create a GVC and does not deploy the workload it protects.
 
 ## Prerequisites
@@ -80,29 +84,18 @@ matters if you point `image` at an older `coraza-crs` build: those do not create
 without it every large request fails with a 500 and `failed to append request body: ... no such file
 or directory`, which reads as a WAF fault rather than a missing directory.
 
-
 Inspecting a request body costs CPU in proportion to its size, and `timeoutSeconds` cuts the request off
 part-way through. Together they set the largest body this WAF accepts; anything larger is a **504 from the
 WAF**, which reads as an application fault. GET traffic is unaffected, so smoke tests never reveal it.
+The pre-1.2.0 defaults (`cpu: 50m`, a 5 s timeout) returned 504 for POST bodies of a few tens of KB.
 
-Measured on the platform, same body, only `resources.cpu` changed, with `timeoutSeconds` at its old
-hardcoded value of 5:
-
-| POST body | `cpu: 50m` (pre-1.2.0 default) | `cpu: 1000m` |
-|---|---|---|
-| 1 KB | 200 (1.89 s) | 200 (0.15 s) |
-| 50 KB | **504** (5.20 s) | 200 (0.57 s) |
-| 400 KB | **504** (5.30 s) | 200 (3.75 s) |
-| 600 KB | **504** (5.32 s) | 200 (5.14 s) |
-
-Every failure sits on the 5 s timeout and CPU alone moves it: roughly **8.5 ms per KB at `cpu: 1000m`**,
-scaling inversely with CPU and relatively worse below about `250m`, where CPU throttling bites. As a rule,
-`largest body ≈ 120 KB × cpu-cores × timeoutSeconds` — so the shipped `500m` / `30 s` gives about
-**1.8 MB**, enough for ordinary form posts and JSON APIs.
+As a rule, `largest body ≈ 120 KB × cpu-cores × timeoutSeconds`, so the shipped `500m` / `30 s` handles
+bodies up to roughly 1.8 MB, enough for ordinary form posts and JSON APIs. Throughput drops off more than
+proportionally below about `250m`, where CPU throttling bites.
 
 For more, raise `resources.cpu` first (faster, rather than merely more patient), then `timeoutSeconds`, and
-raise `resources.memory` with them — one inspected 3 MB body peaked at 124 MiB, which is why the default is
-no longer 128Mi. Two ceilings you cannot raise here: Coraza stops inspecting above **12.5 MiB**
+raise `resources.memory` with them — memory use grows with body size, which is why the default is no
+longer 128Mi. Two ceilings you cannot raise here: Coraza stops inspecting above **12.5 MiB**
 (`SecRequestBodyLimit`, fixed in the image), and `timeoutSeconds` also caps how long your own upstream has
 to answer, so set it above your application's slowest response.
 
@@ -110,7 +103,7 @@ to answer, so set it above your application's slowest response.
 
 | What | Value |
 |---|---|
-| Public | the WAF workload's endpoint on `WAFPort` — this is the address clients should use |
+| Public | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-coraza-waf --gvc GVC_NAME -o yaml` — always open to the internet; this is the address clients should use |
 | Internal (same GVC) | `RELEASE_NAME-coraza-waf.GVC_NAME.cpln.local:WAFPort` |
 | Upstream | whatever you set as `targetWorkload` and `targetPort` |
 
@@ -118,15 +111,17 @@ Send traffic to the WAF, not to the workload behind it.
 
 ## Custom rules
 
-Edit the created secret with the suffix `coraza-custom-rules`. It ships with an example rule that blocks
-any request whose URI contains `attack`:
+Edit the `RELEASE_NAME-coraza-custom-rules` secret (there is no values knob for it). It ships with an
+example rule that blocks any request whose URI contains `attack`:
 
 ```
 SecRule REQUEST_URI "@rx attack" "id:1001,phase:1,deny,msg:'Blocked attack attempt'"
 ```
 
-Rules use [seclang directives](https://coraza.io/docs/seclang/directives/). After changing the secret,
-restart the workload replicas — rules are read at startup.
+Rules use [seclang directives](https://coraza.io/docs/seclang/directives/). Rules are read at startup, so
+after changing the secret run `cpln workload force-redeployment RELEASE_NAME-coraza-waf --gvc GVC_NAME`.
+The chart renders this secret with the example rule, and whether a later `helm upgrade` keeps your edits is
+unverified, so keep your rules under version control and re-check the secret after every upgrade.
 
 The secret is loaded **after** the Core Rule Set, so it can also switch a CRS rule off:
 
@@ -135,14 +130,14 @@ SecRuleRemoveById 920450
 ```
 
 Rule 920450 blocks any request carrying an `Expect: 100-continue` header, which HTTP clients add for large
-uploads: measured on this image, an identical 2 KB body returns 200 without the header and 403 with it. An
+uploads: an otherwise identical request returns 200 without the header and 403 with it. An
 app behind this WAF that receives large uploads will see 403s unrelated to the payload. Removing that one
 rule leaves the rest of CRS untouched.
 
 ## Logging
 
-All Coraza logging goes to `/dev/stdout` so it is readable in the built-in logging interface. Redirect
-it by changing the `CORAZA_*` environment variables in the workload configuration.
+All Coraza logging (access, audit and debug) goes to `/dev/stdout`, so it is readable with `cpln logs`.
+The `CORAZA_*` and `ACCESSLOG` environment variables are set by the chart and have no values knob.
 
 ## Important Notes
 

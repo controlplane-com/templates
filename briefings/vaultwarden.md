@@ -29,7 +29,7 @@
 | Knob | Default | Meaning |
 |---|---|---|
 | `signups.allowed` | `true` | open registration ON by maintainer ruling (usability) — turn off after onboarding |
-| `signups.domainsWhitelist` | `[]` | email domains that may register anyway — main onboarding path |
+| `signups.domainsWhitelist` | `[]` | when non-empty, OVERRIDES `signups.allowed`: only these email domains can register (open or not), and org invites and email changes are limited to them too (upstream `config.rs` `is_signup_allowed`) |
 | `admin.tokenSecretName` | `""` | `/admin` panel off; set to a pre-created secret holding an argon2 hash (a scrambled, uncrackable form of the token) to enable |
 | `smtp.*` / `smtp.authSecretName` | off | outgoing email (invites, verification) via user's mail server |
 | `icons.disableDownload` | `false` | website icons fetched by default; set true for privacy (fetching reveals which sites users store) |

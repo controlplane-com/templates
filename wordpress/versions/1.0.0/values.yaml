@@ -1,0 +1,66 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# The ONE location of your GVC that WordPress runs in; it must be a location the GVC has.
+location: aws-us-east-1
+
+# ─── WordPress ────────────────────────────────────────────────────────────────
+wordpress:
+  image: wordpress:7.1.4-php8.4-apache # seeds the docroot on first boot only; later bumps change PHP and Apache, not core
+  replicas: 1 # 2+ share one docroot volume and one database
+  siteTitle: My WordPress Site # first boot only; change it later in Settings > General
+  siteUrl: "" # public base URL, e.g. https://www.example.com; empty = the canonical *.cpln.app endpoint
+  tablePrefix: wp_ # first boot only; change only when importing an existing database
+  debug: false # WP_DEBUG: PHP notices to the container log
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+
+# ─── PHP limits ───────────────────────────────────────────────────────────────
+php:
+  uploadMaxSize: 64M # upload_max_filesize and post_max_size (stock PHP caps uploads at 2M)
+  memoryLimit: 256M # memory_limit
+
+# ─── Admin account ────────────────────────────────────────────────────────────
+admin:
+  secretName: my-wordpress-admin # MUST EXIST BEFORE INSTALL: dictionary with username, password, email (first boot only)
+
+# ─── Content storage ──────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10 # GiB (minimum 10): core, plugins, themes, uploads and wp-config.php
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # HTTPS site and wp-admin on the canonical *.cpln.app endpoint
+internalAccess:
+  type: same-gvc # none | same-gvc | same-org | workload-list
+  workloads: [] # used only with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── MariaDB (bundled mariadb template) ───────────────────────────────────────
+mariadb:
+  image: mariadb:11.8.9
+  credentialsSecretName: my-wordpress-db-credentials # MUST EXIST BEFORE INSTALL: dictionary with username, password, database
+  rootPasswordSecretName: my-wordpress-db-root-password # MUST EXIST BEFORE INSTALL: opaque (encoding plain), the root password
+  resources:
+    minCpu: 150m # keeps cpu:minCpu under the stateful 4:1 cap
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10 # GiB (minimum 10)
+  internalAccess:
+    type: same-gvc # WordPress connects like any workload: never none
+  # Optional scheduled database backups to AWS S3 or GCS (see "Storage setup" in the README).
+  backup:
+    enabled: false
+    provider: aws # aws | gcp
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
+      prefix: wordpress/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: wordpress/backups

@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: OpenTelemetry Collector
+# No gvc block: the collector is a stateless standard workload with one replica per GVC location, and
+# nothing is stored.
+
+steps:
+  - id: collector
+    title: Collector
+    description: How the collector config is built, and the collector's compute.
+    sections:
+      - title: Config source
+        description: >-
+          With the generated config or the shipped one, the collector receives OTLP traces over gRPC on port
+          4317, sends them to Control Plane tracing, and serves span metrics for scraping on port 8889. It runs
+          one replica in each GVC location, reachable from workloads in this GVC only.
+        fields:
+          - path: otelCollector.mode
+            type: enum
+            label: Collector config
+            widget: cards
+            required: true
+            options:
+              - value: simple
+                label: Generated config
+                description: Built from the span processing settings in the next step.
+              - value: advanced
+                label: Your own config
+                description: You write the whole collector config and it runs as written. Starts from the shipped config.
+      - title: Compute
+        fields:
+          - path: otelCollector.resources
+            type: resources
+            label: Resources
+            required: true
+            description: The limit of the collector replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: otelCollector.image
+            type: string
+            format: image
+            label: Collector image
+            required: true
+            advanced: true
+            description: >-
+              An otel/opentelemetry-collector-contrib image; both configs use contrib components. This version
+              ships with 0.148.0 and another tag is untested with it: after changing it, check that the replica
+              becomes ready and that `cpln logs` shows no config errors.
+
+  - id: pipeline
+    title: Pipeline
+    description: What the collector does with the traces it receives.
+    sections:
+      - title: Span processing
+        when: self.otelCollector.mode == 'simple'
+        description: >-
+          Traces go to Control Plane tracing. Span metrics (request rate, errors and a latency histogram by
+          URL, method and status) are served for scraping on port 8889.
+        docs: "#simple-mode"
+        fields:
+          - path: otelCollector.simple.processors.transform.traceStatements
+            type: list
+            label: URL normalization statements
+            widget: tags
+            description: >-
+              OTTL statements run on every span. Collapse dynamic URL parts into one value so span metrics
+              stay at a manageable number of series; replace PLACEHOLDER with a URL part, for example
+              `user/profile`.
+            item:
+              type: string
+              label: Statement
+          - path: otelCollector.simple.spanmetrics.histogram.buckets
+            type: yaml
+            yamlType: list
+            label: Histogram buckets
+            required: true
+            description: >-
+              Span duration bucket boundaries as a YAML list of durations, for example
+              `["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"]`; tune them
+              to your latency objectives.
+          - path: otelCollector.simple.spanmetrics.histogram.unit
+            type: enum
+            label: Histogram unit
+            widget: segmented
+            required: true
+            description: The unit the duration histogram is recorded in. It does not change how the buckets are read.
+            options:
+              - { value: ms, label: Milliseconds }
+              - { value: s, label: Seconds }
+        rules:
+          # The shipped buckets are bare numbers; the collector reads a bare number as nanoseconds (briefing
+          # and 1.1.0+ values), so the default histogram puts nearly every span above its last boundary. 1.1.0 ships
+          # duration strings.
+          - rule: >-
+              self.otelCollector.simple.spanmetrics.histogram.buckets.all(b, string(b).matches('^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'))
+            severity: warning
+            paths: [otelCollector.simple.spanmetrics.histogram.buckets]
+            message: >-
+              Enter every bucket as a duration such as 100ms or 1s. The collector reads a bare number as
+              nanoseconds (250 is 250ns), so these buckets end far below real span durations. Version 1.1.0
+              ships them as durations.
+      - title: Your collector config
+        when: self.otelCollector.mode == 'advanced'
+        description: >-
+          Used exactly as written. The chart opens the gRPC port of `receivers.otlp` and port 8889 for span
+          metrics, and no other port. It adds no readiness or liveness probes. The shipped config also logs
+          every span in full through the `debug` exporter; remove `debug` from `exporters` and from the traces
+          pipeline to cut log volume.
+        fields:
+          - path: otelCollector.advanced.config
+            type: string
+            multiline: true
+            label: Collector config
+            required: true
+        rules:
+          - rule: "!self.otelCollector.advanced.config.contains('buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]')"
+            severity: warning
+            paths: [otelCollector.advanced.config]
+            message: >-
+              The shipped config lists the histogram buckets as bare numbers, which the collector reads as
+              nanoseconds, so nearly every span lands above the last boundary. Change them to durations, for example
+              ["1ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s"], as version
+              1.1.0 ships them.
+      - title: Send traces from the GVC
+        fields:
+          - type: note
+            text: >-
+              After install, set the GVC's OpenTelemetry tracing provider to
+              `RELEASE_NAME.GVC_NAME.cpln.local:4317`. Saving it restarts every workload in the GVC. See
+              [Send Traces From the GVC](/template-catalog/templates/otel-collector#send-traces-from-the-gvc).
+            textExpression: >-
+              'After install, set the OpenTelemetry tracing provider of the GVC to `' + context.releaseName +
+              '.' + (context.gvc != null ? context.gvc : 'GVC_NAME') + '.cpln.local:4317`. Saving it restarts
+              every workload in the GVC. See
+              [Send Traces From the GVC](/template-catalog/templates/otel-collector#send-traces-from-the-gvc).'

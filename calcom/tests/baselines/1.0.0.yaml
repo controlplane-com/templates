@@ -1,0 +1,23 @@
+# Default install: single-instance PostgreSQL, private (no public endpoint), scheduled-job caller on, no SMTP.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+secrets:
+  auth:
+    type: dictionary
+    # Each generated key is 32 hex characters (run.py: token_hex(16)), which is exactly the length
+    # CALENDSO_ENCRYPTION_KEY requires.
+    keys: [nextAuthSecret, encryptionKey, cronSecret, cronApiKey]
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: calcom, database: calcom}
+
+values:
+  location: aws-us-east-1
+  calcom:
+    auth:
+      secretName: "{secrets.auth.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"

@@ -43,6 +43,10 @@ The single HTTP workload: proxy + web + space + admin + live + api.
 {{- printf "%s-plane-caddyfile" .Release.Name }}
 {{- end }}
 
+{{- define "plane.secret.mqConf.name" -}}
+{{- printf "%s-plane-mq-conf" .Release.Name }}
+{{- end }}
+
 {{- define "plane.secret.adminNginx.name" -}}
 {{- printf "%s-plane-admin-nginx" .Release.Name }}
 {{- end }}

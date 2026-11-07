@@ -1,0 +1,20 @@
+kind: policy
+name: {{ include "langflow.policy.name" . }}
+description: Langflow secret access
+tags: {{- include "langflow.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "langflow.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "langflow.db.secretName" . }}
+  - //secret/{{ .Values.admin.secretName }}
+  - //secret/{{ .Values.secretKey.secretName }}
+  {{- with .Values.variableSecrets.secretName }}
+  - //secret/{{ . }}
+  {{- end }}
+  {{- if include "langflow.redis.authEnabled" . }}
+  - //secret/{{ include "langflow.redis.secretName" . }}
+  {{- end }}

@@ -1,0 +1,72 @@
+# langflow 1.0.0 — the production-leaning shape at the smallest size that runs: two Langflow replicas on
+# the bundled single PostgreSQL and a one-node Redis that requires a password, with a provider-keys
+# secret loaded as a global variable and one extraEnv setting. All credentials are prerequisite secrets
+# CI creates (hex, so the database and Redis passwords are URL-safe; the encryption key is a real
+# 44-character Fernet key).
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+  adminpw: hex
+  redispw: hex
+  probe: hex
+  fernet: fernet
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: langflow
+      password: "{gen.pgpw}"
+      database: langflow
+  admin:
+    type: dictionary
+    entries:
+      username: admin
+      password: "{gen.adminpw}"
+  key:
+    type: opaque
+    payload: "{gen.fernet}"
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  vars:
+    type: dictionary
+    entries:
+      E2E_PROBE: "{gen.probe}"
+
+vars:
+  langflow_version: "1.13.1"       # the version /api/v1/version reports; bump with the image tag
+  admin_user: admin
+  admin_password: "{gen.adminpw}"
+  secret_key: "{gen.fernet}"
+  redis_password: "{gen.redispw}"
+  probe: "{gen.probe}"
+
+values:
+  langflow:
+    replicas: 2
+    extraEnv:
+      - name: LANGFLOW_MAX_FILE_SIZE_UPLOAD
+        value: "77"
+  admin:
+    secretName: "{secrets.admin.name}"
+  secretKey:
+    secretName: "{secrets.key.name}"
+  variableSecrets:
+    secretName: "{secrets.vars.name}"
+    keys: [E2E_PROBE]
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    enabled: true
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# New template: no earlier version to upgrade from.

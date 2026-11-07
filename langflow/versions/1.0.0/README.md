@@ -165,6 +165,8 @@ Langflow blocks requests to private addresses by default, which includes service
 - Anyone who reaches the public URL can sign up, but new accounts stay inactive until an admin activates them in Langflow; to turn sign-up off, add `{name: LANGFLOW_ENABLE_SIGNUP, value: "false"}` to `langflow.extraEnv`.
 - Any user who can log in can run Python on the server through custom components. Give accounts only to people you trust.
 - With more than one replica, use the Streamable HTTP MCP URL. The legacy SSE URL (`/sse`) works with one replica only.
+- MCP clients authenticate with a Langflow API key in the `x-api-key` header (create one under Settings → API Keys), even when the MCP Server tab shows no auth.
+- After turning on `redis.enabled` or Redis auth on a running release, run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` so every replica picks up the change.
 - Rotating a provider-keys secret does not restart Langflow; run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` afterwards.
 - The first `helm upgrade` after an install can restart the bundled database, which briefly interrupts the editor and the API.
 - Use a single-location GVC: the database, the data volume and Redis run in one location.

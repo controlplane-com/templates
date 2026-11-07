@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Plane
+category: apps
+topology: stateless
+
+summary: >-
+  Plane open-source project tracking: work items, cycles, modules, roadmaps, wiki pages and
+  real-time collaborative editing. One scalable web tier behind a single proxy plus Celery workers
+  and a scheduler, on a bundled PostgreSQL, Redis and RabbitMQ, with attachments in a bundled
+  MinIO-compatible store or your own AWS S3 or S3-compatible bucket. Pick it to run your own issue
+  and project tracker instead of a hosted one.
+
+keywords:
+  - project management
+  - project tracking
+  - issue tracker
+  - issue tracking
+  - work items
+  - kanban
+  - sprints
+  - cycles
+  - roadmap
+  - agile
+  - bug tracker
+  - task management
+
+useCases:
+  - Track work items, bugs and features for engineering and product teams
+  - Plan sprints as cycles and group work into modules and roadmaps
+  - Keep project wiki pages next to the work they describe, edited together in real time
+  - Keep project data and attachments in your own database and bucket instead of a hosted tracker
+
+alternativeTo:
+  - Jira
+  - Linear
+  - Asana
+  - ClickUp
+  - Monday.com
+
+pickInsteadIf:
+  - need: a team wiki or knowledge base without issue tracking
+    template: docmost
+  - need: Git hosting with built-in issues and pull requests
+    template: gitea
+
+related:
+  - template: docmost
+    relation: companion
+    note: a standalone team wiki alongside the tracker
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [SECRET_KEY, LIVE_SERVER_SECRET_KEY]
+    valuesPath: secrets.name
+    required: true
+    description: Django signing key and live-editor server key. When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: URL-safe credentials the bundled PostgreSQL initializes with and Plane connects with.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.credentialsSecretName
+    required: true
+    description: URL-safe password for the bundled Redis (Valkey).
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: rabbitmq.credentialsSecretName
+    required: true
+    description: URL-safe login for the bundled RabbitMQ broker; read on its first boot only.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: storage.minio.credentialsSecretName
+    required: true
+    when: storage.type is minio (the default)
+    description: Root access keys of the bundled object store; secretKey at least 8 characters.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type is s3
+    description: Your S3 or S3-compatible bucket for attachments, with the CORS rule from the README.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type is s3 on AWS without access keys
+    description: Control Plane AWS cloud account, plus your bucket-scoped IAM policy (storage.s3.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type is s3 with an S3-compatible endpoint
+    description: Access keys for the S3-compatible endpoint.

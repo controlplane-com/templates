@@ -13,11 +13,11 @@ langflow:
   requestTimeoutSeconds: 600    # longest request on the public URL (flow runs, editor build streams) before it is cut (1-3600)
   volumeset:
     capacity: 10                # GiB (minimum 10): uploaded files, knowledge bases and the secret-key file, shared by all replicas
-  # Plain (non-secret) Langflow settings, e.g. LANGFLOW_SSRF_ALLOWED_HOSTS, LANGFLOW_NEW_USER_IS_ACTIVE, DO_NOT_TRACK.
+  # Plain (non-secret) Langflow settings, e.g. LANGFLOW_SSRF_ALLOWED_HOSTS, LANGFLOW_LOG_LEVEL, DO_NOT_TRACK.
   extraEnv: []
   # extraEnv:
-  #   - name: LANGFLOW_NEW_USER_IS_ACTIVE
-  #     value: "true"
+  #   - name: LANGFLOW_LOG_LEVEL
+  #     value: "debug"
 
 # ─── Admin login and encryption key (REQUIRED prerequisite secrets) ──────────
 admin:

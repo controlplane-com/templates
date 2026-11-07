@@ -82,70 +82,6 @@ imports:
 
 
 steps:
-  - id: login
-    title: Login and encryption
-    description: The superuser Langflow creates on first start and the key that encrypts every stored API key. Both are prerequisite secrets.
-    sections:
-      - title: Superuser
-        docs: "#prerequisites"
-        fields:
-          - type: note
-            severity: warning
-            text: >-
-              Both secrets must exist **before** you install; if one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
-          - path: admin.secretName
-            type: ref
-            label: Superuser secret
-            required: true
-            description: A dictionary secret with the keys `username` and `password`. Login is always required.
-            help: >-
-              Langflow creates this user on first start only. Later starts keep the existing password: change it
-              in the Langflow UI, not in the secret.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password]
-              create:
-                suggestName: "context.releaseName + '-langflow-admin'"
-          - path: secretKey.secretName
-            type: ref
-            label: Encryption key secret
-            required: true
-            description: >-
-              An opaque secret holding a 44-character Fernet key, for example the output of
-              `openssl rand -base64 32 | tr '+/' '-_'`. Langflow refuses to start with a malformed key.
-            help: >-
-              It encrypts every API key saved in Langflow and signs logins. Never rotate or delete it: stored
-              credentials could no longer be read.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              allowCreate: true
-              create:
-                suggestName: "context.releaseName + '-langflow-secret-key'"
-                encoding: plain
-        rules:
-          - rule: self.admin.secretName != ''
-            mirrors: langflow.validateAdmin
-            paths: [admin.secretName]
-            message: The superuser secret is required.
-          - rule: self.secretKey.secretName != ''
-            mirrors: langflow.validateSecretKey
-            paths: [secretKey.secretName]
-            message: The encryption key secret is required.
-          - rule: oldSelf == null || self.secretKey.secretName == oldSelf.secretKey.secretName
-            severity: warning
-            paths: [secretKey.secretName]
-            message: >-
-              A different key cannot decrypt the API keys already stored in Langflow. Keep the secret the release
-              was installed with unless it holds the same key.
-
   - id: database
     title: Database
     description: Which PostgreSQL holds Langflow's users, flows, messages and stored credentials, and the prerequisite secret with its credentials.
@@ -283,6 +219,70 @@ steps:
         message: >-
           Switching the database type deploys a new, empty database; the flows, users and credentials in the
           current one are not moved.
+
+  - id: login
+    title: Login and encryption
+    description: The superuser Langflow creates on first start and the key that encrypts every stored API key. Both are prerequisite secrets.
+    sections:
+      - title: Superuser
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install; if one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: admin.secretName
+            type: ref
+            label: Superuser secret
+            required: true
+            description: A dictionary secret with the keys `username` and `password`. Login is always required.
+            help: >-
+              Langflow creates this user on first start only. Later starts keep the existing password: change it
+              in the Langflow UI, not in the secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-langflow-admin'"
+          - path: secretKey.secretName
+            type: ref
+            label: Encryption key secret
+            required: true
+            description: >-
+              An opaque secret holding a 44-character Fernet key, for example the output of
+              `openssl rand -base64 32 | tr '+/' '-_'`. Langflow refuses to start with a malformed key.
+            help: >-
+              It encrypts every API key saved in Langflow and signs logins. Never rotate or delete it: stored
+              credentials could no longer be read.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-langflow-secret-key'"
+                encoding: plain
+        rules:
+          - rule: self.admin.secretName != ''
+            mirrors: langflow.validateAdmin
+            paths: [admin.secretName]
+            message: The superuser secret is required.
+          - rule: self.secretKey.secretName != ''
+            mirrors: langflow.validateSecretKey
+            paths: [secretKey.secretName]
+            message: The encryption key secret is required.
+          - rule: oldSelf == null || self.secretKey.secretName == oldSelf.secretKey.secretName
+            severity: warning
+            paths: [secretKey.secretName]
+            message: >-
+              A different key cannot decrypt the API keys already stored in Langflow. Keep the secret the release
+              was installed with unless it holds the same key.
 
   - id: langflow
     title: Langflow
@@ -429,7 +429,7 @@ steps:
           !(n.upperAscii() in ['LANGFLOW_HOST', 'LANGFLOW_PORT', 'LANGFLOW_WORKERS', 'LANGFLOW_CONFIG_DIR',
           'LANGFLOW_SAVE_DB_IN_CONFIG_DIR', 'LANGFLOW_KNOWLEDGE_BASES_DIR', 'LANGFLOW_DATABASE_URL',
           'LANGFLOW_DB_CONNECTION_SETTINGS', 'LANGFLOW_POOL_SIZE', 'LANGFLOW_MAX_OVERFLOW', 'LANGFLOW_AUTO_LOGIN',
-          'LANGFLOW_SKIP_AUTH_AUTO_LOGIN', 'LANGFLOW_SUPERUSER', 'LANGFLOW_SUPERUSER_PASSWORD', 'LANGFLOW_SECRET_KEY',
+          'LANGFLOW_SKIP_AUTH_AUTO_LOGIN', 'LANGFLOW_NEW_USER_IS_ACTIVE', 'LANGFLOW_SUPERUSER', 'LANGFLOW_SUPERUSER_PASSWORD', 'LANGFLOW_SECRET_KEY',
           'LANGFLOW_JOB_QUEUE_TYPE', 'LANGFLOW_REDIS_QUEUE_URL', 'LANGFLOW_REDIS_QUEUE_HOST',
           'LANGFLOW_REDIS_QUEUE_PORT', 'LANGFLOW_RATE_LIMIT_STORAGE_URI', 'LANGFLOW_RATE_LIMIT_TRUST_PROXY',
           'LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT', 'LANGFLOW_PROMETHEUS_PORT',

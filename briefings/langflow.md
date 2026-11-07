@@ -21,7 +21,7 @@
 - Defaults: 1 replica, single PostgreSQL, no Redis, public URL with login required (auth is always on: `LANGFLOW_AUTO_LOGIN=false` is fixed and refused in `extraEnv`).
 - Multi-replica is in the free edition. HA = `langflow.replicas: 2` + `redis.enabled: true` + `postgresHA.enabled: true`. Single location only (the database, volume and Redis live in one location).
 - **The command is overridden** (`/bin/sh -c`): a stdlib-Python guard refuses a secret key that is not a valid Fernet key, then `exec langflow run`. Langflow itself boots with a 64-char hex key and only fails (500) at the first saved credential. On public installs the script also exports `LANGFLOW_MCP_BASE_URL=$CPLN_GLOBAL_ENDPOINT`, unless `extraEnv` sets it.
-- Fixed settings (reserved, case-insensitive): server host/port/workers, config dir, DB URL and pool (`pool_size 10 + max_overflow 10` per replica, measured peak 43 connections at 2 replicas under an 80-client burst), superuser, secret key, Redis queue and rate-limit URLs, `LANGFLOW_RATE_LIMIT_TRUST_PROXY=true`, `LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT`.
+- Fixed settings (reserved, case-insensitive): server host/port/workers, config dir, DB URL and pool (`pool_size 10 + max_overflow 10` per replica, measured peak 43 connections at 2 replicas under an 80-client burst), superuser, `LANGFLOW_NEW_USER_IS_ACTIVE=false`, secret key, Redis queue and rate-limit URLs, `LANGFLOW_RATE_LIMIT_TRUST_PROXY=true`, `LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT`.
 - Sandbox support is out of 1.0.0 (ruling R2).
 
 ## Key knobs
@@ -35,6 +35,7 @@
 - **Rate limiting behind the platform proxy:** without `TRUST_PROXY` every public client shared one 5-per-minute login bucket (a stranger's typos locked everyone out). With it, Langflow keys on the last `X-Forwarded-For` hop, which Envoy appends; a spoofed header does not escape the limit.
 - **MCP:** Streamable HTTP works at any replica count. Legacy SSE (`/sse`) works at 1 replica only: its POST-backs must reach the replica holding the stream, and Redis does not bridge that.
 - **In-GVC services** (`*.cpln.local` resolves to 240.240.x.x) are blocked by Langflow's SSRF protection by default; `extraEnv LANGFLOW_SSRF_ALLOWED_HOSTS=*.cpln.local` allows them (validators checked in-container).
+- **Self-signup:** upstream lets anyone `POST /api/v1/users/` (`ENABLE_SIGNUP` defaults true); the chart pins `LANGFLOW_NEW_USER_IS_ACTIVE=false` (reserved), so such a user gets 400 "Waiting for approval" at login until an admin activates them. `LANGFLOW_ENABLE_SIGNUP=false` via `extraEnv` turns sign-up off.
 - **Any logged-in user can run Python on the server** (custom components); README says to give accounts only to trusted people.
 - **Memory:** cgroup peak 1.5 GiB after boot plus ~30 builds and MCP sessions; the 3Gi limit leaves 2× headroom. Boot to serving ~20 s on a warm DB.
 - **Uninstall deletes the database and the data volume.** The first upgrade after install may restart the bundled PostgreSQL.

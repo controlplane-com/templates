@@ -43,6 +43,9 @@ spec:
           value: '{"pool_size":10,"max_overflow":10,"pool_timeout":30,"pool_pre_ping":true,"pool_recycle":1800,"echo":false}'
         - name: LANGFLOW_AUTO_LOGIN
           value: "false"
+        # Self-signups on the public URL stay inactive until an admin activates them (upstream default, pinned).
+        - name: LANGFLOW_NEW_USER_IS_ACTIVE
+          value: "false"
         - name: LANGFLOW_SUPERUSER
           value: 'cpln://secret/{{ .Values.admin.secretName }}.username'
         - name: LANGFLOW_SUPERUSER_PASSWORD

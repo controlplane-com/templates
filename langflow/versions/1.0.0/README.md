@@ -162,6 +162,7 @@ Langflow blocks requests to private addresses by default, which includes service
 
 - Never rotate or delete the encryption key secret: API keys already saved in Langflow could no longer be decrypted.
 - The superuser secret is read on first start only. Change the password in the Langflow UI, since later changes to the secret are ignored.
+- Anyone who reaches the public URL can sign up, but new accounts stay inactive until an admin activates them in Langflow; to turn sign-up off, add `{name: LANGFLOW_ENABLE_SIGNUP, value: "false"}` to `langflow.extraEnv`.
 - Any user who can log in can run Python on the server through custom components. Give accounts only to people you trust.
 - With more than one replica, use the Streamable HTTP MCP URL. The legacy SSE URL (`/sse`) works with one replica only.
 - Rotating a provider-keys secret does not restart Langflow; run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` afterwards.

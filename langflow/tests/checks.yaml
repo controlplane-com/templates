@@ -358,6 +358,88 @@ checks:
     retries: 3
     retryDelaySeconds: 15
 
+  - id: starter-projects-once
+    description: >-
+      The replicas booted together and seeded the starter flows once: the Starter Projects folder in
+      PostgreSQL holds flows and no name appears twice.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT count(*) || ' ' || count(DISTINCT f.name) FROM flow f JOIN folder d ON f.folder_id = d.id WHERE d.name = 'Starter Projects'" | awk '$1 > 0 && $1 == $2 { print "STARTERS_OK " $1; next } { print "STARTERS_BAD " $0 }'
+    expect:
+      stdout: "^STARTERS_OK \\d+$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: mcp-url-public
+    description: >-
+      The MCP connection URL Langflow shows for a project is the public HTTPS endpoint, not the
+      http://localhost:7860 it builds from its bind address.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        h = dict(Authorization='Bearer ' + tok)
+        pid = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/projects/', headers=h), timeout=60).read())[0]['id']
+        u = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/mcp/project/' + pid + '/composer-url', headers=h), timeout=60).read()).get('streamable_http_url') or ''
+        ok = u.startswith('https://') and 'localhost' not in u and u.endswith('/api/v1/mcp/project/' + pid + '/streamable')
+        print('MCP_URL_OK' if ok else 'MCP_URL_BAD %s' % u)
+        PY
+    expect:
+      stdout: "^MCP_URL_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: signup-inactive
+    description: >-
+      Anyone may sign up anonymously, but the new account is inactive: logging in with it is refused and
+      returns no token.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, secrets, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        def req(m, p, data, ctype):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=dict([('Content-Type', ctype)]), method=m), timeout=60) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        user = 'e2e-signup-' + secrets.token_hex(4)
+        pw = 'Pw-' + secrets.token_hex(12)
+        c, _ = req('POST', '/api/v1/users/', json.dumps(dict(username=user, password=pw)).encode(), 'application/json')
+        print('SIGNUP_ACCEPTED' if c == 201 else 'SIGNUP_GOT %d' % c)
+        form = urllib.parse.urlencode(dict(username=user, password=pw)).encode()
+        for _ in range(6):
+            c, b = req('POST', '/api/v1/login', form, 'application/x-www-form-urlencoded')
+            if c != 429:
+                break
+            time.sleep(15)
+        print('INACTIVE_REFUSED' if c in (400, 401, 403) and 'access_token' not in b else 'INACTIVE_GOT %d' % c)
+        PY
+    expect:
+      stdout: "(?s)^SIGNUP_ACCEPTED\nINACTIVE_REFUSED$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
   - id: flow-written
     description: A flow named after the running version is stored in PostgreSQL and listed again.
     exec:

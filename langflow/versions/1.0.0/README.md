@@ -9,7 +9,7 @@ This app deploys [Langflow](https://www.langflow.org), a visual low-code builder
 - **PostgreSQL (single instance, default)**: the `postgres` template. It holds users, flows, messages and stored credentials.
 - **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint.
 - **Redis (optional, required above 1 replica)**: the `redis` template as one node. It holds the shared editor build queue and the login rate limits.
-- **Control Plane MCP server (optional)**: with `cplnMcp.keySecretName` set, Langflow registers `https://mcp.cpln.io/mcp` as the superuser's MCP server `cpln` at boot, authenticated with a service-account key.
+- **Control Plane MCP server (optional)**: with `cplnMcp.keySecretName` set, Langflow registers `https://mcp.cpln.io/mcp?toolsets=readonly` (read-only tools) as the superuser's MCP server `cpln` at boot, authenticated with a service-account key.
 - **Identity + policy**: `reveal` on exactly the secrets you name. The template creates no secrets.
 
 ## Prerequisites
@@ -91,7 +91,7 @@ variableSecrets:
   keys: []                      # e.g. [OPENAI_API_KEY, ANTHROPIC_API_KEY]
 cplnMcp:
   keySecretName: ""             # opaque: a service-account key; "" = no Control Plane MCP server
-  url: https://mcp.cpln.io/mcp  # add ?toolsets=readonly for a catalog with no create, update or delete tools
+  url: https://mcp.cpln.io/mcp?toolsets=readonly  # read-only tools (no create, update or delete); https://mcp.cpln.io/mcp = every tool
 ```
 
 ### Access

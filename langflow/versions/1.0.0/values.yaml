@@ -44,7 +44,7 @@ variableSecrets:
 # service account, so grant it only what flows need (README, Prerequisites). "" = no MCP server.
 cplnMcp:
   keySecretName: ""             # e.g. my-langflow-cpln-mcp-key
-  url: https://mcp.cpln.io/mcp  # add ?toolsets=readonly for a catalog with no create, update or delete tools
+  url: https://mcp.cpln.io/mcp?toolsets=readonly  # read-only tools (no create, update or delete); https://mcp.cpln.io/mcp = every tool
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:

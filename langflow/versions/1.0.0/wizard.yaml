@@ -499,8 +499,8 @@ steps:
             advanced: true
             required: true
             when: self.cplnMcp.keySecretName != ''
-            suggestions: ["https://mcp.cpln.io/mcp", "https://mcp.cpln.io/mcp?toolsets=readonly"]
-            description: Add `?toolsets=readonly` for a catalog with no create, update or delete tools.
+            suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
+            description: The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete tools as well, and grant the service account only what flows need.
             pattern: '^https://'
             patternMessage: Use an https:// URL.
         rules:

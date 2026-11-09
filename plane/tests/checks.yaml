@@ -1,0 +1,205 @@
+# Feature checks for the plane template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline var admin_password.
+#
+# The app checks are Python (requests ships in the backend image; it has no curl) run in the `api`
+# container against the proxy on 127.0.0.1:80, the same Caddy routing table browsers use, so /api, /auth
+# and the /uploads object-store route are all exercised. They sign in as the instance admin the
+# god-mode-claim check creates. Plane rate-limits per IP (app sign-in 10 a minute, anonymous API calls 30
+# a minute), so each check signs in once and makes few anonymous calls; one pass uses about a third. The database checks run psql in the bundled postgres container. The runner reads any {word} as a
+# placeholder, so the scripts use dict() and % formatting, never braces around a bare name.
+# Plane sets its cookies Secure, and requests will not send a Secure cookie over http://127.0.0.1, so each
+# script wraps RequestsCookieJar.set_cookie to clear the flag (test client only; the chart is unchanged).
+checks:
+  - id: api-serving
+    description: The proxy routes /api to the Django API, which answers the public instance endpoint from the database.
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        python - <<'PY'
+        import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
+        r = requests.get('http://127.0.0.1:80/api/instances/', timeout=30)
+        j = r.json() if r.headers.get('content-type', '').startswith('application/json') else dict()
+        print('INSTANCE %s config=%s instance=%s' % (r.status_code, 'config' in j, 'instance' in j))
+        PY
+    expect:
+      stdout: "^INSTANCE 200 config=True instance=True$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: migrations-applied
+    description: The scheduler applied every Django migration (migrate --check exits non-zero while any is pending).
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        cd /code && if python manage.py migrate --check >/dev/null 2>&1; then echo MIGRATIONS_APPLIED; else echo MIGRATIONS_PENDING; fi
+    expect:
+      stdout: "^MIGRATIONS_APPLIED$"
+    retries: 3
+
+  - id: god-mode-claim
+    description: >-
+      The first admin claims the instance through /god-mode sign-up (skipped once claimed), signs in with
+      that password, and a wrong password is refused.
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        python - <<'PY'
+        import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
+        B = 'http://127.0.0.1:80'
+        EMAIL, PW = 'e2e-admin@example.com', '{admin_password}'
+        def post(path, **data):
+            s = requests.Session()
+            data['csrfmiddlewaretoken'] = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
+            r = s.post(B + path, data=data, headers=dict(Referer=B + '/god-mode/'), allow_redirects=False, timeout=30)
+            return r.headers.get('Location', '')
+        if not requests.get(B + '/api/instances/', timeout=30).json()['instance'].get('is_setup_done'):
+            print('SIGNUP ' + post('/api/instances/admins/sign-up/', email=EMAIL, password=PW, first_name='E2E',
+                                   last_name='Admin', company_name='e2e', is_telemetry_enabled='False'))
+        ok = post('/api/instances/admins/sign-in/', email=EMAIL, password=PW)
+        bad = post('/api/instances/admins/sign-in/', email=EMAIL, password=PW + '-wrong')
+        setup = requests.get(B + '/api/instances/', timeout=30).json()['instance'].get('is_setup_done')
+        print('CLAIM signin=%s wrong=%s setup=%s' % (
+            'ok' if ok.endswith('/god-mode/general/') else ok,
+            'refused' if 'ADMIN_AUTHENTICATION_FAILED' in bad else bad, setup))
+        PY
+    expect:
+      stdout: "^CLAIM signin=ok wrong=refused setup=True$"
+    retries: 3
+
+  - id: data-written
+    description: >-
+      Through the app API, the admin creates a workspace and project (once) and a work item tagged with the
+      running version, and reads it back.
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        python - <<'PY'
+        import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
+        B = 'http://127.0.0.1:80'
+        s = requests.Session()
+        tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
+        s.post(B + '/auth/sign-in/', data=dict(csrfmiddlewaretoken=tok, email='e2e-admin@example.com',
+               password='{admin_password}'), headers=dict(Referer=B + '/'), allow_redirects=False, timeout=30)
+        h = dict(Referer=B + '/')
+        h['X-CSRFToken'] = s.cookies.get('csrftoken')
+        if 'e2e' not in [w['slug'] for w in s.get(B + '/api/users/me/workspaces/', timeout=30).json()]:
+            s.post(B + '/api/workspaces/', json=dict(name='e2e', slug='e2e', organization_size='1'), headers=h, timeout=30)
+        P = B + '/api/workspaces/e2e/projects/'
+        projects = [p for p in s.get(P, timeout=30).json() if p.get('identifier') == 'E2E']
+        pid = projects[0]['id'] if projects else s.post(P, json=dict(name='e2e', identifier='E2E', network=2), headers=h, timeout=30).json()['id']
+        I = P + pid + '/issues/'
+        name = 'e2e-{version}'
+        found = [i for i in s.get(I, timeout=30).json()['results'] if i['name'] == name]
+        iid = found[0]['id'] if found else s.post(I, json=dict(name=name), headers=h, timeout=30).json()['id']
+        print('ITEM ' + s.get(I + iid + '/', timeout=30).json()['name'])
+        PY
+    expect:
+      stdout: "^ITEM e2e-[0-9]+\\.[0-9]+\\.[0-9]+$"
+    retries: 3
+
+  - id: worker-consumed
+    description: >-
+      A Celery worker consumed the issue-activity task the API queued on RabbitMQ: the work item's
+      "created" activity row exists (only the worker writes it).
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'ACTIVITY ' || count(*) FROM issue_activities a JOIN issues i ON i.id = a.issue_id WHERE i.name = 'e2e-{version}' AND a.verb = 'created'"
+    expect:
+      stdout: "^ACTIVITY [1-9][0-9]*$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: attachment-roundtrip
+    description: >-
+      An attachment is uploaded to the work item through the proxy's presigned object-store route, marked
+      uploaded, and downloaded back byte for byte through the API's presigned redirect.
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        python - <<'PY'
+        import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
+        B = 'http://127.0.0.1:80'
+        s = requests.Session()
+        tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
+        s.post(B + '/auth/sign-in/', data=dict(csrfmiddlewaretoken=tok, email='e2e-admin@example.com',
+               password='{admin_password}'), headers=dict(Referer=B + '/'), allow_redirects=False, timeout=30)
+        h = dict(Referer=B + '/')
+        h['X-CSRFToken'] = s.cookies.get('csrftoken')
+        pid = [p for p in s.get(B + '/api/workspaces/e2e/projects/', timeout=30).json() if p.get('identifier') == 'E2E'][0]['id']
+        iid = [i for i in s.get(B + '/api/workspaces/e2e/projects/%s/issues/' % pid, timeout=30).json()['results'] if i['name'] == 'e2e-{version}'][0]['id']
+        A = B + '/api/assets/v2/workspaces/e2e/projects/%s/issues/%s/attachments/' % (pid, iid)
+        body = ('plane-e2e-attachment-' + '{version}').encode()
+        if not s.get(A, timeout=30).json():
+            r = s.post(A, json=dict(name='e2e.txt', type='text/plain', size=len(body)), headers=h, timeout=30).json()
+            up = requests.post(r['upload_data']['url'], data=r['upload_data']['fields'],
+                               files=dict(file=('e2e.txt', body, 'text/plain')), timeout=60)
+            print('UPLOAD %s' % up.status_code)
+            s.patch(A + r['asset_id'] + '/', json=dict(), headers=h, timeout=30)
+        aid = s.get(A, timeout=30).json()[0]['id']
+        loc = s.get(A + aid + '/', allow_redirects=False, timeout=30).headers.get('Location', '')
+        got = requests.get(loc, timeout=60).content if loc else b''
+        print('ATTACHMENT ' + ('match' if got == body else 'mismatch %r' % got[:80]))
+        PY
+    expect:
+      stdout: "ATTACHMENT match$"
+    retries: 3
+
+  - id: data-survives
+    description: >-
+      After every upgrade the work item written by the first installed version is still readable through the
+      API, and its attachment still downloads from the object store's volume.
+    exec:
+      workload: "{release}-plane"
+      container: api
+      script: |
+        python - <<'PY'
+        import requests
+        _sc = requests.cookies.RequestsCookieJar.set_cookie
+        def _f(self, cookie, *a, **k):
+            cookie.secure = False
+            return _sc(self, cookie, *a, **k)
+        requests.cookies.RequestsCookieJar.set_cookie = _f
+        B = 'http://127.0.0.1:80'
+        s = requests.Session()
+        tok = s.get(B + '/auth/get-csrf-token/', timeout=30).json()['csrf_token']
+        s.post(B + '/auth/sign-in/', data=dict(csrfmiddlewaretoken=tok, email='e2e-admin@example.com',
+               password='{admin_password}'), headers=dict(Referer=B + '/'), allow_redirects=False, timeout=30)
+        pid = [p for p in s.get(B + '/api/workspaces/e2e/projects/', timeout=30).json() if p.get('identifier') == 'E2E'][0]['id']
+        name = 'e2e-{installed_version}'
+        found = [i for i in s.get(B + '/api/workspaces/e2e/projects/%s/issues/' % pid, timeout=30).json()['results'] if i['name'] == name]
+        A = B + '/api/assets/v2/workspaces/e2e/projects/%s/issues/%s/attachments/' % (pid, found[0]['id'])
+        loc = s.get(A + s.get(A, timeout=30).json()[0]['id'] + '/', allow_redirects=False, timeout=30).headers['Location']
+        got = requests.get(loc, timeout=60).content
+        print('SURVIVED %s attachment=%s' % (found[0]['name'], got == ('plane-e2e-attachment-' + '{installed_version}').encode()))
+        PY
+    expect:
+      stdout: "^SURVIVED e2e-[0-9]+\\.[0-9]+\\.[0-9]+ attachment=True$"
+    retries: 3

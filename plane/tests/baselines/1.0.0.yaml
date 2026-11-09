@@ -1,0 +1,45 @@
+# Default install: bundled PostgreSQL, Redis, RabbitMQ and object store, one replica of each Plane tier,
+# private (no public endpoint). Every credential is a prerequisite secret CI creates; generated values
+# are hex, so they are URL-safe for the connection URLs.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  adminpw: hex                 # the god-mode admin the checks claim the instance with
+
+secrets:
+  app:
+    type: dictionary
+    keys: [SECRET_KEY, LIVE_SERVER_SECRET_KEY]
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: plane, database: plane}
+  redis:
+    type: dictionary
+    keys: [password]
+  mq:
+    type: dictionary
+    keys: [password]
+    entries: {username: plane}
+  minio:
+    type: dictionary
+    keys: [accessKey, secretKey]
+
+vars:
+  admin_password: "{gen.adminpw}"
+
+values:
+  location: aws-us-east-1
+  secrets:
+    name: "{secrets.app.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    credentialsSecretName: "{secrets.redis.name}"
+  rabbitmq:
+    credentialsSecretName: "{secrets.mq.name}"
+  storage:
+    minio:
+      credentialsSecretName: "{secrets.minio.name}"

@@ -12,6 +12,7 @@ generated:
   redispw: hex
   probe: hex
   fernet: fernet
+  fakemcpkey: hex
 
 secrets:
   db:
@@ -36,6 +37,10 @@ secrets:
     type: dictionary
     entries:
       E2E_PROBE: "{gen.probe}"
+  # Not a real service-account key: mcp.cpln.io refuses it, which cpln-mcp-key-refused proves.
+  mcpkey:
+    type: opaque
+    payload: "{gen.fakemcpkey}"
 
 vars:
   langflow_version: "1.13.1"       # the version /api/v1/version reports; bump with the image tag
@@ -58,6 +63,8 @@ values:
   variableSecrets:
     secretName: "{secrets.vars.name}"
     keys: [E2E_PROBE]
+  cplnMcp:
+    keySecretName: "{secrets.mcpkey.name}"
   postgres:
     config:
       credentialsSecretName: "{secrets.db.name}"

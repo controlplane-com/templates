@@ -9,6 +9,7 @@ This app deploys [Langflow](https://www.langflow.org), a visual low-code builder
 - **PostgreSQL (single instance, default)**: the `postgres` template. It holds users, flows, messages and stored credentials.
 - **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint.
 - **Redis (optional, required above 1 replica)**: the `redis` template as one node. It holds the shared editor build queue and the login rate limits.
+- **Control Plane MCP server (optional)**: with `cplnMcp.keySecretName` set, Langflow registers `https://mcp.cpln.io/mcp` as the superuser's MCP server `cpln` at boot, authenticated with a service-account key.
 - **Identity + policy**: `reveal` on exactly the secrets you name. The template creates no secrets.
 
 ## Prerequisites
@@ -46,6 +47,17 @@ Secret names are org-wide, so give each release its own secrets. Langflow refuse
 - Provider keys: a dictionary secret whose keys (such as `OPENAI_API_KEY`) you list in `variableSecrets.keys`.
 - A Redis password: a dictionary secret with a URL-safe `password` key.
 - Backups: a bucket and a Control Plane cloud account, set up as in the [postgres](https://docs.controlplane.com/template-catalog/templates/postgres) template. On AWS you also need a bucket-scoped IAM policy.
+- The Control Plane MCP server: an opaque secret holding a service-account key, named in `cplnMcp.keySecretName`. Langflow's MCP client cannot sign in with OAuth, so every flow that uses the server acts as this service account. Give it only what your flows need. This example lets it view one GVC:
+
+```bash
+cpln serviceaccount create --name my-langflow-mcp
+cpln policy create --name my-langflow-mcp-view --target-kind gvc --resource GVC_NAME
+cpln policy add-binding my-langflow-mcp-view --permission view --serviceaccount my-langflow-mcp
+cpln serviceaccount add-key my-langflow-mcp --description langflow -o json | jq -j .key | \
+  cpln secret create-opaque --name my-langflow-cpln-mcp-key --encoding plain -f -
+```
+
+Add a policy for each further resource kind the flows should see or change, such as `workload` with `view`.
 
 ## Configuration
 
@@ -77,6 +89,9 @@ secretKey:
 variableSecrets:
   secretName: ""                # dictionary; each listed key becomes an env var and a Langflow global variable
   keys: []                      # e.g. [OPENAI_API_KEY, ANTHROPIC_API_KEY]
+cplnMcp:
+  keySecretName: ""             # opaque: a service-account key; "" = no Control Plane MCP server
+  url: https://mcp.cpln.io/mcp  # add ?toolsets=readonly for a catalog with no create, update or delete tools
 ```
 
 ### Access
@@ -154,6 +169,7 @@ redis:
 | Internal API | `http://RELEASE_NAME-langflow.GVC_NAME.cpln.local:7860` |
 | Run a flow | `POST /api/v1/run/FLOW_ID` with the header `x-api-key: API_KEY` (create API keys under Settings) |
 | MCP server | `/api/v1/mcp/project/PROJECT_ID/streamable` (Streamable HTTP); the project's MCP Server tab shows the full URL |
+| Control Plane MCP server | Log in as the superuser, add an MCP Tools component to a flow and pick the `cpln` server; its tools act as the service account in `cplnMcp.keySecretName` |
 | API docs | `/docs` on any of the above |
 
 Langflow blocks requests to private addresses by default, which includes services in your GVC (`*.cpln.local`). To let flows call one, such as an Ollama or Qdrant release, add this to `langflow.extraEnv`: `{name: LANGFLOW_SSRF_ALLOWED_HOSTS, value: "*.cpln.local"}`.
@@ -167,6 +183,9 @@ Langflow blocks requests to private addresses by default, which includes service
 - With more than one replica, use the Streamable HTTP MCP URL. The legacy SSE URL (`/sse`) works with one replica only.
 - MCP clients authenticate with a Langflow API key in the `x-api-key` header (create one under Settings → API Keys), even when the MCP Server tab shows no auth.
 - After turning on `redis.enabled` or Redis auth on a running release, run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` so every replica picks up the change.
+- The Control Plane MCP server is registered for the superuser only; other users add their own under Settings → MCP Servers. Registration runs in the background and never delays startup: the log line starting `cpln-mcp:` says whether it worked, and a key the server refuses is reported there and not registered.
+- Any logged-in user can read the service-account key through Python, so grant that service account only what flows need.
+- Rotating the service-account key does not update a server that is already registered: edit its `Authorization` header under Settings → MCP Servers, or delete the `cpln` server there and run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME`.
 - Rotating a provider-keys secret does not restart Langflow; run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` afterwards.
 - The first `helm upgrade` after an install can restart the bundled database, which briefly interrupts the editor and the API.
 - Use a single-location GVC: the database, the data volume and Redis run in one location.

@@ -17,6 +17,7 @@
 | `postgres` 3.4.1 (default, `postgres:18`) or `postgresHA` 2.8.1 | Users, flows, messages, encrypted variables |
 | `redis` 3.9.0, `mode: dev` (optional; required above 1 replica) | Shared build-job queue (DB 1) and login rate limits (DB 2) |
 | identity + policy | `reveal` on exactly the named secrets; the chart creates no secrets |
+| MCP server row `cpln` (optional, in PostgreSQL) | The Control Plane MCP server, registered for the superuser at boot when `cplnMcp.keySecretName` is set |
 
 - Defaults: 1 replica, single PostgreSQL, no Redis, public URL with login required (auth is always on: `LANGFLOW_AUTO_LOGIN=false` is fixed and refused in `extraEnv`).
 - Multi-replica is in the free edition. HA = `langflow.replicas: 2` + `redis.enabled: true` + `postgresHA.enabled: true`. Single location only (the database, volume and Redis live in one location).
@@ -25,7 +26,7 @@
 - Sandbox support is out of 1.0.0 (ruling R2).
 
 ## Key knobs
-`langflow.{image,replicas,resources,requestTimeoutSeconds,volumeset.capacity,extraEnv}` · `admin.secretName` · `secretKey.secretName` · `variableSecrets.{secretName,keys}` · `publicAccess` (on) · `internalAccess` · `postgres` / `postgresHA` · `redis.enabled` · `redis.redis.auth.fromSecret`
+`langflow.{image,replicas,resources,requestTimeoutSeconds,volumeset.capacity,extraEnv}` · `admin.secretName` · `secretKey.secretName` · `variableSecrets.{secretName,keys}` · `publicAccess` (on) · `internalAccess` · `postgres` / `postgresHA` · `redis.enabled` · `redis.redis.auth.fromSecret` · `cplnMcp.{keySecretName,url}`
 
 ## Troubleshooting / considerations
 - **Three required prerequisite secrets** (DB dictionary, admin dictionary, secret-key opaque). A missing one wedges silently; read `status.versions[].message` via `cpln workload get-deployments`.
@@ -40,3 +41,8 @@
 - **Memory:** cgroup peak 1.5 GiB after boot plus ~30 builds and MCP sessions; the 3Gi limit leaves 2× headroom. Boot to serving ~20 s on a warm DB.
 - **Uninstall deletes the database and the data volume.** The first upgrade after install may restart the bundled PostgreSQL.
 - **Wizard:** `redis.enabled` is a toggle section in the Langflow step and the condition of the Redis import; the replicas-need-Redis rule is step-level because a section rule does not run while its toggle is off.
+- **Control Plane MCP (`cplnMcp.keySecretName`, default `""` = off; ruling 2026-11-09, Option A).** Langflow 1.13.1's MCP client sends only a fixed URL and headers, with no OAuth anywhere in the source, so mcp.cpln.io's sign-in cannot work (a no-auth registration fails "HTTP 401: the configured credential was refused"). mcp.cpln.io accepts a service-account key as `Authorization: Bearer <key>`, and a bare key without `Bearer` gets 401. The service account's policies bound what the tools see: with view on one GVC, `list_resources kind=gvc` returned exactly that GVC. `?toolsets=readonly` works with a key: 27 tools, none that create, update or delete.
+  - MCP servers are per-user rows (`mcp_server`, unique `(user_id, name)`; headers encrypted with the Fernet key, masked on read). A background step in the start script checks the key against the MCP URL (401/403: logs `cpln-mcp: not registered: … refused`, registers nothing), waits for `/health_check`, logs in as the superuser and POSTs `/api/v2/mcp/servers/cpln`. 200 = registered and 409 = already there (left unchanged), so it never duplicates and never overwrites user edits. The outcome goes to `/tmp/cpln-mcp-status`, and the step never blocks readiness.
+  - Live (test-gvc-2, 2 replicas + Redis): one replica `registered`, the other `exists`; after a force-redeployment both were `exists`, one `cpln` row in PostgreSQL. An MCP Tools component listed 49 tools and ran `list_resources` (gvc), returning `test-gvc-2` only. A wrong key logged the refusal and Langflow stayed ready. CI check `cpln-mcp-key-refused` covers the fake-key path.
+  - Limits (README): the superuser only (other users add their own); every flow acts as the service account; any logged-in user can read the key through Python; rotating the key does not update an existing row (edit the header in Settings → MCP Servers, or delete `cpln` and force a redeployment). If the superuser's password was changed in the UI, registration logs `login-failed`.
+

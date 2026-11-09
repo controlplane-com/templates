@@ -104,6 +104,12 @@ prerequisites:
     required: false
     when: redis.enabled and redis.redis.auth.fromSecret.enabled
     description: URL-safe password the bundled Redis requires and Langflow connects with.
+  - kind: secret
+    secretType: opaque
+    valuesPath: cplnMcp.keySecretName
+    required: false
+    when: cplnMcp.keySecretName is set
+    description: A Control Plane service-account key for the pre-registered Control Plane MCP server. Every flow using it acts as that service account.
   - kind: other
     valuesPath: langflow.image
     required: false

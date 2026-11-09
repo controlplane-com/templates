@@ -461,6 +461,53 @@ steps:
             mirrors: langflow.validateVariableSecrets
             paths: [variableSecrets.keys]
             message: List at least one key of the provider keys secret, or clear the secret.
+      - title: Control Plane MCP server
+        docs: "#prerequisites"
+        description: >-
+          Optional. Registers the Control Plane MCP server as the superuser's MCP server `cpln`, so an MCP Tools
+          component can work with your org. Langflow cannot sign in to it with OAuth, so it uses a
+          service-account key.
+        fields:
+          - path: cplnMcp.keySecretName
+            type: ref
+            label: Service-account key secret
+            description: >-
+              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
+              empty for no Control Plane MCP server.
+            help: >-
+              Registered once, for the superuser only; other users add their own under Settings > MCP Servers.
+              Rotating the key does not update a registered server: edit its header there, or delete it and force
+              a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-langflow-cpln-mcp-key'"
+                encoding: plain
+          - type: note
+            severity: warning
+            when: self.cplnMcp.keySecretName != ''
+            text: >-
+              Every flow that uses this server acts as the service account, and any logged-in user can read its
+              key through Python. Grant the service account only what flows need.
+          - path: cplnMcp.url
+            type: string
+            label: MCP server URL
+            advanced: true
+            required: true
+            when: self.cplnMcp.keySecretName != ''
+            suggestions: ["https://mcp.cpln.io/mcp", "https://mcp.cpln.io/mcp?toolsets=readonly"]
+            description: Add `?toolsets=readonly` for a catalog with no create, update or delete tools.
+            pattern: '^https://'
+            patternMessage: Use an https:// URL.
+        rules:
+          - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
+            mirrors: langflow.validateCplnMcp
+            paths: [cplnMcp.url]
+            message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
       - title: Extra environment variables
         fields:
           - path: langflow.extraEnv
@@ -568,7 +615,7 @@ steps:
           'LANGFLOW_REDIS_QUEUE_PORT', 'LANGFLOW_RATE_LIMIT_STORAGE_URI', 'LANGFLOW_RATE_LIMIT_TRUST_PROXY',
           'LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT', 'LANGFLOW_PROMETHEUS_PORT',
           'LANGFLOW_DANGEROUSLY_ALLOW_MULTI_WORKER_WITHOUT_SHARED_QUEUE', 'LF_DB_USER', 'LF_DB_PASSWORD',
-          'LF_DB_NAME', 'LF_REDIS_PASSWORD']))
+          'LF_DB_NAME', 'LF_REDIS_PASSWORD', 'LF_CPLN_MCP_KEY', 'LF_CPLN_MCP_URL']))
         mirrors: langflow.validateEnvNames
         paths: [variableSecrets.keys, langflow.extraEnv]
         message: >-

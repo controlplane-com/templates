@@ -37,6 +37,15 @@ variableSecrets:
   secretName: ""                # e.g. my-langflow-provider-keys
   keys: []                      # e.g. [OPENAI_API_KEY, ANTHROPIC_API_KEY]
 
+# ─── Control Plane MCP server (optional prerequisite) ────────────────────────
+# Registers the Control Plane MCP server as the superuser's MCP server "cpln" at boot, so an MCP Tools
+# component can manage your org. Langflow's MCP client has no OAuth, so it authenticates with a
+# service-account key: an `opaque` secret (encoding: plain) holding the key. Every flow then acts as that
+# service account, so grant it only what flows need (README, Prerequisites). "" = no MCP server.
+cplnMcp:
+  keySecretName: ""             # e.g. my-langflow-cpln-mcp-key
+  url: https://mcp.cpln.io/mcp  # add ?toolsets=readonly for a catalog with no create, update or delete tools
+
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
   enabled: true                 # public *.cpln.app URL; login required (the admin secret above)

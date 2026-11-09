@@ -96,7 +96,86 @@ if not ok:
 # MCP connection URLs shown in the UI: the public endpoint unless extraEnv sets LANGFLOW_MCP_BASE_URL.
 if [ -z "${LANGFLOW_MCP_BASE_URL:-}" ]; then export LANGFLOW_MCP_BASE_URL="${CPLN_GLOBAL_ENDPOINT}"; fi
 {{- end }}
+{{- if .Values.cplnMcp.keySecretName }}
+# Register the Control Plane MCP server for the superuser in the background: it never blocks startup or
+# readiness, logs one "cpln-mcp:" line, and writes its outcome to /tmp/cpln-mcp-status.
+{{ include "langflow.cplnMcpRegister" . }} &
+{{- end }}
 exec langflow run
+{{- end }}
+
+{{/*
+Registers https://mcp.cpln.io (cplnMcp.url) as the superuser's MCP server "cpln", with the
+service-account key from cplnMcp.keySecretName as a Bearer header. Langflow's MCP client sends only
+fixed headers (no OAuth), so the key is the credential. It checks the key against the MCP server first
+(a refused key is logged and nothing is registered), then waits for Langflow, logs in as the superuser
+and POSTs /api/v2/mcp/servers/cpln: 200 = registered, 409 = the superuser already has one (left
+unchanged, so restarts, extra replicas and the user's own edits never duplicate or overwrite it).
+Never logs the key, the password or a response body.
+*/}}
+{{- define "langflow.cplnMcpRegister" -}}
+python -c '
+import json, os, sys, time, urllib.error, urllib.parse, urllib.request
+B = "http://127.0.0.1:7860"
+KEY = os.environ.get("LF_CPLN_MCP_KEY", "").strip()
+URL = os.environ.get("LF_CPLN_MCP_URL", "")
+def done(state, msg):
+    print("cpln-mcp: " + msg, flush=True)
+    try:
+        with open("/tmp/cpln-mcp-status", "w") as f:
+            f.write(state + "\n")
+    except OSError:
+        pass
+    sys.exit(0)
+def call(method, url, data=None, headers=None, timeout=30):
+    req = urllib.request.Request(url, data=data, headers=headers or dict(), method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except Exception:
+        return 0, ""
+if not KEY:
+    done("empty", "not registered: the secret in cplnMcp.keySecretName is empty")
+init = json.dumps(dict(jsonrpc="2.0", id=1, method="initialize", params=dict(protocolVersion="2025-06-18", capabilities=dict(), clientInfo=dict(name="langflow-chart", version="1")))).encode()
+mcp_headers = dict([("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream"), ("Authorization", "Bearer " + KEY)])
+code = 0
+for _ in range(10):
+    code, _b = call("POST", URL, init, mcp_headers)
+    if code:
+        break
+    time.sleep(30)
+if code in (401, 403):
+    done("refused", "not registered: %s refused the service-account key (HTTP %d). Fix the secret in cplnMcp.keySecretName, then run cpln workload force-redeployment." % (URL, code))
+if code != 200:
+    print("cpln-mcp: could not check the key against %s (HTTP %s); registering it anyway" % (URL, code or "no connection"), flush=True)
+for _ in range(120):
+    code, _b = call("GET", B + "/health_check", timeout=10)
+    if code == 200:
+        break
+    time.sleep(10)
+else:
+    done("timeout", "not registered: Langflow was not healthy within 20 minutes")
+form = urllib.parse.urlencode(dict(username=os.environ.get("LANGFLOW_SUPERUSER", ""), password=os.environ.get("LANGFLOW_SUPERUSER_PASSWORD", ""))).encode()
+for _ in range(8):
+    code, body = call("POST", B + "/api/v1/login", form, dict([("Content-Type", "application/x-www-form-urlencoded")]))
+    if code == 200:
+        break
+    time.sleep(15)
+if code != 200:
+    done("login-failed", "not registered: the superuser in admin.secretName could not log in (HTTP %d). If its password was changed in Langflow, add the server under Settings > MCP Servers instead." % code)
+token = json.loads(body).get("access_token", "")
+server = json.dumps(dict(url=URL, headers=dict(Authorization="Bearer " + KEY))).encode()
+for _ in range(5):
+    code, _b = call("POST", B + "/api/v2/mcp/servers/cpln", server, dict([("Content-Type", "application/json"), ("Authorization", "Bearer " + token)]))
+    if code == 200:
+        done("registered", "registered the Control Plane MCP server (cpln, %s) for the superuser" % URL)
+    if code == 409:
+        done("exists", "the superuser already has an MCP server named cpln; left unchanged")
+    time.sleep(15)
+done("error", "not registered: Langflow answered HTTP %d to the registration" % code)
+'
 {{- end }}
 
 {{/* Double every $ (container args expand $(VAR) and collapse $$). */}}
@@ -111,7 +190,7 @@ langflow.extraEnv and variableSecrets.keys, with the CPLN_ prefix. Authenticatio
 switched off: the AUTO_LOGIN names are on this list.
 */}}
 {{- define "langflow.reservedEnv" -}}
-LANGFLOW_HOST LANGFLOW_PORT LANGFLOW_WORKERS LANGFLOW_CONFIG_DIR LANGFLOW_SAVE_DB_IN_CONFIG_DIR LANGFLOW_KNOWLEDGE_BASES_DIR LANGFLOW_DATABASE_URL LANGFLOW_DB_CONNECTION_SETTINGS LANGFLOW_POOL_SIZE LANGFLOW_MAX_OVERFLOW LANGFLOW_AUTO_LOGIN LANGFLOW_SKIP_AUTH_AUTO_LOGIN LANGFLOW_NEW_USER_IS_ACTIVE LANGFLOW_SUPERUSER LANGFLOW_SUPERUSER_PASSWORD LANGFLOW_SECRET_KEY LANGFLOW_JOB_QUEUE_TYPE LANGFLOW_REDIS_QUEUE_URL LANGFLOW_REDIS_QUEUE_HOST LANGFLOW_REDIS_QUEUE_PORT LANGFLOW_RATE_LIMIT_STORAGE_URI LANGFLOW_RATE_LIMIT_TRUST_PROXY LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT LANGFLOW_PROMETHEUS_PORT LANGFLOW_DANGEROUSLY_ALLOW_MULTI_WORKER_WITHOUT_SHARED_QUEUE LF_DB_USER LF_DB_PASSWORD LF_DB_NAME LF_REDIS_PASSWORD
+LANGFLOW_HOST LANGFLOW_PORT LANGFLOW_WORKERS LANGFLOW_CONFIG_DIR LANGFLOW_SAVE_DB_IN_CONFIG_DIR LANGFLOW_KNOWLEDGE_BASES_DIR LANGFLOW_DATABASE_URL LANGFLOW_DB_CONNECTION_SETTINGS LANGFLOW_POOL_SIZE LANGFLOW_MAX_OVERFLOW LANGFLOW_AUTO_LOGIN LANGFLOW_SKIP_AUTH_AUTO_LOGIN LANGFLOW_NEW_USER_IS_ACTIVE LANGFLOW_SUPERUSER LANGFLOW_SUPERUSER_PASSWORD LANGFLOW_SECRET_KEY LANGFLOW_JOB_QUEUE_TYPE LANGFLOW_REDIS_QUEUE_URL LANGFLOW_REDIS_QUEUE_HOST LANGFLOW_REDIS_QUEUE_PORT LANGFLOW_RATE_LIMIT_STORAGE_URI LANGFLOW_RATE_LIMIT_TRUST_PROXY LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT LANGFLOW_PROMETHEUS_PORT LANGFLOW_DANGEROUSLY_ALLOW_MULTI_WORKER_WITHOUT_SHARED_QUEUE LF_DB_USER LF_DB_PASSWORD LF_DB_NAME LF_REDIS_PASSWORD LF_CPLN_MCP_KEY LF_CPLN_MCP_URL
 {{- end }}
 
 
@@ -132,6 +211,7 @@ LANGFLOW_HOST LANGFLOW_PORT LANGFLOW_WORKERS LANGFLOW_CONFIG_DIR LANGFLOW_SAVE_D
 {{- include "langflow.validateRedisPassword" . -}}
 {{- include "langflow.validateRedisSecret" . -}}
 {{- include "langflow.validateRedisPublic" . -}}
+{{- include "langflow.validateCplnMcp" . -}}
 {{- end }}
 
 {{- define "langflow.validateDatabase" -}}
@@ -270,6 +350,15 @@ point at :6379 inside the GVC. Runs from templates/validate/redis/auth.yaml too.
 {{- end }}
 
 {{/* Labeling */}}
+
+{{- define "langflow.validateCplnMcp" -}}
+{{- if not (kindIs "string" .Values.cplnMcp.keySecretName) -}}
+{{- fail "langflow: cplnMcp.keySecretName must be a secret name, or \"\" to leave the Control Plane MCP server out" -}}
+{{- end -}}
+{{- if and .Values.cplnMcp.keySecretName (not (hasPrefix "https://" (toString .Values.cplnMcp.url))) -}}
+{{- fail "langflow: cplnMcp.url must be an https:// URL, for example https://mcp.cpln.io/mcp" -}}
+{{- end -}}
+{{- end }}
 
 {{- define "langflow.tags" -}}
 {{- include "cpln-common.tags" . }}

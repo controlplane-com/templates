@@ -405,6 +405,41 @@ checks:
     retryDelaySeconds: 30
     timeoutSeconds: 180
 
+  - id: cpln-mcp-key-refused
+    description: >-
+      The baseline names a fake service-account key in cplnMcp.keySecretName. The background registration
+      checks it against mcp.cpln.io, records the refusal, and registers nothing, while Langflow keeps serving
+      (the superuser has no cpln MCP server and the health check passes).
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, os, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        st = open('/tmp/cpln-mcp-status').read().strip() if os.path.exists('/tmp/cpln-mcp-status') else 'missing'
+        print('STATUS_REFUSED' if st == 'refused' else 'STATUS_GOT %s' % st)
+        h = json.loads(urllib.request.urlopen(B + '/health_check', timeout=30).read())
+        print('HEALTH_OK' if h.get('db') == 'ok' else 'HEALTH_BAD %s' % h)
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        names = [s['name'] for s in json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v2/mcp/servers', headers=dict(Authorization='Bearer ' + tok)), timeout=60).read())]
+        print('NOT_REGISTERED' if 'cpln' not in names else 'REGISTERED %s' % names)
+        PY
+    expect:
+      stdout: "(?s)^STATUS_REFUSED\nHEALTH_OK\nNOT_REGISTERED$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
   - id: signup-inactive
     description: >-
       Anyone may sign up anonymously, but the new account is inactive: logging in with it is refused and

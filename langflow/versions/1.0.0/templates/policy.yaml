@@ -18,3 +18,6 @@ targetLinks:
   {{- if include "langflow.redis.authEnabled" . }}
   - //secret/{{ include "langflow.redis.secretName" . }}
   {{- end }}
+  {{- with .Values.cplnMcp.keySecretName }}
+  - //secret/{{ . }}
+  {{- end }}

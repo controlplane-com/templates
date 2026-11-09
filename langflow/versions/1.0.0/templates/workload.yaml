@@ -70,6 +70,12 @@ spec:
         - name: LANGFLOW_RATE_LIMIT_STORAGE_URI
           value: {{ include "langflow.redis.url" (list . 2) | quote }}
         {{- end }}
+        {{- with .Values.cplnMcp.keySecretName }}
+        - name: LF_CPLN_MCP_KEY
+          value: 'cpln://secret/{{ . }}.payload'
+        - name: LF_CPLN_MCP_URL
+          value: {{ $.Values.cplnMcp.url | quote }}
+        {{- end }}
         {{- with .Values.variableSecrets.keys }}
         - name: LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT
           value: {{ join "," . | quote }}

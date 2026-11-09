@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "librechat.identity.name" . }}
+description: LibreChat workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "librechat.tags" . | nindent 4 }}

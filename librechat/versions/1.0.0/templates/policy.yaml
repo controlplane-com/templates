@@ -1,0 +1,14 @@
+kind: policy
+name: {{ include "librechat.policy.name" . }}
+description: LibreChat secret access
+tags: {{- include "librechat.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "librechat.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- range (include "librechat.secrets" . | fromJsonArray) }}
+  - //secret/{{ . }}
+  {{- end }}

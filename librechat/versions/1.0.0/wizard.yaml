@@ -1,0 +1,689 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: LibreChat
+
+# The bundled MongoDB, Meilisearch, pgvector and Redis are single-location stateful workloads, and the
+# uploaded files live on one shared volume: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: mongodb
+    version: 1.4.1
+    title: MongoDB
+    after: advanced
+    steps:
+      - { id: server, title: Database server, description: "The MongoDB server that holds every chat, user, preset and setting." }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled MongoDB. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the mongodb template docs.
+    exclude:
+      # A prerequisite LibreChat needs too: chosen in the Keys and admin step.
+      - config.credentialsSecretName
+      # LibreChat connects inside the GVC; a public database load balancer would sit unused (yamlOnly below).
+      - directLoadBalancer
+    override:
+      internalAccess.type:
+        description: >-
+          LibreChat connects to its database like any other workload: keep Same GVC, or add the LibreChat
+          workload under Allowed workloads.
+  - template: meilisearch
+    version: 1.0.0
+    when: self.search.enabled
+    title: Meilisearch
+    after: advanced
+    steps:
+      - { id: server, title: Search server, description: "The Meilisearch server that indexes conversations and messages for the search box." }
+      - { id: storage, title: Search storage }
+      - { id: network, title: Search network, description: Who can connect to the bundled Meilisearch. }
+    exclude:
+      # A prerequisite LibreChat needs too: chosen in the Search step.
+      - auth.secretName
+      # LibreChat reaches Meilisearch inside the GVC (yamlOnly below).
+      - publicAccess
+      - server.env
+  - template: pgvector
+    version: 1.0.1
+    when: self.rag.enabled
+    title: pgvector
+    after: advanced
+    steps:
+      - { id: server, title: Vector store server, description: "The PostgreSQL with pgvector that stores the embeddings of uploaded files." }
+      - { id: storage, title: Vector store storage }
+      - { id: network, title: Vector store network, description: Who can connect to the bundled pgvector database. }
+      - id: backup
+        title: Vector store backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the pgvector template docs.
+    exclude:
+      # A prerequisite the document-search service needs too: chosen in the Document search step.
+      - config.credentialsSecretName
+      # The document-search service connects to <release>-pgvector directly (yamlOnly below).
+      - pgbouncer
+      - publicAccess
+    override:
+      internalAccess.type:
+        description: >-
+          The document-search workload connects like any other workload: keep Same GVC, or add the
+          LibreChat rag workload under Allowed workloads.
+  - template: redis
+    version: 3.9.0
+    when: self.redis.enabled
+    title: Redis
+    after: advanced
+    steps:
+      - { id: topology, title: Redis engine, description: "The server of the single Redis node LibreChat replicas share for sessions, rate limits and resumable answers." }
+      - { id: resources, title: Redis resources }
+      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
+      - { id: backup, title: Redis backups }
+      - { id: advanced, title: Redis advanced, description: "Images, timeouts, health probes and extra workload settings." }
+    exclude:
+      # LibreChat connects to one Redis URL and cannot use Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # The Redis password secret is chosen in the Scaling step; a password in values is refused.
+      - redisAuth
+      - redis.auth.fromSecret
+      # LibreChat reaches Redis on :6379 inside the GVC; public access moves it to other ports.
+      - redis.publicAccess
+    override:
+      redis.replicaDirect:
+        description: A DNS name per replica. LibreChat connects through the workload's own name, so it does not need one.
+
+steps:
+  - id: keys
+    title: Keys and admin
+    description: The prerequisite secrets every install needs — encryption keys, the admin account and the database credentials — and who may sign up.
+    docs: "#prerequisites"
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              These secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing; the reason is under `status.versions[].message` of
+              `cpln workload get-deployments`.
+          - path: keys.secretName
+            type: ref
+            label: Encryption and signing keys
+            required: true
+            description: >-
+              A dictionary secret with the keys `CREDS_KEY` (64 hex characters), `CREDS_IV` (32 hex characters),
+              `JWT_SECRET` and `JWT_REFRESH_SECRET`.
+            help: >-
+              The CREDS keys encrypt every API key users save, so never change them; a new JWT secret signs
+              everyone out. Create it with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry CREDS_KEY=$(openssl rand -hex 32)
+              --entry CREDS_IV=$(openssl rand -hex 16) --entry JWT_SECRET=$(openssl rand -hex 32)
+              --entry JWT_REFRESH_SECRET=$(openssl rand -hex 32)`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [CREDS_KEY, CREDS_IV, JWT_SECRET, JWT_REFRESH_SECRET]
+              create:
+                suggestName: "context.releaseName + '-librechat-keys'"
+          - path: admin.secretName
+            type: ref
+            label: Admin account
+            required: true
+            description: A dictionary secret with the keys `email` and `password` (8 or more characters).
+            help: >-
+              LibreChat creates this account on its first start, before the UI serves, as the first user and
+              therefore an admin. Later changes to the secret change nothing: change the password in the UI.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [email, password]
+              create:
+                suggestName: "context.releaseName + '-librechat-admin'"
+          - path: mongodb.config.credentialsSecretName
+            type: ref
+            label: Database credentials
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database` for the bundled MongoDB.
+              URL-safe values only (letters, digits, `-`, `_`, `.`): they go into the connection string.
+            help: >-
+              MongoDB reads these values only when its volume is first initialized, and LibreChat connects with
+              them. Create the secret with:
+              `cpln secret create-dictionary --name SECRET_NAME --entry username=librechat
+              --entry password=$(openssl rand -hex 32) --entry database=LibreChat`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-librechat-mongodb-credentials'"
+          - path: auth.allowRegistration
+            type: boolean
+            label: Allow sign-up
+            description: On, anyone who reaches the URL can create an account (role USER). Off, only the admin account exists until you turn it on.
+        rules:
+          - rule: self.keys.secretName != null && self.keys.secretName != ''
+            mirrors: librechat.validateSecrets
+            paths: [keys.secretName]
+            message: The keys secret is required.
+          - rule: self.admin.secretName != null && self.admin.secretName != ''
+            mirrors: librechat.validateSecrets
+            paths: [admin.secretName]
+            message: The admin account secret is required.
+          - rule: self.mongodb.config.credentialsSecretName != null && self.mongodb.config.credentialsSecretName != ''
+            mirrors: librechat.validateSecrets
+            paths: [mongodb.config.credentialsSecretName]
+            message: The database credentials secret is required.
+          - rule: oldSelf == null || self.keys.secretName == oldSelf.keys.secretName
+            severity: warning
+            paths: [keys.secretName]
+            message: >-
+              Different CREDS keys make every API key users saved unreadable, and a different JWT secret signs
+              everyone out.
+          - rule: oldSelf == null || self.mongodb.config.credentialsSecretName == oldSelf.mongodb.config.credentialsSecretName
+            severity: info
+            paths: [mongodb.config.credentialsSecretName]
+            message: >-
+              MongoDB reads the credentials only when its volume is first initialized; pointing at another secret
+              does not change the existing user or password.
+
+  - id: models
+    title: Models
+    description: Which AI providers LibreChat offers. Each is optional; with none, users can still bring their own keys.
+    docs: "#configuration"
+    sections:
+      - title: Providers
+        fields:
+          - path: providers.openai.apiKeySecretName
+            type: ref
+            label: OpenAI API key
+            description: Optional. An opaque secret holding an OpenAI API key, shared by every user. Empty leaves OpenAI off.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-librechat-openai-key'"
+          - path: providers.anthropic.apiKeySecretName
+            type: ref
+            label: Anthropic API key
+            description: Optional. An opaque secret holding an Anthropic API key, shared by every user. Empty leaves Anthropic off.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-librechat-anthropic-key'"
+          - path: providers.google.apiKeySecretName
+            type: ref
+            label: Google API key
+            description: Optional. An opaque secret holding a Google AI (Gemini) API key, shared by every user. Empty leaves Google off.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-librechat-google-key'"
+          - path: providers.userProvidedKeys
+            type: boolean
+            label: Users bring their own keys
+            description: On, every provider above without a secret is still offered, and each user enters their own key in LibreChat.
+      - title: OpenAI-compatible endpoints
+        fields:
+          - path: customEndpoints
+            type: list
+            label: Custom endpoints
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", baseURL: "", apiKeySecretName: "", models: [], fetchModels: false }
+            itemLabel: "item.name"
+            description: >-
+              Ollama, vLLM, LiteLLM, OpenRouter or any other OpenAI-compatible server, shown by name in the model
+              menu. A server in this GVC is `http://WORKLOAD.GVC.cpln.local:PORT/v1`; private addresses are
+              allowed automatically.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                - path: baseURL
+                  type: string
+                  format: url
+                  label: Base URL
+                  required: true
+                  placeholder: http://my-ollama-ollama.GVC_NAME.cpln.local:11434/v1
+                - path: apiKeySecretName
+                  type: ref
+                  label: API key secret
+                  description: An opaque secret with the key. Empty for servers without one, such as Ollama.
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [opaque] }
+                    mustExist: error
+                    allowCreate: true
+                    create:
+                      encoding: plain
+                - path: models
+                  type: list
+                  label: Models
+                  required: true
+                  widget: tags
+                  description: Model names offered in the menu.
+                  item:
+                    type: string
+                - path: fetchModels
+                  type: boolean
+                  label: Also list the server's models
+              rules:
+                - rule: item.name == '' || !item.name.lowerAscii().matches('^(openai|azureopenai|google|anthropic|assistants|azureassistants|agents|custom|bedrock|gptplugins|chatgptbrowser)$')
+                  mirrors: librechat.validateCustomEndpoints
+                  paths: [name]
+                  message: This name belongs to a built-in LibreChat endpoint; pick another.
+                - rule: item.baseURL == '' || item.baseURL.matches('^https?://[^/\\s]+')
+                  mirrors: librechat.validateCustomEndpoints
+                  paths: [baseURL]
+                  message: Use a URL that starts with http:// or https://.
+                - rule: size(item.models) > 0
+                  mirrors: librechat.validateCustomEndpoints
+                  paths: [models]
+                  message: List at least one model.
+        rules:
+          - rule: self.customEndpoints.all(e, self.customEndpoints.filter(f, f.name.lowerAscii() == e.name.lowerAscii()).size() == 1)
+            mirrors: librechat.validateCustomEndpoints
+            paths: [customEndpoints]
+            message: Each custom endpoint needs its own name (names are compared ignoring case).
+
+  - id: search
+    title: Search
+    description: Search across past conversations, with a bundled Meilisearch.
+    sections:
+      - id: search
+        title: Conversation search
+        toggle: search.enabled
+        docs: "#configuration"
+        description: On, a search box finds past chats and messages. Adds a Meilisearch workload whose settings follow the other steps.
+        fields:
+          - type: note
+            severity: warning
+            text: The master-key secret must exist **before** you install; if it is missing, the deployment waits with no logs.
+          - path: meilisearch.auth.secretName
+            type: ref
+            label: Meilisearch master key
+            required: true
+            description: An opaque secret (encoding plain) whose payload is the master key, 16 or more bytes.
+            help: >-
+              Create it with:
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME --encoding plain -f -`
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-librechat-meili-key'"
+                hint: "Generate the key with: openssl rand -hex 32"
+        rules:
+          - rule: "!self.search.enabled || (self.meilisearch.auth.secretName != null && self.meilisearch.auth.secretName != '')"
+            mirrors: librechat.validateSecrets
+            paths: [meilisearch.auth.secretName]
+            message: The Meilisearch master key secret is required.
+
+  - id: documents
+    title: Document search
+    description: Chat over uploaded files (file search), with a rag-api workload and a bundled pgvector database.
+    sections:
+      - id: rag
+        title: Chat over uploaded files
+        toggle: rag.enabled
+        docs: "#configuration"
+        description: >-
+          On, files users attach for file search are split, embedded and stored in pgvector, and answers draw on
+          them. Embedding needs an OpenAI key or an OpenAI-compatible embeddings server.
+        fields:
+          - path: pgvector.config.credentialsSecretName
+            type: ref
+            label: Vector store credentials
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database` for the bundled pgvector.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-librechat-pgvector-credentials'"
+          - path: rag.embeddings.baseUrl
+            type: string
+            format: url
+            label: Embeddings server
+            placeholder: http://my-ollama-ollama.GVC_NAME.cpln.local:11434/v1
+            description: Empty uses OpenAI. Otherwise any OpenAI-compatible embeddings URL, for example an Ollama workload's `/v1`.
+          - path: rag.embeddings.apiKeySecretName
+            type: ref
+            label: Embeddings API key
+            description: An opaque secret with the embeddings API key. Required for OpenAI; optional for a server that needs no key.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-librechat-embeddings-key'"
+          - path: rag.embeddings.model
+            type: string
+            label: Embeddings model
+            required: true
+            suggestions: [text-embedding-3-small, text-embedding-3-large, nomic-embed-text]
+            description: Changing it after files are indexed breaks search over those files.
+        rules:
+          - rule: "!self.rag.enabled || (self.pgvector.config.credentialsSecretName != null && self.pgvector.config.credentialsSecretName != '')"
+            mirrors: librechat.validateRag
+            paths: [pgvector.config.credentialsSecretName]
+            message: The vector store credentials secret is required.
+          - rule: "!self.rag.enabled || self.rag.embeddings.apiKeySecretName != '' || self.rag.embeddings.baseUrl != ''"
+            mirrors: librechat.validateRag
+            paths: [rag.embeddings.apiKeySecretName]
+            message: Choose the OpenAI API key secret, or set an embeddings server.
+          - rule: "!self.rag.enabled || self.rag.embeddings.baseUrl == '' || self.rag.embeddings.baseUrl.matches('^https?://[^/\\\\s]+')"
+            mirrors: librechat.validateRag
+            paths: [rag.embeddings.baseUrl]
+            message: Use a URL that starts with http:// or https://.
+          - rule: oldSelf == null || !oldSelf.rag.enabled || self.rag.embeddings.model == oldSelf.rag.embeddings.model
+            severity: warning
+            paths: [rag.embeddings.model]
+            message: Files already indexed with the previous model can no longer be searched.
+
+  - id: scaling
+    title: Scaling
+    description: How many LibreChat replicas run, and the Redis they share when there is more than one.
+    sections:
+      - fields:
+          - path: replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 4
+            widget: stepper
+            description: >-
+              1 is the lighter shape. 2-4 keep chat up through restarts and upgrades, and need Redis below. The
+              document-search workload runs the same count.
+        rules:
+          - rule: self.replicas >= 1 && self.replicas <= 4
+            mirrors: librechat.validateReplicas
+            paths: [replicas]
+            message: Use between 1 and 4 replicas.
+          - rule: self.replicas <= 1 || self.redis.enabled
+            mirrors: librechat.validateReplicas
+            paths: [replicas]
+            message: More than one replica needs Redis; turn it on below.
+      - id: redis
+        title: Redis
+        toggle: redis.enabled
+        docs: "#configuration"
+        description: >-
+          A single Redis node the replicas share for sessions, rate limits and answers that resume after a
+          reconnect. Its settings follow the other steps.
+        fields:
+          - type: note
+            severity: warning
+            text: The Redis password secret must exist **before** you install or upgrade; if it is missing, the deployment waits with no logs.
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret; the key named below holds a URL-safe password (for example `openssl rand -hex 32`).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-librechat-redis-password'"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+        rules:
+          - rule: "!self.redis.enabled || (self.redis.redis.auth.fromSecret.enabled && self.redis.redis.auth.fromSecret.name != '')"
+            mirrors: librechat.validateRedis
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+    rules:
+      - rule: "!self.redis.enabled || self.redis.mode == 'dev'"
+        mirrors: librechat.validateRedis
+        paths: [redis.enabled]
+        message: >-
+          Redis must run as a single node: set redis.mode to dev. LibreChat connects to one Redis URL and cannot
+          use Sentinel.
+      - rule: >-
+          !self.redis.enabled || !has(self.redis.redis.auth.password) ||
+          (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+          (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+        mirrors: librechat.validateRedisPassword
+        paths: [redis.enabled]
+        message: >-
+          redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove
+          it and choose the Redis password secret instead.
+      - rule: "!self.redis.enabled || !has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+        mirrors: librechat.validateRedisPublic
+        paths: [redis.enabled]
+        message: >-
+          Redis public access is not supported: LibreChat connects to Redis on port 6379 inside the GVC. Set
+          redis.redis.publicAccess.enabled to false.
+
+  - id: access
+    title: Access
+    description: The public chat URL, an optional custom domain, and which workloads can reach LibreChat inside Control Plane.
+    sections:
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              The chat UI on a public `*.cpln.app` URL; sign-in protects it. Off, reach it with `cpln port-forward`.
+              Firewall changes take 30 seconds to a few minutes to take effect.
+          - path: customDomain
+            type: string
+            format: url
+            label: Custom domain URL
+            placeholder: https://chat.example.com
+            description: >-
+              Optional. The full URL users open, with no path. It sets the app's own URL only: create and verify
+              the Control Plane domain and route it to the LibreChat workload yourself.
+        rules:
+          - rule: self.customDomain == '' || self.customDomain.matches('^https?://[^/\\s]+$')
+            mirrors: librechat.validateAccess
+            paths: [customDomain]
+            message: Use a full URL with no path, for example https://chat.example.com.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: librechat.validateAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: librechat.validateAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+
+  - id: advanced
+    title: Advanced
+    description: Images, compute, the uploaded-files volume and extra librechat.yaml settings.
+    sections:
+      - title: LibreChat
+        docs: "#configuration"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Image
+            required: true
+            description: The LibreChat image. The chart is built for v0.8.8.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+          - path: files.volumeset.capacity
+            type: integer
+            label: Uploaded files volume (GiB)
+            required: true
+            min: 10
+            description: One shared volume for uploads, images and avatars, seen by every replica. It can grow later, never shrink, and takes no snapshots.
+          - path: config
+            type: yaml
+            yamlType: map
+            label: Extra librechat.yaml settings
+            description: >-
+              Merged over the generated file (lists replace), for example `interface.customWelcome`. Never put a
+              key here: reference one with `${VAR}`.
+        rules:
+          - rule: self.files.volumeset.capacity >= 10
+            mirrors: librechat.validateFiles
+            paths: [files.volumeset.capacity]
+            message: Use at least 10 GiB, the platform minimum.
+          - rule: type(self.config) == map
+            mirrors: librechat.validateConfig
+            paths: [config]
+            message: Use a map of librechat.yaml settings.
+      - title: Document search service
+        when: self.rag.enabled
+        fields:
+          - path: rag.image
+            type: string
+            format: image
+            label: rag-api image
+            required: true
+          - path: rag.resources
+            type: resources
+            label: rag-api resources
+            required: true
+            description: Per replica.
+            cpu: { min: 50m }
+            memory: { min: 128Mi }
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - rule: self.mongodb.internalAccess.type != 'none'
+    paths: [mongodb.internalAccess.type]
+    message: '"None" also blocks LibreChat, which connects to its database like any other workload.'
+  - when: self.mongodb.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat') in self.mongodb.internalAccess.workloads
+    severity: warning
+    paths: [mongodb.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat, or LibreChat cannot reach its database.'"
+    message: Add the LibreChat workload to the list, or LibreChat cannot reach its database.
+  - when: self.search.enabled
+    rule: self.meilisearch.internalAccess.type != 'none'
+    paths: [meilisearch.internalAccess.type]
+    message: '"None" also blocks LibreChat, which connects to Meilisearch like any other workload.'
+  - when: self.search.enabled && self.meilisearch.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat') in self.meilisearch.internalAccess.workloads
+    severity: warning
+    paths: [meilisearch.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat, or search cannot reach Meilisearch.'"
+    message: Add the LibreChat workload to the list, or search cannot reach Meilisearch.
+  - when: self.rag.enabled
+    rule: self.pgvector.internalAccess.type != 'none'
+    paths: [pgvector.internalAccess.type]
+    message: '"None" also blocks the document-search workload, which connects to pgvector like any other workload.'
+  - when: self.rag.enabled && self.pgvector.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat-rag') in self.pgvector.internalAccess.workloads
+    severity: warning
+    paths: [pgvector.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat-rag, or document search cannot reach pgvector.'"
+    message: Add the LibreChat rag workload to the list, or document search cannot reach pgvector.
+  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat') in self.redis.redis.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-librechat, or LibreChat cannot reach Redis.'"
+    message: Add the LibreChat workload to the list, or LibreChat cannot reach Redis.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (librechat.validateRedis), since LibreChat cannot use Sentinel.
+  - path: redis.redis.auth.fromSecret.enabled
+    reason: Must stay true with Redis on (librechat.validateRedis); the password secret is chosen in the Scaling step.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); use the Redis password secret.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (librechat.validateRedisPublic); LibreChat connects to Redis on port 6379 inside the GVC.
+  - path: mongodb.directLoadBalancer
+    reason: LibreChat connects to MongoDB inside the GVC; a public database load balancer is not part of this bundle.
+  - path: meilisearch.publicAccess
+    reason: LibreChat reaches Meilisearch inside the GVC; its API stays private.
+  - path: meilisearch.server.env
+    reason: Stays production, so every Meilisearch route requires the master key and the preview UI is off.
+  - path: pgvector.pgbouncer
+    reason: The document-search service connects to <release>-pgvector directly, so a PgBouncer in front of it would sit unused.
+  - path: pgvector.publicAccess
+    reason: The document-search service connects inside the GVC; the vector store stays private.

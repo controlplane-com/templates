@@ -1,0 +1,141 @@
+# ─── Image & Resources ────────────────────────────────────────────────────────
+image: ghcr.io/librechat-ai/librechat:v0.8.8
+
+resources:
+  minCpu: 250m
+  maxCpu: 1000m
+  minMemory: 512Mi
+  maxMemory: 2Gi
+
+# LibreChat replicas (UI + API). 1 = the lighter shape; 2-4 keep chat up through restarts
+# and upgrades and REQUIRE redis.enabled: true. The document-search (rag) workload runs the same count.
+replicas: 1
+
+# ─── Uploaded files ───────────────────────────────────────────────────────────
+# One shared volume, seen by every replica: chat uploads, images and avatars. Not snapshotted.
+files:
+  volumeset:
+    capacity: 10 # GiB (platform minimum 10); can be expanded later, never shrunk
+
+# ─── Encryption & signing keys (REQUIRED — create BEFORE install) ─────────────
+# A `dictionary` secret with exactly four keys. It must EXIST BEFORE INSTALL — the deployment
+# WEDGES silently otherwise — and must never change: CREDS_* encrypt every key users save.
+#   cpln secret create-dictionary --name my-librechat-keys \
+#     --entry CREDS_KEY=$(openssl rand -hex 32) --entry CREDS_IV=$(openssl rand -hex 16) \
+#     --entry JWT_SECRET=$(openssl rand -hex 32) --entry JWT_REFRESH_SECRET=$(openssl rand -hex 32)
+keys:
+  secretName: my-librechat-keys
+
+# ─── Admin account (REQUIRED — create BEFORE install) ─────────────────────────
+# A `dictionary` secret with keys `email` and `password` (8+ characters). The account is created
+# on FIRST boot only, before the UI serves; later changes to the secret change nothing.
+admin:
+  secretName: my-librechat-admin
+
+auth:
+  allowRegistration: false # true = anyone who reaches the URL can create an account (role USER)
+
+# ─── Model providers (each optional) ──────────────────────────────────────────
+# Each key is an `opaque` secret (encoding: plain) you create first; "" = that provider is off.
+providers:
+  openai:
+    apiKeySecretName: ""    # e.g. my-librechat-openai-key
+  anthropic:
+    apiKeySecretName: ""    # e.g. my-librechat-anthropic-key
+  google:
+    apiKeySecretName: ""    # e.g. my-librechat-google-key
+  userProvidedKeys: false   # true = providers above with no secret ask each user for their own key
+
+# OpenAI-compatible endpoints (Ollama, vLLM, LiteLLM, OpenRouter, ...), shown by name in the model menu.
+# A private address (*.cpln.local, localhost, 10.x, ...) is allowed automatically for its host:port.
+customEndpoints: []
+  # - name: ollama                                   # unique; not openAI/anthropic/google/agents/assistants/azureOpenAI/bedrock
+  #   baseURL: http://my-ollama-ollama.GVC_NAME.cpln.local:11434/v1
+  #   apiKeySecretName: ""                           # opaque secret; "" = no key (local servers)
+  #   models: [llama3.2]                             # shown even when fetchModels is false
+  #   fetchModels: false                             # true = also list the server's /models
+
+# Extra librechat.yaml settings, merged over the generated file (lists replace). Never put a key
+# here: reference one with ${VAR}. See https://www.librechat.ai/docs/configuration/librechat_yaml
+config: {}
+  # interface:
+  #   customWelcome: "Welcome to our assistant"
+  # registration:
+  #   allowedDomains: [example.com]
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # chat UI on the canonical *.cpln.app URL; false = reach it with cpln port-forward
+
+customDomain: "" # full URL, e.g. https://chat.example.com; sets the app's URL only — create the cpln domain yourself
+
+internalAccess: # which workloads inside Control Plane may call LibreChat
+  type: none # none | same-gvc | same-org | workload-list
+  workloads: []
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: MongoDB (mongodb template, always on) ──────────────────────────
+mongodb:
+  config:
+    # REQUIRED PREREQUISITE SECRET — `dictionary` with `username`, `password`, `database`.
+    # URL-safe values only (use openssl rand -hex 32): they go into the connection string.
+    credentialsSecretName: my-librechat-mongodb-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10 # GiB
+  # every other mongodb template value works here too, e.g. backup.enabled / backup.provider
+
+# ─── Conversation search: Meilisearch (meilisearch template) ──────────────────
+search:
+  enabled: true # false = no search box, and no Meilisearch workload
+
+meilisearch:
+  auth:
+    # REQUIRED when search.enabled — `opaque` secret, 16+ bytes:
+    #   printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-librechat-meili-key --encoding plain -f -
+    secretName: my-librechat-meili-key
+  resources:
+    minCpu: 125m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10 # GiB
+
+# ─── Document search / RAG (rag-api + pgvector template) ──────────────────────
+rag:
+  enabled: false # true = chat over uploaded files ("file search")
+  image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0
+  resources:
+    minCpu: 100m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 1Gi
+  embeddings:
+    model: text-embedding-3-small # changing it after documents are indexed breaks their search
+    baseUrl: "" # "" = OpenAI; any OpenAI-compatible URL, e.g. http://my-ollama-ollama.GVC_NAME.cpln.local:11434/v1
+    apiKeySecretName: "" # opaque secret with the embeddings API key; required unless baseUrl is set
+
+pgvector:
+  config:
+    # REQUIRED when rag.enabled — `dictionary` with `username`, `password`, `database`.
+    credentialsSecretName: my-librechat-pgvector-credentials
+  volumeset:
+    capacity: 10 # GiB
+
+# ─── Redis (redis template, dev mode) — REQUIRED for replicas > 1 ─────────────
+redis:
+  enabled: false
+  mode: dev # LibreChat needs one plain Redis endpoint; the chart refuses production (Sentinel)
+  redis:
+    auth:
+      fromSecret:
+        enabled: true
+        # REQUIRED when redis.enabled — `dictionary` with key `password` (URL-safe: openssl rand -hex 32)
+        name: my-librechat-redis-password
+        passwordKey: password

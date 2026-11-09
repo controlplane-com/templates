@@ -1,0 +1,110 @@
+{{- if .Values.rag.enabled }}
+{{- $pg := .Values.pgvector.config.credentialsSecretName }}
+kind: workload
+name: {{ include "librechat.rag.name" . }}
+description: LibreChat document search (rag-api over pgvector)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "librechat.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "librechat.rag.identity.name" . }}
+  containers:
+    - name: rag
+      image: {{ .Values.rag.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.rag.resources.minCpu | quote }}
+      minMemory: {{ .Values.rag.resources.minMemory | quote }}
+      cpu: {{ .Values.rag.resources.maxCpu | quote }}
+      memory: {{ .Values.rag.resources.maxMemory | quote }}
+      env:
+        - name: RAG_HOST
+          value: "0.0.0.0"
+        - name: RAG_PORT
+          value: "8000"
+        - name: VECTOR_DB_TYPE
+          value: pgvector
+        - name: DB_HOST
+          value: {{ include "librechat.pgvector.host" . }}
+        - name: DB_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          value: 'cpln://secret/{{ $pg }}.database'
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ $pg }}.username'
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ $pg }}.password'
+        - name: PGVECTOR_CREATE_EXTENSION
+          value: "True"
+        # Requests from LibreChat carry a short-lived token signed with the shared JWT_SECRET
+        - name: JWT_SECRET
+          value: 'cpln://secret/{{ .Values.keys.secretName }}.JWT_SECRET'
+        - name: EMBEDDINGS_PROVIDER
+          value: openai
+        - name: EMBEDDINGS_MODEL
+          value: {{ .Values.rag.embeddings.model | quote }}
+        - name: RAG_OPENAI_API_KEY
+          {{- if .Values.rag.embeddings.apiKeySecretName }}
+          value: 'cpln://secret/{{ .Values.rag.embeddings.apiKeySecretName }}.payload'
+          {{- else }}
+          value: not-needed
+          {{- end }}
+        {{- with .Values.rag.embeddings.baseUrl }}
+        - name: RAG_OPENAI_BASEURL
+          value: {{ . | quote }}
+        # OpenAI-compatible servers other than OpenAI take plain text, not token arrays
+        - name: RAG_CHECK_EMBEDDING_CTX_LENGTH
+          value: "False"
+        {{- end }}
+      ports:
+        - number: 8000
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 8000
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      # only LibreChat calls the rag-api
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - //gvc/{{ .Values.global.cpln.gvc }}/workload/{{ include "librechat.name" . }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+{{- end }}

@@ -1,0 +1,294 @@
+# Feature checks for the librechat template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_email, admin_password).
+#
+# The checks are Node scripts (the image's Node 24, built-in fetch) run in the LibreChat container
+# against its own API on 127.0.0.1:3080. The runner reads any {word} as a placeholder, so the scripts
+# use string concatenation, never template literals, and keep a space inside every object literal.
+# Sign-in is rate limited per IP (7 per 5 minutes), so the checks share one token through a file.
+checks:
+  - id: public-ui
+    description: The chat UI and /health answer on the canonical public endpoint.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        (async () => {
+          const ep = process.env.CPLN_GLOBAL_ENDPOINT;
+          const page = await fetch(ep + '/');
+          const html = await page.text();
+          const health = await fetch(ep + '/health');
+          const body = (await health.text()).trim();
+          const ok = page.status === 200 && html.includes('<title>LibreChat</title>') && health.status === 200 && body === 'OK';
+          console.log(ok ? 'PUBLIC_OK' : 'PUBLIC_BAD ' + page.status + ' ' + health.status + ' ' + body.slice(0, 80));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^PUBLIC_OK$"
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: startup-config
+    description: >-
+      The anonymous startup config reports registration off and the canonical endpoint as the server
+      domain, and a registration attempt is refused.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        (async () => {
+          const B = 'http://127.0.0.1:3080';
+          const cfg = await (await fetch(B + '/api/config')).json();
+          const reg = await fetch(B + '/api/auth/register', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'E2E Intruder', username: 'e2eintruder', email: 'e2e-intruder@example.com', password: 'e2e-intruder-pw', confirm_password: 'e2e-intruder-pw' }),
+          });
+          const ok = cfg.registrationEnabled === false && cfg.serverDomain === process.env.CPLN_GLOBAL_ENDPOINT && reg.status >= 400;
+          console.log(ok ? 'CONFIG_OK' : 'CONFIG_BAD ' + cfg.registrationEnabled + ' ' + cfg.serverDomain + ' ' + reg.status);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^CONFIG_OK$"
+
+  - id: admin-sign-in
+    description: >-
+      The admin account created on first boot from the admin secret signs in and has role ADMIN, and a
+      wrong password is refused.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function login(password) {
+          const r = await fetch(B + '/api/auth/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: password }),
+          });
+          return { status: r.status, json: await r.json().catch(() => null) };
+        }
+        (async () => {
+          const good = await login('{admin_password}');
+          if (good.status !== 200 || !good.json || !good.json.token) {
+            console.log('LOGIN_BAD ' + good.status);
+            return;
+          }
+          fs.writeFileSync('/tmp/e2e-librechat-token', good.json.token);
+          const me = await (await fetch(B + '/api/user', { headers: { authorization: 'Bearer ' + good.json.token } })).json();
+          const bad = await login('{admin_password}-wrong');
+          const ok = me.role === 'ADMIN' && me.email === '{admin_email}' && bad.status >= 400 && !(bad.json && bad.json.token);
+          console.log(ok ? 'ADMIN_OK' : 'ADMIN_BAD ' + me.role + ' ' + bad.status);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^ADMIN_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+
+  - id: search-enabled
+    description: Conversation search is on and LibreChat reaches Meilisearch with the master key.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function token() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-token');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-token', 'utf8');
+          } catch (e) { /* no cached token */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const j = await r.json();
+          fs.writeFileSync('/tmp/e2e-librechat-token', j.token);
+          return j.token;
+        }
+        (async () => {
+          const t = await token();
+          const r = await fetch(B + '/api/search/enable', { headers: { authorization: 'Bearer ' + t } });
+          const body = (await r.text()).trim();
+          console.log(r.status === 200 && body === 'true' ? 'SEARCH_OK' : 'SEARCH_BAD ' + r.status + ' ' + body.slice(0, 80));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^SEARCH_OK$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: endpoints
+    description: >-
+      The OpenAI provider (key secret set) and the custom endpoint from the generated librechat.yaml are
+      offered, the unset Anthropic and Google providers are not, and the custom endpoint lists its model.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function token() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-token');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-token', 'utf8');
+          } catch (e) { /* no cached token */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const j = await r.json();
+          fs.writeFileSync('/tmp/e2e-librechat-token', j.token);
+          return j.token;
+        }
+        (async () => {
+          const h = { headers: { authorization: 'Bearer ' + (await token()) } };
+          const ep = await (await fetch(B + '/api/endpoints', h)).json();
+          const models = await (await fetch(B + '/api/models', h)).json();
+          const names = Object.keys(ep || []).sort();
+          const ok = names.includes('openAI') && names.includes('e2e') && !names.includes('anthropic') && !names.includes('google') &&
+            Array.isArray(models.e2e) && models.e2e.includes('e2e-model');
+          console.log(ok ? 'ENDPOINTS_OK' : 'ENDPOINTS_BAD ' + names.join(',') + ' ' + JSON.stringify(models.e2e));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^ENDPOINTS_OK$"
+
+  - id: config-merged
+    description: A setting from the config value is merged into the generated librechat.yaml and served.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function token() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-token');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-token', 'utf8');
+          } catch (e) { /* no cached token */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const j = await r.json();
+          fs.writeFileSync('/tmp/e2e-librechat-token', j.token);
+          return j.token;
+        }
+        (async () => {
+          const cfg = await (await fetch(B + '/api/config', { headers: { authorization: 'Bearer ' + (await token()) } })).json();
+          const w = cfg.interface && cfg.interface.customWelcome;
+          console.log(w === 'e2e-welcome' ? 'CONFIG_MERGED' : 'CONFIG_NOT_MERGED ' + JSON.stringify(w));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^CONFIG_MERGED$"
+
+  - id: data-survives
+    description: >-
+      A preset saved by this version is listed, and the preset saved by the version the scenario
+      installed first is still there (MongoDB data survives upgrades).
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function token() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-token');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-token', 'utf8');
+          } catch (e) { /* no cached token */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const j = await r.json();
+          fs.writeFileSync('/tmp/e2e-librechat-token', j.token);
+          return j.token;
+        }
+        (async () => {
+          const auth = 'Bearer ' + (await token());
+          const title = 'e2e-' + '{version}';
+          const saved = await fetch(B + '/api/presets', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: auth },
+            body: JSON.stringify({ presetId: title, title: title, endpoint: 'openAI', model: 'gpt-4o-mini' }),
+          });
+          const list = await (await fetch(B + '/api/presets', { headers: { authorization: auth } })).json();
+          const titles = (Array.isArray(list) ? list : []).map((p) => p.title);
+          const ok = saved.status === 201 && titles.includes(title) && titles.includes('e2e-' + '{installed_version}');
+          console.log(ok ? 'PRESETS_OK' : 'PRESETS_BAD ' + saved.status + ' ' + titles.join(','));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^PRESETS_OK$"
+
+  - id: files-shared-volume
+    description: >-
+      An image written to LibreChat's image directory lands on the shared files volume and is served back
+      byte for byte by the /images route; the image written by the first-installed version is still served.
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const B = 'http://127.0.0.1:3080';
+        async function token() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-token');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-token', 'utf8');
+          } catch (e) { /* no cached token */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const j = await r.json();
+          fs.writeFileSync('/tmp/e2e-librechat-token', j.token);
+          return j.token;
+        }
+        const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+        async function served(dir, name) {
+          const r = await fetch(B + '/images/' + dir + '/' + name);
+          return r.status === 200 && Buffer.from(await r.arrayBuffer()).equals(PNG);
+        }
+        (async () => {
+          const me = await (await fetch(B + '/api/user', { headers: { authorization: 'Bearer ' + (await token()) } })).json();
+          const id = String(me.id || me._id);
+          const dir = '/app/client/public/images/' + id;
+          fs.mkdirSync(dir, { recursive: true });
+          const name = 'e2e-' + '{version}' + '.png';
+          fs.writeFileSync(dir + '/' + name, PNG);
+          const real = fs.realpathSync(dir + '/' + name);
+          const onVolume = real.startsWith('/app/storage/images/') && fs.existsSync('/app/storage/images/' + id + '/' + name);
+          const now = await served(id, name);
+          const first = await served(id, 'e2e-' + '{installed_version}' + '.png');
+          console.log(onVolume && now && first ? 'FILES_OK' : 'FILES_BAD ' + real + ' ' + now + ' ' + first);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^FILES_OK$"
+
+  - id: rag-wiring
+    description: >-
+      The document-search API is up on pgvector, refuses a request without a token, and accepts one signed
+      with LibreChat's JWT_SECRET (the shared secret LibreChat uses to call it).
+    exec:
+      workload: "{release}-librechat"
+      container: librechat
+      script: |
+        node - <<'JS'
+        const crypto = require('crypto');
+        const R = 'http://' + '{release}' + '-librechat-rag.' + '{gvc}' + '.cpln.local:8000';
+        function b64(o) { return Buffer.from(JSON.stringify(o)).toString('base64url'); }
+        (async () => {
+          const health = await (await fetch(R + '/health')).text();
+          const anon = await fetch(R + '/ids');
+          const unsigned = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ id: 'e2e', exp: Math.floor(Date.now() / 1000) + 300 });
+          const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(unsigned).digest('base64url');
+          const signed = await fetch(R + '/ids', { headers: { authorization: 'Bearer ' + unsigned + '.' + sig } });
+          const ids = await signed.text();
+          const ok = health.includes('"UP"') && (anon.status === 401 || anon.status === 403) && signed.status === 200 && ids.trim().startsWith('[');
+          console.log(ok ? 'RAG_OK' : 'RAG_BAD ' + health.slice(0, 80) + ' ' + anon.status + ' ' + signed.status + ' ' + ids.slice(0, 80));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^RAG_OK$"
+    retries: 6
+    retryDelaySeconds: 15

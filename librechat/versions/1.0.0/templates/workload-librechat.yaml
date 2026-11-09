@@ -169,6 +169,7 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
       outboundAllowHostname: []
+      outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internalAccess.type }}

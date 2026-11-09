@@ -95,6 +95,7 @@ spec:
       outboundAllowCIDR:
         - 0.0.0.0/0
       outboundAllowHostname: []
+      outboundAllowPort: []
       outboundBlockedCIDR: []
     internal:
       # only LibreChat calls the rag-api

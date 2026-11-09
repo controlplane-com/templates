@@ -298,7 +298,7 @@ steps:
                 - rule: item.name == '' || !item.name.lowerAscii().matches('^(openai|azureopenai|google|anthropic|assistants|azureassistants|agents|custom|bedrock|gptplugins|chatgptbrowser)$')
                   mirrors: librechat.validateCustomEndpoints
                   paths: [name]
-                  message: This name belongs to a built-in LibreChat endpoint; pick another.
+                  message: "This name belongs to a built-in LibreChat endpoint (openAI, azureOpenAI, google, anthropic, assistants, azureAssistants, agents, custom, bedrock, gptPlugins, chatGPTBrowser, in any case); pick another."
                 - rule: item.baseURL == '' || item.baseURL.matches('^https?://[^/\\s]+')
                   mirrors: librechat.validateCustomEndpoints
                   paths: [baseURL]

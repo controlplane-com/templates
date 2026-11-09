@@ -263,11 +263,11 @@ steps:
             paths: [secretKey.secretName]
             message: The encryption key secret is required.
           - rule: oldSelf == null || self.secretKey.secretName == oldSelf.secretKey.secretName
-            severity: warning
+            severity: info
             paths: [secretKey.secretName]
             message: >-
-              A different key cannot decrypt the API keys already stored in Langflow. Keep the secret the release
-              was installed with unless it holds the same key.
+              A different key cannot decrypt the API keys already stored in Langflow. Change the secret only if
+              the new one holds the same key.
     rules:
       # Only when exactly one database is on: with both (or neither) on, the root rule below says so instead of
       # flagging a secret field that has a value.
@@ -496,6 +496,7 @@ steps:
               `cpln port-forward`.
           - type: note
             severity: warning
+            when: self.publicAccess.enabled
             text: >-
               Anyone who reaches the URL can sign up. New accounts stay inactive until an admin activates them in
               Langflow; to turn sign-up off, add `LANGFLOW_ENABLE_SIGNUP` with the value `false` under Extra
@@ -622,9 +623,9 @@ rules:
       Enable exactly one database: set either postgres.enabled or postgresHA.enabled to true, and the other to
       false.
   # No paths: postgresHA.enabled is a hidden field (the Database choice writes it), so a path there would never
-  # show; this shows on Review and blocks Install.
+  # show; this shows on Review and blocks Install. A deliberate hard gate (maintainer ruling 2026-11-09): the
+  # old database and its volume are deleted, so a switch loses every flow, user and credential.
   - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
-    severity: warning
     message: >-
       Switching the database type deploys a new, empty database; the flows, users and credentials in the
       current one are not moved. Keep the current database type, or install a new release and move the data.

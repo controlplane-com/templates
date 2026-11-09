@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Langflow
+category: ai
+topology: single
+
+summary: >-
+  Langflow visual low-code builder for AI agents, RAG pipelines and MCP servers: drag components onto a canvas,
+  test the flow in the editor, then call it through the REST API or as MCP tools. Runs on a bundled PostgreSQL
+  with a persistent file volume, and always requires a login. Up to four replicas with a Redis job queue and a
+  highly available PostgreSQL are optional. Pick it to build and serve LLM flows without writing the plumbing code.
+
+keywords:
+  - visual flow builder
+  - low-code ai
+  - no-code ai
+  - ai agents
+  - agent builder
+  - rag
+  - retrieval augmented generation
+  - llm workflows
+  - langchain
+  - mcp server
+  - mcp tools
+  - prompt engineering
+  - chatbot builder
+  - knowledge base
+  - python components
+  - flow api
+  - openai
+  - anthropic
+  - ollama
+
+useCases:
+  - Build and test AI agents in a visual drag-and-drop editor
+  - Serve a flow as a REST endpoint that an app calls
+  - Expose flows as MCP tools for Claude, Cursor or another MCP client
+  - Answer questions over uploaded documents and knowledge bases with RAG
+  - Prototype prompts, chains and model choices with a team
+
+alternativeTo:
+  - Flowise
+  - Dify
+
+pickInsteadIf:
+  - need: code-first LangGraph agents served behind the LangGraph Agent Server API
+    template: aegra
+  - need: general workflow automation across SaaS apps rather than LLM flows
+    template: n8n
+  - need: a chat UI for people to talk to models
+    template: open-webui
+  - need: one OpenAI-compatible gateway with keys and spend limits in front of many model providers
+    template: litellm
+
+related:
+  - template: litellm
+    relation: companion
+    note: LiteLLM model gateway that Langflow's model components can call with one key
+  - template: ollama
+    relation: companion
+    note: Self-hosted open models Langflow's Ollama component connects to
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server on GPUs for Langflow flows
+  - template: qdrant
+    relation: companion
+    note: Vector store for Langflow RAG flows
+  - template: pgvector
+    relation: companion
+    note: PostgreSQL vector store for Langflow RAG flows
+  - template: langfuse
+    relation: companion
+    note: Langfuse LLM observability, receives traces of Langflow runs
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: URL-safe credentials the bundled PostgreSQL initializes with and Langflow connects with. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: The Langflow superuser created on first start. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: secretKey.secretName
+    required: true
+    description: A 44-character Fernet key that encrypts every stored API key and signs logins. Never rotate or delete it; Langflow refuses to start with a malformed key.
+  - kind: other
+    valuesPath: variableSecrets.secretName
+    required: false
+    when: variableSecrets.secretName is set
+    description: A dictionary secret of model provider API keys; each key listed in variableSecrets.keys becomes an environment variable and a Langflow global variable of the same name.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled and redis.redis.auth.fromSecret.enabled
+    description: URL-safe password the bundled Redis requires and Langflow connects with.
+  - kind: secret
+    secretType: opaque
+    valuesPath: cplnMcp.keySecretName
+    required: false
+    when: cplnMcp.keySecretName is set
+    description: A Control Plane service-account key for the pre-registered Control Plane MCP server. Every flow using it acts as that service account.
+  - kind: other
+    valuesPath: langflow.image
+    required: false
+    when: you add custom components or Python packages
+    description: An image built FROM langflowai/langflow with your components, pushed to a registry the GVC can pull.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

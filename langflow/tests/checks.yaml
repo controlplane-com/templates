@@ -1,0 +1,542 @@
+# Feature checks for the langflow template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (langflow_version, admin_user, admin_password, secret_key, redis_password, probe).
+#
+# The checks are Python (standard library only) run in the Langflow container against its own API on
+# 127.0.0.1:7860; Redis is reached with raw RESP over a socket (the image has no redis-cli). The runner
+# reads any {word} as a placeholder, so the scripts use % formatting and concatenation, never f-strings
+# or dict literals. Login is rate-limited to 5 a minute per address, so every login retries a 429.
+checks:
+  - id: boot-version
+    description: Langflow reports the version in the baseline var langflow_version and its health check sees the database.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:7860'
+        v = json.loads(urllib.request.urlopen(B + '/api/v1/version', timeout=30).read())
+        h = json.loads(urllib.request.urlopen(B + '/health_check', timeout=30).read())
+        ok = v.get('version') == '{langflow_version}' and h.get('db') == 'ok'
+        print('VERSION_OK' if ok else 'VERSION_BAD %s %s' % (v, h))
+        PY
+    expect:
+      stdout: "^VERSION_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: auth-enforced
+    description: >-
+      Login is always required: a wrong password is refused, an anonymous API call is refused, automatic
+      login is off, and the superuser from the admin secret logs in.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        def req(m, p, data=None, h=None):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h or dict(), method=m), timeout=60) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        def login(user, pw):
+            form = urllib.parse.urlencode(dict(username=user, password=pw)).encode()
+            for _ in range(6):
+                c, b = req('POST', '/api/v1/login', form, dict([('Content-Type', 'application/x-www-form-urlencoded')]))
+                if c != 429:
+                    return c, b
+                time.sleep(15)
+            return c, b
+        c, _ = login('{admin_user}', 'not-the-password')
+        print('WRONG_REFUSED' if c == 401 else 'WRONG_GOT %d' % c)
+        c, _ = req('GET', '/api/v1/flows/')
+        print('ANON_REFUSED' if c in (401, 403) else 'ANON_GOT %d' % c)
+        c, b = req('GET', '/api/v1/auto_login')
+        print('AUTOLOGIN_OFF' if c == 403 and 'access_token' not in b else 'AUTOLOGIN_GOT %d' % c)
+        c, b = login('{admin_user}', '{admin_password}')
+        print('LOGIN_OK' if c == 200 and json.loads(b).get('access_token') else 'LOGIN_BAD %d' % c)
+        PY
+    expect:
+      stdout: "(?s)^WRONG_REFUSED\nANON_REFUSED\nAUTOLOGIN_OFF\nLOGIN_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 240
+
+  - id: flow-runs
+    description: >-
+      A flow created through the API runs with an API key: POST /api/v1/run returns the random text a tweak
+      fed into it.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, secrets, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        def req(m, p, body=None, h=None, form=False):
+            h = dict(h or dict())
+            data = None
+            if body is not None:
+                data = urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()
+                h['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=120) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        for _ in range(6):
+            c, b = req('POST', '/api/v1/login', dict(username='{admin_user}', password='{admin_password}'), form=True)
+            if c != 429:
+                break
+            time.sleep(15)
+        auth = dict(Authorization='Bearer ' + json.loads(b)['access_token'])
+        comp = json.loads(req('GET', '/api/v1/all', h=auth)[1])['input_output']['TextOutput']
+        nid = 'TextOutput-' + secrets.token_hex(3)
+        node = dict(id=nid, type='genericNode', position=dict(x=0, y=0), data=dict(id=nid, type='TextOutput', node=comp))
+        flow = dict(name='e2e-run-' + secrets.token_hex(3), data=dict(nodes=[node], edges=[], viewport=dict(x=0, y=0, zoom=1)))
+        fid = json.loads(req('POST', '/api/v1/flows/', flow, auth)[1])['id']
+        key = json.loads(req('POST', '/api/v1/api_key/', dict(name='e2e'), auth)[1])['api_key']
+        probe = secrets.token_hex(8)
+        tweaks = dict([(nid, dict(input_value=probe))])
+        c, b = req('POST', '/api/v1/run/' + fid, dict(input_value='', tweaks=tweaks), dict([('x-api-key', key)]))
+        print('RUN_OK' if c == 200 and probe in b else 'RUN_BAD %d %s' % (c, b[:300]))
+        PY
+    expect:
+      stdout: "^RUN_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 240
+
+  - id: build-across-replicas
+    description: >-
+      Ten editor builds through the workload's service name, which spreads requests over the replicas, all
+      reach their end event: the build queue is shared through Redis. Without it about half fail with
+      "Job not found".
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, secrets, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://{release}-langflow.{gvc}.cpln.local:7860'
+        def req(m, p, body=None, h=None, form=False):
+            h = dict(h or dict())
+            data = None
+            if body is not None:
+                data = urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()
+                h['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=120) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        for _ in range(6):
+            c, b = req('POST', '/api/v1/login', dict(username='{admin_user}', password='{admin_password}'), form=True)
+            if c != 429:
+                break
+            time.sleep(15)
+        auth = dict(Authorization='Bearer ' + json.loads(b)['access_token'])
+        comp = json.loads(req('GET', '/api/v1/all', h=auth)[1])['input_output']['TextOutput']
+        nid = 'TextOutput-' + secrets.token_hex(3)
+        node = dict(id=nid, type='genericNode', position=dict(x=0, y=0), data=dict(id=nid, type='TextOutput', node=comp))
+        flow = dict(name='e2e-build-' + secrets.token_hex(3), data=dict(nodes=[node], edges=[], viewport=dict(x=0, y=0, zoom=1)))
+        fid = json.loads(req('POST', '/api/v1/flows/', flow, auth)[1])['id']
+        ok = 0
+        for _ in range(10):
+            c, b = req('POST', '/api/v1/build/' + fid + '/flow', dict(inputs=dict(input_value='')), auth)
+            if c != 200:
+                continue
+            c, b = req('GET', '/api/v1/build/' + json.loads(b)['job_id'] + '/events?event_delivery=direct', h=auth)
+            ok += int(c == 200 and '"end"' in b)
+        print('BUILDS_OK %d/10' % ok)
+        PY
+    expect:
+      stdout: "^BUILDS_OK 10/10$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 300
+
+  - id: secret-key-applied
+    description: Langflow uses the key from the secretKey secret, not one it generated.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import os
+        k = open('/app/langflow/secret_key').read().strip() if os.path.exists('/app/langflow/secret_key') else ''
+        e = os.environ.get('LANGFLOW_SECRET_KEY', '')
+        print('KEY_OK' if k == '{secret_key}' and e == '{secret_key}' else 'KEY_BAD file=%d env=%d' % (len(k), len(e)))
+        PY
+    expect:
+      stdout: "^KEY_OK$"
+
+  - id: provider-keys-as-variables
+    description: >-
+      Each key listed in variableSecrets.keys reaches Langflow as an env var holding the secret's value, and
+      appears once as a Credential global variable, which also proves the key can encrypt a credential.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, os, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        v = os.environ.get('E2E_PROBE', '')
+        print('ENV_OK' if v == '{probe}' and 'cpln://' not in v else 'ENV_BAD len=%d' % len(v))
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/variables/', headers=dict(Authorization='Bearer ' + tok)), timeout=60)
+        found = [x for x in json.loads(r.read()) if x.get('name') == 'E2E_PROBE']
+        print('VARIABLE_OK' if len(found) == 1 and found[0].get('type') == 'Credential' else 'VARIABLE_BAD %s' % found)
+        PY
+    expect:
+      stdout: "(?s)^ENV_OK\nVARIABLE_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: extra-env-applied
+    description: A setting from langflow.extraEnv (LANGFLOW_MAX_FILE_SIZE_UPLOAD 77) reaches Langflow's configuration.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/config', headers=dict(Authorization='Bearer ' + tok)), timeout=60)
+        n = json.loads(r.read()).get('max_file_size_upload')
+        print('EXTRA_ENV_OK' if n == 77 else 'EXTRA_ENV_BAD %s' % n)
+        PY
+    expect:
+      stdout: "^EXTRA_ENV_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: file-on-volume
+    description: >-
+      /app/langflow is a mounted volume, and a file uploaded through the API is stored on it and downloads
+      with the same bytes.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, os, secrets, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        mounts = [l.split()[1] for l in open('/proc/mounts')]
+        print('MOUNT_OK' if '/app/langflow' in mounts else 'MOUNT_MISSING')
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        body = secrets.token_hex(32).encode()
+        bnd = 'e2e' + secrets.token_hex(8)
+        data = (('--%s\r\nContent-Disposition: form-data; name="file"; filename="e2e-probe.txt"\r\n'
+                 'Content-Type: text/plain\r\n\r\n') % bnd).encode() + body + ('\r\n--%s--\r\n' % bnd).encode()
+        h = dict(Authorization='Bearer ' + tok)
+        h['Content-Type'] = 'multipart/form-data; boundary=' + bnd
+        up = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v2/files', data=data, headers=h, method='POST'), timeout=60).read())
+        got = urllib.request.urlopen(urllib.request.Request(B + '/api/v2/files/' + up['id'], headers=dict(Authorization='Bearer ' + tok)), timeout=60).read()
+        on_disk = os.path.join('/app/langflow', up.get('path', ''))
+        same = got == body and os.path.isfile(on_disk) and open(on_disk, 'rb').read() == body
+        print('FILE_OK' if same else 'FILE_BAD %s' % up)
+        PY
+    expect:
+      stdout: "(?s)^MOUNT_OK\nFILE_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: redis-job-queue
+    description: >-
+      Langflow's build queue runs on Redis, and a login leaves its rate-limit counter in Redis database 2,
+      so every replica shares one limit.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, socket, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        HOST = '{release}-redis.{gvc}.cpln.local'
+        def reply(f):
+            line = f.readline().decode().rstrip('\r\n')
+            kind, rest = line[0], line[1:]
+            if kind == '$':
+                n = int(rest)
+                return None if n < 0 else f.read(n + 2)[:-2].decode()
+            if kind == '*':
+                return [reply(f) for _ in range(int(rest))]
+            return line
+        def redis(*cmds):
+            s = socket.create_connection((HOST, 6379), timeout=10)
+            f = s.makefile('rb')
+            out = []
+            for c in cmds:
+                s.sendall(('*%d\r\n' % len(c) + ''.join('$%d\r\n%s\r\n' % (len(x.encode()), x) for x in c)).encode())
+                out.append(reply(f))
+            s.close()
+            return out
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        q = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/monitor/job_queue', headers=dict(Authorization='Bearer ' + tok)), timeout=60).read())
+        print('QUEUE_REDIS' if q.get('backend') == 'redis' else 'QUEUE_BAD %s' % json.dumps(q)[:300])
+        keys = redis(['AUTH', '{redis_password}'], ['SELECT', '2'], ['SCAN', '0', 'MATCH', 'LIMITS:*', 'COUNT', '1000'])[2][1]
+        print('RATELIMIT_SHARED' if keys else 'NO_RATELIMIT_KEYS')
+        PY
+    expect:
+      stdout: "(?s)^QUEUE_REDIS\nRATELIMIT_SHARED$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: redis-requires-auth
+    description: The bundled Redis refuses a command without the password and answers with it.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import socket
+        HOST = '{release}-redis.{gvc}.cpln.local'
+        def replies(cmds):
+            s = socket.create_connection((HOST, 6379), timeout=10)
+            f = s.makefile('rb')
+            out = []
+            for c in cmds:
+                s.sendall(('*%d\r\n' % len(c) + ''.join('$%d\r\n%s\r\n' % (len(x.encode()), x) for x in c)).encode())
+                out.append(f.readline().decode().rstrip('\r\n'))
+            s.close()
+            return out
+        noauth = replies([['PING']])[0]
+        authed = replies([['AUTH', '{redis_password}'], ['PING']])
+        print('NOAUTH' if noauth.startswith('-NOAUTH') else 'OPEN %r' % noauth)
+        print('PONG' if authed == ['+OK', '+PONG'] else 'AUTH_BAD %r' % authed)
+        PY
+    expect:
+      stdout: "(?s)^NOAUTH\nPONG$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: starter-projects-once
+    description: >-
+      The replicas booted together and seeded the starter flows once: the Starter Projects folder in
+      PostgreSQL holds flows and no name appears twice.
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT count(*) || ' ' || count(DISTINCT f.name) FROM flow f JOIN folder d ON f.folder_id = d.id WHERE d.name = 'Starter Projects'" | awk '$1 > 0 && $1 == $2 { print "STARTERS_OK " $1; next } { print "STARTERS_BAD " $0 }'
+    expect:
+      stdout: "^STARTERS_OK \\d+$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: mcp-url-public
+    description: >-
+      The MCP connection URL Langflow shows for a project is the public HTTPS endpoint, not the
+      http://localhost:7860 it builds from its bind address.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        h = dict(Authorization='Bearer ' + tok)
+        pid = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/projects/', headers=h), timeout=60).read())[0]['id']
+        u = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/mcp/project/' + pid + '/composer-url', headers=h), timeout=60).read()).get('streamable_http_url') or ''
+        ok = u.startswith('https://') and 'localhost' not in u and u.endswith('/api/v1/mcp/project/' + pid + '/streamable')
+        print('MCP_URL_OK' if ok else 'MCP_URL_BAD %s' % u)
+        PY
+    expect:
+      stdout: "^MCP_URL_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: cpln-mcp-key-refused
+    description: >-
+      The baseline names a fake service-account key in cplnMcp.keySecretName. The background registration
+      checks it against mcp.cpln.io, records the refusal, and registers nothing, while Langflow keeps serving
+      (the superuser has no cpln MCP server and the health check passes).
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, os, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        st = open('/tmp/cpln-mcp-status').read().strip() if os.path.exists('/tmp/cpln-mcp-status') else 'missing'
+        print('STATUS_REFUSED' if st == 'refused' else 'STATUS_GOT %s' % st)
+        h = json.loads(urllib.request.urlopen(B + '/health_check', timeout=30).read())
+        print('HEALTH_OK' if h.get('db') == 'ok' else 'HEALTH_BAD %s' % h)
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        names = [s['name'] for s in json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v2/mcp/servers', headers=dict(Authorization='Bearer ' + tok)), timeout=60).read())]
+        print('NOT_REGISTERED' if 'cpln' not in names else 'REGISTERED %s' % names)
+        PY
+    expect:
+      stdout: "(?s)^STATUS_REFUSED\nHEALTH_OK\nNOT_REGISTERED$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: signup-inactive
+    description: >-
+      Anyone may sign up anonymously, but the new account is inactive: logging in with it is refused and
+      returns no token.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, secrets, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        def req(m, p, data, ctype):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=dict([('Content-Type', ctype)]), method=m), timeout=60) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        user = 'e2e-signup-' + secrets.token_hex(4)
+        pw = 'Pw-' + secrets.token_hex(12)
+        c, _ = req('POST', '/api/v1/users/', json.dumps(dict(username=user, password=pw)).encode(), 'application/json')
+        print('SIGNUP_ACCEPTED' if c == 201 else 'SIGNUP_GOT %d' % c)
+        form = urllib.parse.urlencode(dict(username=user, password=pw)).encode()
+        for _ in range(6):
+            c, b = req('POST', '/api/v1/login', form, 'application/x-www-form-urlencoded')
+            if c != 429:
+                break
+            time.sleep(15)
+        print('INACTIVE_REFUSED' if c in (400, 401, 403) and 'access_token' not in b else 'INACTIVE_GOT %d' % c)
+        PY
+    expect:
+      stdout: "(?s)^SIGNUP_ACCEPTED\nINACTIVE_REFUSED$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: flow-written
+    description: A flow named after the running version is stored in PostgreSQL and listed again.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        h = dict(Authorization='Bearer ' + tok)
+        h['Content-Type'] = 'application/json'
+        body = json.dumps(dict(name='persist-{version}', data=dict(nodes=[], edges=[]))).encode()
+        try:
+            f = json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/flows/', data=body, headers=h, method='POST'), timeout=60).read())
+        except urllib.error.HTTPError as e:
+            f = dict(error=e.code)
+        names = [x.get('name') for x in json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/flows/?get_all=true&header_flows=true', headers=h), timeout=60).read())]
+        print('WRITTEN %s' % f.get('id') if 'persist-{version}' in names else 'WRITE_BAD %s' % f)
+        PY
+    expect:
+      stdout: "^WRITTEN "
+    retries: 4
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: flow-persists
+    description: >-
+      The flow written on the version this scenario installed first is still there. On a fresh install that
+      is the same version; after an upgrade it proves the database carried over. Never writes.
+    exec:
+      workload: "{release}-langflow"
+      container: langflow
+      script: |
+        python3 - <<'PY'
+        import json, time, urllib.parse, urllib.request, urllib.error
+        B = 'http://127.0.0.1:7860'
+        form = urllib.parse.urlencode(dict(username='{admin_user}', password='{admin_password}')).encode()
+        for _ in range(6):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + '/api/v1/login', data=form, method='POST'), timeout=60)
+                tok = json.loads(r.read())['access_token']
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                time.sleep(15)
+        h = dict(Authorization='Bearer ' + tok)
+        names = [x.get('name') for x in json.loads(urllib.request.urlopen(urllib.request.Request(B + '/api/v1/flows/?get_all=true&header_flows=true', headers=h), timeout=60).read())]
+        print('PERSISTED' if 'persist-{installed_version}' in names else 'MISSING (no flow named persist-{installed_version})')
+        PY
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 30
+    timeoutSeconds: 180

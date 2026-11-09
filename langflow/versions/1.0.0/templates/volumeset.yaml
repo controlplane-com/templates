@@ -1,0 +1,11 @@
+kind: volumeset
+name: {{ include "langflow.volumeset.name" . }}
+description: Langflow data (uploaded files, knowledge bases, secret-key file), shared by all replicas
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "langflow.tags" . | nindent 4 }}
+spec:
+  # shared = read-write-many, so every replica mounts the same files. performanceClass is
+  # declared because the API stores `shared` for a shared volumeset either way.
+  fileSystemType: shared
+  performanceClass: shared
+  initialCapacity: {{ .Values.langflow.volumeset.capacity }}

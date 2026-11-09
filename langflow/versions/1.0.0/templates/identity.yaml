@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "langflow.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "langflow.tags" . | nindent 4 }}

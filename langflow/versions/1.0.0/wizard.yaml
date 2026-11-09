@@ -1,0 +1,735 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Langflow
+
+# The bundled PostgreSQL, the shared data volume and the optional Redis exist in one location, and every
+# Langflow replica shares them: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    # Right after the Database and login step that picks it and names its secret.
+    after: database
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database step, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Langflow connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internalAccess.type:
+        description: >-
+          Langflow connects to its database like any other workload: keep Same GVC, or add the Langflow workload under
+          Allowed workloads.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    # Right after the Database and login step that picks it and names its secret.
+    after: database
+    steps:
+      - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold Langflow's users, flows and messages." }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Langflow connects to the HAProxy leader endpoint directly (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          Langflow connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the Langflow
+          workload under Allowed workloads.
+  - template: redis
+    version: 3.9.0
+    when: self.redis.enabled
+    title: Redis
+    # Right after the Langflow step whose Redis job queue switch turns it on.
+    after: langflow
+    steps:
+      - { id: topology, title: Redis engine, description: "The single Redis node that holds the shared editor build queue and login rate limits; a restart fails the builds in progress." }
+      - { id: resources, title: Redis resources }
+      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
+      - { id: backup, title: Redis backups }
+      - { id: advanced, title: Redis images, description: The Redis or Valkey image the node runs. }
+    exclude:
+      # Langflow connects to one Redis URL and cannot use Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # Redis authentication is chosen in the Langflow step; a password in values is refused (langflow.validateRedisPassword).
+      - redisAuth
+      - redis.auth.fromSecret
+      # Langflow reaches Redis on :6379 inside the GVC; public access moves it to other ports (langflow.validateRedisPublic).
+      - redis.publicAccess
+      # Advanced tuning of a transient queue stays at the redis chart's defaults; YAML mode still sets it
+      # (yamlOnly below). The images, backups and exporter stay: redis's own migrations write them.
+      - redis.timeoutSeconds
+      - sentinel.timeoutSeconds
+      - redis.replication
+      - redis.probes
+      - redis.env
+      - redis.tags
+      - redis.requestRetryPolicy
+      - sentinel.env
+      - sentinel.tags
+      - sentinel.requestRetryPolicy
+    override:
+      redis.replicaDirect:
+        description: A DNS name per replica. Langflow connects through the workload's own name, so it does not need one.
+
+
+steps:
+  - id: database
+    title: Database and login
+    description: >-
+      Which PostgreSQL holds Langflow's users, flows, messages and stored credentials, and the three prerequisite
+      secrets: the database credentials, the superuser and the encryption key.
+    docs: "#prerequisites"
+    sections:
+      - title: Database
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica. Upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              All three secrets on this step must exist **before** you install; if one is missing, the
+              deployment waits and `cpln logs` shows nothing at all. Langflow receives the values inside a
+              connection URL, so use only letters, digits, `-`, `_`, `.` and `~`.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every user, flow, message and stored credential.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              The first upgrade after an install can restart the bundled database, which briefly interrupts
+              the editor and the API.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica. Its server, storage, network and backups follow this step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`, all URL-safe (letters, digits, `-`, `_`, `.`, `~`).
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Langflow connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Langflow.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-langflow-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Langflow connects through. Their settings follow this step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`, all URL-safe (letters, digits, `-`, `_`, `.`, `~`).
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Langflow connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of Langflow.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-langflow-db-credentials'"
+      - title: Superuser and encryption key
+        docs: "#prerequisites"
+        fields:
+          - path: admin.secretName
+            type: ref
+            label: Superuser secret
+            required: true
+            description: A dictionary secret with the keys `username` and `password`. Login is always required.
+            help: >-
+              Langflow creates this user on first start only. Later starts keep the existing password: change it
+              in the Langflow UI, not in the secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-langflow-admin'"
+          - path: secretKey.secretName
+            type: ref
+            label: Encryption key secret
+            required: true
+            description: >-
+              An opaque secret holding a 44-character Fernet key. Create one with
+              `printf '%s' "$(openssl rand -base64 32 | tr '+/' '-_')" | cpln secret create-opaque --name my-langflow-secret-key --encoding plain -f -`.
+              Langflow refuses to start with a malformed key.
+            help: >-
+              It encrypts every API key saved in Langflow and signs logins. Never rotate or delete it: stored
+              credentials could no longer be read.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-langflow-secret-key'"
+                encoding: plain
+        rules:
+          - rule: self.admin.secretName != ''
+            mirrors: langflow.validateAdmin
+            paths: [admin.secretName]
+            message: The superuser secret is required.
+          - rule: self.secretKey.secretName != ''
+            mirrors: langflow.validateSecretKey
+            paths: [secretKey.secretName]
+            message: The encryption key secret is required.
+          - rule: oldSelf == null || self.secretKey.secretName == oldSelf.secretKey.secretName
+            severity: info
+            paths: [secretKey.secretName]
+            message: >-
+              A different key cannot decrypt the API keys already stored in Langflow. Change the secret only if
+              the new one holds the same key.
+    rules:
+      # Only when exactly one database is on: with both (or neither) on, the root rule below says so instead of
+      # flagging a secret field that has a value.
+      - rule: >-
+          self.postgresHA.enabled == self.postgres.enabled ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: langflow.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: langflow
+    title: Langflow
+    description: >-
+      The Langflow server and its replicas, the optional Redis job queue, provider keys and extra settings, and who
+      can reach Langflow.
+    sections:
+      - title: Server
+        docs: "#configuration"
+        fields:
+          - path: langflow.image
+            type: string
+            format: image
+            label: Image
+            required: true
+            description: The official Langflow image. To add custom components or Python packages, build an image FROM it and set it here.
+          - path: langflow.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 4
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas share PostgreSQL, the data volume and Redis, so they are interchangeable. More than one needs
+              the Redis job queue below; 2 with highly available PostgreSQL keeps Langflow up through upgrades.
+          - type: note
+            when: self.langflow.replicas > 1
+            text: >-
+              With more than one replica, connect MCP clients to the Streamable HTTP URL
+              (`/api/v1/mcp/project/PROJECT_ID/streamable`). The legacy SSE URL (`/sse`) works with one replica only.
+          - path: langflow.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica.
+            cpu: { min: 250m }
+            memory: { min: 1Gi }
+          - path: langflow.requestTimeoutSeconds
+            type: integer
+            label: Request timeout (seconds)
+            required: true
+            min: 1
+            max: 3600
+            suggestions: [60, 600, 3600]
+            description: The longest request on the public URL, such as a flow run or an editor build, before it is cut. Requests from inside the GVC are not affected.
+          - path: langflow.volumeset.capacity
+            type: integer
+            label: Data volume (GiB)
+            required: true
+            min: 10
+            description: Uploaded files and knowledge bases, shared by every replica.
+        rules:
+          - rule: self.langflow.replicas >= 1 && self.langflow.replicas <= 4
+            mirrors: langflow.validateReplicas
+            paths: [langflow.replicas]
+            message: Use between 1 and 4 replicas.
+          - rule: self.langflow.requestTimeoutSeconds >= 1 && self.langflow.requestTimeoutSeconds <= 3600
+            mirrors: langflow.validateTimeout
+            paths: [langflow.requestTimeoutSeconds]
+            message: Use between 1 and 3600 seconds.
+          - rule: self.langflow.volumeset.capacity >= 10
+            mirrors: langflow.validateVolumeset
+            paths: [langflow.volumeset.capacity]
+            message: Use at least 10 GiB.
+      - id: redis
+        title: Redis job queue
+        toggle: redis.enabled
+        docs: "#configuration"
+        description: >-
+          A single Redis node that every replica shares for editor builds and login rate limits. Needed for more
+          than one replica; with one replica Langflow keeps both in memory.
+        fields:
+          - type: note
+            text: The Redis password is set below; the Redis settings follow this step.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              After turning Redis on for a running release, run `cpln workload force-redeployment
+              RELEASE_NAME-langflow --gvc GVC_NAME` so every replica picks up the change.
+            textExpression: >-
+              'After turning Redis on for a running release, run `cpln workload force-redeployment ' +
+              context.releaseName + '-langflow --gvc ' + context.gvc + '` so every replica picks up the change.'
+      - id: redis-auth
+        title: Require a Redis password
+        toggle: redis.redis.auth.fromSecret.enabled
+        when: self.redis.enabled
+        docs: "#prerequisites"
+        description: >-
+          Off, the same-GVC firewall is Redis's only boundary. On, Redis requires a password read from a secret you
+          create first; it goes in a URL, so it must be URL-safe (letters, digits, `-`, `_`, `.`).
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The Redis password secret must exist **before** you install or upgrade. If it is missing, the
+              deployment waits and `cpln logs` shows nothing.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              After turning the Redis password on for a running release, run `cpln workload force-redeployment
+              RELEASE_NAME-langflow --gvc GVC_NAME` so every replica picks up the change.
+            textExpression: >-
+              'After turning the Redis password on for a running release, run `cpln workload force-redeployment ' +
+              context.releaseName + '-langflow --gvc ' + context.gvc + '` so every replica picks up the change.'
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret; the key named below holds the password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-langflow-redis'"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+        rules:
+          - rule: "!self.redis.redis.auth.fromSecret.enabled || self.redis.redis.auth.fromSecret.name != ''"
+            mirrors: langflow.validateRedisSecret
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+          - rule: >-
+              oldSelf == null ||
+              self.redis.redis.auth.fromSecret.enabled == oldSelf.redis.redis.auth.fromSecret.enabled
+            severity: info
+            paths: [redis.redis.auth.fromSecret.name]
+            message: Turning the Redis password on or off restarts Redis and Langflow; editor builds in progress fail.
+      - title: Provider keys
+        docs: "#configuration"
+        fields:
+          - path: variableSecrets.secretName
+            type: ref
+            label: Provider keys secret
+            description: >-
+              Optional. A dictionary secret you create; each key listed below becomes an environment variable and a
+              Langflow global variable of the same name. Leave empty for none.
+            help: >-
+              Rotating the secret does not restart Langflow; run `cpln workload force-redeployment
+              <release>-langflow` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "self.variableSecrets.keys"
+          - path: variableSecrets.keys
+            type: list
+            label: Keys
+            widget: tags
+            unique: true
+            when: self.variableSecrets.secretName != ''
+            description: The keys of the secret to load, for example `OPENAI_API_KEY`. Each must exist in the secret.
+            item:
+              type: string
+              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              patternMessage: Use letters, digits and _, not starting with a digit.
+        rules:
+          - rule: (self.variableSecrets.secretName == '') == (size(self.variableSecrets.keys) == 0)
+            mirrors: langflow.validateVariableSecrets
+            paths: [variableSecrets.keys]
+            message: List at least one key of the provider keys secret, or clear the secret.
+      - title: Control Plane MCP server
+        docs: "#prerequisites"
+        description: >-
+          Optional. Registers the Control Plane MCP server as the superuser's MCP server `cpln`, so an MCP Tools
+          component can work with your org. Langflow cannot sign in to it with OAuth, so it uses a
+          service-account key.
+        fields:
+          - path: cplnMcp.keySecretName
+            type: ref
+            label: Service-account key secret
+            description: >-
+              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
+              empty for no Control Plane MCP server.
+            help: >-
+              Registered once, for the superuser only; other users add their own under Settings > MCP Servers.
+              Rotating the key does not update a registered server: edit its header there, or delete it and force
+              a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-langflow-cpln-mcp-key'"
+                encoding: plain
+          - type: note
+            severity: warning
+            when: self.cplnMcp.keySecretName != ''
+            text: >-
+              Every flow that uses this server acts as the service account, and any logged-in user can read its
+              key through Python. Grant the service account only what flows need.
+          - path: cplnMcp.url
+            type: string
+            label: MCP server URL
+            advanced: true
+            required: true
+            when: self.cplnMcp.keySecretName != ''
+            suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
+            description: The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete tools as well, and grant the service account only what flows need.
+        rules:
+          - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
+            mirrors: langflow.validateCplnMcp
+            paths: [cplnMcp.url]
+            message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
+      - title: Extra environment variables
+        fields:
+          - path: langflow.extraEnv
+            type: list
+            label: Extra environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Plain, non-secret Langflow settings, for example `LANGFLOW_SSRF_ALLOWED_HOSTS` or `DO_NOT_TRACK`. Put
+              API keys in the provider keys secret instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and _, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - type: note
+            text: >-
+              Langflow always requires a login (the superuser secret). Turned off, reach the editor with
+              `cpln port-forward`.
+          - type: note
+            severity: warning
+            when: self.publicAccess.enabled
+            text: >-
+              Anyone who reaches the URL can sign up. New accounts stay inactive until an admin activates them in
+              Langflow; to turn sign-up off, add `LANGFLOW_ENABLE_SIGNUP` with the value `false` under Extra
+              environment variables.
+          - type: note
+            severity: warning
+            text: >-
+              Any user who can log in can run Python on the server through custom components. Give accounts only
+              to people you trust.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: A public `*.cpln.app` URL. Firewall changes take 30 seconds to a few minutes to take effect.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: langflow.validateInternalAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: langflow.validateInternalAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+    rules:
+      # Step-level: a section rule does not run while its toggle is off, which is exactly the refused case.
+      - rule: self.langflow.replicas <= 1 || self.redis.enabled
+        mirrors: langflow.validateReplicasRedis
+        paths: [redis.enabled, langflow.replicas]
+        message: More than one replica needs the Redis job queue, or editor builds fail when requests reach another replica.
+      - rule: >-
+          (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).all(n,
+          !(n.upperAscii() in ['LANGFLOW_HOST', 'LANGFLOW_PORT', 'LANGFLOW_WORKERS', 'LANGFLOW_CONFIG_DIR',
+          'LANGFLOW_SAVE_DB_IN_CONFIG_DIR', 'LANGFLOW_KNOWLEDGE_BASES_DIR', 'LANGFLOW_DATABASE_URL',
+          'LANGFLOW_DB_CONNECTION_SETTINGS', 'LANGFLOW_POOL_SIZE', 'LANGFLOW_MAX_OVERFLOW', 'LANGFLOW_AUTO_LOGIN',
+          'LANGFLOW_SKIP_AUTH_AUTO_LOGIN', 'LANGFLOW_NEW_USER_IS_ACTIVE', 'LANGFLOW_SUPERUSER', 'LANGFLOW_SUPERUSER_PASSWORD', 'LANGFLOW_SECRET_KEY',
+          'LANGFLOW_JOB_QUEUE_TYPE', 'LANGFLOW_REDIS_QUEUE_URL', 'LANGFLOW_REDIS_QUEUE_HOST',
+          'LANGFLOW_REDIS_QUEUE_PORT', 'LANGFLOW_RATE_LIMIT_STORAGE_URI', 'LANGFLOW_RATE_LIMIT_TRUST_PROXY',
+          'LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT', 'LANGFLOW_PROMETHEUS_PORT',
+          'LANGFLOW_DANGEROUSLY_ALLOW_MULTI_WORKER_WITHOUT_SHARED_QUEUE', 'LF_DB_USER', 'LF_DB_PASSWORD',
+          'LF_DB_NAME', 'LF_REDIS_PASSWORD', 'LF_CPLN_MCP_KEY', 'LF_CPLN_MCP_URL']))
+        mirrors: langflow.validateEnvNames
+        paths: [variableSecrets.keys, langflow.extraEnv]
+        message: >-
+          The chart sets the server, database, login, secret key, Redis queue and rate-limit settings itself
+          (LANGFLOW_HOST, LANGFLOW_DATABASE_URL, LANGFLOW_AUTO_LOGIN, LANGFLOW_SECRET_KEY, LANGFLOW_REDIS_QUEUE_URL
+          and others, plus LF_DB_*, LF_REDIS_PASSWORD and LF_CPLN_MCP_*); remove them from the keys and extra variables.
+      - rule: (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).all(n, !n.startsWith('CPLN_'))
+        mirrors: langflow.validateEnvNames
+        paths: [variableSecrets.keys, langflow.extraEnv]
+        message: Names starting with CPLN_ are reserved by Control Plane.
+      - rule: >-
+          (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).all(n,
+          n == '' || n.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
+        mirrors: langflow.validateEnvNames
+        paths: [variableSecrets.keys, langflow.extraEnv]
+        message: Environment variable names use letters, digits and _, and do not start with a digit.
+      - rule: >-
+          (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).all(n,
+          (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).filter(m, m == n).size() == 1)
+        mirrors: langflow.validateEnvNames
+        paths: [variableSecrets.keys, langflow.extraEnv]
+        message: Each name may appear only once across the secret keys and the extra variables.
+      - rule: "!self.redis.enabled || self.redis.mode == 'dev'"
+        mirrors: langflow.validateRedisMode
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          Redis must run as a single node: set redis.mode to dev. Langflow connects to one Redis URL and cannot
+          follow a Sentinel failover.
+      - rule: >-
+          !self.redis.enabled || !has(self.redis.redis.auth.password) ||
+          (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+          (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+        mirrors: langflow.validateRedisPassword
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove
+          it and turn on Require a Redis password with a secret instead.
+      - rule: "!self.redis.enabled || !has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+        mirrors: langflow.validateRedisPublic
+        paths: [redis.redis.auth.fromSecret.enabled]
+        message: >-
+          Redis public access is not supported: Langflow connects to Redis on port 6379 inside the GVC, and public
+          access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: langflow.validateDatabase
+    message: >-
+      Enable exactly one database: set either postgres.enabled or postgresHA.enabled to true, and the other to
+      false.
+  # No paths: postgresHA.enabled is a hidden field (the Database choice writes it), so a path there would never
+  # show; this shows on Review and blocks Install. A deliberate hard gate (maintainer ruling 2026-11-09): the
+  # old database and its volume are deleted, so a switch loses every flow, user and credential.
+  - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+    message: >-
+      Switching the database type deploys a new, empty database; the flows, users and credentials in the
+      current one are not moved. Keep the current database type, or install a new release and move the data.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: langflow.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Langflow's database endpoint.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Langflow, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow') in self.postgres.internalAccess.workloads
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow, or Langflow cannot reach its database.'"
+    message: Add the Langflow workload to the list, or Langflow cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow') in self.postgresHA.internal_access.workloads
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow, or Langflow cannot reach its database.'"
+    message: Add the Langflow workload to the list, or Langflow cannot reach its database.
+  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow') in self.redis.redis.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-langflow, or Langflow cannot reach Redis.'"
+    message: Add the Langflow workload to the list, or Langflow cannot reach Redis.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (langflow.validateRedisMode), since Langflow cannot use Sentinel.
+  - path: postgres.pgbouncer
+    reason: Langflow connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Langflow connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); use Require a Redis password with a secret.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (langflow.validateRedisPublic); Langflow connects to Redis on port 6379 inside the GVC.
+  - path: redis.redis.timeoutSeconds
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.sentinel.timeoutSeconds
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.redis.replication
+    reason: Replication tuning applies only to production mode, which Langflow does not use.
+  - path: redis.redis.probes
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.env
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.tags
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.requestRetryPolicy
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.sentinel.env
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.sentinel.tags
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.sentinel.requestRetryPolicy
+    reason: Sentinel never runs (redis.mode is fixed to dev).

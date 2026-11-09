@@ -1,0 +1,38 @@
+kind: policy
+name: {{ include "clickhouse.policy.name" . }}
+description: Clickhouse policy
+tags: {{- include "clickhouse.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "clickhouse.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.database.credentialsSecretName }}
+  {{- if not (include "clickhouse.isSingleNode" .) }}
+  {{- /* single-node renders no Keeper, so granting reveal on its secret is a dangling grant */}}
+  - //secret/{{ include "clickhouse.secretKeeper.name" . }}
+  {{- end }}
+  - //secret/{{ include "clickhouse.secretServer.name" . }}
+  {{- if eq .Values.provider "gcp" }}
+  - //secret/{{ .Values.gcp.credentialsSecretName }}
+  {{- end }}
+  {{- if eq .Values.provider "hetzner" }}
+  - //secret/{{ .Values.hetzner.credentialsSecretName }}
+  {{- end }}
+  {{- if eq .Values.provider "azure" }}
+  - //secret/{{ .Values.azure.credentialsSecretName }}
+  {{- end }}
+  {{- if eq .Values.provider "aws" }}
+  - //secret/{{ include "clickhouse.secretS3.name" . }}
+  {{- end }}
+  {{- if eq .Values.provider "gcp" }}
+  - //secret/{{ include "clickhouse.secretGCS.name" . }}
+  {{- end }}
+  {{- if eq .Values.provider "azure" }}
+  - //secret/{{ include "clickhouse.secretAzure.name" . }}
+  {{- end }}
+  {{- if eq .Values.provider "hetzner" }}
+  - //secret/{{ include "clickhouse.secretHetzner.name" . }}
+  {{- end }}

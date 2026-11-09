@@ -47,6 +47,9 @@ read cache — or, **from 3.1.0, `provider: local`: all data on the server volum
   `validateStorage` accepting `local`; every provider-specific block was already gated, so aws/gcp/azure/hetzner
   render byte-identically to 3.0.0 apart from version labels (proved per provider × single/one-shard/multi-shard).
   It also onboards `clickhouse/tests/` (the baseline uses `local`, so CI needs no bucket).
+  `local` is for a single node only (cluster modes render but are not a supported shape), and it has **no
+  scheduled snapshot or backup**: the server volume is the only copy; uninstall keeps one final snapshot
+  for 7 days. `upgradeFrom: []` in the 3.1.0 baseline (3.0.0 needs a bucket) is pending a maintainer ruling.
 
 ## Troubleshooting / considerations
 
@@ -67,7 +70,7 @@ read cache — or, **from 3.1.0, `provider: local`: all data on the server volum
   crash a live cluster. Freshness marker is `/var/lib/clickhouse/metadata` (absent on a new volume, created
   on first successful start, survives a clean shutdown — `status` does not, which is why it is not used).
 - **If EVERY declared location is absent from the GVC, nothing starts and nothing complains** — no container
-  boots, so no guard can fire. Symptom: zero replicas, `desiredScale: None`, empty logs. Check
+  boots, so no guard can fire. Symptom: zero replicas, `desiredScale: 0`, empty logs. Check
   `cpln gvc get NAME -o json` → `spec.staticPlacement.locationLinks` **before** installing.
 - **Keeper quorum is checked arithmetically before Keeper starts.** Below a majority of the first-3
   locations the container exits with a named error instead of waiting for an election that can never

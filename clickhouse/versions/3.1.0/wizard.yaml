@@ -150,7 +150,8 @@ steps:
               upgrade deletes the Keeper workload and its volume set with the Raft log and Raft snapshots,
               and the server restarts with the single-node configuration.
           # Each location gets its own volume (guide §4.6), and the volume holds the metadata (README: Architecture).
-          - rule: >-
+          - when: self.provider != 'local'
+            rule: >-
               oldSelf == null || !(size(oldSelf.locations) == 1 && oldSelf.locations[0].replicas == 1) ||
               self.locations.exists(l, l.name == oldSelf.locations[0].name)
             severity: info
@@ -305,6 +306,7 @@ steps:
             label: Provider
             widget: cards
             required: true
+            docs: "#local-volume"
             immutable: >-
               Switch storage providers with a fresh install: the table data stays in the old storage, and the
               release's identity keeps a cloud binding once it has one.
@@ -323,11 +325,19 @@ steps:
                 description: S3-compatible, with an access key pair in a secret.
               - value: local
                 label: Local volume
-                description: No bucket. Table data lives on the server volume, sized under Server.
+                description: >-
+                  For a single node. No bucket: table data lives on the server volume, sized under Server, with
+                  no scheduled snapshot or backup.
             rules:
               - rule: self.provider in ['aws', 'gcp', 'azure', 'hetzner', 'local']
                 mirrors: clickhouse.validateStorage
                 message: The provider must be `aws`, `gcp`, `azure`, `hetzner` or `local`.
+              - when: self.provider == 'local'
+                rule: size(self.locations) == 1 && self.locations[0].replicas == 1
+                severity: info
+                message: >-
+                  Local is meant for a single node (one location with one replica). In a cluster each replica keeps
+                  its own copy on its own volume, with no scheduled snapshot or backup.
               # validateCredentials refuses azure.accountKey whatever the provider is.
               - rule: "!has(self.azure.accountKey)"
                 mirrors: clickhouse.validateCredentials
@@ -574,8 +584,8 @@ steps:
             when: context.mode == 'upgrade'
             text: >-
               Every upgrade restarts every server replica in every location at once: nothing serialises a
-              rolling restart of a stateful workload. A three-shard cluster was measured at about 83 seconds
-              of total unavailability, so plan the upgrade as a query interruption.
+              rolling restart of a stateful workload. A cluster is unavailable for over a minute, so plan the
+              upgrade as a query interruption.
           - path: server.image
             type: string
             format: image

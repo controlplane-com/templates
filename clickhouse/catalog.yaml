@@ -9,7 +9,8 @@ topology: distributed
 summary: >-
   ClickHouse column-oriented analytical database, with table data in object storage (Amazon S3,
   Google Cloud Storage, Azure Blob Storage or Hetzner Object Storage) and local volumes for
-  metadata and cache, or with all data on the local volume and no bucket. One location with one replica runs a single node; several replicas in one
+  metadata and cache, or, as a single node, with all data on its local volume (no bucket and no
+  scheduled snapshot or backup). One location with one replica runs a single node; several replicas in one
   location, or three or more locations, form a sharded and replicated cluster coordinated by
   ClickHouse Keeper. Pick it for real-time analytics and data warehousing over large event, log
   or metrics tables with SQL.

@@ -3,7 +3,7 @@
 ClickHouse is a column-oriented analytical database for real-time querying and data warehousing at scale.
 This template deploys it in **single-node** or **cluster** mode — the mode is derived from the `locations`
 list — with object storage (AWS S3, GCS, Azure Blob Storage, or Hetzner Object Storage) as the primary data
-store, or with the data on the server volume itself (`provider: local`). **From 3.0.0 the chart deploys into the GVC you install into and creates none of its own.**
+store, or, for a single node, with the data on the server volume itself (`provider: local`). **From 3.0.0 the chart deploys into the GVC you install into and creates none of its own.**
 
 ## Architecture
 
@@ -121,7 +121,7 @@ curl -fsSLO https://raw.githubusercontent.com/controlplane-com/templates/main/sc
 python3 keep-gvc.py RELEASE_NAME            # shows what it will change
 python3 keep-gvc.py RELEASE_NAME --apply
 # write values-new.yaml from values-old.yaml (see below)
-cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/clickhouse --version 3.0.0 --gvc OLD_GVC_NAME -f values-new.yaml
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/clickhouse --version 3.1.0 --gvc OLD_GVC_NAME -f values-new.yaml
 ```
 
 - `OLD_GVC_NAME` is the GVC the 2.x release created (its `gvc.name`), not the GVC you ran the original install against.
@@ -258,8 +258,11 @@ Choose one of the providers below. Only `local` works without a bucket.
 Set `provider: local`. ClickHouse keeps every table on the server volumeset at `/var/lib/clickhouse`
 with its built-in `default` storage policy, so there is no `s3_main` policy and no storage-configuration
 secret. Size the volume for all of your data with `volumeset.server.capacity`; raise it with `helm upgrade`
-when it fills (a volume cannot shrink). The volumeset keeps a final snapshot on uninstall, retained for 7 days.
-In cluster modes each replica keeps its own copy on its own volume, so use `ReplicatedMergeTree` as below.
+when it fills (a volume cannot shrink). Use `local` for a single node: one location with one replica.
+
+**There is no scheduled snapshot or backup with `local`.** The server volume is the only copy of your data.
+The chart takes no snapshots while the release runs; uninstalling keeps one final snapshot of the volume
+for 7 days. Export or copy anything you cannot afford to lose.
 
 ### AWS S3
 
@@ -438,14 +441,14 @@ position in `locations`.
 - **Never `helm upgrade` a 2.x release onto 3.0.0** — it deletes the GVC the 2.x chart created and everything in it. See [Migrating from 2.x](#migrating-from-2x)
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more
-- **`provider: local` puts the data on the server volume**, so the volume must be sized for all of it. The bucket providers keep only metadata and cache there
+- **`provider: local` puts the data on the server volume**, so the volume must be sized for all of it, and that volume is the only copy: there is no scheduled snapshot or backup. Use it for a single node. The bucket providers keep only metadata and cache there
 - **The credentials secret has no `username` key.** To rotate the password: update the secret's value, run `cpln workload force-redeployment RELEASE_NAME-clickhouse-server --gvc GVC_NAME`, then update your clients. The startup script rewrites `users.xml` from the secret on every start, so the new password takes effect at the redeploy — and because `default` is defined in `users.xml`, it cannot be changed with `ALTER USER`. Updating a `cpln://` secret does not restart the workload by itself
 - **Switch storage providers (including to or from `local`) with a fresh install, not an upgrade.** The data stays where it was written, and an identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
 - **`helm upgrade` restarts every replica in every location at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned query interruption
 - **Keep locations and the bucket in the same provider and region family.** Cross-region traffic to object storage is billed on every query that misses the local cache
 - **With `workload-list`, list only your clients.** The server and Keeper reach each other over the same internal firewall, so the chart adds this release's own workloads to the list for you
-- **A rolling upgrade of a 3-shard cluster is about 83 seconds of total unavailability** (measured), and changing a Keeper setting costs roughly 60 seconds of coordination outage. Plan both as query interruptions
+- **A `helm upgrade` of a cluster interrupts queries on every shard at once**, for over a minute, and changing a Keeper setting interrupts coordination for about a minute. Plan both as query interruptions
 - **Renaming `clusterName` orphans existing `Distributed` tables** — they keep pointing at the old cluster and fail with `Code: 701`. Recreate them after a rename
 - **With one replica per shard, losing a shard fails every distributed query** (~60 s to surface), not just the rows on that shard. Add replicas if partial results are not acceptable
 

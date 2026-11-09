@@ -501,8 +501,6 @@ steps:
             when: self.cplnMcp.keySecretName != ''
             suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
             description: The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete tools as well, and grant the service account only what flows need.
-            pattern: '^https://'
-            patternMessage: Use an https:// URL.
         rules:
           - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
             mirrors: langflow.validateCplnMcp
@@ -621,7 +619,7 @@ steps:
         message: >-
           The chart sets the server, database, login, secret key, Redis queue and rate-limit settings itself
           (LANGFLOW_HOST, LANGFLOW_DATABASE_URL, LANGFLOW_AUTO_LOGIN, LANGFLOW_SECRET_KEY, LANGFLOW_REDIS_QUEUE_URL
-          and others, plus LF_DB_* and LF_REDIS_PASSWORD); remove them from the keys and extra variables.
+          and others, plus LF_DB_*, LF_REDIS_PASSWORD and LF_CPLN_MCP_*); remove them from the keys and extra variables.
       - rule: (self.variableSecrets.keys + self.langflow.extraEnv.map(e, e.name)).all(n, !n.startsWith('CPLN_'))
         mirrors: langflow.validateEnvNames
         paths: [variableSecrets.keys, langflow.extraEnv]

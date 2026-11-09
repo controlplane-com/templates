@@ -1,0 +1,14 @@
+{{- include "directus.validate" . }}
+---
+kind: identity
+name: {{ include "directus.identity.name" . }}
+description: Directus identity
+tags: {{- include "directus.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "directus.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

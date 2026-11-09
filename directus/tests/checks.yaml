@@ -1,0 +1,225 @@
+# Feature checks for the directus template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_email, admin_password, redis_password, directus_version).
+#
+# The checks are Node (built-ins only: fetch, net, fs) run in the Directus container against its own API
+# on 127.0.0.1:8055; Redis is reached with raw RESP over a socket (the image has no redis-cli, curl or
+# python). The runner reads any brace-wrapped word as a placeholder, so the scripts use string
+# concatenation, never template literals, and keep a space after every opening brace.
+checks:
+  - id: server-version
+    description: An admin token reads /server/info, which reports the Directus version in the baseline var directus_version.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        (async () => {
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const r = await fetch(B + '/server/info', { headers: { authorization: 'Bearer ' + tok } });
+          const v = ((await r.json()).data || {}).version;
+          console.log(v === '{directus_version}' ? 'VERSION_OK' : 'VERSION_BAD ' + r.status + ' ' + v);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^VERSION_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: login-and-refusal
+    description: The admin from the prerequisite secret logs in, and a wrong password is refused with HTTP 401.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        const login = (pw) => fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: '{admin_email}', password: pw }) });
+        (async () => {
+          const ok = await login('{admin_password}');
+          const body = await ok.json();
+          console.log(ok.status === 200 && body.data && body.data.access_token ? 'LOGIN_OK' : 'LOGIN_BAD ' + ok.status);
+          const bad = await login('wrong-' + Date.now());
+          console.log(bad.status === 401 ? 'WRONG_REFUSED' : 'WRONG_ACCEPTED ' + bad.status);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^LOGIN_OK\nWRONG_REFUSED$"
+
+  - id: setup-refused
+    description: >-
+      The unauthenticated first-run setup endpoint refuses to create another admin on the installed
+      instance (the admin was pre-seeded from the secret), and the user count stays at one.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        (async () => {
+          const s = await fetch(B + '/server/setup', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ project_name: 'e2e', first_name: 'Intruder', email: 'intruder@example.com', password: 'Intruder-' + Date.now(), license: true }) });
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const u = await fetch(B + '/users?aggregate[count]=*', { headers: { authorization: 'Bearer ' + tok } });
+          const n = Number(((await u.json()).data || [])[0].count);
+          const refused = s.status >= 400;
+          console.log(refused && n === 1 ? 'SETUP_REFUSED' : 'SETUP_OPEN ' + s.status + ' users=' + n);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^SETUP_REFUSED$"
+
+  - id: item-written
+    description: Creates the e2e_notes collection if absent, writes an item tagged with the version under test, and reads it back by filter.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        const TAG = 'persist-{version}';
+        (async () => {
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const h = { authorization: 'Bearer ' + tok, 'content-type': 'application/json' };
+          const c = await fetch(B + '/collections/e2e_notes', { headers: h });
+          if (c.status !== 200) {
+            const mk = await fetch(B + '/collections', { method: 'POST', headers: h, body: JSON.stringify({
+              collection: 'e2e_notes', meta: { icon: 'note' }, schema: { name: 'e2e_notes' },
+              fields: [
+                { field: 'id', type: 'integer', meta: { hidden: true }, schema: { is_primary_key: true, has_auto_increment: true } },
+                { field: 'tag', type: 'string' },
+              ] }) });
+            if (mk.status >= 300) { console.log('COLLECTION_BAD ' + mk.status + ' ' + (await mk.text()).slice(0, 200)); return; }
+          }
+          const w = await fetch(B + '/items/e2e_notes', { method: 'POST', headers: h, body: JSON.stringify({ tag: TAG }) });
+          const id = ((await w.json()).data || {}).id;
+          const f = encodeURIComponent(JSON.stringify({ tag: { _eq: TAG } }));
+          const r = await fetch(B + '/items/e2e_notes?filter=' + f, { headers: h });
+          const rows = (await r.json()).data || [];
+          console.log(id && rows.some((x) => x.id === id) ? 'WRITTEN ' + id : 'WRITE_BAD ' + w.status + ' ' + r.status);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^WRITTEN [0-9]+$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: item-persists
+    description: The item tagged with the first-installed version is still in the database (it never writes).
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        const TAG = 'persist-{installed_version}';
+        (async () => {
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const f = encodeURIComponent(JSON.stringify({ tag: { _eq: TAG } }));
+          const r = await fetch(B + '/items/e2e_notes?filter=' + f, { headers: { authorization: 'Bearer ' + tok } });
+          const rows = (await r.json()).data || [];
+          console.log(rows.length >= 1 ? 'PERSISTED' : 'MISSING ' + r.status);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^PERSISTED$"
+
+  - id: file-roundtrip
+    description: >-
+      An uploaded file reads back byte for byte from /assets and sits on the shared uploads volume at
+      /directus/uploads; it is then deleted.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const fs = require('node:fs');
+        const crypto = require('node:crypto');
+        const B = 'http://127.0.0.1:8055';
+        (async () => {
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const bytes = crypto.randomBytes(4096);
+          const form = new FormData();
+          form.append('file', new Blob([bytes], { type: 'application/octet-stream' }), 'e2e.bin');
+          const up = await fetch(B + '/files', { method: 'POST', headers: { authorization: 'Bearer ' + tok }, body: form });
+          const meta = (await up.json()).data || {};
+          const a = await fetch(B + '/assets/' + meta.id, { headers: { authorization: 'Bearer ' + tok } });
+          const back = Buffer.from(await a.arrayBuffer());
+          const onDisk = !!meta.filename_disk && fs.existsSync('/directus/uploads/' + meta.filename_disk);
+          const same = back.equals(bytes);
+          await fetch(B + '/files/' + meta.id, { method: 'DELETE', headers: { authorization: 'Bearer ' + tok } });
+          console.log(same && onDisk ? 'FILE_OK' : 'FILE_BAD up=' + up.status + ' get=' + a.status + ' same=' + same + ' disk=' + onDisk);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^FILE_OK$"
+
+  - id: redis-auth
+    description: The bundled Redis refuses a command without the password (NOAUTH) and answers PONG with the password from the secret.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const net = require('node:net');
+        const HOST = '{release}-redis.{gvc}.cpln.local';
+        const talk = (lines) => new Promise((resolve) => {
+          const s = net.connect(6379, HOST);
+          let buf = '';
+          const done = () => { s.destroy(); resolve(buf); };
+          s.setTimeout(8000, done);
+          s.on('data', (d) => { buf += d.toString(); if (buf.split('\r\n').length > lines.length) done(); });
+          s.on('error', (e) => { buf += 'ERR ' + e.message; done(); });
+          s.on('connect', () => s.write(lines.map((x) => x + '\r\n').join('')));
+        });
+        (async () => {
+          const a = await talk(['PING']);
+          console.log(a.startsWith('-NOAUTH') ? 'NOAUTH' : 'OPEN ' + JSON.stringify(a));
+          const b = await talk(['AUTH {redis_password}', 'PING']);
+          console.log(b === '+OK\r\n+PONG\r\n' ? 'PONG' : 'AUTH_BAD ' + JSON.stringify(b));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^NOAUTH\nPONG$"
+
+  - id: bus-on-redis
+    description: >-
+      Both Directus replicas are subscribed to the Redis message bus (schema-change channel), so they
+      share cache invalidation instead of falling back to a per-process bus.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const net = require('node:net');
+        const HOST = '{release}-redis.{gvc}.cpln.local';
+        const s = net.connect(6379, HOST);
+        let buf = '';
+        const finish = () => {
+          s.destroy();
+          const m = buf.match(/:(\d+)\r\n/);
+          const n = m ? Number(m[1]) : -1;
+          console.log(n >= 2 ? 'BUS_SUBSCRIBERS_OK' : 'BUS_BAD ' + JSON.stringify(buf));
+        };
+        s.setTimeout(8000, finish);
+        s.on('data', (d) => { buf += d.toString(); if (/:\d+\r\n/.test(buf)) finish(); });
+        s.on('error', (e) => { buf += 'ERR ' + e.message; finish(); });
+        s.on('connect', () => s.write('AUTH {redis_password}\r\nPUBSUB NUMSUB directus:bus:schemaChanged\r\n'));
+        JS
+    expect:
+      stdout: "^BUS_SUBSCRIBERS_OK$"
+    retries: 4
+    retryDelaySeconds: 15

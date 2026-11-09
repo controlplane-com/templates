@@ -1,0 +1,728 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Directus
+
+# Directus pins itself to the single `location` value, and the bundled PostgreSQL and Redis are
+# single-location stateful workloads with no location handling: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: email
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database section, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Directus connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        help: >-
+          Holds every collection, item, user and revision. Uninstalling the release deletes the volume set, so the
+          data does not survive a reinstall.
+      internalAccess.type:
+        description: >-
+          Directus connects to its database like any other workload: keep Same GVC, or add the Directus workload
+          under Allowed workloads.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: email
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Directus stores its data in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Directus connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        description: >-
+          Per member. A quarter of it caps the WAL that replication slots may hold back.
+      internal_access.type:
+        description: >-
+          Directus connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
+          Directus workload under Allowed workloads.
+  - template: redis
+    version: 3.9.0
+    when: self.redis.enabled
+    title: Redis
+    after: email
+    steps:
+      - { id: topology, title: Redis engine, description: "The single Redis node that holds Directus's shared cache, locks and message bus. It holds no data of record." }
+      - { id: resources, title: Redis resources }
+      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
+      - { id: backup, title: Redis backups }
+      - { id: advanced, title: Redis advanced, description: "Images, timeouts, health probes and extra workload settings." }
+    exclude:
+      # Directus connects to one Redis endpoint and cannot follow Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # Redis authentication is chosen in the Scaling and cache step; a password in values is refused (directus.validateRedis).
+      - redisAuth
+      - redis.auth.fromSecret
+      # Directus reaches Redis on :6379 inside the GVC; public access moves it to other ports (directus.validateRedis).
+      - redis.publicAccess
+    override:
+      redis.replicaDirect:
+        description: A DNS name per replica. Directus connects through the workload's own name, so it does not need one.
+
+steps:
+  - id: directus
+    title: Directus
+    description: Where Directus runs, its server, its prerequisite secret, an optional license key, and its database.
+    sections:
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC that Directus runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: directus.validateLocation
+            paths: [location]
+            message: >-
+              Directus runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: Server
+        docs: "#directus"
+        fields:
+          - path: directus.image
+            type: string
+            format: image
+            label: Directus image
+            required: true
+          - path: directus.publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://cms.example.com
+            description: >-
+              Only for a custom domain, with the scheme and no trailing slash. Empty uses the canonical endpoint, or
+              `http://localhost:8055` (for `cpln port-forward`) when the public endpoint is off.
+            help: Password-reset and invitation links, OAuth redirects and the license activation are bound to this address.
+          - path: directus.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. Image transformations need the memory headroom.
+            cpu: { min: 25m }
+            memory: { min: 256Mi }
+        rules:
+          - rule: >-
+              !has(self.gvc) &&
+              (self.directus.publicUrl == '' || self.directus.publicUrl.matches('^https?://[^/]+(/.*[^/])?$'))
+            mirrors: directus.validate
+            paths: [directus.publicUrl]
+            message: >-
+              Use a full URL with the scheme and no trailing slash, such as https://cms.example.com, and remove any
+              `gvc` key from the values: Directus deploys into the GVC you install it into.
+      - title: Prerequisite secret
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Two secrets must exist **before** you install: this one and the database credentials under Database
+              below. If one is missing, the deployment waits and `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Directus secret
+            required: true
+            description: >-
+              A dictionary secret with `secret` (a random string of 32 or more characters, such as
+              `openssl rand -hex 32`), `adminEmail` and `adminPassword` (the first administrator).
+            help: >-
+              `adminEmail` and `adminPassword` are read on the first boot only; change the password later in the
+              Data Studio. Never change `secret`: every session and token is signed with it.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [secret, adminEmail, adminPassword]
+              create:
+                suggestName: "context.releaseName + '-directus-secrets'"
+        rules:
+          - rule: self.secrets.name != null && self.secrets.name != ''
+            mirrors: directus.validate
+            paths: [secrets.name]
+            message: The Directus secret is required.
+      - title: License key
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            text: >-
+              Without a key Directus runs on the free Core tier: 3 Data Studio users, 25 collections and 5 flows.
+              A license key, free on registration for small organizations, lifts the caps.
+          - path: license.secretName
+            type: ref
+            label: License key secret
+            description: Optional. An opaque secret (encoding plain) holding your Directus license key.
+            help: With a key set here, the license can no longer be changed from the Data Studio.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-directus-license'"
+                encoding: plain
+
+      - title: Database
+        docs: "#database"
+        description: >-
+          Which PostgreSQL holds Directus's data. Its server, storage, network and backups follow in the last
+          steps; their defaults fit a first install.
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every collection, item and user.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              The first upgrade after an install can restart the bundled database, which briefly interrupts the API
+              and the Data Studio.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Directus connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Directus.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-directus-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Directus connects through.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Directus connects with
+              them. Changing it later is a database operation: follow the postgres-highly-available template's
+              password rotation steps, then update the secret and force a redeployment of Directus.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-directus-db-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: directus.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: >-
+          Switching the database type deploys a new, empty database; the collections, items and users in the
+          current one are not moved.
+
+  - id: storage
+    title: File storage
+    description: Where uploaded files and images are stored.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: File storage
+            widget: cards
+            required: true
+            docs: "#file-storage"
+            options:
+              - value: local
+                label: Shared volume
+                description: A read-write-many volume every replica mounts. Deleted on uninstall, with every file.
+              - value: s3
+                label: S3 bucket
+                description: AWS S3 or an S3-compatible server such as MinIO; the files outlive the release.
+        rules:
+          - rule: self.storage.type in ['local', 's3']
+            mirrors: directus.validate
+            paths: [storage.type]
+            message: Choose where files are stored.
+      - title: Shared volume
+        when: self.storage.type == 'local'
+        fields:
+          - path: storage.local.capacity
+            type: integer
+            label: Capacity
+            unit: GiB
+            required: true
+            min: 10
+            suggestions: [10, 50, 100]
+            description: Can be expanded later, not shrunk.
+        rules:
+          - rule: self.storage.type != 'local' || self.storage.local.capacity >= 10
+            mirrors: directus.validate
+            paths: [storage.local.capacity]
+            message: Use at least 10 GiB.
+      - title: S3 bucket
+        when: self.storage.type == 's3'
+        docs: "#storage-setup"
+        fields:
+          - id: s3Flavour
+            virtual: true
+            type: enum
+            label: S3 provider
+            widget: segmented
+            required: true
+            init: "self.storage.s3.endpoint == null || self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a Control Plane cloud account; static keys are not accepted.
+                set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
+              - value: compatible
+                label: S3-compatible
+                description: MinIO or another S3 server, with static keys in a secret.
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            description: Any value for most S3-compatible servers.
+          - path: storage.s3.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            placeholder: http://my-minio.my-gvc.cpln.local:9000
+            description: The S3 API address, with scheme and port, fully qualified.
+          - path: storage.s3.forcePathStyle
+            type: boolean
+            label: Path-style requests
+            when: ui.s3Flavour == 'compatible'
+            description: On for most S3-compatible servers, such as MinIO.
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: Access keys secret
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            description: A dictionary secret with the keys `accessKeyId` and `secretAccessKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            when: ui.s3Flavour == 'aws'
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            when: ui.s3Flavour == 'aws'
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+        rules:
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket != ''
+            mirrors: directus.validate
+            paths: [storage.s3.bucket]
+            message: The bucket is required.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName == '' ||
+              self.storage.s3.endpoint != ''
+            mirrors: directus.validate
+            paths: [storage.s3.auth.secretName, storage.s3.bucket]
+            message: >-
+              Static keys are only for S3-compatible servers. For AWS S3, choose AWS S3 above and use a cloud
+              account.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName != '' ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: directus.validate
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName]
+            message: AWS S3 needs a cloud account and an IAM policy name.
+          - rule: oldSelf == null || self.storage.type == oldSelf.storage.type
+            severity: warning
+            paths: [storage.type]
+            message: Switching file storage does not move existing files; files uploaded before the switch stop loading.
+
+  - id: scaling
+    title: Scaling and cache
+    description: How many Directus replicas run, the Redis they share, and the API response cache.
+    sections:
+      - title: Replicas
+        docs: "#scaling-and-cache"
+        fields:
+          - path: directus.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 10
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas are interchangeable. 2 or more need Redis below; 2 with highly available PostgreSQL keeps
+              Directus up through upgrades and failover.
+        rules:
+          - rule: self.directus.replicas >= 1 && self.directus.replicas <= 10
+            mirrors: directus.validate
+            paths: [directus.replicas]
+            message: Use between 1 and 10 replicas.
+          - rule: self.directus.replicas < 2 || self.redis.enabled
+            mirrors: directus.validate
+            paths: [directus.replicas]
+            message: >-
+              2 or more replicas need Redis: without it each replica keeps its own cache and runs every scheduled
+              flow itself. Turn on Redis below, or use 1 replica.
+      - id: redis
+        title: Redis
+        toggle: redis.enabled
+        docs: "#scaling-and-cache"
+        description: >-
+          One Redis node for the shared cache, locks, message bus, rate limits and scheduled-flow clock. It holds no
+          data of record: a Redis restart only empties the cache. Its server settings follow the Email step.
+        fields:
+          - path: redis.redis.auth.fromSecret.enabled
+            type: boolean
+            label: Require a Redis password
+            description: Off, the same-GVC firewall is Redis's only boundary. On, Redis requires a password read from a secret you create first.
+          - type: note
+            severity: warning
+            when: self.redis.redis.auth.fromSecret.enabled
+            text: >-
+              The Redis password secret must exist **before** you install or upgrade. If it is missing, the
+              deployment waits and `cpln logs` shows nothing.
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            when: self.redis.redis.auth.fromSecret.enabled
+            description: A dictionary secret; the key named below holds the password.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-directus-redis'"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            when: self.redis.redis.auth.fromSecret.enabled
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+        rules:
+          - rule: "!self.redis.enabled || !self.redis.redis.auth.fromSecret.enabled || self.redis.redis.auth.fromSecret.name != ''"
+            mirrors: directus.validateRedis
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+          - rule: >-
+              oldSelf == null ||
+              self.redis.redis.auth.fromSecret.enabled == oldSelf.redis.redis.auth.fromSecret.enabled
+            severity: info
+            paths: [redis.redis.auth.fromSecret.enabled]
+            message: Turning the Redis password on or off restarts Redis and Directus.
+      - title: Response cache
+        docs: "#scaling-and-cache"
+        fields:
+          - path: cache.enabled
+            type: boolean
+            label: Cache API responses
+            description: >-
+              Caches read responses and purges them on every write. Shared through Redis when Redis is on, otherwise
+              kept per replica.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Directus inside Control Plane.
+    sections:
+      - title: Public endpoint
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              The API and the Data Studio on a public `*.cpln.app` URL. Off, reach Directus only through
+              `cpln port-forward`. Firewall changes take 30 seconds to a few minutes to take effect.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: directus.validate
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+
+  - id: email
+    title: Email
+    description: The SMTP relay and sender for invitations and password-reset mail.
+    sections:
+      - title: SMTP relay
+        toggle: email.enabled
+        docs: "#email"
+        description: Without it no mail is sent, so users cannot be invited by email or reset a forgotten password.
+        fields:
+          - path: email.fromAddress
+            type: string
+            label: From address
+            required: true
+            example: true
+          - path: email.host
+            type: string
+            label: SMTP host
+            required: true
+            example: true
+          - path: email.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+          - path: email.secure
+            type: boolean
+            label: Implicit TLS
+            description: On for port 465; off uses STARTTLS or plain on 587 and 25.
+          - path: email.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: A dictionary secret with the keys `username` and `password`. Empty for an unauthenticated relay.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+        rules:
+          - rule: "!self.email.enabled || (self.email.host != '' && self.email.fromAddress != '')"
+            mirrors: directus.validate
+            paths: [email.host, email.fromAddress]
+            message: The SMTP host and from address are required.
+
+# Rules over the imported values and YAML-only settings: their issues show on the imported fields' steps,
+# or on Review when they have no paths.
+rules:
+  # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: directus.validateDatabase
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: directus.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Directus's database endpoint.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    mirrors: directus.validateDatabase
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Directus, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus') in self.postgres.internalAccess.workloads
+    mirrors: directus.validateDatabase
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus, or Directus cannot reach its database.'"
+    message: Add the Directus workload to the list, or Directus cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus') in self.postgresHA.internal_access.workloads
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus, or Directus cannot reach its database.'"
+    message: Add the Directus workload to the list, or Directus cannot reach its database.
+  - when: self.redis.enabled
+    rule: self.redis.mode == 'dev'
+    mirrors: directus.validateRedis
+    message: >-
+      Redis must run as a single node: set redis.mode to dev. Directus connects to one Redis endpoint and cannot
+      follow a Sentinel failover.
+  - when: self.redis.enabled
+    rule: >-
+      !has(self.redis.redis.auth.password) ||
+      (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+      (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+    mirrors: directus.validateRedis
+    message: >-
+      redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove it
+      and turn on Require a Redis password with a secret instead.
+  - when: self.redis.enabled
+    rule: "!has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+    mirrors: directus.validateRedis
+    message: >-
+      Redis public access is not supported: Directus connects to Redis on port 6379 inside the GVC, and public
+      access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
+  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus') in self.redis.redis.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus, or Directus cannot reach Redis.'"
+    message: Add the Directus workload to the list, or Directus cannot reach Redis.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (directus.validateRedis), since Directus cannot follow Sentinel.
+  - path: postgres.pgbouncer
+    reason: Directus connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Directus connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); use Require a Redis password with a secret.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (directus.validateRedis); Directus connects to Redis on port 6379 inside the GVC.

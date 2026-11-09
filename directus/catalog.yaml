@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Directus
+category: apps
+topology: single
+
+summary: >-
+  Directus headless CMS and data platform: an instant REST and GraphQL API plus the Data Studio admin
+  app over a bundled PostgreSQL, with uploaded files on a shared volume or an S3 bucket. Optional Redis
+  for multiple replicas, optional highly available PostgreSQL, SMTP email and database backups. Runs
+  on the free Core tier (3 Studio users, 25 collections, 5 flows); a license key, free on registration
+  for small organizations, lifts the caps.
+
+keywords:
+  - headless cms
+  - directus
+  - rest api
+  - graphql
+  - data studio
+  - content api
+  - admin panel
+  - backend as a service
+  - postgres api
+  - digital asset management
+  - strapi alternative
+  - contentful alternative
+
+useCases:
+  - Manage website and app content in an admin app and serve it over REST or GraphQL
+  - Put an instant API and a no-code admin panel on top of a PostgreSQL database
+  - Store and transform images and files for your front ends
+  - Automate content workflows with flows, webhooks and roles
+
+alternativeTo:
+  - Contentful
+  - Strapi
+  - Sanity
+  - Hasura
+
+pickInsteadIf:
+  - need: a spreadsheet-style UI over a database for non-developers
+    template: nocodb
+  - need: a Firebase-style backend with auth, realtime and storage
+    template: supabase
+  - need: a single-binary backend with a built-in database
+    template: pocketbase
+  - need: a blog or newsletter publishing site
+    template: ghost
+  - need: a full website builder with themes and plugins
+    template: wordpress
+
+related:
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for uploaded files with storage.type s3
+  - template: postgres
+    relation: companion
+    note: A standalone PostgreSQL to point other apps at
+  - template: supabase
+    relation: alternative
+    note: Postgres backend with auth and realtime instead of a CMS
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [secret, adminEmail, adminPassword]
+    valuesPath: secrets.name
+    required: true
+    description: Token signing secret and the first admin's login (read on first boot only). When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Directus connects with; set the name for the database in use.
+  - kind: secret
+    secretType: opaque
+    valuesPath: license.secretName
+    required: false
+    when: lifting the Core-tier caps with a license key
+    description: Directus license key, encoding plain, to lift the Core-tier caps. Without it Directus runs on the free Core tier.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type s3
+    description: S3 or S3-compatible bucket that stores uploaded files.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3 on AWS (storage.s3.auth.secretName empty)
+    description: Control Plane AWS cloud account for keyless bucket access, plus a bucket-scoped IAM policy (storage.s3.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type s3 with an S3-compatible storage.s3.endpoint
+    description: Static access keys for the S3-compatible file storage server.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: email.auth.secretName
+    required: false
+    when: email.enabled with an authenticated relay
+    description: SMTP relay login for invitation and password-reset email.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled and redis.redis.auth.fromSecret.enabled
+    description: Password the bundled Redis requires and Directus authenticates with.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

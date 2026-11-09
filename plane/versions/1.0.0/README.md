@@ -139,6 +139,8 @@ Instance settings live in God Mode (`{plane-url}/god-mode/`, the admin claimed a
 - **Authentication** (God Mode → Authentication): "Unique codes" (emailed sign-in codes, needs Email), password sign-in, "Allow anyone to sign up", and GitHub, Google or GitLab sign-in. Each provider's OAuth app needs the callback `{plane-url}/auth/{github|google|gitlab}/callback/`; changing `plane.appUrl` means registering it again.
 - **General**: instance name, admins and telemetry.
 
+Webhooks (workspace settings → Webhooks) must point at a public URL; internal and private addresses are refused. Plane generates each webhook's signing secret and signs the body in `x-plane-signature` (HMAC-SHA256). Exports appear as download links under workspace settings → Exports. Uploads larger than `plane.fileSizeLimit` are refused with HTTP 413.
+
 ## Storage setup
 
 Only for `storage.type: s3`. Browsers upload to and download from the bucket directly, so it needs a CORS rule for your Plane origin:

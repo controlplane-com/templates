@@ -1,0 +1,89 @@
+# ─── Locations ────────────────────────────────────────────────────────────────
+# This chart deploys into the GVC you install into — it does NOT create one.
+# Every location listed here MUST already exist in that GVC, or the nodes refuse
+# to initialise with a named error (see Prerequisites in the README).
+# Extra locations in the GVC are fine: nothing ClickHouse-related runs in them.
+#
+# Deployment mode is derived from this list:
+#   1 location,  replicas: 1   → single-node (no Keeper)
+#   1 location,  replicas: >1  → single-shard cluster (Keeper required)
+#   3 or more locations        → multi-shard cluster, one shard per location
+#   2 locations                → NOT supported
+locations:
+  - name: aws-us-east-1
+    replicas: 1
+
+# ─── Object Storage ───────────────────────────────────────────────────────────
+provider: aws # Options: aws, gcp, azure, or hetzner
+
+aws: # If enabled, all fields below are required - See README for guidance
+  bucket: my-clickhouse-bucket # Name of your S3 bucket
+  region: us-east-1 # Region of your S3 bucket
+  cloudAccountName: my-clickhouse-cloudaccount # Name of your Cloud Account
+  policyName: my-clickhouse-s3-policy # Name of your pre-created policy to allow access to the S3 bucket
+
+gcp: # If enabled, all fields below are required - See README for guidance
+  bucket: my-clickhouse-gcs-bucket # Name of your GCS bucket
+  # REQUIRED PREREQUISITE SECRET — a `dictionary` secret holding exactly
+  # `accessKeyId` and `secretAccessKey` (the GCS interoperability HMAC pair).
+  # They reach ClickHouse as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY rather
+  # than being written into the disk XML, because a cpln:// reference inside a
+  # mounted config file is never resolved.
+  credentialsSecretName: my-clickhouse-gcs-credentials
+
+azure: # If enabled, all fields below are required - See README for guidance
+  storageAccount: myclickhousestorage # Name of your Azure Storage Account
+  container: clickhouse-data # Name of your Blob Storage container
+  # REQUIRED PREREQUISITE SECRET — a `dictionary` secret holding exactly
+  # `accountKey` for your Azure Storage Account.
+  credentialsSecretName: my-clickhouse-azure-credentials
+
+hetzner: # If enabled, all fields below are required - See README for guidance
+  bucket: my-clickhouse-hetzner-bucket # Name of your Hetzner Object Storage bucket
+  region: nbg1 # Region of your bucket. Options: nbg1, hel1, fsn1
+  # REQUIRED PREREQUISITE SECRET — a `dictionary` secret holding exactly
+  # `accessKeyId` and `secretAccessKey` for your Hetzner Object Storage.
+  credentialsSecretName: my-clickhouse-hetzner-credentials
+
+# ─── Cluster ──────────────────────────────────────────────────────────────────
+# Used in cluster modes only. Must be a bare identifier: letters, digits and
+# underscores, not starting with a digit — it becomes an XML element name and is
+# used unquoted in `ON CLUSTER` DDL.
+clusterName: my_cluster
+
+database: # Automatically create a database on initialization using the default user
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+  # A `dictionary` secret holding exactly two keys: `password` and `database`.
+  # ClickHouse has no separate username here — it uses the built-in `default`
+  # user, so there is no `username` key. If the secret does not exist at install
+  # time the deployment WEDGES silently; see Prerequisites in the README.
+  credentialsSecretName: my-clickhouse-credentials
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  server:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+  keeper:
+    capacity: 10 # initial capacity in GiB (minimum is 10) - cluster modes only
+
+# ─── Server ───────────────────────────────────────────────────────────────────
+server:
+  image: clickhouse/clickhouse-server:25.10
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internalAccess:
+    type: same-gvc # options: same-gvc, same-org, workload-list, none
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Keeper (cluster modes only) ──────────────────────────────────────────────
+keeper: # cluster modes only
+  image: clickhouse/clickhouse-keeper:25.10
+  resources:
+    cpu: 2
+    memory: 2Gi
+  internalAccess:
+    type: same-gvc # options: same-gvc, same-org, workload-list, none
+    workloads: [] # required when type is workload-list; list only your clients -- this release's
+    # own server and keeper workloads are added automatically, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME

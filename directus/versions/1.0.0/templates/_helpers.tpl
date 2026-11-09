@@ -100,6 +100,9 @@ clickhouse/pgedge in the 2026-08-27 batch).
 {{- define "directus.ownWorkloadLinks" -}}
 {{- $gvc := .Values.global.cpln.gvc -}}
 - //gvc/{{ $gvc }}/workload/{{ include "directus.name" . }}
+{{- if .Values.redis.enabled }}
+- //gvc/{{ $gvc }}/workload/{{ include "directus.redis.workload" . }}
+{{- end }}
 {{- end -}}
 
 {{/*

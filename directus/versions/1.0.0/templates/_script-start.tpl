@@ -10,7 +10,7 @@ What it adds in front of the image's own docker-entrypoint.cjs:
   2. GVC report (fail-open): warn when the GVC has locations this release does
      not use — the bundled database subcharts run, and are billed, in all of them.
   3. Database gate: a real `SELECT 1` through the `pg` driver Directus itself
-     ships, 3 consecutive successes, bounded at 180 s. A TCP connect is not a
+     ships, 3 consecutive successes, until 150 s after the wrapper started. A TCP connect is not a
      signal (the mesh answers it for anything), and bootstrap's own wait is only
      5 x 5 s, which a fresh bundled PostgreSQL can outlast.
   4. `directus bootstrap` (install or migrations) under a PostgreSQL advisory
@@ -22,8 +22,16 @@ What it adds in front of the image's own docker-entrypoint.cjs:
 
 Boot window: the platform derives a startup probe from the readiness probe and
 restarts a never-ready container after about initialDelaySeconds + 30 x
-periodSeconds = 10 + 30 x 15 = 460 s. The gates give up inside it so their
-diagnostics reach the log: GVC read <= ~30 s, database 180 s, lock wait 240 s.
+periodSeconds = 10 + 30 x 15 = 460 s. Every wait is measured against ONE clock
+(T0, the wrapper's start), so the gates give up inside that window and their
+diagnostics reach the log:
+  GVC read      <= 22 s   (3 x 6 s timeout + 2 x 2 s pause; fail-open)
+  database gate until T0 + 150 s (each attempt's timeouts clipped to the deadline)
+  lock wait     until T0 + 300 s (lock_timeout = what is left of that)
+That leaves >= 160 s for `directus bootstrap` (install or migrations) plus
+server start and the first passing readiness probe. A bootstrap that runs past
+the window is killed with the container; PostgreSQL then releases the lock and
+the next start resumes the migrations.
 */}}
 {{- define "directus.script.start" -}}
 'use strict';
@@ -34,11 +42,13 @@ const { spawn } = require('node:child_process');
 const CONFIGURED_LOCATION = '{{ .Values.location }}';
 const DB_HOST = '{{ include "directus.postgres.host" . }}';
 const DB_PORT = 5432;
-const GATE_ATTEMPTS = 36;        // x 5 s = 180 s
+const T0 = Date.now();
+const elapsed = () => (Date.now() - T0) / 1000;
+const GATE_DEADLINE_S = 150;     // database must answer by T0 + 150 s
 const GATE_SLEEP_MS = 5000;
 const GATE_REQUIRED_OK = 3;
+const LOCK_DEADLINE_S = 300;     // the bootstrap lock must be held by T0 + 300 s
 const LOCK_KEY = '4912120601';   // pg_advisory_lock key shared by every replica of every release on this database
-const LOCK_TIMEOUT = '240s';
 
 const log = (m) => console.log('[directus] ' + m);
 const warn = (m) => console.error('[directus] WARNING: ' + m);
@@ -78,7 +88,7 @@ async function main() {
       } catch (e) {
         warn('GVC read failed (attempt ' + i + '/3): ' + e.message);
       }
-      if (!gvcDoc) await sleep(2000);
+      if (!gvcDoc && i < 3) await sleep(2000);
     }
   }
   if (!gvcDoc) {
@@ -112,11 +122,16 @@ async function main() {
     connectionTimeoutMillis: 5000,
     query_timeout: 5000,
   };
-  log('waiting up to ' + (GATE_ATTEMPTS * GATE_SLEEP_MS / 1000) + 's for PostgreSQL at ' + DB_HOST + ':' + DB_PORT + ' to answer a query');
+  log('waiting until ' + GATE_DEADLINE_S + 's after start for PostgreSQL at ' + DB_HOST + ':' + DB_PORT + ' to answer a query');
   let ok = 0;
   let lastErr = '';
-  for (let i = 1; i <= GATE_ATTEMPTS; i++) {
-    const c = new Client(conn);
+  for (let i = 1; elapsed() < GATE_DEADLINE_S; i++) {
+    // Clip this attempt's timeouts to the deadline, so the gate never overruns it.
+    const left = Math.max(1000, Math.floor((GATE_DEADLINE_S - elapsed()) * 1000));
+    const c = new Client(Object.assign({}, conn, {
+      connectionTimeoutMillis: Math.min(conn.connectionTimeoutMillis, left),
+      query_timeout: Math.min(conn.query_timeout, left),
+    }));
     try {
       await c.connect();
       await c.query('SELECT 1');
@@ -126,24 +141,25 @@ async function main() {
     } catch (e) {
       ok = 0;
       lastErr = e.message;
-      log('PostgreSQL not serving yet (attempt ' + i + '/' + GATE_ATTEMPTS + '): ' + e.message);
+      log('PostgreSQL not serving yet (attempt ' + i + ', ' + Math.round(elapsed()) + 's): ' + e.message);
     } finally {
       await c.end().catch(() => {});
     }
     if (ok >= GATE_REQUIRED_OK) break;
-    await sleep(GATE_SLEEP_MS);
+    await sleep(Math.max(0, Math.min(GATE_SLEEP_MS, (GATE_DEADLINE_S - elapsed()) * 1000)));
   }
   if (ok < GATE_REQUIRED_OK) {
-    fatal('PostgreSQL at ' + DB_HOST + ':' + DB_PORT + ' did not answer within ' + (GATE_ATTEMPTS * GATE_SLEEP_MS / 1000) +
-      's (last error: ' + lastErr + '). Refusing to start. Check the database workload and that the credentials secret matches the one the database was initialized with.');
+    fatal('PostgreSQL at ' + DB_HOST + ':' + DB_PORT + ' did not answer within ' + GATE_DEADLINE_S +
+      's of start (last error: ' + lastErr + '). Refusing to start. Check the database workload and that the credentials secret matches the one the database was initialized with.');
   }
 
   // --- 4. Bootstrap under an advisory lock ---
   // Session-level: released explicitly below, and by PostgreSQL if this
-  // process dies. lock_timeout bounds the wait inside the boot window.
+  // process dies. lock_timeout is whatever is left until T0 + LOCK_DEADLINE_S.
   const lock = new Client(Object.assign({}, conn, { query_timeout: undefined }));
   await lock.connect();
   lock.on('error', (e) => warn('bootstrap lock connection error: ' + e.message));
+  const LOCK_TIMEOUT = Math.max(5, Math.floor(LOCK_DEADLINE_S - elapsed())) + 's';
   await lock.query("SET lock_timeout = '" + LOCK_TIMEOUT + "'");
   const got = await lock.query('SELECT pg_try_advisory_lock(' + LOCK_KEY + ') AS ok');
   if (!got.rows[0].ok) {
@@ -151,7 +167,7 @@ async function main() {
     try {
       await lock.query('SELECT pg_advisory_lock(' + LOCK_KEY + ')');
     } catch (e) {
-      fatal('timed out waiting for the bootstrap lock (' + e.message + '). Another replica has held it for over ' + LOCK_TIMEOUT + '; check its log.');
+      fatal('timed out waiting for the bootstrap lock (' + e.message + '). Another replica has held it for over ' + LOCK_TIMEOUT + '; check its log. This replica restarts and waits again.');
     }
   }
   log('bootstrap lock held; running directus bootstrap');

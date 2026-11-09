@@ -2,7 +2,7 @@
 
 A headless CMS and data platform: Directus puts an instant REST and GraphQL API and the Data Studio admin app on top of PostgreSQL, so editors manage content in a web UI and your sites and apps read it over the API. This template deploys Directus with a bundled PostgreSQL (single-instance by default, highly available behind one flag), file storage on a shared volume or an S3 bucket, and optional Redis for multiple replicas.
 
-Directus 12 is licensed MSCL-1.0-GPL. **Without a license key it runs on the free Core tier: 3 Data Studio users, 25 collections and 5 flows.** Going over a cap starts a grace period, after which the project is downgraded until you get back under the caps or add a key. A key is free on registration for small organizations (Directus's Innovation Grant) and paid otherwise; see **License key** under Prerequisites.
+Directus 12 is licensed MSCL-1.0-GPL. **Without a license key it runs on the free Core tier: 3 Data Studio users, 25 collections and 5 flows.** Going over a cap starts a grace period, after which the project is downgraded until you get back under the caps or add a key. A key is free on registration for small organizations (Directus's Innovation Grant) and paid otherwise; see **License key** under Prerequisites. Directus also sends usage telemetry to Directus by default; whether it can be turned off depends on your license, so this chart leaves upstream's default in place.
 
 ## Architecture
 
@@ -33,20 +33,27 @@ cpln secret create-dictionary --name my-directus-db-credentials \
   --entry username=directus --entry password="$(openssl rand -hex 24)" --entry database=directus
 ```
 
-**License key (optional)** — an `opaque` secret holding your Directus license key; set `license.secretName` to its name. With a key set here, the license can no longer be changed in the Data Studio (Settings → License); without one, you can enter a key there instead.
+**License key (optional)** — an `opaque` secret holding your Directus license key; set `license.secretName` to its name. With a key set here, the license can no longer be changed in the Data Studio (Settings → License); without one, you can enter a key there instead. Activation is bound to the public URL, so check Settings → License after changing `directus.publicUrl`.
 
 ```bash
 printf '%s' 'YOUR_LICENSE_KEY' | cpln secret create-opaque --name my-directus-license --encoding plain -f -
 ```
 
-Also optional: an S3 bucket for files (**Storage setup**), a Redis password secret, an SMTP relay and a backup bucket.
+**Redis password and SMTP login (optional)** — `dictionary` secrets for `redis.redis.auth.fromSecret.name` (key `password`) and `email.auth.secretName` (`username`, `password`):
+
+```bash
+cpln secret create-dictionary --name my-directus-redis --entry password="$(openssl rand -hex 24)"
+cpln secret create-dictionary --name my-directus-smtp --entry username=SMTP_USERNAME --entry password=SMTP_PASSWORD
+```
+
+Also optional: an S3 bucket for files (**Storage setup**) and a backup bucket.
 
 ## Configuration
 
 ```yaml
 location: aws-us-east-1        # the ONE location of your GVC that Directus runs in
 directus:
-  image: directus/directus:12.6.1
+  image: directus/directus:12.6.1   # extensions: build FROM this image and set your own (Studio marketplace installs are not persisted)
   # set directus.replicas: 2, redis.enabled: true and postgresHA.enabled: true for near-zero-downtime upgrades and failover
   replicas: 1                  # 1-10; 2+ needs redis.enabled: true
   publicUrl: ""                # empty = canonical endpoint (http://localhost:8055 when private); custom domain with scheme, e.g. https://cms.example.com
@@ -66,16 +73,14 @@ email:
   host: smtp.example.com
   port: 587
   secure: false                # false = STARTTLS/plain (587); true = implicit TLS (465)
-  auth: { secretName: "" }     # optional dictionary with username + password, e.g. my-directus-smtp
+  auth: { secretName: "" }     # optional SMTP login secret, e.g. my-directus-smtp
 publicAccess: { enabled: true }   # the API and Studio on the canonical *.cpln.app endpoint
 internalAccess:
   type: same-gvc               # none | same-gvc | same-org | workload-list
   workloads: []                # workload-list only; this release's own workloads are always added
 redis:
   enabled: false               # required for 2+ replicas; mode stays dev (one node)
-  redis:
-    auth:
-      fromSecret: { enabled: false, name: "", passwordKey: password }   # optional dictionary with key `password`
+  redis: { auth: { fromSecret: { enabled: false, name: "", passwordKey: password } } }   # optional password secret, e.g. my-directus-redis
 ```
 
 ### Database
@@ -122,6 +127,8 @@ cpln secret create-dictionary --name my-directus-s3-keys \
   --entry accessKeyId=ACCESS_KEY --entry secretAccessKey=SECRET_KEY
 ```
 
+If Directus does not become ready with a bucket, the IAM policy or keys usually do not cover it: the health check writes a test file, and `GET /server/health` names the failing check.
+
 ## Connecting
 
 | Target | Address | Credentials |
@@ -139,18 +146,20 @@ curl -s -X POST https://YOUR_ENDPOINT/auth/login -H 'Content-Type: application/j
   -d '{"email":"admin@example.com","password":"YOUR_ADMIN_PASSWORD"}'
 ```
 
+`adminPassword` is read on the first boot only. Change the password in the Data Studio, or reset a forgotten one in the container (`read` keeps it out of your shell history):
+
+```bash
+read -rs NEW_PASSWORD
+cpln workload exec {release}-directus --gvc {gvc} --container directus -- \
+  node /directus/cli.js users passwd --email admin@example.com --password "$NEW_PASSWORD"
+```
+
 ## Important Notes
 
-- **`adminPassword` is read on the first boot only.** Change it in the Data Studio, or reset it in the container: `cpln workload exec {release}-directus --gvc {gvc} --container directus -- node /directus/cli.js users passwd --email admin@example.com --password NEW_PASSWORD`.
-- **Never change `secret` after installing**: it signs every session and token, so all of them stop working.
-- **Rotating a secret does not restart Directus**: run `cpln workload force-redeployment {release}-directus --gvc {gvc}` afterwards.
-- **License activation is bound to the public URL.** After changing `directus.publicUrl` or moving to a custom domain, check Settings → License in the Data Studio.
-- **Telemetry**: Directus sends usage telemetry to Directus by default. Whether it can be turned off depends on your license, so this chart leaves upstream's default in place.
-- **Local files are deleted on uninstall and are not snapshotted.** Use `storage.type: s3` for files that must outlive the release. Switching `storage.type` later does not move existing files.
-- **Not ready with an S3 bucket** usually means the IAM policy or keys do not cover the bucket: the health check writes a test file, and `/server/health` names the failing check.
+- **Never change `secret` after installing**: it signs every session and token, so all of them stop working. Rotating any other secret needs `cpln workload force-redeployment {release}-directus --gvc {gvc}`.
+- **Local files are deleted on uninstall and are not snapshotted.** Use `storage.type: s3` for files that must outlive the release; switching `storage.type` later does not move existing files.
 - **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Directus with it; use `postgresHA` when that matters.
 - **Install into a GVC with one location** and set `location` to it (the default is `aws-us-east-1`): if the GVC lacks that location, Directus runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL and Redis start in every GVC location.
-- **Extensions**: bake them into your own image built `FROM directus/directus:12.6.1` and set `directus.image`; marketplace installs from the Data Studio are not persisted.
 
 ## Links
 

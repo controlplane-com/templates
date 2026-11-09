@@ -139,14 +139,10 @@ steps:
             cpu: { min: 25m }
             memory: { min: 256Mi }
         rules:
-          - rule: >-
-              !has(self.gvc) &&
-              (self.directus.publicUrl == '' || self.directus.publicUrl.matches('^https?://[^/]+(/.*[^/])?$'))
+          - rule: self.directus.publicUrl == '' || self.directus.publicUrl.matches('^https?://[^/]+(/.*[^/])?$')
             mirrors: directus.validate
             paths: [directus.publicUrl]
-            message: >-
-              Use a full URL with the scheme and no trailing slash, such as https://cms.example.com, and remove any
-              `gvc` key from the values: Directus deploys into the GVC you install it into.
+            message: Use a full URL with the scheme and no trailing slash, such as https://cms.example.com.
       - title: Prerequisite secret
         docs: "#prerequisites"
         fields:
@@ -660,6 +656,13 @@ steps:
 # Rules over the imported values and YAML-only settings: their issues show on the imported fields' steps,
 # or on Review when they have no paths.
 rules:
+  # A `gvc` values key only arrives through YAML edits, so this root rule has no paths: it blocks Install
+  # and shows on Review.
+  - rule: "!has(self.gvc)"
+    mirrors: directus.validate
+    message: >-
+      Remove the `gvc` key from the values: Directus deploys into the GVC you install it into and never creates
+      one.
   # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
   # fields), so these only trip on YAML edits; they block Install and show on Review.
   - rule: self.postgresHA.enabled != self.postgres.enabled

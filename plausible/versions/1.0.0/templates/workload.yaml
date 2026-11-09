@@ -1,0 +1,158 @@
+{{- include "plausible.validate" . }}
+kind: workload
+name: {{ include "plausible.name" . }}
+description: Plausible Analytics
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plausible.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plausible.identity.name" . }}
+  containers:
+    - name: plausible
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "plausible.inlineScript" (include "plausible.script.boot" .) | nindent 10 }}
+      env:
+        - name: BASE_URL
+          value: {{ include "plausible.baseUrl" . | quote }}
+        {{- /* Signs sessions and derives the two-factor vault key; a prerequisite
+               opaque secret, so it never enters the Helm release. */}}
+        - name: SECRET_KEY_BASE
+          value: 'cpln://secret/{{ .Values.app.secretKeyBaseSecretName }}.payload'
+        - name: DISABLE_REGISTRATION
+          value: {{ toString .Values.app.registration | quote }}
+        - name: LISTEN_IP
+          value: 0.0.0.0
+        - name: HTTP_PORT
+          value: "8000"
+        {{- /* The same prerequisite secrets the bundled stores initialise from. The
+               connection URLs are assembled at container start from $(VAR)
+               references, so no credential is rendered into the chart. */}}
+        - name: PG_USER
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.username'
+        - name: PG_PASSWORD
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.password'
+        - name: PG_DATABASE
+          value: 'cpln://secret/{{ .Values.postgres.config.credentialsSecretName }}.database'
+        - name: PG_HOST
+          value: {{ include "plausible.postgres.host" . }}
+        - name: DATABASE_URL
+          value: postgres://$(PG_USER):$(PG_PASSWORD)@{{ include "plausible.postgres.host" . }}:5432/$(PG_DATABASE)
+        - name: CH_PASSWORD
+          value: 'cpln://secret/{{ .Values.clickhouse.database.credentialsSecretName }}.password'
+        - name: CH_DATABASE
+          value: 'cpln://secret/{{ .Values.clickhouse.database.credentialsSecretName }}.database'
+        - name: CH_HOST
+          value: {{ include "plausible.clickhouse.host" . }}
+        - name: CLICKHOUSE_DATABASE_URL
+          value: http://default:$(CH_PASSWORD)@{{ include "plausible.clickhouse.host" . }}:8123/$(CH_DATABASE)
+        - name: CH_LOCATION
+          value: {{ (index .Values.clickhouse.locations 0).name | quote }}
+        {{- if .Values.smtp.enabled }}
+        - name: SMTP_HOST_ADDR
+          value: {{ .Values.smtp.host | quote }}
+        - name: SMTP_HOST_PORT
+          value: {{ .Values.smtp.port | toString | quote }}
+        - name: MAILER_EMAIL
+          value: {{ .Values.smtp.fromEmail | quote }}
+        {{- if .Values.smtp.fromName }}
+        - name: MAILER_NAME
+          value: {{ .Values.smtp.fromName | quote }}
+        {{- end }}
+        {{- if .Values.smtp.credentialsSecretName }}
+        - name: SMTP_USER_NAME
+          value: 'cpln://secret/{{ .Values.smtp.credentialsSecretName }}.username'
+        - name: SMTP_USER_PWD
+          value: 'cpln://secret/{{ .Values.smtp.credentialsSecretName }}.password'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.geoip.maxmindLicenseKeySecretName }}
+        - name: MAXMIND_LICENSE_KEY
+          value: 'cpln://secret/{{ .Values.geoip.maxmindLicenseKeySecretName }}.payload'
+        - name: MAXMIND_EDITION
+          value: {{ .Values.geoip.maxmindEdition | quote }}
+        {{- end }}
+      ports:
+        - number: 8000
+          protocol: http
+      readinessProbe:
+        {{- /* 200 only when PostgreSQL and ClickHouse answer and the site caches are
+               loaded. The derived startup window, 15 + 30 x 20 = 615 s, covers the
+               240 s database gate and a first-boot migration. */}}
+        httpGet:
+          path: /api/system/health/ready
+          port: 8000
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        timeoutSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        httpGet:
+          path: /api/system/health/live
+          port: 8000
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 5
+        successThreshold: 1
+  defaultOptions:
+    autoscaling:
+      {{- /* One replica: Plausible keeps each visitor's open session in the
+             replica's memory, and nothing pins a visitor to one replica, so more
+             replicas would split visits. See README "Important Notes". */}}
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    {{- /* Fully declared, including the empty lists: the API backfills them and
+           an undeclared field shows as drift on the first no-op upgrade. */}}
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false
+  rolloutOptions:
+    {{- /* Surge: the new replica migrates and becomes ready while the old one still
+           serves, so an upgrade at one replica has near-zero downtime.
+           terminationGracePeriodSeconds is declared because the API backfills 90. */}}
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 10
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

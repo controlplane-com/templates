@@ -36,7 +36,6 @@ useCases:
 
 alternativeTo:
   - Google Analytics
-  - Plausible Analytics
   - Fathom Analytics
   - Matomo
   - Simple Analytics
@@ -50,6 +49,11 @@ pickInsteadIf:
     template: uptime-kuma
   - need: error and exception tracking for web apps
     template: glitchtip
+
+related:
+  - template: plausible
+    relation: alternative
+    note: Cookieless analytics with events in ClickHouse; one app replica
 
 prerequisites:
   - kind: secret

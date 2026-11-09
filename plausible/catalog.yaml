@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Plausible Analytics
+category: analytics
+topology: stateless
+
+summary: >-
+  Plausible Community Edition, cookieless web analytics: one app serves the dashboard, the tracker
+  script and the event API. Events and sessions go to a bundled single-node ClickHouse on its own
+  volume, and accounts, sites and goals to a bundled PostgreSQL with optional scheduled backups.
+  Optional SMTP for invitations and reports, and a MaxMind key for city-level locations. CE has no
+  funnels, revenue goals, SSO or Sites API. Pick it for Google-Analytics-style reports without cookies.
+
+keywords:
+  - web analytics
+  - website analytics
+  - cookieless analytics
+  - privacy-friendly analytics
+  - gdpr
+  - page views
+  - visitor statistics
+  - referrers
+  - tracking script
+  - custom events
+  - goals
+  - utm tracking
+  - clickhouse
+  - stats api
+
+useCases:
+  - Track visitors, referrers, pages and countries for a website without cookies
+  - Replace Google Analytics with analytics you host yourself
+  - Measure goals and custom events in a web app
+  - Share a public or password-protected stats dashboard with clients
+  - Query raw pageview events with SQL in ClickHouse
+
+alternativeTo:
+  - Google Analytics
+  - Fathom Analytics
+  - Simple Analytics
+  - Matomo
+  - Cloudflare Web Analytics
+  - Vercel Web Analytics
+  - Plausible Cloud
+
+pickInsteadIf:
+  - need: web analytics on a single PostgreSQL with no ClickHouse, or a highly available database
+    template: umami
+  - need: BI dashboards and SQL over your own business databases
+    template: metabase
+  - need: error and exception tracking for web apps
+    template: glitchtip
+
+related:
+  - template: umami
+    relation: alternative
+    note: Lighter, PostgreSQL-only web analytics
+  - template: clickhouse
+    relation: companion
+    note: The bundled event store; Plausible runs it as one node with local storage
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: app.secretKeyBaseSecretName
+    required: true
+    description: Random signing key of at least 32 bytes (plain encoding, from openssl rand -base64 48); keep it stable. When missing, the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: postgres.config.credentialsSecretName
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Plausible connects with (URL-safe values). When missing, the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password, database]
+    valuesPath: clickhouse.database.credentialsSecretName
+    required: true
+    description: Password of the ClickHouse default user (URL-safe, no quotes) and the events database name. When missing, the deployment waits with no logs.
+  - kind: other
+    valuesPath: clickhouse.locations
+    required: true
+    description: A GVC with exactly one location, named in clickhouse.locations; Plausible refuses to start in a GVC with more than one.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: smtp.credentialsSecretName
+    required: false
+    when: smtp.enabled with a relay that requires authentication
+    description: SMTP relay username and password for invitations, password resets and email reports.
+  - kind: secret
+    secretType: opaque
+    valuesPath: geoip.maxmindLicenseKeySecretName
+    required: false
+    when: city-level geolocation is wanted
+    description: Free MaxMind GeoLite2 licence key (plain encoding); without it the bundled DB-IP database gives countries only.

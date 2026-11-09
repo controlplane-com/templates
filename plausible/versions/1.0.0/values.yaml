@@ -1,0 +1,89 @@
+image: ghcr.io/plausible/community-edition:v3.2.1 # v3.2.1 or newer: the chart refuses older tags (CVE-2026-8467)
+
+resources:
+  minCpu: 250m
+  maxCpu: 1
+  minMemory: 512Mi
+  maxMemory: 1Gi
+
+# ─── Application ──────────────────────────────────────────────────────────────
+app:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+  # An opaque secret (encoding: plain), at least 32 bytes: openssl rand -base64 48. Signs sessions and
+  # derives the two-factor encryption key — keep it stable for the life of the install. See README Prerequisites.
+  secretKeyBaseSecretName: my-plausible-secret-key-base
+  # invite_only = only the first account and invited users can register; true = closed; false = open to anyone.
+  # The very first account can always register, whatever this is set to.
+  registration: invite_only
+  # Public base URL used in links and to check browser connections. "" = the canonical endpoint when
+  # publicAccess is on, else http://localhost:8000 (the port-forward first-run URL). Custom domain:
+  #   baseUrl: https://stats.example.com
+  baseUrl: ""
+
+# ─── Email (optional) ─────────────────────────────────────────────────────────
+# Without it Plausible sends no invitations, password resets or email reports.
+smtp:
+  enabled: false
+  host: ""             # SMTP relay host, e.g. smtp.example.com; required when enabled
+  port: 587            # 465 = implicit TLS (SMTPS); other ports use STARTTLS when the relay offers it
+  fromEmail: ""        # sender address, required when enabled, e.g. analytics@example.com
+  fromName: Plausible  # sender display name
+  # Optional dictionary secret holding `username` and `password` for relay auth, e.g. my-plausible-smtp.
+  # "" = unauthenticated relay.
+  credentialsSecretName: ""
+
+# ─── Geolocation (optional) ───────────────────────────────────────────────────
+# Default: the bundled DB-IP database (country only). A free MaxMind licence key adds region and city.
+geoip:
+  maxmindLicenseKeySecretName: "" # opaque secret holding the licence key, e.g. my-plausible-maxmind; "" = DB-IP country
+  maxmindEdition: GeoLite2-City   # GeoLite2-City or GeoLite2-Country; used only with a licence key
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  # false = nothing reaches Plausible from the internet. Register the owner account first through
+  # `cpln port-forward` (README "First run"), then set true: visitors' browsers must reach the tracker
+  # script and /api/event. Until an account exists, anyone who can open the URL can claim the instance.
+  enabled: false
+
+internalAccess:
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: []  # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── PostgreSQL (accounts, sites, goals, job queue) ───────────────────────────
+# Every knob of the `postgres` template is available under this key, including scheduled backups:
+#   postgres.backup.enabled: true, postgres.backup.provider: aws | gcp | minio — see README "Bundled stores".
+postgres:
+  image: postgres:18
+  config:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+    # A `dictionary` secret with exactly three keys: username, password, database (URL-safe values —
+    # Plausible puts them in its connection URL). PostgreSQL reads it once, at first initialization.
+    credentialsSecretName: my-plausible-db-credentials
+  resources:
+    minCpu: 200m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+  volumeset:
+    capacity: 10 # initial capacity in GiB (minimum is 10)
+
+# ─── ClickHouse (all events and sessions) ─────────────────────────────────────
+clickhouse:
+  provider: local # data on the volumeset below; no bucket needed
+  # Exactly one location with one replica — it MUST be the location of the GVC you install into.
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+  database:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+    # A `dictionary` secret with exactly two keys: password (URL-safe, no quotes — e.g. openssl rand -hex 24)
+    # and database (a bare identifier, e.g. plausible_events_db). ClickHouse and Plausible read it at every start.
+    credentialsSecretName: my-plausible-clickhouse-credentials
+  server:
+    image: clickhouse/clickhouse-server:25.11 # the ClickHouse release Plausible v3.2.1 is tested against
+    resources:
+      cpu: 1
+      memory: 2Gi
+  volumeset:
+    server:
+      capacity: 10 # initial capacity in GiB (minimum is 10); holds all analytics data

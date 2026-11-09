@@ -367,12 +367,11 @@ rules:
     paths: [clickhouse.locations]
     messageExpression: "'Set the ClickHouse location to ' + context.gvcLocations[0] + ', the location of the GVC; Plausible refuses to start in another.'"
     message: Set the ClickHouse location to the location of the GVC; Plausible refuses to start in another.
-  # Restated from the clickhouse import, whose storage rules went with the excluded provider field.
+  # Restated from the clickhouse import, whose storage rules went with the excluded provider field. Both keys are
+# YAML only, so the rules name no field and show as release-wide issues.
   - rule: self.clickhouse.provider in ['aws', 'gcp', 'azure', 'hetzner', 'local']
-    paths: [clickhouse.locations]
     message: clickhouse.provider must be local (the default), aws, gcp, azure or hetzner.
   - rule: "!has(self.clickhouse.azure.accountKey)"
-    paths: [clickhouse.locations]
     message: >-
       clickhouse.azure.accountKey is refused by the ClickHouse chart: put the key in a dictionary secret as
       `accountKey`, and remove it from the values.

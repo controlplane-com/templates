@@ -38,7 +38,7 @@ cpln secret create-dictionary --name my-plausible-clickhouse-credentials \
   --entry database=plausible_events_db
 ```
 
-Optional: an SMTP relay (see [Email](#email)) and a free [MaxMind](https://www.maxmind.com/en/geolite2/signup) licence key for city-level locations.
+Optional: an SMTP relay (see [Email](#email)), a free [MaxMind](https://www.maxmind.com/en/geolite2/signup) licence key for city-level locations, and a bucket with a cloud account for PostgreSQL backups (see [Storage setup](#storage-setup-backups-only)).
 
 ## Configuration
 
@@ -67,6 +67,7 @@ app:
 Without SMTP, Plausible sends no invitations, password resets or email reports.
 
 ```yaml
+# example: the default is enabled: false with empty host and fromEmail
 smtp:
   enabled: true
   host: smtp.example.com
@@ -81,6 +82,7 @@ smtp:
 The bundled DB-IP database gives countries. A MaxMind licence key, stored in an opaque secret, adds regions and cities:
 
 ```yaml
+# example: the default is an empty secret name (DB-IP countries)
 geoip:
   maxmindLicenseKeySecretName: my-plausible-maxmind
   maxmindEdition: GeoLite2-City   # or GeoLite2-Country
@@ -101,10 +103,25 @@ internalAccess:
 
 ```yaml
 postgres:
+  image: postgres:18
   config:
     credentialsSecretName: my-plausible-db-credentials
+  resources:
+    minCpu: 200m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
   volumeset:
     capacity: 10 # GiB
+  backup:
+    enabled: false # true = scheduled backups of accounts, sites and goals (not events)
+    schedule: "0 2 * * *"
+    provider: aws  # aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy
 
 clickhouse:
   provider: local
@@ -113,30 +130,55 @@ clickhouse:
       replicas: 1
   database:
     credentialsSecretName: my-plausible-clickhouse-credentials
+  server:
+    image: clickhouse/clickhouse-server:25.11
+    resources:
+      cpu: 1
+      memory: 2Gi
   volumeset:
     server:
       capacity: 10 # GiB; holds all analytics data
 ```
 
-Every knob of the `postgres` template is available under `postgres`, including scheduled backups (`postgres.backup.enabled: true` with `provider: aws`, `gcp` or `minio`; see that template's README for the bucket setup). ClickHouse is limited to one location with one replica.
+Every knob of the `postgres` template is available under `postgres`. ClickHouse is limited to one location with one replica.
+
+### Storage setup (backups only)
+
+Backups are off by default and need no cloud account. They cover PostgreSQL (accounts, sites, goals), not the analytics events in ClickHouse.
+
+**AWS S3**: create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket, then set `postgres.backup.aws.{bucket,region,cloudAccountName,policyName}`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-backup-bucket" },
+    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-backup-bucket/*" }
+  ]
+}
+```
+
+**Google Cloud Storage**: grant the cloud account's service account **Storage Object Admin** on the bucket, then set `provider: gcp` and `postgres.backup.gcp.{bucket,cloudAccountName}`.
+
+**MinIO or S3-compatible**: create a dictionary secret with `accessKey` and `secretKey`, then set `provider: minio` and `postgres.backup.minio.{endpoint,bucket,credentialsSecretName}`.
 
 ## Connecting
 
 | What | Value |
 |---|---|
-| Local access (public access off) | `cpln port-forward {release}-plausible 8000:8000 --gvc {gvc}`, then open `http://localhost:8000` |
-| Public URL | `status.canonicalEndpoint` from `cpln workload get {release}-plausible --gvc {gvc} -o yaml`, when `publicAccess.enabled: true` |
-| Tracker script | `https://{canonical-endpoint}/js/script.js`; the dashboard shows the snippet for each site |
-| Event API | `https://{canonical-endpoint}/api/event` |
-| In-GVC | `http://{release}-plausible.{gvc}.cpln.local:8000`, subject to `internalAccess.type` |
-| ClickHouse (raw events) | `http://{release}-clickhouse-server.{gvc}.cpln.local:8123`, user `default` with the password from your ClickHouse secret |
+| Local access (public access off) | `cpln port-forward RELEASE_NAME-plausible 8000:8000 --gvc GVC_NAME`, then open `http://localhost:8000` |
+| Public URL | `status.canonicalEndpoint` from `cpln workload get RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, when `publicAccess.enabled: true` |
+| Tracker script | `https://CANONICAL_ENDPOINT/js/script.js`; the dashboard shows the snippet for each site |
+| Event API | `https://CANONICAL_ENDPOINT/api/event` |
+| In-GVC | `http://RELEASE_NAME-plausible.GVC_NAME.cpln.local:8000`, subject to `internalAccess.type` |
+| ClickHouse (raw events) | `http://RELEASE_NAME-clickhouse-server.GVC_NAME.cpln.local:8123`, user `default` with the password from your ClickHouse secret |
 
 ### First run
 
 Until the first account exists, anyone who can open Plausible can register as its owner. Register over a private tunnel first:
 
 1. Install with `publicAccess.enabled: false` (the default).
-2. Run `cpln port-forward {release}-plausible 8000:8000 --gvc {gvc}` and open `http://localhost:8000`. Plausible redirects to `/register`; create the owner account and add your first site.
+2. Run `cpln port-forward RELEASE_NAME-plausible 8000:8000 --gvc GVC_NAME` and open `http://localhost:8000`. Plausible redirects to `/register`; create the owner account and add your first site.
 3. Run `cpln helm upgrade` with `publicAccess.enabled: true`. Firewall changes take a few minutes to propagate.
 4. Log in again at the canonical URL. Your account and sites are kept. Then add the tracker snippet to your site.
 
@@ -146,9 +188,10 @@ Use `http://localhost:8000` in step 2, not another host name: Plausible accepts 
 
 - **Tracking needs `publicAccess.enabled: true`.** Visitors' browsers must reach the tracker script and `/api/event`.
 - **One app replica.** Plausible keeps each visitor's open session in the replica's memory, so several replicas would split visits and distort bounce rate and visit duration. A restart of the replica is a short outage, and tracker hits during it are lost.
-- **Analytics events are not backed up.** They live only on the ClickHouse volume, which this chart does not snapshot. Uninstalling deletes the volumes and all data.
+- **Analytics events have no scheduled backup or snapshot.** They live only on the ClickHouse volume. PostgreSQL is backed up only when `postgres.backup.enabled` is on.
+- **Uninstalling deletes both volumes.** Each keeps one final snapshot for 7 days; after that the data is gone.
 - **Do not change the signing key.** A new `SECRET_KEY_BASE` logs everyone out and breaks two-factor logins for every enrolled user.
-- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments {release}-plausible --gvc {gvc} -o yaml`, field `status.versions[].message`.
+- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`.
 - **A `FATAL` about the location in the Plausible log** means `clickhouse.locations[0].name` is not your GVC's location, or the GVC has more than one location.
 - **Visitor IP and country** come from the leftmost `X-Forwarded-For` entry.
 - **Community Edition** has no funnels, ecommerce revenue goals, SSO or Sites API; those are Plausible Cloud features. The Stats API and shared dashboard links are available.

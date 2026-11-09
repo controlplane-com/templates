@@ -96,3 +96,20 @@ prerequisites:
     required: false
     when: city-level geolocation is wanted
     description: Free MaxMind GeoLite2 licence key (plain encoding); without it the bundled DB-IP database gives countries only.
+  - kind: bucket
+    valuesPath: [postgres.backup.aws.bucket, postgres.backup.gcp.bucket, postgres.backup.minio.bucket]
+    required: false
+    when: postgres.backup.enabled
+    description: Object storage bucket that receives the scheduled PostgreSQL backups (accounts, sites and goals; not the analytics events).
+  - kind: cloud-account
+    valuesPath: [postgres.backup.aws.cloudAccountName, postgres.backup.gcp.cloudAccountName]
+    required: false
+    when: backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy (postgres.backup.aws.policyName) on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: postgres.backup.minio.credentialsSecretName
+    required: false
+    when: backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

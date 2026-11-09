@@ -50,8 +50,7 @@ internalAccess:
   workloads: []  # used with workload-list, e.g. //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── PostgreSQL (accounts, sites, goals, job queue) ───────────────────────────
-# Every knob of the `postgres` template is available under this key, including scheduled backups:
-#   postgres.backup.enabled: true, postgres.backup.provider: aws | gcp | minio — see README "Bundled stores".
+# Every knob of the `postgres` template is available under this key.
 postgres:
   image: postgres:18
   config:
@@ -66,6 +65,34 @@ postgres:
     maxMemory: 512Mi
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+  # Scheduled backups of accounts, sites and goals to object storage (off by default). Analytics events
+  # live in ClickHouse and are NOT included. Pass-through to the postgres template's backup — see README
+  # "Storage setup (backups only)".
+  backup:
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # 18.1.0 = PG18, 17.1.0 = PG17
+    schedule: "0 2 * * *"  # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws          # aws, gcp, or minio
+    aws:
+      bucket: my-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-backup-cloudaccount
+      policyName: my-backup-policy # bucket-scoped IAM policy, see README
+      prefix: plausible/backups
+    gcp:
+      bucket: my-backup-bucket
+      cloudAccountName: my-backup-cloudaccount
+      prefix: plausible/backups
+    minio:                 # any S3-compatible endpoint (e.g. an internal MinIO template)
+      endpoint: http://my-minio-workload:9000
+      bucket: my-backup-bucket
+      # Prerequisite dictionary secret holding `accessKey` and `secretKey`, only when backup is enabled
+      # with provider: minio. See README "Storage setup (backups only)".
+      credentialsSecretName: my-plausible-minio-credentials
+      prefix: plausible/backups
 
 # ─── ClickHouse (all events and sessions) ─────────────────────────────────────
 clickhouse:

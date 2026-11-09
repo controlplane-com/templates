@@ -131,6 +131,14 @@ cpln helm upgrade {release} oci://ghcr.io/controlplane-com/templates/plane --ver
 | Plane (internal, same GVC) | `http://{release}-plane.{gvc}.cpln.local:80` |
 | PostgreSQL (internal) | `{release}-postgres.{gvc}.cpln.local:5432` |
 
+### God Mode (instance administration)
+
+Instance settings live in God Mode (`{plane-url}/god-mode/`, the admin claimed above), not in chart values, and are stored in the database:
+
+- **Email** (God Mode → Email): SMTP host, port, sender and security, required for invites, notifications and sign-in codes. A relay in the same GVC is `{smtp-workload}.{gvc}.cpln.local`.
+- **Authentication** (God Mode → Authentication): "Unique codes" (emailed sign-in codes, needs Email), password sign-in, "Allow anyone to sign up", and GitHub, Google or GitLab sign-in. Each provider's OAuth app needs the callback `{plane-url}/auth/{github|google|gitlab}/callback/`; changing `plane.appUrl` means registering it again.
+- **General**: instance name, admins and telemetry.
+
 ## Storage setup
 
 Only for `storage.type: s3`. Browsers upload to and download from the bucket directly, so it needs a CORS rule for your Plane origin:
@@ -159,7 +167,7 @@ Only for `storage.type: s3`. Browsers upload to and download from the bucket dir
 - **No highly available database or scheduled backups**: the `postgres-highly-available` template and the `postgres` backups need PostgreSQL 17, and Plane's own deployments run 15 and 16. Back up with `pg_dump` in the `postgresql` container; attachments live in the object store, so back that up too.
 - **The bundled PostgreSQL is not pinned to `location`**: in a multi-location GVC an unused copy runs in every other location. Use a one-location GVC.
 - **Secrets are read at replica start, and a paused deployment does not retry on its own**: after creating a missing prerequisite secret late, changing one, or an upgrade that changes which secrets the release reads, run `cpln workload force-redeployment {release}-plane --gvc {gvc}` and the same for `{release}-plane-worker`, `{release}-plane-beat` and the datastore whose secret it is (`{release}-postgres`, `{release}-plane-redis`, `{release}-plane-mq` or `{release}-plane-minio`). RabbitMQ creates its user on first boot only, and PostgreSQL its user on first initialization.
-- **Plane sends usage telemetry to `telemetry.plane.so`**: turn it off in God Mode under the instance settings. Plane's integrations service (also named Silo, unrelated to the object store), Intake and Monitor are not in the Community Edition.
+- **Plane sends usage telemetry to `telemetry.plane.so`**: turn it off in God Mode → General. Plane's integrations service (also named Silo, unrelated to the object store), Intake and Monitor are not in the Community Edition.
 
 ## Links
 

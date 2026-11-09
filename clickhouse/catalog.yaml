@@ -9,7 +9,7 @@ topology: distributed
 summary: >-
   ClickHouse column-oriented analytical database, with table data in object storage (Amazon S3,
   Google Cloud Storage, Azure Blob Storage or Hetzner Object Storage) and local volumes for
-  metadata and cache. One location with one replica runs a single node; several replicas in one
+  metadata and cache, or with all data on the local volume and no bucket. One location with one replica runs a single node; several replicas in one
   location, or three or more locations, form a sharded and replicated cluster coordinated by
   ClickHouse Keeper. Pick it for real-time analytics and data warehousing over large event, log
   or metrics tables with SQL.
@@ -36,6 +36,7 @@ useCases:
   - Run fast SQL aggregations over billions of event or log rows
   - Real-time analytics backend for product dashboards and metrics
   - Data warehouse with table data kept in S3, GCS or Azure Blob Storage
+  - Single-node analytics store on a local volume with no cloud bucket
   - Store and query clickstream, telemetry or observability data at scale
   - Sharded analytical cluster spread across three or more locations
 
@@ -81,16 +82,19 @@ prerequisites:
     description: Password for the built-in default user and the database to create; no username key. When missing, the workload waits with no logs.
   - kind: bucket
     valuesPath: [aws.bucket, gcp.bucket, azure.container, hetzner.bucket]
-    required: true
-    description: Bucket (or Azure Blob container in azure.storageAccount) that holds all table data. Object storage is required in every mode, including single node.
+    required: false
+    when: provider aws, gcp, azure or hetzner (not local)
+    description: Bucket (or Azure Blob container in azure.storageAccount) that holds all table data. Not used with provider local, which keeps the data on the server volume.
   - kind: cloud-account
     valuesPath: aws.cloudAccountName
-    required: true
-    description: AWS cloud account for keyless S3 access, needed with provider aws (the default). Not used with gcp, azure or hetzner.
+    required: false
+    when: provider aws (the default)
+    description: AWS cloud account for keyless S3 access. Not used with gcp, azure, hetzner or local.
   - kind: other
     valuesPath: aws.policyName
-    required: true
-    description: Bucket-scoped AWS IAM policy attached through the cloud account, needed with provider aws (the default). The chart refuses to render without it.
+    required: false
+    when: provider aws (the default)
+    description: Bucket-scoped AWS IAM policy attached through the cloud account. The chart refuses to render provider aws without it.
   - kind: other
     valuesPath: locations
     required: true

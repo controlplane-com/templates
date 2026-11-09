@@ -14,7 +14,9 @@ locations:
     replicas: 1
 
 # ─── Object Storage ───────────────────────────────────────────────────────────
-provider: aws # Options: aws, gcp, azure, or hetzner
+# aws, gcp, azure or hetzner keep table data in your bucket (fill in that block below).
+# local keeps it on the server volumeset (volumeset.server.capacity) and needs no bucket.
+provider: aws # Options: aws, gcp, azure, hetzner, or local
 
 aws: # If enabled, all fields below are required - See README for guidance
   bucket: my-clickhouse-bucket # Name of your S3 bucket

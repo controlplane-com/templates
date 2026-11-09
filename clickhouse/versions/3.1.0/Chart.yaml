@@ -3,12 +3,12 @@ name: clickhouse
 description: Fast, open source column-oriented database management system
 
 type: application
-version: 3.0.0
+version: 3.1.0
 appVersion: "25.10"
 
 annotations:
   created: "2025-11-21"
-  lastModified: "2026-10-29"
+  lastModified: "2026-11-09"
   createsGvc: false
 
 dependencies:

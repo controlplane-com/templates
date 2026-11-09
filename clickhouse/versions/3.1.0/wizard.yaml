@@ -287,11 +287,14 @@ steps:
           `password` and `database`, and remove them from the values.
 
   - id: storage
-    title: Object storage
-    description: Where ClickHouse keeps its table data; the server volume holds its metadata.
+    title: Storage
+    description: >-
+      Where ClickHouse keeps its table data: in your object storage bucket (the server volume holds its
+      metadata), or on the server volume itself with Local.
     sections:
       - fields:
           - type: note
+            when: self.provider != 'local'
             text: >-
               Give each release its own bucket or container: the chart writes to a fixed path in it, so two
               releases on one bucket would share a data path. Keep the locations and the bucket in the same cloud
@@ -303,8 +306,8 @@ steps:
             widget: cards
             required: true
             immutable: >-
-              Switch object storage providers with a fresh install: the table data stays in the old storage,
-              and the release's identity keeps a cloud binding once it has one.
+              Switch storage providers with a fresh install: the table data stays in the old storage, and the
+              release's identity keeps a cloud binding once it has one.
             options:
               - value: aws
                 label: AWS S3
@@ -318,10 +321,13 @@ steps:
               - value: hetzner
                 label: Hetzner Object Storage
                 description: S3-compatible, with an access key pair in a secret.
+              - value: local
+                label: Local volume
+                description: No bucket. Table data lives on the server volume, sized under Server.
             rules:
-              - rule: self.provider in ['aws', 'gcp', 'azure', 'hetzner']
+              - rule: self.provider in ['aws', 'gcp', 'azure', 'hetzner', 'local']
                 mirrors: clickhouse.validateStorage
-                message: The provider must be `aws`, `gcp`, `azure` or `hetzner`.
+                message: The provider must be `aws`, `gcp`, `azure`, `hetzner` or `local`.
               # validateCredentials refuses azure.accountKey whatever the provider is.
               - rule: "!has(self.azure.accountKey)"
                 mirrors: clickhouse.validateCredentials
@@ -592,8 +598,8 @@ steps:
             max: 65536
             required: true
             description: >-
-              Holds each replica's metadata and the object storage disk metadata; table data lives in object
-              storage.
+              Holds each replica's metadata and the object storage disk metadata. With the Local volume
+              provider it also holds all of the table data, so size it for that.
             docs: "#volumes"
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             rules:

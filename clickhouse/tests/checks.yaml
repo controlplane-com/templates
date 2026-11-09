@@ -1,0 +1,75 @@
+# Feature checks for the clickhouse template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (ch_password,
+# ch_db). The runner reads any {word} as a placeholder, so the scripts write $VAR, never the braced form.
+#
+# The server image has bash and clickhouse-client; the checks connect over the native port on localhost.
+checks:
+  - id: database-created
+    description: The database named in the credentials secret exists, and the secret's password signs in as default.
+    since: 3.1.0
+    exec:
+      workload: "{release}-clickhouse-server"
+      container: server
+      shell: bash
+      script: |
+        clickhouse-client --host 127.0.0.1 --port 9000 --user default --password '{ch_password}' \
+          --query "SELECT 'DB_FOUND' FROM system.databases WHERE name = '{ch_db}'"
+    expect:
+      stdout: "^DB_FOUND$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: wrong-password-refused
+    description: A wrong password for the default user is refused.
+    since: 3.1.0
+    exec:
+      workload: "{release}-clickhouse-server"
+      container: server
+      shell: bash
+      script: |
+        out=$(clickhouse-client --host 127.0.0.1 --port 9000 --user default --password 'not-the-password' \
+          --query "SELECT 'LOGGED_IN'" 2>&1)
+        echo "$out"
+        echo "$out" | grep -q -E 'AUTHENTICATION_FAILED|Authentication failed' && echo REFUSED
+    expect:
+      stdout: "^REFUSED$"
+      notStdout: "^LOGGED_IN$"
+
+  - id: mergetree-write-read
+    description: >-
+      A row written to a MergeTree table is read back; the row written on {installed_version} is still
+      there after an upgrade.
+    since: 3.1.0
+    exec:
+      workload: "{release}-clickhouse-server"
+      container: server
+      shell: bash
+      script: |
+        set -e
+        q() { clickhouse-client --host 127.0.0.1 --port 9000 --user default --password '{ch_password}' --database '{ch_db}' --query "$1"; }
+        q "CREATE TABLE IF NOT EXISTS e2e_rows (version String, ts DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY ts"
+        q "INSERT INTO e2e_rows (version) VALUES ('{version}')"
+        n=$(q "SELECT count() FROM e2e_rows WHERE version = '{installed_version}'")
+        [ "$n" -ge 1 ] && echo "ROW_FOUND {installed_version}"
+    expect:
+      stdout: "^ROW_FOUND "
+
+  - id: local-storage-on-volumeset
+    description: >-
+      With provider local, MergeTree tables use the default storage policy (no s3_main policy, no object
+      storage disk) and keep their parts under /var/lib/clickhouse, the volumeset mount.
+    since: 3.1.0
+    exec:
+      workload: "{release}-clickhouse-server"
+      container: server
+      shell: bash
+      script: |
+        q() { clickhouse-client --host 127.0.0.1 --port 9000 --user default --password '{ch_password}' --database '{ch_db}' --query "$1"; }
+        q "CREATE TABLE IF NOT EXISTS e2e_policy (id UInt64) ENGINE = MergeTree ORDER BY id"
+        echo "POLICY $(q "SELECT storage_policy FROM system.tables WHERE database = '{ch_db}' AND name = 'e2e_policy'")"
+        echo "PATH $(q "SELECT arrayStringConcat(data_paths, ',') FROM system.tables WHERE database = '{ch_db}' AND name = 'e2e_policy'")"
+        echo "S3_POLICIES $(q "SELECT count() FROM system.storage_policies WHERE policy_name = 's3_main'")"
+        echo "OBJECT_DISKS $(q "SELECT countIf(name ILIKE '%s3%' OR name ILIKE '%azure%' OR name ILIKE '%hetzner%' OR name ILIKE '%gcs%') FROM system.disks")"
+    expect:
+      stdout: "(?s)^POLICY default$.*^PATH /var/lib/clickhouse/store/.*^S3_POLICIES 0$.*^OBJECT_DISKS 0$"

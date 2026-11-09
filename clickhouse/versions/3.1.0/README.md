@@ -3,15 +3,15 @@
 ClickHouse is a column-oriented analytical database for real-time querying and data warehousing at scale.
 This template deploys it in **single-node** or **cluster** mode — the mode is derived from the `locations`
 list — with object storage (AWS S3, GCS, Azure Blob Storage, or Hetzner Object Storage) as the primary data
-store. **From 3.0.0 the chart deploys into the GVC you install into and creates none of its own.**
+store, or with the data on the server volume itself (`provider: local`). **From 3.0.0 the chart deploys into the GVC you install into and creates none of its own.**
 
 ## Architecture
 
 - **ClickHouse Server** — stateful workload, the database itself, with configurable replicas per location.
 - **ClickHouse Keeper** *(cluster modes only)* — stateful workload providing Raft coordination, one replica in each of the first three locations.
-- **Volume sets** — server metadata and state, plus Keeper state in cluster modes. Table data lives in object storage; the volume is metadata and read cache.
+- **Volume sets** — server metadata and state, plus Keeper state in cluster modes. With a bucket provider, table data lives in object storage and the volume is metadata and read cache; with `provider: local`, the volume holds the table data.
 - **Scratch volumes** — local filesystem cache and temporary spill.
-- **Secrets** — startup scripts for Server and Keeper, plus one storage-configuration secret for the selected provider.
+- **Secrets** — startup scripts for Server and Keeper, plus one storage-configuration secret for the selected bucket provider (none with `local`).
 - **Identity + two policies** — `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each container can confirm at boot that the GVC really has every location you listed.
 
 This template does **not** create a GVC. Every resource lands in the GVC you pass to `--gvc`, so
@@ -78,8 +78,9 @@ cpln workload get-deployments RELEASE_NAME-clickhouse-server --gvc GVC_NAME -o y
 Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret
 repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
 
-**Object storage is required in every mode**, including single-node. See [Storage setup](#storage-setup) for
-the per-provider steps; the `gcp`, `azure` and `hetzner` providers each need their own prerequisite secret.
+**A bucket is needed for the `aws`, `gcp`, `azure` and `hetzner` providers.** See [Storage setup](#storage-setup)
+for the per-provider steps; `gcp`, `azure` and `hetzner` each need their own prerequisite secret. `provider: local`
+needs no bucket, cloud account or extra secret.
 
 ## Migrating from 2.x
 
@@ -181,7 +182,9 @@ database:
 ### Object storage
 
 ```yaml
-provider: aws # Options: aws, gcp, azure, or hetzner
+# aws, gcp, azure or hetzner keep table data in your bucket (fill in that block below).
+# local keeps it on the server volumeset (volumeset.server.capacity) and needs no bucket.
+provider: aws # Options: aws, gcp, azure, hetzner, or local
 
 aws: # If enabled, all fields below are required - See README for guidance
   bucket: my-clickhouse-bucket # Name of your S3 bucket
@@ -248,7 +251,15 @@ apply.
 
 ## Storage setup
 
-Object storage is required in every deployment mode. Choose one of the providers below.
+Choose one of the providers below. Only `local` works without a bucket.
+
+### Local volume
+
+Set `provider: local`. ClickHouse keeps every table on the server volumeset at `/var/lib/clickhouse`
+with its built-in `default` storage policy, so there is no `s3_main` policy and no storage-configuration
+secret. Size the volume for all of your data with `volumeset.server.capacity`; raise it with `helm upgrade`
+when it fills (a volume cannot shrink). The volumeset keeps a final snapshot on uninstall, retained for 7 days.
+In cluster modes each replica keeps its own copy on its own volume, so use `ReplicatedMergeTree` as below.
 
 ### AWS S3
 
@@ -427,9 +438,9 @@ position in `locations`.
 - **Never `helm upgrade` a 2.x release onto 3.0.0** — it deletes the GVC the 2.x chart created and everything in it. See [Migrating from 2.x](#migrating-from-2x)
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more
-- **Object storage is required in every mode**, including single-node. There is no local-only shape
+- **`provider: local` puts the data on the server volume**, so the volume must be sized for all of it. The bucket providers keep only metadata and cache there
 - **The credentials secret has no `username` key.** To rotate the password: update the secret's value, run `cpln workload force-redeployment RELEASE_NAME-clickhouse-server --gvc GVC_NAME`, then update your clients. The startup script rewrites `users.xml` from the secret on every start, so the new password takes effect at the redeploy — and because `default` is defined in `users.xml`, it cannot be changed with `ALTER USER`. Updating a `cpln://` secret does not restart the workload by itself
-- **Switch object-storage providers with a fresh install, not an upgrade.** An identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
+- **Switch storage providers (including to or from `local`) with a fresh install, not an upgrade.** The data stays where it was written, and an identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
 - **`helm upgrade` restarts every replica in every location at once** — nothing serialises a rolling restart on a stateful workload, so treat an upgrade as a planned query interruption
 - **Keep locations and the bucket in the same provider and region family.** Cross-region traffic to object storage is billed on every query that misses the local cache

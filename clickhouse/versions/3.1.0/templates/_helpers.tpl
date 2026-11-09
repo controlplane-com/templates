@@ -115,8 +115,8 @@ true
 
 {{- define "clickhouse.validateStorage" -}}
 {{- $provider := .Values.provider -}}
-{{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "azure") (eq $provider "hetzner")) -}}
-  {{- fail "provider must be set to 'aws', 'gcp', 'azure', or 'hetzner'." -}}
+{{- if not (or (eq $provider "aws") (eq $provider "gcp") (eq $provider "azure") (eq $provider "hetzner") (eq $provider "local")) -}}
+  {{- fail "provider must be set to 'aws', 'gcp', 'azure', 'hetzner', or 'local'." -}}
 {{- end -}}
 {{- if eq $provider "aws" -}}
   {{- if not .Values.aws.bucket -}}

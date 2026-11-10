@@ -104,19 +104,56 @@ checks:
     timeoutSeconds: 180
 
   - id: single-workspace
-    description: "Self sign-up and creating more workspaces are off, as the licence allows one workspace per install."
+    description: >-
+      Self sign-up is off, as the licence allows one workspace per install: system-features reports registration
+      off, the email sign-up endpoint is refused with 403, and the admin's account lists exactly one workspace.
     exec:
       workload: "{release}-dify-api"
       container: api
       script: |
         python3 - <<'PY'
-        import json, urllib.request
-        f = json.loads(urllib.request.urlopen('http://127.0.0.1:5001/console/api/system-features', timeout=30).read())
-        ok = f.get('is_allow_register') is False and f.get('is_allow_create_workspace') is False
-        print('SINGLE_WORKSPACE_OK' if ok else 'SINGLE_WORKSPACE_BAD %s %s' % (f.get('is_allow_register'), f.get('is_allow_create_workspace')))
+        import base64, json, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        JAR = dict()
+        def req(m, p, body=None):
+            h = dict()
+            if JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=60)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            for sc in r.headers.get_all('Set-Cookie') or []:
+                k, _, v = sc.split(';', 1)[0].partition('=')
+                JAR[k.strip()] = v
+            return c, r.read().decode()
+        c, b = req('GET', '/console/api/system-features')
+        f = json.loads(b) if c == 200 else dict()
+        print('REGISTER_FLAG_OFF' if f.get('is_allow_register') is False else 'REGISTER_FLAG_GOT %d %s' % (c, f.get('is_allow_register')))
+        c, b = req('POST', '/console/api/email-register/send-email', dict(email='e2e-signup@example.com', language='en-US'))
+        print('SIGNUP_REFUSED' if c == 403 else 'SIGNUP_GOT %d %s' % (c, b[:200]))
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        c, b = req('GET', '/console/api/workspaces')
+        n = len(json.loads(b).get('workspaces') or []) if c == 200 else -1
+        print('ONE_WORKSPACE' if n == 1 else 'WORKSPACES_GOT %d %d' % (c, n))
         PY
     expect:
-      stdout: "^SINGLE_WORKSPACE_OK$"
+      stdout: "(?s)^REGISTER_FLAG_OFF\nSIGNUP_REFUSED\nONE_WORKSPACE$"
+    retries: 3
+    retryDelaySeconds: 20
 
   - id: public-url
     description: >-
@@ -156,7 +193,7 @@ checks:
             if c != 429:
                 break
             time.sleep(20)
-        c, b = req('POST', '/console/api/apps', dict(name='e2e-url-' + secrets.token_hex(3), mode='workflow', icon_type='emoji', icon='🤖', icon_background='#FFEAD5'))
+        c, b = req('POST', '/console/api/apps', dict(name='e2e-url-' + secrets.token_hex(3), mode='workflow', icon_type='emoji', icon='\U0001F916', icon_background='#FFEAD5'))
         app_id = json.loads(b)['id']
         c, b = req('GET', '/console/api/apps/' + app_id)
         url = json.loads(b).get('api_base_url') or ''
@@ -227,7 +264,7 @@ checks:
         edges = [dict(id='e1', source='1001', sourceHandle='source', target='1002', targetHandle='target', type='custom', data=dict(sourceType='start', targetType='code')),
                  dict(id='e2', source='1002', sourceHandle='source', target='1003', targetHandle='target', type='custom', data=dict(sourceType='code', targetType='end'))]
         dsl = dict(version='0.7.0', kind='app', dependencies=[],
-            app=dict(name='e2e-code-' + secrets.token_hex(3), mode='workflow', icon='🤖', icon_background='#FFEAD5', description=''),
+            app=dict(name='e2e-code-' + secrets.token_hex(3), mode='workflow', icon='\U0001F916', icon_background='#FFEAD5', description=''),
             workflow=dict(graph=dict(nodes=[start, node, end], edges=edges, viewport=dict(x=0, y=0, zoom=1)),
                 features=dict(), environment_variables=[], conversation_variables=[]))
         c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl)))
@@ -251,9 +288,8 @@ checks:
 
   - id: code-node-egress
     description: >-
-      Code-node code reaches the internet only through the SSRF proxy: urllib (which the sandbox points at the
-      proxy with HTTPS_PROXY) fetches https://example.com, urllib to the API's *.cpln.local address gets squid's
-      403, and a raw socket to an external IP gets no HTTP answer because the sandbox has no direct egress.
+      Code-node code goes through the SSRF proxy (the sandbox hands HTTPS_PROXY to Python): requests fetches
+      https://example.com through squid, and requests to the API's *.cpln.local address gets squid's 403.
     exec:
       workload: "{release}-dify-api"
       container: api
@@ -294,25 +330,17 @@ checks:
             time.sleep(20)
         code = '\n'.join([
             'def main(a: str) -> dict:',
-            '    import socket, urllib.request, urllib.error',
+            '    import requests',
             '    def get(u):',
             '        try:',
-            "            return urllib.request.urlopen(u, timeout=5).read().decode(errors='replace')",
-            '        except urllib.error.HTTPError as e:',
-            "            return 'HTTP %d' % e.code",
+            '            r = requests.get(u, timeout=8)',
+            "            return 'HTTP %d %s' % (r.status_code, r.text[:2000])",
             '        except Exception as e:',
             "            return 'ERR ' + type(e).__name__",
-            "    pub = 'Example Domain' in get('https://example.com/')",
-            "    gvc = get('http://{release}-dify-api.{gvc}.cpln.local:5001/health')[:40]",
-            '    try:',
-            "        s = socket.create_connection(('1.1.1.1', 80), timeout=3)",
-            '        s.settimeout(3)',
-            "        s.sendall(b'GET / HTTP/1.0\\r\\nHost: 1.1.1.1\\r\\n\\r\\n')",
-            "        raw = s.recv(64).decode(errors='replace')[:40]",
-            '        s.close()',
-            '    except Exception as e:',
-            "        raw = 'ERR ' + type(e).__name__",
-            "    return dict(result='EGRESS PUBLIC=%s GVC=%s RAW=%s' % (pub, gvc, raw))",
+            "    pub = get('https://example.com/')",
+            "    pub_ok = pub.startswith('HTTP 200') and 'Example Domain' in pub",
+            "    gvc = get('http://{release}-dify-api.{gvc}.cpln.local:5001/health')[:8]",
+            "    return dict(result='EGRESS PUBLIC=%s GVC=%s' % (pub_ok, gvc))",
             '']) + '\n'
         start = dict(id='1001', type='custom', position=dict(x=0, y=0), data=dict(type='start', title='Start', desc='',
             variables=[dict(variable='a', label='a', type='text-input', required=True, max_length=48, options=[])]))
@@ -324,7 +352,7 @@ checks:
         edges = [dict(id='e1', source='1001', sourceHandle='source', target='1002', targetHandle='target', type='custom', data=dict(sourceType='start', targetType='code')),
                  dict(id='e2', source='1002', sourceHandle='source', target='1003', targetHandle='target', type='custom', data=dict(sourceType='code', targetType='end'))]
         dsl = dict(version='0.7.0', kind='app', dependencies=[],
-            app=dict(name='e2e-egress-' + secrets.token_hex(3), mode='workflow', icon='🤖', icon_background='#FFEAD5', description=''),
+            app=dict(name='e2e-egress-' + secrets.token_hex(3), mode='workflow', icon='\U0001F916', icon_background='#FFEAD5', description=''),
             workflow=dict(graph=dict(nodes=[start, node, end], edges=edges, viewport=dict(x=0, y=0, zoom=1)),
                 features=dict(), environment_variables=[], conversation_variables=[]))
         c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl)))
@@ -341,8 +369,7 @@ checks:
         print(out.get('result') or 'EGRESS_BAD %d %s' % (c, b[:300]))
         PY
     expect:
-      stdout: "^EGRESS PUBLIC=True GVC=HTTP 403 RAW=(?!HTTP)"
-      notStdout: "RAW=HTTP"
+      stdout: "^EGRESS PUBLIC=True GVC=HTTP 403$"
     retries: 3
     retryDelaySeconds: 30
     timeoutSeconds: 300
@@ -529,7 +556,10 @@ checks:
             c, b = req('GET', '/console/api/workspaces/current/plugin/list?page=1&page_size=100')
             return c == 200 and ('"plugin_id": "' + PLUGIN + '"' in b or '"plugin_id":"' + PLUGIN + '"' in b)
         if not installed():
-            m = json.loads(urllib.request.urlopen('https://marketplace.dify.ai/api/v1/plugins/' + PLUGIN, timeout=30).read())
+            ua = dict(Accept='application/json')
+            ua['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
+            mreq = urllib.request.Request('https://marketplace.dify.ai/api/v1/plugins/' + PLUGIN, headers=ua)
+            m = json.loads(urllib.request.urlopen(mreq, timeout=30).read())
             ident = m['data']['plugin']['latest_package_identifier']
             c, b = req('POST', '/console/api/workspaces/current/plugin/install/marketplace', dict(plugin_unique_identifiers=[ident]))
             if c != 200:

@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: mongodb
-    version: 1.4.1
+    version: 1.4.2
     title: MongoDB
     after: advanced
     steps:
@@ -47,7 +47,7 @@ imports:
       - publicAccess
       - server.env
   - template: pgvector
-    version: 1.0.1
+    version: 1.0.2
     when: self.rag.enabled
     title: pgvector
     after: advanced

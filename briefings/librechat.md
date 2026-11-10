@@ -14,9 +14,9 @@
 |---|---|
 | `{release}-librechat` (standard, :3080, 1-4 replicas, default 1) | UI + API, public by default |
 | `{release}-librechat-files` (shared volume set, 10 GiB) | uploads, images, avatars at `/app/storage`, seen by every replica; no snapshots |
-| `{release}-mongo` (`mongodb` 1.4.1, always) | chats, users, presets, settings |
+| `{release}-mongo` (`mongodb` 1.4.2, always) | chats, users, presets, settings |
 | `{release}-meilisearch` (`meilisearch` 1.0.0, default on) | conversation search index |
-| `{release}-librechat-rag` + `{release}-pgvector` (`pgvector` 1.0.1, opt-in `rag.enabled`) | file search: embeddings + vector store; rag-api internal only |
+| `{release}-librechat-rag` + `{release}-pgvector` (`pgvector` 1.0.2, opt-in `rag.enabled`) | file search: embeddings + vector store; rag-api internal only |
 | `{release}-redis` (`redis` 3.9.1, `mode: dev`, opt-in) | shared cache, sessions, resumable streams; required for 2+ replicas |
 | identities + policies | `reveal` on exactly the named secrets; the chart creates no secrets of its own |
 
@@ -39,4 +39,4 @@
 - rag-api `/health` answers 200 even when its database is down, so its readiness probe cannot detect a lost pgvector.
 - **Refused at render:** replicas outside 1-4 or >1 without Redis; `redis.mode` other than `dev`; a plaintext `redis.redis.auth.password`; Redis public access; a custom endpoint named after a built-in one, duplicate names, a non-http(s) `baseURL` or no models; `customDomain` with a path; RAG without an embeddings key or base URL.
 - **Wizard:** imports mongodb, meilisearch, pgvector and redis; their credential secrets are redeclared on the parent's steps; root rules keep the subcharts' firewalls open to the LibreChat workloads.
-- **Status:** live-tested 2026-11-10 in test-gvc-3 (test-report-librechat.md): admin bootstrap, registration, providers, custom endpoints, RAG, shared-volume uploads, port-forward sign-in, Redis resume, availability, validation and uninstall pass. Open: mongodb/pgvector subchart drift (autoscaling + timeoutSeconds backfill).
+- **Status:** live-tested 2026-11-10 in test-gvc-3 (test-report-librechat.md): admin bootstrap, registration, providers, custom endpoints, RAG, shared-volume uploads, port-forward sign-in, Redis resume, availability, validation and uninstall pass. Open: none (subcharts drift-free: redis 3.9.1, mongodb 1.4.2, pgvector 1.0.2).

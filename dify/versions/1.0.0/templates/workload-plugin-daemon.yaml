@@ -1,0 +1,128 @@
+{{- $db := include "dify.db.secretName" . }}
+kind: workload
+name: {{ include "dify.plugin.name" . }}
+description: Dify plugin daemon (installs and runs model-provider and tool plugins)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "dify.identity.name" . }}
+  containers:
+    - name: plugin-daemon
+      image: {{ .Values.pluginDaemon.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.pluginDaemon.resources.minCpu | quote }}
+      minMemory: {{ .Values.pluginDaemon.resources.minMemory | quote }}
+      cpu: {{ .Values.pluginDaemon.resources.maxCpu | quote }}
+      memory: {{ .Values.pluginDaemon.resources.maxMemory | quote }}
+      # tini stays PID 1: the Python plugin runtime exits when its parent is PID 1.
+      command: /usr/bin/tini
+      args:
+        - -g
+        - --
+        - /bin/bash
+        - -c
+        - /app/commandline migrate && exec /app/main
+      env:
+        - name: SERVER_PORT
+          value: "5002"
+        - name: SERVER_KEY
+          value: 'cpln://secret/{{ .Values.dify.secretName }}.pluginDaemonKey'
+        - name: DIFY_INNER_API_URL
+          value: {{ include "dify.api.url" . | quote }}
+        - name: DIFY_INNER_API_KEY
+          value: 'cpln://secret/{{ .Values.dify.secretName }}.pluginInnerApiKey'
+        - name: PLATFORM
+          value: local
+        - name: DB_TYPE
+          value: postgresql
+        - name: DB_HOST
+          value: {{ include "dify.db.host" . | quote }}
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USERNAME
+          value: 'cpln://secret/{{ $db }}.username'
+        - name: DB_PASSWORD
+          value: 'cpln://secret/{{ $db }}.password'
+        # Its own database, created on first start (the database user is a superuser in both Postgres templates).
+        - name: DB_DATABASE
+          value: dify_plugin
+        - name: DB_DEFAULT_DATABASE
+          value: postgres
+        - name: DB_SSL_MODE
+          value: disable
+        - name: DB_MAX_OPEN_CONNS
+          value: "10"
+        - name: DB_MAX_IDLE_CONNS
+          value: "5"
+        - name: REDIS_HOST
+          value: {{ include "dify.redis.host" . | quote }}
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "dify.redis.secretName" . }}.{{ include "dify.redis.secretKey" . }}'
+        - name: REDIS_DB
+          value: "0"
+        - name: PLUGIN_STORAGE_TYPE
+          value: local
+        - name: PLUGIN_STORAGE_LOCAL_ROOT
+          value: /app/storage
+        - name: PLUGIN_WORKING_PATH
+          value: /app/storage/cwd
+        - name: PLUGIN_INSTALLED_PATH
+          value: plugin
+        - name: PLUGIN_MEDIA_CACHE_PATH
+          value: assets
+        - name: PLUGIN_PACKAGE_CACHE_PATH
+          value: plugin_packages
+        # Plugins come from the marketplace or an upload, signed; no remote-debugging port.
+        - name: PLUGIN_REMOTE_INSTALLING_ENABLED
+          value: "false"
+        - name: FORCE_VERIFYING_SIGNATURE
+          value: "true"
+        - name: PYTHON_ENV_INIT_TIMEOUT
+          value: "240"
+        - name: PLUGIN_MAX_EXECUTION_TIMEOUT
+          value: {{ .Values.dify.requestTimeoutSeconds | quote }}
+        - name: MAX_PLUGIN_PACKAGE_SIZE
+          value: "52428800"
+        - name: PPROF_ENABLED
+          value: "false"
+      ports:
+        - number: 5002
+          protocol: http
+      volumes:
+        - path: /app/storage
+          uri: cpln://volumeset/{{ include "dify.plugin.volumeset.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /health/check
+          port: 5002
+          scheme: HTTP
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health/check
+          port: 5002
+          scheme: HTTP
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" 1 "timeout" .Values.dify.requestTimeoutSeconds) | nindent 4 }}
+  firewallConfig:
+    {{- include "dify.backendFirewall" (dict "root" . "from" (list "dify.name" "dify.api.name" "dify.worker.name")) | nindent 4 }}
+  securityOptions:
+    filesystemGroupId: 1001
+  rolloutOptions:
+    maxSurgeReplicas: "0"
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

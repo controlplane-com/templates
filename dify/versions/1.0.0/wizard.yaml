@@ -1,0 +1,782 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Dify
+
+# The bundled PostgreSQL, Redis, both volume sets and the stateful plugin daemon exist in one location, and
+# every Dify tier shares them: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    # Right after the Database step that picks it and names its secret.
+    after: database
+    steps:
+      - { id: server, title: Database server, description: "PostgreSQL with pgvector: Dify's apps, users, knowledge-base vectors and plugin records." }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database step, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Dify connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      image:
+        description: >-
+          Dify stores knowledge-base vectors in this database, so the image must include the pgvector extension
+          (the default pgvector/pgvector image does).
+      internalAccess.type:
+        description: >-
+          Dify's API, worker, scheduler and plugin daemon connect to the database like any other workload: keep Same
+          GVC, or list those four workloads under Allowed workloads.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    # Right after the Database step that picks it and names its secret.
+    after: database
+    steps:
+      - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold Dify's apps, users and knowledge-base vectors." }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Dify connects to the HAProxy leader endpoint directly (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          Dify's API, worker, scheduler and plugin daemon connect through the HAProxy endpoint like any other
+          workload: keep Same GVC, or list those four workloads under Allowed workloads.
+  - template: redis
+    version: 3.9.0
+    when: self.redis.enabled
+    title: Redis
+    # Right after the Database step; its password secret is chosen on the Credentials step.
+    after: database
+    steps:
+      - { id: topology, title: Redis engine, description: "The single Redis node that holds Dify's cache, task queue and plugin state; a restart fails the tasks in progress." }
+      - { id: resources, title: Redis resources }
+      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
+      - { id: backup, title: Redis backups }
+      - { id: advanced, title: Redis images, description: The Redis or Valkey image the node runs. }
+    exclude:
+      # Dify connects to one Redis address and cannot use Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # The password secret is required and chosen on the Credentials step; a password in values is refused.
+      - redisAuth
+      - redis.auth.fromSecret
+      # Dify reaches Redis on :6379 inside the GVC; public access moves it to other ports (dify.validateRedisPublic).
+      - redis.publicAccess
+      # Advanced tuning stays at the redis chart's defaults; YAML mode still sets it (yamlOnly below).
+      - redis.timeoutSeconds
+      - sentinel.timeoutSeconds
+      - redis.replication
+      - redis.probes
+      - redis.env
+      - redis.tags
+      - redis.requestRetryPolicy
+      - sentinel.env
+      - sentinel.tags
+      - sentinel.requestRetryPolicy
+    override:
+      redis.replicaDirect:
+        description: A DNS name per replica. Dify connects through the workload's own name, so it does not need one.
+
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: >-
+      The four prerequisite secrets: Dify's keys, the code sandbox key, the database credentials and the Redis
+      password. All of them must exist before you install.
+    docs: "#prerequisites"
+    sections:
+      - title: Dify keys
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Every secret on this step must exist **before** you install; if one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: dify.secretName
+            type: ref
+            label: Dify secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `secretKey`, `initPassword` (at most 30 characters),
+              `pluginDaemonKey` and `pluginInnerApiKey`.
+            help: >-
+              secretKey signs logins and must never change. initPassword is asked once, on the /install page that
+              creates the admin account. The two plugin keys are any long random strings.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [secretKey, initPassword, pluginDaemonKey, pluginInnerApiKey]
+              create:
+                suggestName: "context.releaseName + '-dify-secrets'"
+          - path: codeExecution.apiKeySecretName
+            type: ref
+            label: Code sandbox key secret
+            required: true
+            description: >-
+              An opaque secret holding the key Dify and the code sandbox share. Create one with
+              `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-dify-sandbox-key --encoding plain -f -`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-dify-sandbox-key'"
+                encoding: plain
+        rules:
+          - rule: self.dify.secretName != ''
+            mirrors: dify.validateSecrets
+            paths: [dify.secretName]
+            message: The Dify secret is required.
+          - rule: self.codeExecution.apiKeySecretName != ''
+            mirrors: dify.validateSecrets
+            paths: [codeExecution.apiKeySecretName]
+            message: The code sandbox key secret is required.
+          - rule: oldSelf == null || self.dify.secretName == oldSelf.dify.secretName
+            severity: info
+            paths: [dify.secretName]
+            message: >-
+              A different secretKey signs out every user and invalidates links already shared. Change the secret
+              only if the new one holds the same secretKey.
+      - title: Redis password
+        fields:
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            description: >-
+              A dictionary secret; the key named below holds the password, letters and digits only. Redis always
+              requires it, because user code runs inside this GVC.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-dify-redis'"
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+          # Declared so the import's condition and the required password are fields; never shown.
+          - path: redis.enabled
+            type: boolean
+            label: Redis on
+            readOnly: true
+            advanced: true
+            when: self.redis.enabled == null   # never shown: Redis is always on
+            description: Dify always runs the bundled Redis.
+          - path: redis.redis.auth.fromSecret.enabled
+            type: boolean
+            label: Redis password required
+            readOnly: true
+            advanced: true
+            when: self.redis.redis.auth.fromSecret.enabled == null   # never shown: always on
+            description: Redis always requires the password.
+        rules:
+          - rule: self.redis.redis.auth.fromSecret.name != ''
+            mirrors: dify.validateRedisSecret
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+
+  - id: dify
+    title: Dify
+    description: The Dify tiers and their replicas, the public URL and request timeout, storage and extra settings.
+    sections:
+      - title: Images and replicas
+        docs: "#configuration"
+        fields:
+          - path: dify.apiImage
+            type: string
+            format: image
+            label: API image
+            required: true
+            description: Runs the API, the worker and the scheduler. Keep it on the same tag as the web image.
+          - path: dify.webImage
+            type: string
+            format: image
+            label: Web image
+            required: true
+            description: The web console and published web apps. Keep it on the same tag as the API image.
+          - path: dify.gatewayImage
+            type: string
+            format: image
+            label: Gateway image
+            required: true
+            advanced: true
+            description: The nginx image that routes the public URL to the web, API and plugin tiers.
+          - path: dify.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 3
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas of the gateway, web, API, code sandbox and SSRF proxy. 2, with 2 workers and highly available
+              PostgreSQL, keeps Dify up through upgrades.
+          - path: worker.replicas
+            type: integer
+            label: Worker replicas
+            required: true
+            min: 1
+            max: 3
+            suggestions: [1, 2, 3]
+            description: Celery workers that index documents and run asynchronous tasks.
+        rules:
+          - rule: self.dify.replicas >= 1 && self.dify.replicas <= 3
+            mirrors: dify.validateReplicas
+            paths: [dify.replicas]
+            message: Use between 1 and 3 replicas.
+          - rule: self.worker.replicas >= 1 && self.worker.replicas <= 3
+            mirrors: dify.validateReplicas
+            paths: [worker.replicas]
+            message: Use between 1 and 3 worker replicas.
+      - title: URL and timeout
+        docs: "#connecting"
+        fields:
+          - path: dify.publicUrl
+            type: string
+            label: Public URL
+            description: >-
+              Empty uses the gateway's `*.cpln.app` endpoint. Set it to a custom domain routed to the gateway, or, with
+              the public endpoint off, to the address you browse (such as `http://localhost:8080` through
+              `cpln port-forward`). No trailing `/`.
+            help: Dify builds every link, cookie and webhook URL from it, and the login only works on this exact address.
+          - path: dify.requestTimeoutSeconds
+            type: integer
+            label: Request timeout (seconds)
+            required: true
+            min: 1
+            max: 3600
+            suggestions: [60, 600, 3600]
+            description: The longest request or streamed answer on the public URL before it is cut.
+        rules:
+          - rule: self.dify.publicUrl == '' || self.dify.publicUrl.matches('^https?://[^/\\s]+(/[^\\s]*[^/\\s])?$')
+            mirrors: dify.validatePublicUrl
+            paths: [dify.publicUrl]
+            message: Leave it empty, or use an http(s):// URL without a trailing /.
+          - rule: self.dify.requestTimeoutSeconds >= 1 && self.dify.requestTimeoutSeconds <= 3600
+            mirrors: dify.validateTimeout
+            paths: [dify.requestTimeoutSeconds]
+            message: Use between 1 and 3600 seconds.
+      - title: Resources
+        fields:
+          - path: dify.resources.gateway
+            type: resources
+            label: Gateway
+            required: true
+            description: Per replica.
+            advanced: true
+          - path: dify.resources.web
+            type: resources
+            label: Web
+            required: true
+            description: Per replica.
+          - path: dify.resources.api
+            type: resources
+            label: API
+            required: true
+            description: Per replica.
+            memory: { min: 512Mi }
+          - path: worker.resources
+            type: resources
+            label: Worker
+            required: true
+            description: Per replica.
+            memory: { min: 512Mi }
+          - path: dify.resources.beat
+            type: resources
+            label: Scheduler
+            required: true
+            advanced: true
+            description: One replica.
+      - title: Storage
+        fields:
+          - path: dify.volumeset.capacity
+            type: integer
+            label: File storage (GiB)
+            required: true
+            min: 10
+            description: >-
+              Uploaded files and the keys that decrypt stored provider credentials, shared by the API and the
+              worker.
+        rules:
+          - rule: self.dify.volumeset.capacity >= 10
+            mirrors: dify.validateVolumesets
+            paths: [dify.volumeset.capacity]
+            message: Use at least 10 GiB.
+      - title: Extra environment variables
+        fields:
+          - path: dify.extraEnv
+            type: list
+            label: Extra environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Plain, non-secret Dify settings for the API, worker and scheduler, for example `UPLOAD_FILE_SIZE_LIMIT`
+              or `LOG_LEVEL`. Model provider keys are entered in the Dify UI instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and _, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+        rules:
+          - rule: >-
+              self.dify.extraEnv.all(e, !(e.name.upperAscii() in ['MODE', 'MIGRATION_ENABLED', 'DEPLOY_ENV',
+              'SECRET_KEY', 'INIT_PASSWORD', 'DB_TYPE', 'DB_HOST', 'DB_PORT', 'DB_USERNAME', 'DB_PASSWORD',
+              'DB_DATABASE', 'SQLALCHEMY_POOL_SIZE', 'SQLALCHEMY_MAX_OVERFLOW', 'SQLALCHEMY_POOL_PRE_PING',
+              'VECTOR_STORE', 'PGVECTOR_HOST', 'PGVECTOR_PORT', 'PGVECTOR_USER', 'PGVECTOR_PASSWORD',
+              'PGVECTOR_DATABASE', 'PGVECTOR_MIN_CONNECTION', 'PGVECTOR_MAX_CONNECTION', 'REDIS_HOST', 'REDIS_PORT',
+              'REDIS_PASSWORD', 'REDIS_DB', 'CELERY_BROKER_URL', 'STORAGE_TYPE', 'OPENDAL_SCHEME', 'OPENDAL_FS_ROOT',
+              'CODE_EXECUTION_ENDPOINT', 'CODE_EXECUTION_API_KEY', 'PLUGIN_DAEMON_URL', 'PLUGIN_DAEMON_KEY',
+              'INNER_API_KEY_FOR_PLUGIN', 'INTERNAL_FILES_URL', 'SSRF_PROXY_HTTP_URL', 'SSRF_PROXY_HTTPS_URL',
+              'ALLOW_REGISTER', 'ALLOW_CREATE_WORKSPACE', 'ENABLE_COLLABORATION_MODE',
+              'RESPECT_XFORWARD_HEADERS_ENABLED', 'CONSOLE_API_URL', 'CONSOLE_WEB_URL', 'SERVICE_API_URL',
+              'APP_WEB_URL', 'FILES_URL', 'TRIGGER_URL', 'ENDPOINT_URL_TEMPLATE', 'DIFY_PORT', 'DIFY_BIND_ADDRESS',
+              'SERVER_WORKER_AMOUNT', 'SERVER_WORKER_CLASS', 'GUNICORN_TIMEOUT', 'CELERY_WORKER_AMOUNT']))
+            mirrors: dify.validateEnvNames
+            paths: [dify.extraEnv]
+            message: >-
+              The chart sets the database, Redis, storage, URL, plugin, sandbox, sign-up and server settings itself
+              (DB_*, REDIS_*, SECRET_KEY, CONSOLE_API_URL, ALLOW_REGISTER and others); remove them from the extra
+              variables.
+          - rule: self.dify.extraEnv.all(e, !e.name.upperAscii().startsWith('CPLN_'))
+            mirrors: dify.validateEnvNames
+            paths: [dify.extraEnv]
+            message: Names starting with CPLN_ are reserved by Control Plane.
+          - rule: self.dify.extraEnv.all(e, e.name == '' || e.name.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
+            mirrors: dify.validateEnvNames
+            paths: [dify.extraEnv]
+            message: Environment variable names use letters, digits and _, and do not start with a digit.
+          - rule: self.dify.extraEnv.all(e, self.dify.extraEnv.filter(m, m.name == e.name).size() == 1)
+            mirrors: dify.validateEnvNames
+            paths: [dify.extraEnv]
+            message: Each name may appear only once.
+
+  - id: execution
+    title: Code execution and network
+    description: >-
+      Where Code nodes run, the plugin daemon, the SSRF proxy that filters the requests apps make, and who can reach
+      Dify.
+    sections:
+      - title: Code execution
+        docs: "#architecture"
+        fields:
+          - path: codeExecution.endpoint
+            type: string
+            label: External code executor URL
+            description: >-
+              Empty runs the bundled dify-sandbox workload. Set the http(s):// URL of your own sandbox-compatible
+              executor to run Code nodes there instead; it must accept the key in the code sandbox key secret.
+          - type: note
+            severity: warning
+            when: self.codeExecution.endpoint == ''
+            text: >-
+              Anyone who can edit an app can run Python and JavaScript in the sandbox. It cannot reach Dify's own
+              tiers, but it can open connections to other services in this GVC, which are then guarded by their own
+              passwords. Give accounts only to people you trust.
+          - path: codeExecution.sandbox.image
+            type: string
+            format: image
+            label: Sandbox image
+            required: true
+            advanced: true
+            when: self.codeExecution.endpoint == ''
+          - path: codeExecution.sandbox.resources
+            type: resources
+            label: Sandbox resources
+            required: true
+            when: self.codeExecution.endpoint == ''
+            description: Per replica.
+        rules:
+          - rule: self.codeExecution.endpoint == '' || self.codeExecution.endpoint.matches('^https?://[^/\\s]+')
+            mirrors: dify.validateCodeExecution
+            paths: [codeExecution.endpoint]
+            message: Leave it empty for the bundled sandbox, or use an http(s):// URL.
+      - title: Plugin daemon
+        fields:
+          - path: pluginDaemon.image
+            type: string
+            format: image
+            label: Plugin daemon image
+            required: true
+            advanced: true
+          - path: pluginDaemon.resources
+            type: resources
+            label: Plugin daemon resources
+            required: true
+            description: One replica; model-provider and tool plugins run inside it.
+            memory: { min: 512Mi }
+          - path: pluginDaemon.volumeset.capacity
+            type: integer
+            label: Plugin storage (GiB)
+            required: true
+            min: 10
+            description: Installed plugins and their Python environments.
+        rules:
+          - rule: self.pluginDaemon.volumeset.capacity >= 10
+            mirrors: dify.validateVolumesets
+            paths: [pluginDaemon.volumeset.capacity]
+            message: Use at least 10 GiB.
+      - id: ssrf
+        title: SSRF proxy
+        toggle: ssrfProxy.enabled
+        docs: "#important-notes"
+        description: >-
+          HTTP Request nodes, tools and sandboxed code send their requests through a squid proxy that refuses private,
+          link-local and in-GVC addresses. Off, apps can call any service in this GVC.
+        fields:
+          - path: ssrfProxy.image
+            type: string
+            format: image
+            label: Proxy image
+            required: true
+            advanced: true
+          - path: ssrfProxy.resources
+            type: resources
+            label: Proxy resources
+            required: true
+            description: Per replica.
+            advanced: true
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - type: note
+            text: >-
+              Every page needs a login, and the one-time /install page is guarded by the initPassword. Self sign-up
+              is off. Turned off, reach Dify with `cpln port-forward` and set the Public URL to the address you browse.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: A public `*.cpln.app` URL. Firewall changes take 30 seconds to a few minutes to take effect.
+          - type: note
+            severity: warning
+            when: "!self.publicAccess.enabled && self.dify.publicUrl == ''"
+            text: >-
+              With the public endpoint off, set the Public URL on the Dify step to the address you will browse, or the
+              login is refused.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect to the gateway internally
+            widget: cards
+            required: true
+            description: The other Dify tiers accept only each other. Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: dify.validateInternalAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: dify.validateInternalAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+
+  - id: database
+    title: Database
+    description: >-
+      Which PostgreSQL holds Dify's apps, users, conversations, knowledge-base vectors and plugin records, and its
+      credentials secret.
+    docs: "#prerequisites"
+    sections:
+      - title: Database
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica with pgvector. Upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            text: >-
+              The credentials secret must exist **before** you install; if it is missing, the deployment waits and
+              `cpln logs` shows nothing. Use only letters and digits in all three values.
+          - type: note
+            text: >-
+              Uninstalling deletes the database volume, and with it every app, user, conversation and knowledge
+              base.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica. Its server, storage, network and backups follow this step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`, letters and digits only.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Dify connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of the Dify workloads.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-dify-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Dify connects through. Their settings follow this step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`, letters and digits only.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Dify connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of the Dify workloads.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-dify-db-credentials'"
+    rules:
+      # Only when exactly one database is on: with both (or neither) on, the root rule below says so instead.
+      - rule: >-
+          self.postgresHA.enabled == self.postgres.enabled ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: dify.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+# Rules over the imported and hidden values: they block Install and show on Review.
+rules:
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: dify.validateDatabase
+    message: >-
+      Enable exactly one database: set either postgres.enabled or postgresHA.enabled to true, and the other to
+      false.
+  # A deliberate hard gate (langflow precedent): the old database and its volume are deleted, so a switch loses
+  # every app, user and knowledge base.
+  - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+    message: >-
+      Switching the database type deploys a new, empty database; the apps, users and knowledge bases in the
+      current one are not moved. Keep the current database type, or install a new release and move the data.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: dify.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Dify's database endpoint.
+  - rule: self.redis.enabled == true
+    mirrors: dify.validateRedisEnabled
+    message: redis.enabled must stay true; Dify keeps its cache, task queue and plugin state in the bundled Redis.
+  - rule: "!self.redis.enabled || self.redis.mode == 'dev'"
+    mirrors: dify.validateRedisMode
+    message: >-
+      Redis must run as a single node: set redis.mode to dev. Dify connects to one Redis address and cannot follow
+      a Sentinel failover.
+  - rule: "!self.redis.enabled || self.redis.redis.auth.fromSecret.enabled == true"
+    mirrors: dify.validateRedisSecret
+    message: >-
+      redis.redis.auth.fromSecret.enabled must stay true: Redis requires a password because user code runs inside
+      this GVC.
+  - rule: >-
+      !self.redis.enabled || !has(self.redis.redis.auth.password) ||
+      (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+      (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+    mirrors: dify.validateRedisPassword
+    message: >-
+      redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove it;
+      the Redis password secret on the Credentials step is used instead.
+  - rule: "!self.redis.enabled || !has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+    mirrors: dify.validateRedisPublic
+    message: >-
+      Redis public access is not supported: Dify connects to Redis on port 6379 inside the GVC, and public access
+      moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Dify, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.postgres.internalAccess.workloads)
+    severity: warning
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
+      -dify-plugin-daemon, or Dify cannot reach its database.'
+    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.postgresHA.internal_access.workloads)
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
+      -dify-plugin-daemon, or Dify cannot reach its database.'
+    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach its database.
+  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: >-
+      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.redis.redis.firewall.inboundAllowWorkload)
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
+      -dify-plugin-daemon, or Dify cannot reach Redis.'
+    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach Redis.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (dify.validateRedisMode), since Dify cannot use Sentinel.
+  - path: postgres.pgbouncer
+    reason: Dify connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Dify connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); the Redis password secret is used.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (dify.validateRedisPublic); Dify connects to Redis on port 6379 inside the GVC.
+  - path: redis.redis.timeoutSeconds
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.sentinel.timeoutSeconds
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.redis.replication
+    reason: Replication tuning applies only to production mode, which Dify does not use.
+  - path: redis.redis.probes
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.env
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.tags
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.redis.requestRetryPolicy
+    reason: Advanced Redis tuning stays at the redis chart's tested defaults.
+  - path: redis.sentinel.env
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.sentinel.tags
+    reason: Sentinel never runs (redis.mode is fixed to dev).
+  - path: redis.sentinel.requestRetryPolicy
+    reason: Sentinel never runs (redis.mode is fixed to dev).

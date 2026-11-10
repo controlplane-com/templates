@@ -1,0 +1,74 @@
+# dify 1.0.0 — the production-leaning shape at the smallest size that runs: two replicas of the gateway,
+# web, API, sandbox and SSRF proxy, two Celery workers, the bundled single PostgreSQL (pgvector) and a
+# one-node Redis that requires a password, with one extraEnv setting. All credentials are prerequisite
+# secrets CI creates (hex, so every value is letters and digits). The initPassword must be at most 30
+# characters, so it uses the 22-character kraft-cluster-id generator (base64url; Dify accepts it).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  redispw: hex
+  secretkey: hex
+  plugkey: hex
+  innerkey: hex
+  sandboxkey: hex
+  adminpw: hex
+  initpw: kraft-cluster-id
+
+secrets:
+  app:
+    type: dictionary
+    entries:
+      secretKey: "{gen.secretkey}"
+      initPassword: "{gen.initpw}"
+      pluginDaemonKey: "{gen.plugkey}"
+      pluginInnerApiKey: "{gen.innerkey}"
+  sandbox:
+    type: opaque
+    payload: "{gen.sandboxkey}"
+  db:
+    type: dictionary
+    entries:
+      username: dify
+      password: "{gen.pgpw}"
+      database: dify
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  dify_version: "1.19.0"            # the version the API's /health reports; bump with the image tag
+  admin_email: admin@example.com
+  admin_password: "Dify1{gen.adminpw}"   # Dify requires a letter and a digit
+  init_password: "{gen.initpw}"
+  redis_password: "{gen.redispw}"
+
+values:
+  dify:
+    replicas: 2
+    secretName: "{secrets.app.name}"
+    extraEnv:
+      - name: UPLOAD_FILE_SIZE_LIMIT
+        value: "7"
+  worker:
+    replicas: 2
+  codeExecution:
+    apiKeySecretName: "{secrets.sandbox.name}"
+  ssrfProxy:
+    enabled: true
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# New template: no earlier version to upgrade from.

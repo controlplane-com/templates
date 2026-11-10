@@ -1,0 +1,81 @@
+{{- if not .Values.codeExecution.endpoint }}
+kind: workload
+name: {{ include "dify.sandbox.name" . }}
+description: Dify code sandbox (runs Code-node Python and JavaScript in a seccomp jail)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "dify.sandbox.identity.name" . }}
+  containers:
+    - name: sandbox
+      image: {{ .Values.codeExecution.sandbox.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.codeExecution.sandbox.resources.minCpu | quote }}
+      minMemory: {{ .Values.codeExecution.sandbox.resources.minMemory | quote }}
+      cpu: {{ .Values.codeExecution.sandbox.resources.maxCpu | quote }}
+      memory: {{ .Values.codeExecution.sandbox.resources.maxMemory | quote }}
+      env:
+        - name: API_KEY
+          value: 'cpln://secret/{{ .Values.codeExecution.apiKeySecretName }}.payload'
+        - name: SANDBOX_PORT
+          value: "8194"
+        - name: GIN_MODE
+          value: release
+        - name: WORKER_TIMEOUT
+          value: "15"
+        # Dify always asks for network access; the sandbox refuses every run when it is off.
+        - name: ENABLE_NETWORK
+          value: "true"
+        {{- if .Values.ssrfProxy.enabled }}
+        - name: HTTP_PROXY
+          value: {{ include "dify.ssrf.url" . | quote }}
+        - name: HTTPS_PROXY
+          value: {{ include "dify.ssrf.url" . | quote }}
+        {{- end }}
+      ports:
+        - number: 8194
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8194
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8194
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.dify.replicas "timeout" 60) | nindent 4 }}
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      {{- if .Values.ssrfProxy.enabled }}
+      # User code reaches the internet only through the SSRF proxy.
+      outboundAllowCIDR: []
+      {{- else }}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- end }}
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ include "dify.link" (list . "dify.api.name") }}
+        - {{ include "dify.link" (list . "dify.worker.name") }}
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}
+{{- end }}

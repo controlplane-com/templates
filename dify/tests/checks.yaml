@@ -1,0 +1,504 @@
+# Feature checks for the dify template. Each runs after install (and after each upgrade) on every version in
+# its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (dify_version, admin_email, admin_password, init_password, redis_password).
+#
+# The checks are Python (standard library only) run in the API container against its own port 127.0.0.1:5001,
+# or through the gateway's internal address to prove its routing. The runner reads any {word} as a
+# placeholder, so the scripts use % formatting and dict(), never f-strings or dict literals. The console
+# API sets __Host- cookies (the public URL is https), which urllib's cookie jar drops over plain http, so
+# the scripts carry the cookies and the X-CSRF-Token header by hand.
+checks:
+  - id: boot-version
+    description: >-
+      The API reports the baseline's dify_version, and the gateway's internal address routes /console/api to the
+      API and / to the web tier.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request, urllib.error
+        def get(u):
+            try:
+                with urllib.request.urlopen(u, timeout=30) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        c, b = get('http://127.0.0.1:5001/health')
+        v = json.loads(b).get('version') if c == 200 else None
+        print('VERSION_OK' if v == '{dify_version}' else 'VERSION_BAD %d %s' % (c, b[:200]))
+        G = 'http://{release}-dify.{gvc}.cpln.local:8080'
+        c, b = get(G + '/console/api/system-features')
+        print('GATEWAY_API_OK' if c == 200 and 'is_allow_register' in b else 'GATEWAY_API_BAD %d %s' % (c, b[:200]))
+        c, b = get(G + '/signin')
+        print('GATEWAY_WEB_OK' if c == 200 and '<html' in b.lower() else 'GATEWAY_WEB_BAD %d' % c)
+        PY
+    expect:
+      stdout: "(?s)^VERSION_OK\nGATEWAY_API_OK\nGATEWAY_WEB_OK$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: init-password-guard
+    description: >-
+      The initPassword guards first setup: a wrong init password and a setup without a validated init are
+      refused, the right password lets setup create the admin, and a second setup is refused. On a release that
+      is already set up, init and setup are both refused and the admin logs in.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        JAR = dict()
+        def req(m, p, body=None):
+            h = dict()
+            if JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=60)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            for sc in r.headers.get_all('Set-Cookie') or []:
+                k, _, v = sc.split(';', 1)[0].partition('=')
+                JAR[k.strip()] = v
+            return c, r.read().decode()
+        setup = dict(email='{admin_email}', name='admin', password='{admin_password}')
+        c, b = req('GET', '/console/api/setup')
+        if json.loads(b).get('step') != 'finished':
+            c, _ = req('POST', '/console/api/init', dict(password='wrong-init-password'))
+            print('WRONG_INIT_REFUSED' if 400 <= c < 500 else 'WRONG_INIT_GOT %d' % c)
+            JAR.clear()
+            c, _ = req('POST', '/console/api/setup', setup)
+            print('UNVALIDATED_SETUP_REFUSED' if 400 <= c < 500 else 'UNVALIDATED_SETUP_GOT %d' % c)
+            c, b = req('POST', '/console/api/init', dict(password='{init_password}'))
+            ok = c in (200, 201) and 'success' in b
+            c, b = req('POST', '/console/api/setup', setup)
+            print('SETUP_OK' if ok and c in (200, 201) and 'success' in b else 'SETUP_BAD %d %s' % (c, b[:200]))
+        else:
+            c, _ = req('POST', '/console/api/init', dict(password='wrong-init-password'))
+            print('WRONG_INIT_REFUSED' if 400 <= c < 500 else 'WRONG_INIT_GOT %d' % c)
+            c, _ = req('POST', '/console/api/setup', setup)
+            print('UNVALIDATED_SETUP_REFUSED' if 400 <= c < 500 else 'UNVALIDATED_SETUP_GOT %d' % c)
+            print('SETUP_OK')
+        JAR.clear()
+        c, _ = req('POST', '/console/api/init', dict(password='{init_password}'))
+        c, b = req('POST', '/console/api/setup', setup)
+        print('SECOND_SETUP_REFUSED' if 400 <= c < 500 else 'SECOND_SETUP_GOT %d' % c)
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        JAR.clear()
+        c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+        print('LOGIN_OK' if c == 200 and any(k.endswith('access_token') for k in JAR) else 'LOGIN_BAD %d %s' % (c, b[:200]))
+        PY
+    expect:
+      stdout: "(?s)^WRONG_INIT_REFUSED\nUNVALIDATED_SETUP_REFUSED\nSETUP_OK\nSECOND_SETUP_REFUSED\nLOGIN_OK$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: single-workspace
+    description: "Self sign-up and creating more workspaces are off, as the licence allows one workspace per install."
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        f = json.loads(urllib.request.urlopen('http://127.0.0.1:5001/console/api/system-features', timeout=30).read())
+        ok = f.get('is_allow_register') is False and f.get('is_allow_create_workspace') is False
+        print('SINGLE_WORKSPACE_OK' if ok else 'SINGLE_WORKSPACE_BAD %s %s' % (f.get('is_allow_register'), f.get('is_allow_create_workspace')))
+        PY
+    expect:
+      stdout: "^SINGLE_WORKSPACE_OK$"
+
+  - id: public-url
+    description: >-
+      With dify.publicUrl empty, the service API base URL Dify shows is the gateway's public https endpoint,
+      and that endpoint answers with the gateway's own health page.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, secrets, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        JAR = dict()
+        def req(m, p, body=None, base=B):
+            h = dict()
+            if JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(base + p, data=data, headers=h, method=m), timeout=60)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            for sc in r.headers.get_all('Set-Cookie') or []:
+                k, _, v = sc.split(';', 1)[0].partition('=')
+                JAR[k.strip()] = v
+            return c, r.read().decode()
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        c, b = req('POST', '/console/api/apps', dict(name='e2e-url-' + secrets.token_hex(3), mode='workflow', icon_type='emoji', icon='🤖', icon_background='#FFEAD5'))
+        app_id = json.loads(b)['id']
+        c, b = req('GET', '/console/api/apps/' + app_id)
+        url = json.loads(b).get('api_base_url') or ''
+        prefix = 'https://{release}-dify-'
+        root = url[:-3] if url.endswith('/v1') else ''
+        try:
+            health = urllib.request.urlopen(root + '/gateway-health', timeout=30).read().decode().strip() if root else ''
+        except Exception as e:
+            health = 'ERR %s' % e
+        print('PUBLIC_URL_OK' if url.startswith(prefix) and health == 'ok' else 'PUBLIC_URL_BAD %s %s' % (url, health))
+        PY
+    expect:
+      stdout: "^PUBLIC_URL_OK$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: workflow-code-node
+    description: >-
+      A workflow imported as DSL (Start, a Python Code node, End), published and run through the gateway's
+      service API with an app key, returns its random input repeated 7 times: the code ran in the sandbox.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, secrets, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        G = 'http://{release}-dify.{gvc}.cpln.local:8080'
+        JAR = dict()
+        def req(m, p, body=None, base=B, auth=None):
+            h = dict()
+            if auth:
+                h['Authorization'] = 'Bearer ' + auth
+            elif JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(base + p, data=data, headers=h, method=m), timeout=120)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            if not auth:
+                for sc in r.headers.get_all('Set-Cookie') or []:
+                    k, _, v = sc.split(';', 1)[0].partition('=')
+                    JAR[k.strip()] = v
+            return c, r.read().decode()
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        code = 'def main(a: str) -> dict:\n    return dict(result=a * 7)\n'
+        start = dict(id='1001', type='custom', position=dict(x=0, y=0), data=dict(type='start', title='Start', desc='',
+            variables=[dict(variable='a', label='a', type='text-input', required=True, max_length=48, options=[])]))
+        node = dict(id='1002', type='custom', position=dict(x=300, y=0), data=dict(type='code', title='Code', desc='',
+            code_language='python3', code=code, variables=[dict(variable='a', value_selector=['1001', 'a'])],
+            outputs=dict(result=dict(type='string', children=None))))
+        end = dict(id='1003', type='custom', position=dict(x=600, y=0), data=dict(type='end', title='End', desc='',
+            outputs=[dict(variable='result', value_selector=['1002', 'result'], value_type='string')]))
+        edges = [dict(id='e1', source='1001', sourceHandle='source', target='1002', targetHandle='target', type='custom', data=dict(sourceType='start', targetType='code')),
+                 dict(id='e2', source='1002', sourceHandle='source', target='1003', targetHandle='target', type='custom', data=dict(sourceType='code', targetType='end'))]
+        dsl = dict(version='0.7.0', kind='app', dependencies=[],
+            app=dict(name='e2e-code-' + secrets.token_hex(3), mode='workflow', icon='🤖', icon_background='#FFEAD5', description=''),
+            workflow=dict(graph=dict(nodes=[start, node, end], edges=edges, viewport=dict(x=0, y=0, zoom=1)),
+                features=dict(), environment_variables=[], conversation_variables=[]))
+        c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl)))
+        imp = json.loads(b)
+        app_id = imp.get('app_id')
+        if not app_id:
+            print('IMPORT_BAD %d %s' % (c, b[:300])); raise SystemExit
+        c, b = req('POST', '/console/api/apps/' + app_id + '/workflows/publish', dict(marked_name='', marked_comment=''))
+        c, b = req('POST', '/console/api/apps/' + app_id + '/api-keys')
+        key = json.loads(b)['token']
+        probe = secrets.token_hex(4)
+        c, b = req('POST', '/v1/workflows/run', dict(inputs=dict(a=probe), response_mode='blocking', user='e2e'), base=G, auth=key)
+        out = (json.loads(b).get('data') or dict()).get('outputs') or dict() if c == 200 else dict()
+        print('CODE_NODE_OK' if out.get('result') == probe * 7 else 'CODE_NODE_BAD %d %s' % (c, b[:300]))
+        PY
+    expect:
+      stdout: "^CODE_NODE_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 300
+
+  - id: ssrf-proxy-filters
+    description: >-
+      The SSRF proxy the API sends user-driven requests through fetches a public https page but refuses an
+      in-GVC address (the API's own *.cpln.local name) and the link-local metadata address.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import os, urllib.request, urllib.error
+        p = os.environ.get('SSRF_PROXY_HTTP_URL', '')
+        o = urllib.request.build_opener(urllib.request.ProxyHandler(dict(http=p, https=p)))
+        def fetch(u):
+            try:
+                return 'OK ' + o.open(u, timeout=30).read().decode(errors='replace')
+            except urllib.error.HTTPError as e:
+                return 'HTTP %d' % e.code
+            except Exception as e:
+                return 'ERR %s' % e
+        r = fetch('https://example.com/')
+        print('PUBLIC_ALLOWED' if p and r.startswith('OK') and 'Example Domain' in r else 'PUBLIC_BAD %s' % r[:120])
+        r = fetch('http://{release}-dify-api.{gvc}.cpln.local:5001/health')
+        print('GVC_REFUSED' if r == 'HTTP 403' else 'GVC_GOT %s' % r[:120])
+        r = fetch('http://169.254.169.254/')
+        print('METADATA_REFUSED' if r == 'HTTP 403' else 'METADATA_GOT %s' % r[:120])
+        PY
+    expect:
+      stdout: "(?s)^PUBLIC_ALLOWED\nGVC_REFUSED\nMETADATA_REFUSED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: redis-requires-password
+    description: The bundled Redis refuses a command without the password and answers PONG with it.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import socket
+        def ask(cmds):
+            s = socket.create_connection(('{release}-redis.{gvc}.cpln.local', 6379), timeout=15)
+            out = []
+            for c in cmds:
+                s.sendall(c)
+                out.append(s.recv(256).decode(errors='replace').strip())
+            s.close()
+            return out
+        r = ask([b'PING\r\n'])
+        print('NOAUTH_REFUSED' if r[0].startswith('-NOAUTH') else 'NOAUTH_GOT %s' % r)
+        pw = '{redis_password}'.encode()
+        r = ask([b'*2\r\n$4\r\nAUTH\r\n$' + str(len(pw)).encode() + b'\r\n' + pw + b'\r\n', b'PING\r\n'])
+        print('AUTH_PONG' if r == ['+OK', '+PONG'] else 'AUTH_GOT %s' % r)
+        PY
+    expect:
+      stdout: "(?s)^NOAUTH_REFUSED\nAUTH_PONG$"
+
+  - id: workers-answer
+    description: Both Celery worker replicas (worker.replicas 2 in the baseline) answer a ping over the Redis broker.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      shell: bash
+      script: |
+        cd /app/api && n="$(celery -A app.celery inspect ping --timeout 15 2>/dev/null | grep -c 'pong')"
+        echo "WORKERS $n"
+    expect:
+      stdout: "^WORKERS 2$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: knowledge-base-indexes
+    description: >-
+      A document created through the knowledge API is indexed by a worker (economy mode, no model needed) and a
+      retrieval for its random token returns it: the API, the worker and the shared file storage work together.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, secrets, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        JAR = dict()
+        def req(m, p, body=None, auth=None):
+            h = dict()
+            if auth:
+                h['Authorization'] = 'Bearer ' + auth
+            elif JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=120)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            if not auth:
+                for sc in r.headers.get_all('Set-Cookie') or []:
+                    k, _, v = sc.split(';', 1)[0].partition('=')
+                    JAR[k.strip()] = v
+            return c, r.read().decode()
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        c, b = req('POST', '/console/api/datasets/api-keys')
+        key = json.loads(b)['token']
+        c, b = req('POST', '/v1/datasets', dict(name='e2e-kb-' + secrets.token_hex(3), indexing_technique='economy'), auth=key)
+        ds = json.loads(b)['id']
+        token = 'zq' + secrets.token_hex(6)
+        text = 'The control word for this end to end check is ' + token + '. It appears only in this document.'
+        c, b = req('POST', '/v1/datasets/' + ds + '/document/create-by-text',
+                   dict(name='e2e.txt', text=text, indexing_technique='economy', process_rule=dict(mode='automatic')), auth=key)
+        batch = json.loads(b)['batch']
+        status = ''
+        for _ in range(40):
+            c, b = req('GET', '/v1/datasets/' + ds + '/documents/' + batch + '/indexing-status', auth=key)
+            rows = json.loads(b).get('data') or []
+            status = rows[0].get('indexing_status') if rows else ''
+            if status in ('completed', 'error'):
+                break
+            time.sleep(5)
+        c, b = req('POST', '/v1/datasets/' + ds + '/retrieve', dict(query=token), auth=key)
+        hit = c == 200 and token in b
+        print('KB_OK' if status == 'completed' and hit else 'KB_BAD %s %d %s' % (status, c, b[:200]))
+        PY
+    expect:
+      stdout: "^KB_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 420
+
+  - id: plugin-installs
+    description: >-
+      The plugin daemon installs a signed tool plugin from the Dify marketplace, and the workspace lists it as
+      installed.
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        PLUGIN = 'langgenius/json_process'
+        JAR = dict()
+        def req(m, p, body=None):
+            h = dict()
+            if JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=120)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            for sc in r.headers.get_all('Set-Cookie') or []:
+                k, _, v = sc.split(';', 1)[0].partition('=')
+                JAR[k.strip()] = v
+            return c, r.read().decode()
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        def installed():
+            c, b = req('GET', '/console/api/workspaces/current/plugin/list?page=1&page_size=100')
+            return c == 200 and ('"plugin_id": "' + PLUGIN + '"' in b or '"plugin_id":"' + PLUGIN + '"' in b)
+        if not installed():
+            m = json.loads(urllib.request.urlopen('https://marketplace.dify.ai/api/v1/plugins/' + PLUGIN, timeout=30).read())
+            ident = m['data']['plugin']['latest_package_identifier']
+            c, b = req('POST', '/console/api/workspaces/current/plugin/install/marketplace', dict(plugin_unique_identifiers=[ident]))
+            if c != 200:
+                print('INSTALL_BAD %d %s' % (c, b[:300])); raise SystemExit
+            for _ in range(36):
+                if installed():
+                    break
+                time.sleep(5)
+        print('PLUGIN_OK' if installed() else 'PLUGIN_BAD')
+        PY
+    expect:
+      stdout: "^PLUGIN_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 420
+
+  - id: extra-env-applied
+    description: "dify.extraEnv reaches the API, so the baseline's UPLOAD_FILE_SIZE_LIMIT of 7 is the upload limit Dify reports."
+    exec:
+      workload: "{release}-dify-api"
+      container: api
+      script: |
+        python3 - <<'PY'
+        import base64, json, time, urllib.request, urllib.error
+        B = 'http://127.0.0.1:5001'
+        JAR = dict()
+        def req(m, p, body=None):
+            h = dict()
+            if JAR:
+                h['Cookie'] = '; '.join(k + '=' + v for k, v in JAR.items())
+                for k, v in JAR.items():
+                    if k.endswith('csrf_token'):
+                        h['X-CSRF-Token'] = v
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=60)
+                c = r.status
+            except urllib.error.HTTPError as e:
+                r, c = e, e.code
+            for sc in r.headers.get_all('Set-Cookie') or []:
+                k, _, v = sc.split(';', 1)[0].partition('=')
+                JAR[k.strip()] = v
+            return c, r.read().decode()
+        pw = base64.b64encode('{admin_password}'.encode()).decode()
+        for _ in range(6):
+            c, b = req('POST', '/console/api/login', dict(email='{admin_email}', password=pw, remember_me=False))
+            if c != 429:
+                break
+            time.sleep(20)
+        c, b = req('GET', '/console/api/files/upload')
+        limit = json.loads(b).get('file_size_limit') if c == 200 else None
+        print('EXTRA_ENV_OK' if limit == 7 else 'EXTRA_ENV_BAD %d %s' % (c, b[:200]))
+        PY
+    expect:
+      stdout: "^EXTRA_ENV_OK$"
+    retries: 3
+    retryDelaySeconds: 20
+
+  - id: gateway-timeout
+    description: The gateway holds a request for dify.requestTimeoutSeconds (600 by default) before cutting it.
+    exec:
+      workload: "{release}-dify"
+      container: gateway
+      script: |
+        n="$(grep -c -e 'proxy_read_timeout 600s;' -e 'proxy_send_timeout 600s;' /etc/nginx/conf.d/default.conf)"
+        echo "TIMEOUTS $n"
+    expect:
+      stdout: "^TIMEOUTS 2$"

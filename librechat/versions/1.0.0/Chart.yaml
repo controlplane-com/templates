@@ -26,6 +26,6 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: rag.enabled
   - name: redis
-    version: 3.9.0
+    version: 3.9.1
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: redis.enabled

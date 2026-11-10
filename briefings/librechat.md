@@ -17,7 +17,7 @@
 | `{release}-mongo` (`mongodb` 1.4.1, always) | chats, users, presets, settings |
 | `{release}-meilisearch` (`meilisearch` 1.0.0, default on) | conversation search index |
 | `{release}-librechat-rag` + `{release}-pgvector` (`pgvector` 1.0.1, opt-in `rag.enabled`) | file search: embeddings + vector store; rag-api internal only |
-| `{release}-redis` (`redis` 3.9.0, `mode: dev`, opt-in) | shared cache, sessions, resumable streams; required for 2+ replicas |
+| `{release}-redis` (`redis` 3.9.1, `mode: dev`, opt-in) | shared cache, sessions, resumable streams; required for 2+ replicas |
 | identities + policies | `reveal` on exactly the named secrets; the chart creates no secrets of its own |
 
 - The start script (inline in `args`) writes `/tmp/librechat.yaml` from values (`CONFIG_PATH`), links `/app/uploads` and `/app/client/public/images` into the shared volume, waits up to 180 s for MongoDB, creates the admin with `config/create-user.js` when the user collection is empty, then `npm run backend`.

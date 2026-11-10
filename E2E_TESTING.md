@@ -37,7 +37,8 @@ For the version under test, on a fresh install:
 2. **Rendered == stored**: each workload, volumeset, identity and policy the API stored matches the chart's
    render under the Console Drift tab's rules. Any difference is the drift users see on a default install.
    For now drift is reported as a **warning** and does not fail the run, until the catalog's existing drift
-   is fixed. A resource that cannot be read still fails.
+   is fixed. A template with no drift left sets `driftBlocks: true` at the top of its `tests/checks.yaml`,
+   and from then on drift **fails** its runs. A resource that cannot be read always fails.
 3. Every check in `checks.yaml` whose range includes the version.
 4. **Two no-op upgrades**: the second must report nothing `Updated`, and no stored spec may change.
 5. Uninstall removes every resource of the release (uninstall can exit 0 having deleted nothing).

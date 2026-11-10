@@ -140,15 +140,11 @@ Dify builds every link, cookie and webhook from the public URL, and the login wo
 ## Important Notes
 
 - The Dify licence allows one workspace per install, not a multi-tenant service, and forbids removing or changing the Dify logo and copyright in the console. The chart turns off self sign-up and creating more workspaces; invite members from Settings → Members.
-- Never rotate `secretKey`: it signs every login and shared link.
-- Never delete the file storage volume: it holds the keys that decrypt the model provider credentials saved in Dify.
-- Anyone who can edit an app can run Python and JavaScript in the code sandbox. The sandbox cannot reach the other Dify tiers, but it can open connections to other services in this GVC, such as the bundled PostgreSQL and Redis, which their passwords protect. Give accounts only to people you trust.
-- With the SSRF proxy on, HTTP Request nodes and tools cannot call services inside the GVC (`*.cpln.local`). Model-provider plugins run in the plugin daemon, not through the proxy, so the Ollama, vLLM and LiteLLM providers can still use in-GVC URLs.
-- The bundled PostgreSQL and Redis accept any workload in the GVC by default; their passwords are the guard. To narrow them, set `postgres.internalAccess` or `redis.redis.firewall` to a workload list naming `RELEASE_NAME-dify-api`, `-dify-worker`, `-dify-beat` and `-dify-plugin-daemon`.
-- Plugins install from the Dify marketplace or an uploaded package, and only signed plugins are accepted. The plugin debugging port is off.
-- The first `helm upgrade` after an install can restart the bundled database, which briefly interrupts the console and the API.
-- Use a single-location GVC: the database, Redis, both volumes and the plugin daemon run in one location.
-- Uninstalling deletes the database and both volumes, and with them every app, user, knowledge base and installed plugin.
+- Never rotate `secretKey` (it signs every login and shared link) and never delete the file storage volume (it holds the keys that decrypt the model provider credentials saved in Dify).
+- Anyone who can edit an app can run Python and JavaScript in the code sandbox. The sandbox cannot reach the other Dify tiers, but it can open connections to other services in this GVC, including the bundled PostgreSQL and Redis: their passwords are the guard. Give accounts only to people you trust.
+- With the SSRF proxy on, HTTP Request nodes, tools and Code nodes reach the internet only through it and cannot call services inside the GVC (`*.cpln.local`). Python code uses the proxy through `HTTP_PROXY`; JavaScript code has no internet access. Model-provider plugins run in the plugin daemon, not through the proxy, so the Ollama, vLLM and LiteLLM providers can use in-GVC URLs.
+- Plugins install from the Dify marketplace or an uploaded package, and only signed plugins are accepted.
+- Use a single-location GVC: the database, Redis, both volumes and the plugin daemon run in one location. The first `helm upgrade` after an install can restart the bundled database. Uninstalling deletes the database and both volumes, and with them every app, user, knowledge base and installed plugin.
 
 ## Links
 

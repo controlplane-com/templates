@@ -35,8 +35,8 @@ imports:
           (the default pgvector/pgvector image does).
       internalAccess.type:
         description: >-
-          Dify's API, worker, scheduler and plugin daemon connect to the database like any other workload: keep Same
-          GVC, or list those four workloads under Allowed workloads.
+          Keep Same GVC: Dify's tiers connect like any other workload. The database password is the guard against
+          code run in the sandbox; narrowing this to Dify's own workloads is a planned follow-up.
   - template: postgres-highly-available
     version: 2.8.1
     alias: postgresHA
@@ -59,8 +59,8 @@ imports:
     override:
       internal_access.type:
         description: >-
-          Dify's API, worker, scheduler and plugin daemon connect through the HAProxy endpoint like any other
-          workload: keep Same GVC, or list those four workloads under Allowed workloads.
+          Keep Same GVC: Dify's tiers connect like any other workload. The database password is the guard against
+          code run in the sandbox; narrowing this to Dify's own workloads is a planned follow-up.
   - template: redis
     version: 3.9.0
     when: self.redis.enabled
@@ -718,36 +718,14 @@ rules:
     rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks Dify, which connects to its database like any other workload.'
-  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
-    rule: >-
-      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
-      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.postgres.internalAccess.workloads)
-    severity: warning
-    paths: [postgres.internalAccess.workloads]
-    messageExpression: >-
-      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
-      -dify-plugin-daemon, or Dify cannot reach its database.'
-    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach its database.
-  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
-    rule: >-
-      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
-      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.postgresHA.internal_access.workloads)
-    severity: warning
-    paths: [postgresHA.internal_access.workloads]
-    messageExpression: >-
-      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
-      -dify-plugin-daemon, or Dify cannot reach its database.'
-    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach its database.
-  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
-    rule: >-
-      ['-dify-api', '-dify-worker', '-dify-beat', '-dify-plugin-daemon'].all(s,
-      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + s) in self.redis.redis.firewall.inboundAllowWorkload)
-    severity: warning
-    paths: [redis.redis.firewall.inboundAllowWorkload]
-    messageExpression: >-
-      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-dify-api, -dify-worker, -dify-beat and
-      -dify-plugin-daemon, or Dify cannot reach Redis.'
-    message: Add the Dify api, worker, beat and plugin-daemon workloads to the list, or Dify cannot reach Redis.
+  # cpln limit: a stateful workload's CPU limit may be at most 4 times its reservation (refused at apply,
+  # invisible to helm template). The plugin daemon is Dify's only stateful tier.
+  - rule: >-
+      cpuMillicores(self.pluginDaemon.resources.maxCpu) <= 4 * cpuMillicores(self.pluginDaemon.resources.minCpu)
+    paths: [pluginDaemon.resources.maxCpu]
+    message: >-
+      The plugin daemon's CPU limit can be at most 4 times its CPU reservation (Control Plane's limit for stateful
+      workloads). Raise the reservation or lower the limit.
 
 yamlOnly:
   - path: redis.mode

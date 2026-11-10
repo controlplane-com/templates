@@ -122,7 +122,6 @@ spec:
     filesystemGroupId: 1001
   rolloutOptions:
     maxSurgeReplicas: "0"
-    maxUnavailableReplicas: "1"
     minReadySeconds: 0
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 90

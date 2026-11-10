@@ -18,7 +18,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-plausible` (standard, 1 replica) | Dashboard, tracker script, `/api/event`, cron jobs; port 8000; no volume |
-| `{release}-postgres` (postgres 3.4.1 subchart) | Accounts, sites, goals, job queue |
+| `{release}-postgres` (postgres 3.4.2 subchart) | Accounts, sites, goals, job queue |
 | `{release}-clickhouse-server` (clickhouse 3.1.0, `provider: local`) | Every event and session, on its volumeset; no bucket |
 | identity + reveal policy + GVC-view policy | Reveal on exactly the secrets read; `view` on its own GVC for the boot-time location check |
 

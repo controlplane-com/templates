@@ -30,6 +30,34 @@ checks:
     retries: 8
     retryDelaySeconds: 15
 
+  - id: probe-endpoints
+    description: >-
+      The readiness path /server/info answers without sign-in (200), while /server/health refuses an
+      anonymous caller (403) and reports status ok to an admin token.
+    exec:
+      workload: "{release}-directus"
+      container: directus
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:8055';
+        (async () => {
+          const info = await fetch(B + '/server/info');
+          console.log(info.status === 200 ? 'INFO_ANON_OK' : 'INFO_ANON_BAD ' + info.status);
+          const anon = await fetch(B + '/server/health');
+          console.log(anon.status === 403 ? 'HEALTH_ANON_REFUSED' : 'HEALTH_ANON_BAD ' + anon.status);
+          const l = await fetch(B + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const tok = (await l.json()).data.access_token;
+          const h = await fetch(B + '/server/health', { headers: { authorization: 'Bearer ' + tok } });
+          const st = (await h.json()).status;
+          console.log(h.status === 200 && st === 'ok' ? 'HEALTH_ADMIN_OK' : 'HEALTH_ADMIN_BAD ' + h.status + ' ' + st);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^INFO_ANON_OK\nHEALTH_ANON_REFUSED\nHEALTH_ADMIN_OK$"
+    retries: 4
+    retryDelaySeconds: 15
+
   - id: login-and-refusal
     description: The admin from the prerequisite secret logs in, and a wrong password is refused with HTTP 401.
     exec:

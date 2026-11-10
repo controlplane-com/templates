@@ -158,7 +158,7 @@ cpln workload exec {release}-directus --gvc {gvc} --container directus -- \
 
 - **Never change `secret` after installing**: it signs every session and token, so all of them stop working. Rotating any other secret needs `cpln workload force-redeployment {release}-directus --gvc {gvc}`.
 - **Local files are deleted on uninstall and are not snapshotted.** Use `storage.type: s3` for files that must outlive the release; switching `storage.type` later does not move existing files.
-- **Redis is a single node:** while it restarts, API requests briefly fail with 503 until Directus reconnects.
+- **Redis is a single node:** while it restarts, API requests briefly fail with 503 until Directus reconnects. A replica that starts while Redis is down for several minutes restarts until Redis is back.
 - **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Directus with it; use `postgresHA` when that matters.
 - **Install into a GVC with one location** and set `location` to it (the default is `aws-us-east-1`): if the GVC lacks that location, Directus runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL and Redis start in every GVC location.
 

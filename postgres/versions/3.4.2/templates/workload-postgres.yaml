@@ -48,7 +48,13 @@ spec:
       metric: disabled
       minScale: 1
       maxScale: 1
+    {{- /* The API backfills these on a partial autoscaling block; declared so
+    the stored spec matches the rendered one (Console Drift tab). */}}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
+    timeoutSeconds: 5
   rolloutOptions:
     {{- /*
     maxUnavailableReplicas is deliberately NOT set: the API drops it on a
@@ -56,6 +62,7 @@ spec:
     rolling-restart limit that is not in force.
     terminationGracePeriodSeconds is declared because the API backfills 90.
     */}}
+    minReadySeconds: 0
     scalingPolicy: OrderedReady
     terminationGracePeriodSeconds: 90
   firewallConfig:

@@ -5,6 +5,9 @@
 #
 # The checks run in a Sentinel container and ask its own Sentinel (127.0.0.1) for the master, then talk
 # to the master across workloads, the way a client does.
+# No drift left on a default install (postgres 3.4.2 / redis 3.9.1): drift fails the run, not warns.
+driftBlocks: true
+
 checks:
   - id: sentinel-quorum
     description: The Sentinels agree on a master and have enough of them to fail over.

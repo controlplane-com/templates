@@ -194,7 +194,11 @@ spec:
   # See workload-redis.yaml for rationale. Parallel boots all sentinels at
   # once instead of waiting for each to be Ready in sequence.
   rolloutOptions:
+    # minReadySeconds and terminationGracePeriodSeconds are backfilled by the
+    # API; declared so the stored spec matches the rendered one.
+    minReadySeconds: 0
     scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
 {{- if .Values.sentinel.requestRetryPolicy }}
   requestRetryPolicy:
 {{ toYaml .Values.sentinel.requestRetryPolicy | indent 4 }}

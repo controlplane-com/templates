@@ -357,7 +357,11 @@ spec:
   # Parallel boots all replicas at once; the cluster forms because replicas
   # connect out to the master (see the publishNotReadyAddresses note above).
   rolloutOptions:
+    # minReadySeconds and terminationGracePeriodSeconds are backfilled by the
+    # API; declared so the stored spec matches the rendered one.
+    minReadySeconds: 0
     scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
 {{- if .Values.redis.requestRetryPolicy }}
   requestRetryPolicy:
 {{ toYaml .Values.redis.requestRetryPolicy | indent 4 }}

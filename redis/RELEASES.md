@@ -1,3 +1,10 @@
+# Release Notes - Version 3.9.1
+
+## What's New
+
+- **Fix: Console Drift tab**: the Redis and Sentinel workloads now declare `rolloutOptions.minReadySeconds` and `terminationGracePeriodSeconds` as the API stores them, so a fresh install shows no drift. Nothing about how Redis runs changes.
+
+
 # Release Notes - Version 3.9.0
 
 ## What's New

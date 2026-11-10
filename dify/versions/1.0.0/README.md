@@ -15,7 +15,7 @@ This app deploys [Dify](https://dify.ai), an open-source builder for LLM applica
 - **PostgreSQL**: the `postgres` template with the pgvector image (default), or `postgres-highly-available` (3 Patroni replicas, etcd and an HAProxy leader endpoint). It holds apps, users, conversations and knowledge-base vectors.
 - **Redis**: the `redis` template as one node, password required. It holds the cache, the task queue and plugin state.
 - **Firewall**: each Dify tier accepts connections only from the tiers that call it; the sandbox cannot reach the API, web or plugin daemon.
-- **Identities + policies**: `reveal` on exactly the secrets you name; the sandbox can read only its own key. The template creates no secrets.
+- **Identities + policies**: `reveal` on exactly the secrets you name; the sandbox can read only its own key. The template creates no credentials; the bundled Redis keeps its config in its own secret (`RELEASE_NAME-redis-config`).
 
 ## Prerequisites
 

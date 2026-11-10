@@ -178,12 +178,13 @@ spec:
         - number: 8055
           protocol: http
       readinessProbe:
-        # /server/health checks the database, the storage location (it writes a
-        # test file) and Redis when enabled; 503 on error, 200 on ok/warn.
+        # /server/info needs no sign-in and reads the project settings from
+        # the database, so it fails while the database is unreachable.
+        # (/server/health refuses anonymous callers with 403 since Directus 12.)
         # Startup window ~ 10 + 30 x 15 = 460 s, inside which the boot gates
         # give up (_script-start.tpl).
         httpGet:
-          path: /server/health
+          path: /server/info
           port: 8055
           scheme: HTTP
         initialDelaySeconds: 10

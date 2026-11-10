@@ -24,7 +24,9 @@
 - Pinned to one GVC location (`location`): `defaultOptions` min/max 0, one `localOptions` entry. The wizard requires a 1-location GVC.
 - Availability: replicas roll surge-first (`maxSurge 1`, `maxUnavailable 0`). The single postgres is still a short outage on DB restarts; HA postgres is one flag. Default is single everything (ruling 2026-08-06: a CMS fails the cascade test).
 - No `REDIS_*` is rendered when Redis is off: any one of them turns Directus's Redis mode on.
-- `/server/health` (readiness) checks database, storage (writes a test file) and Redis; `HEALTHCHECK_CACHE_TTL=10s`. With Redis the health cache is shared across replicas. `/server/ping` is liveness.
+- Readiness is `/server/info` (anonymous, reads settings from the DB). `/server/health` (DB, storage test write, Redis) needs an admin token since Directus 12, so it is a diagnostic, not the probe. `/server/ping` is liveness.
+- Replicas serialize bootstrap on an advisory lock; waiters POLL `pg_try_advisory_lock` (a blocked `pg_advisory_lock` stalls the holder's `CREATE INDEX CONCURRENTLY` migrations).
+- A prerequisite secret created after install needs `force-redeployment`; Redis restart = brief 503s; first sign-in shows license + project-owner dialogs.
 
 ## Key knobs
 `location` · `secrets.name` (secret/adminEmail/adminPassword) · `license.secretName` · `directus.replicas` · `directus.publicUrl` · `storage.type` local|s3 · `cache.enabled` · `email.enabled` · `redis.enabled` (+ `redis.redis.auth.fromSecret`) · `postgresHA.enabled` · `publicAccess.enabled` · `internalAccess`
@@ -37,7 +39,7 @@
 - **License activation is bound to `PUBLIC_URL`.** Re-check Settings → License after a custom domain change. Whether each replica uses one of the grant's activations is unverified (maintainer test row; needs a real key).
 - **Telemetry** to Directus is on by default; the opt-out is honored only when the license does not require telemetry. The chart leaves the default (ruling 2026-11-09: note only).
 - **Local uploads are deleted on uninstall and not snapshotted.** Use S3 for durable files.
-- **"Not ready" with S3** usually means the IAM policy or keys do not cover the bucket; `/server/health` names the check.
+- **Upload failures with S3** usually mean the IAM policy or keys do not cover the bucket; `/server/health` (admin token) names the check.
 - **2+ replicas without Redis is refused at render** (caches and scheduled flows would diverge per replica). Redis `mode` other than dev, a plaintext Redis password and Redis public access are refused too.
 - **Extensions** are not persisted; bake them into a custom image (`directus.image`).
 - **Boot window:** startup probe ≈ 10 + 30 × 15 = 460 s. One clock from wrapper start: GVC read ≤ 22 s, DB gate gives up at 150 s, the lock must be held by 300 s, leaving ≥ 160 s for bootstrap plus server start. A bootstrap killed by the window releases the lock; the next start resumes the migrations.

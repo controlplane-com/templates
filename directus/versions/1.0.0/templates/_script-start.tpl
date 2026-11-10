@@ -27,7 +27,7 @@ periodSeconds = 10 + 30 x 15 = 460 s. Every wait is measured against ONE clock
 diagnostics reach the log:
   GVC read      <= 22 s   (3 x 6 s timeout + 2 x 2 s pause; fail-open)
   database gate until T0 + 150 s (each attempt's timeouts clipped to the deadline)
-  lock wait     until T0 + 300 s (lock_timeout = what is left of that)
+  lock wait     until T0 + 300 s (polls pg_try_advisory_lock every 3 s)
 That leaves >= 160 s for `directus bootstrap` (install or migrations) plus
 server start and the first passing readiness probe. A bootstrap that runs past
 the window is killed with the container; PostgreSQL then releases the lock and
@@ -155,19 +155,26 @@ async function main() {
 
   // --- 4. Bootstrap under an advisory lock ---
   // Session-level: released explicitly below, and by PostgreSQL if this
-  // process dies. lock_timeout is whatever is left until T0 + LOCK_DEADLINE_S.
+  // process dies. A waiting replica POLLS pg_try_advisory_lock and keeps no
+  // statement open between tries: a blocked pg_advisory_lock is an open
+  // statement, and Directus migrations that CREATE INDEX CONCURRENTLY wait for
+  // every open statement to finish, so the holder would stall until the
+  // waiter gave up.
+  const LOCK_POLL_MS = 3000;
   const lock = new Client(Object.assign({}, conn, { query_timeout: undefined }));
   await lock.connect();
   lock.on('error', (e) => warn('bootstrap lock connection error: ' + e.message));
-  const LOCK_TIMEOUT = Math.max(5, Math.floor(LOCK_DEADLINE_S - elapsed())) + 's';
-  await lock.query("SET lock_timeout = '" + LOCK_TIMEOUT + "'");
-  const got = await lock.query('SELECT pg_try_advisory_lock(' + LOCK_KEY + ') AS ok');
-  if (!got.rows[0].ok) {
-    log('another replica is installing or migrating the database; waiting for it (up to ' + LOCK_TIMEOUT + ')');
-    try {
-      await lock.query('SELECT pg_advisory_lock(' + LOCK_KEY + ')');
-    } catch (e) {
-      fatal('timed out waiting for the bootstrap lock (' + e.message + '). Another replica has held it for over ' + LOCK_TIMEOUT + '; check its log. This replica restarts and waits again.');
+  const tryLock = async () => (await lock.query('SELECT pg_try_advisory_lock(' + LOCK_KEY + ') AS ok')).rows[0].ok;
+  if (!(await tryLock())) {
+    const left = Math.max(5, Math.floor(LOCK_DEADLINE_S - elapsed()));
+    log('another replica is installing or migrating the database; waiting for it (up to ' + left + 's)');
+    let held = false;
+    while (!held && elapsed() < LOCK_DEADLINE_S) {
+      await sleep(LOCK_POLL_MS);
+      held = await tryLock();
+    }
+    if (!held) {
+      fatal('timed out waiting for the bootstrap lock. Another replica has held it until ' + LOCK_DEADLINE_S + 's after this one started; check its log. This replica restarts and waits again.');
     }
   }
   log('bootstrap lock held; running directus bootstrap');

@@ -15,7 +15,7 @@ Directus 12 is licensed MSCL-1.0-GPL. **Without a license key it runs on the fre
 
 ## Prerequisites
 
-Two secrets must exist **before** you install, in a GVC with **one location**. If a secret is missing, the deployment waits with no log lines; `cpln workload get-deployments {release}-directus --gvc {gvc} -o yaml` names it under `status.versions[].message`.
+Two secrets must exist **before** you install, in a GVC with **one location**. If a secret is missing, the deployment waits with no log lines; `cpln workload get-deployments {release}-directus --gvc {gvc} -o yaml` names it under `status.versions[].message`. If you create a secret after installing, run `cpln workload force-redeployment {release}-directus --gvc {gvc}`; the deployment does not pick it up on its own.
 
 **1. Directus secret** — a `dictionary` with the token signing secret and the first administrator. `adminEmail` and `adminPassword` are read on the first boot only:
 
@@ -127,7 +127,7 @@ cpln secret create-dictionary --name my-directus-s3-keys \
   --entry accessKeyId=ACCESS_KEY --entry secretAccessKey=SECRET_KEY
 ```
 
-If Directus does not become ready with a bucket, the IAM policy or keys usually do not cover it: the health check writes a test file, and `GET /server/health` names the failing check.
+If uploads fail with a bucket, the IAM policy or keys usually do not cover it: `GET /server/health` with an admin token (`-H 'Authorization: Bearer TOKEN'`) writes a test file and names the failing check.
 
 ## Connecting
 
@@ -136,10 +136,10 @@ If Directus does not become ready with a bucket, the IAM policy or keys usually 
 | Public API and Data Studio | `status.canonicalEndpoint` of `cpln workload get {release}-directus --gvc {gvc} -o yaml` | `adminEmail` / `adminPassword` |
 | Private | `cpln port-forward {release}-directus 8055:8055 --gvc {gvc}`, then `http://localhost:8055` | same |
 | Internal | `http://{release}-directus.{gvc}.cpln.local:8055` | an access token |
-| Health | `GET /server/ping` (process), `GET /server/health` (database, storage, Redis) | none |
+| Health | `GET /server/ping` (process) and `GET /server/info` (database): none; `GET /server/health` (database, storage, Redis) | admin token for `/server/health` |
 | PostgreSQL | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode | the database credentials secret |
 
-Sign in to the Data Studio at the endpoint with the admin email and password. The API takes a token from `POST /auth/login`, or a static token you set on a user in the Data Studio:
+Sign in to the Data Studio at the endpoint with the admin email and password. On first sign-in Directus asks for a license key (choose **I'm using Core plan** or **Skip** without one) and to register a project owner (**Remind Later** skips it); both dialogs return until answered. The API takes a token from `POST /auth/login`, or a static token you set on a user in the Data Studio:
 
 ```bash
 curl -s -X POST https://YOUR_ENDPOINT/auth/login -H 'Content-Type: application/json' \
@@ -158,6 +158,7 @@ cpln workload exec {release}-directus --gvc {gvc} --container directus -- \
 
 - **Never change `secret` after installing**: it signs every session and token, so all of them stop working. Rotating any other secret needs `cpln workload force-redeployment {release}-directus --gvc {gvc}`.
 - **Local files are deleted on uninstall and are not snapshotted.** Use `storage.type: s3` for files that must outlive the release; switching `storage.type` later does not move existing files.
+- **Redis is a single node:** while it restarts, API requests briefly fail with 503 until Directus reconnects.
 - **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Directus with it; use `postgresHA` when that matters.
 - **Install into a GVC with one location** and set `location` to it (the default is `aws-us-east-1`): if the GVC lacks that location, Directus runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL and Redis start in every GVC location.
 

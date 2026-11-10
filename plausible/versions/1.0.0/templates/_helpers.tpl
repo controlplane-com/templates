@@ -191,8 +191,20 @@ until /entrypoint.sh db createdb; do
 done
 
 if ! /entrypoint.sh db migrate; then
-  echo "${LOG} FATAL: database migrations failed; see the lines above." >&2
-  exit 1
+  # Migration 20240801091615 (capitalize_known_sources) sends ~1000-element arrays as ClickHouse HTTP
+  # query parameters. The mesh sidecar answers 431 for a request that large. On a FRESH install the
+  # tables it updates are empty, so recording it as applied is a no-op; never do this once data exists.
+  chq() { wget -q -O - -T 20 --header="X-ClickHouse-User: default" --header="X-ClickHouse-Key: ${CH_PASSWORD}" --post-data "$1" "http://${CH_HOST}:8123/?database=${CH_DATABASE}" 2>/dev/null; }
+  LAST=$(chq "SELECT max(version) FROM schema_migrations")
+  ROWS=$(chq "SELECT (SELECT count() FROM events_v2) + (SELECT count() FROM sessions_v2)")
+  if [ "${LAST}" = "20240709181437" ] && [ "${ROWS}" = "0" ]; then
+    echo "${LOG} fresh ClickHouse stopped at migration ${LAST}: skipping the empty-table source rewrite 20240801091615"
+    chq "INSERT INTO schema_migrations (version, inserted_at) VALUES (20240801091615, now())"
+    /entrypoint.sh db migrate || { echo "${LOG} FATAL: database migrations failed; see the lines above." >&2; exit 1; }
+  else
+    echo "${LOG} FATAL: database migrations failed; see the lines above." >&2
+    exit 1
+  fi
 fi
 
 exec /entrypoint.sh run

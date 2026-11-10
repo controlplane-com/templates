@@ -52,3 +52,4 @@
 
 - **MaxMind dropped from 1.0.0** (no test key; maintainer ruling 2026-11-09): locations are DB-IP country-level only.
 - Probes declare `scheme: HTTP` (API backfill). A secret created after install needs `force-redeployment`.
+- **Fresh-install migration skip:** Plausible migration `20240801091615_capitalize_known_sources` sends ~1000-element arrays as ClickHouse HTTP query parameters; the mesh sidecar returns `431 headers_too_large` and `db migrate` fails. Only when ClickHouse stopped at `20240709181437` AND `events_v2` + `sessions_v2` are empty, the start script records it as applied and re-runs `db migrate` (the migration only rewrites existing rows). Maintainer ruling 2026-11-10. A future Plausible migration with large URL parameters would hit the same 431.

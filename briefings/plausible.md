@@ -36,7 +36,6 @@
 | `app.baseUrl` | `""` | derived: canonical endpoint when public, else `http://localhost:8000` |
 | `publicAccess.enabled` | `false` | turn on after registering the owner |
 | `smtp.*` | off | invites, password resets, email reports |
-| `geoip.maxmindLicenseKeySecretName` | `""` | city-level geolocation; dropped from 1.0.0 if no key is available at test |
 | `postgres.backup.enabled` | `false` | PostgreSQL only, not events; needs a bucket + cloud account |
 | `clickhouse.locations` | `aws-us-east-1 × 1` | must be the GVC's one location, one replica |
 
@@ -50,3 +49,6 @@
 - **Why one replica:** visitor sessions live in each app replica's memory, and Control Plane does not pin a visitor to one replica, so two or more replicas would split visits and skew bounce rate. A crash is a short outage, and tracker hits in that window are lost.
 - **Visitor IP** comes from the leftmost `X-Forwarded-For` entry; a client can spoof it, which affects unique-visitor counts only.
 - **No email without SMTP:** no invites by email, no password resets, no weekly reports.
+
+- **MaxMind dropped from 1.0.0** (no test key; maintainer ruling 2026-11-09): locations are DB-IP country-level only.
+- Probes declare `scheme: HTTP` (API backfill). A secret created after install needs `force-redeployment`.

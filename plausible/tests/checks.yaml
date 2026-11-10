@@ -29,9 +29,8 @@ checks:
       workload: "{release}-plausible"
       container: plausible
       script: |
-        out=$(wget -q -O - http://127.0.0.1:8000/api/system)
-        echo "$out"
-        case "$out" in *'"version":"{app_version}"'*) echo VERSION_OK ;; esac
+        # The CE image reports build.version null, so the running image tag is the version.
+        case "$CPLN_IMAGE" in *:{app_version}) echo VERSION_OK ;; *) echo "VERSION_BAD $CPLN_IMAGE" ;; esac
     expect:
       stdout: "^VERSION_OK$"
 
@@ -48,7 +47,7 @@ checks:
           echo ALREADY_SEEDED
           exit 0
         fi
-        printf 'GET /login HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n' | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-login.txt
+        (printf 'GET /login HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n'; sleep 2) | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-login.txt
         head -1 /tmp/e2e-login.txt
         tr -d '\r' < /tmp/e2e-login.txt | grep -i '^location:' | sed 's/^[Ll]ocation: */FIRST_LAUNCH_REDIRECT /'
     expect:
@@ -84,7 +83,7 @@ checks:
       workload: "{release}-plausible"
       container: plausible
       script: |
-        printf 'GET /register HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n' | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-register.txt
+        (printf 'GET /register HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n'; sleep 2) | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-register.txt
         head -1 /tmp/e2e-register.txt
         tr -d '\r' < /tmp/e2e-register.txt | grep -i '^location:' | sed 's/^[Ll]ocation: */REGISTER_REDIRECT /'
     expect:
@@ -149,7 +148,7 @@ checks:
       workload: "{release}-plausible"
       container: plausible
       script: |
-        ws() { printf 'GET /live/websocket?vsn=2.0.0 HTTP/1.1\r\nHost: localhost:8000\r\nOrigin: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' "$1" \
+        ws() { (printf 'GET /live/websocket?vsn=2.0.0 HTTP/1.1\r\nHost: localhost:8000\r\nOrigin: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' "$1"; sleep 2) \
           | timeout 5 nc 127.0.0.1 8000 | head -1 | cut -d' ' -f2; }
         echo "WS $(ws http://localhost:8000) $(ws https://evil.example)"
     expect:

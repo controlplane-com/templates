@@ -38,7 +38,7 @@ cpln secret create-dictionary --name my-plausible-clickhouse-credentials \
   --entry database=plausible_events_db
 ```
 
-Optional: an SMTP relay (see [Email](#email)), a free [MaxMind](https://www.maxmind.com/en/geolite2/signup) licence key for city-level locations, and a bucket with a cloud account for PostgreSQL backups (see [Storage setup](#storage-setup-backups-only)).
+Optional: an SMTP relay (see [Email](#email)), and a bucket with a cloud account for PostgreSQL backups (see [Storage setup](#storage-setup-backups-only)).
 
 ## Configuration
 
@@ -75,17 +75,6 @@ smtp:
   fromEmail: analytics@example.com
   fromName: Plausible
   credentialsSecretName: my-plausible-smtp # dictionary with username and password; "" = no relay auth
-```
-
-### Geolocation
-
-The bundled DB-IP database gives countries. A MaxMind licence key, stored in an opaque secret, adds regions and cities:
-
-```yaml
-# example: the default is an empty secret name (DB-IP countries)
-geoip:
-  maxmindLicenseKeySecretName: my-plausible-maxmind
-  maxmindEdition: GeoLite2-City   # or GeoLite2-Country
 ```
 
 ### Access
@@ -186,12 +175,13 @@ Use `http://localhost:8000` in step 2, not another host name: Plausible accepts 
 
 ## Important Notes
 
+- **Visitor locations are country-level**, from the DB-IP database bundled in the image.
 - **Tracking needs `publicAccess.enabled: true`.** Visitors' browsers must reach the tracker script and `/api/event`.
 - **One app replica.** Plausible keeps each visitor's open session in the replica's memory, so several replicas would split visits and distort bounce rate and visit duration. A restart of the replica is a short outage, and tracker hits during it are lost.
 - **Analytics events have no scheduled backup or snapshot.** They live only on the ClickHouse volume. PostgreSQL is backed up only when `postgres.backup.enabled` is on.
 - **Uninstalling deletes both volumes.** Each keeps one final snapshot for 7 days; after that the data is gone.
 - **Do not change the signing key.** A new `SECRET_KEY_BASE` logs everyone out and breaks two-factor logins for every enrolled user.
-- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`.
+- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE_NAME-plausible --gvc GVC_NAME`; the deployment does not pick it up on its own.
 - **A `FATAL` about the location in the Plausible log** means `clickhouse.locations[0].name` is not your GVC's location, or the GVC has more than one location.
 - **Visitor IP and country** come from the leftmost `X-Forwarded-For` entry.
 - **Community Edition** has no funnels, ecommerce revenue goals, SSO or Sites API; those are Plausible Cloud features. The Stats API and shared dashboard links are available.

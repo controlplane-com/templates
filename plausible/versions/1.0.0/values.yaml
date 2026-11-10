@@ -32,12 +32,6 @@ smtp:
   # "" = unauthenticated relay.
   credentialsSecretName: ""
 
-# ─── Geolocation (optional) ───────────────────────────────────────────────────
-# Default: the bundled DB-IP database (country only). A free MaxMind licence key adds region and city.
-geoip:
-  maxmindLicenseKeySecretName: "" # opaque secret holding the licence key, e.g. my-plausible-maxmind; "" = DB-IP country
-  maxmindEdition: GeoLite2-City   # GeoLite2-City or GeoLite2-Country; used only with a licence key
-
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:
   # false = nothing reaches Plausible from the internet. Register the owner account first through

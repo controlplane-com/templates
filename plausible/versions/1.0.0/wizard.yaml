@@ -11,9 +11,9 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 3.4.2
     title: Bundled PostgreSQL
-    after: geolocation
+    after: email
     steps:
       - id: server
         title: Database server
@@ -37,7 +37,7 @@ imports:
   - template: clickhouse
     version: 3.1.0
     title: Bundled ClickHouse
-    after: geolocation
+    after: email
     steps:
       - { id: locations, title: ClickHouse location, description: The one location ClickHouse runs in. }
       - id: server
@@ -320,37 +320,6 @@ steps:
             mirrors: plausible.validateSmtp
             paths: [smtp.host, smtp.fromEmail]
             message: The SMTP host and the sender address are required while the relay is on.
-
-  - id: geolocation
-    title: Geolocation
-    description: Where visitor locations come from.
-    sections:
-      - title: MaxMind
-        docs: "#geolocation"
-        description: >-
-          The bundled DB-IP database gives countries. A free MaxMind GeoLite2 licence key adds regions and cities.
-        fields:
-          - path: geoip.maxmindLicenseKeySecretName
-            type: ref
-            label: MaxMind licence key secret
-            description: An opaque secret (plain encoding) holding the licence key. Leave empty for DB-IP countries.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              allowCreate: true
-              create:
-                suggestName: "context.releaseName + '-plausible-maxmind'"
-          - path: geoip.maxmindEdition
-            type: enum
-            label: MaxMind database
-            widget: segmented
-            required: true
-            when: self.geoip.maxmindLicenseKeySecretName != null && self.geoip.maxmindLicenseKeySecretName != ''
-            options:
-              - { value: GeoLite2-City, label: City }
-              - { value: GeoLite2-Country, label: Country }
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:

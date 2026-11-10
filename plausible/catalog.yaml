@@ -10,7 +10,7 @@ summary: >-
   Plausible Community Edition, cookieless web analytics: one app serves the dashboard, the tracker
   script and the event API. Events and sessions go to a bundled single-node ClickHouse on its own
   volume, and accounts, sites and goals to a bundled PostgreSQL with optional scheduled backups.
-  Optional SMTP for invitations and reports, and a MaxMind key for city-level locations. CE has no
+  Optional SMTP for invitations and reports. CE has no
   funnels, revenue goals, SSO or Sites API. Pick it for Google-Analytics-style reports without cookies.
 
 keywords:
@@ -90,12 +90,6 @@ prerequisites:
     required: false
     when: smtp.enabled with a relay that requires authentication
     description: SMTP relay username and password for invitations, password resets and email reports.
-  - kind: secret
-    secretType: opaque
-    valuesPath: geoip.maxmindLicenseKeySecretName
-    required: false
-    when: city-level geolocation is wanted
-    description: Free MaxMind GeoLite2 licence key (plain encoding); without it the bundled DB-IP database gives countries only.
   - kind: bucket
     valuesPath: [postgres.backup.aws.bucket, postgres.backup.gcp.bucket, postgres.backup.minio.bucket]
     required: false

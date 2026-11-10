@@ -244,8 +244,18 @@ checks:
           return j.token;
         }
         const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+        async function cookie() {
+          try {
+            const st = fs.statSync('/tmp/e2e-librechat-cookie');
+            if (Date.now() - st.mtimeMs < 600000) return fs.readFileSync('/tmp/e2e-librechat-cookie', 'utf8');
+          } catch (e) { /* no cached cookie */ }
+          const r = await fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: '{admin_email}', password: '{admin_password}' }) });
+          const c = r.headers.getSetCookie().map((x) => x.split(';')[0]).join('; ');
+          fs.writeFileSync('/tmp/e2e-librechat-cookie', c);
+          return c;
+        }
         async function served(dir, name) {
-          const r = await fetch(B + '/images/' + dir + '/' + name);
+          const r = await fetch(B + '/images/' + dir + '/' + name, { headers: { cookie: await cookie() } });
           return r.status === 200 && Buffer.from(await r.arrayBuffer()).equals(PNG);
         }
         (async () => {

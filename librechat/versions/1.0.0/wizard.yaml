@@ -70,7 +70,7 @@ imports:
           The document-search workload connects like any other workload: keep Same GVC, or add the
           LibreChat rag workload under Allowed workloads.
   - template: redis
-    version: 3.9.0
+    version: 3.9.1
     when: self.redis.enabled
     title: Redis
     after: advanced
@@ -256,8 +256,8 @@ steps:
             itemLabel: "item.name"
             description: >-
               Ollama, vLLM, LiteLLM, OpenRouter or any other OpenAI-compatible server, shown by name in the model
-              menu. A server in this GVC is `http://WORKLOAD.GVC.cpln.local:PORT/v1`; private addresses are
-              allowed automatically.
+              menu. A server in this GVC is `http://WORKLOAD.GVC.cpln.local:PORT/v1`; private addresses work,
+              and the chart also allows each one's host and port for URLs users add themselves (actions, MCP).
             item:
               type: object
               fields:
@@ -448,8 +448,8 @@ steps:
         toggle: redis.enabled
         docs: "#configuration"
         description: >-
-          A single Redis node the replicas share for sessions, rate limits and answers that resume after a
-          reconnect. Its settings follow the other steps.
+          A single Redis node the replicas share for sessions, rate limits and answers a reconnecting
+          browser picks up on any replica. Its settings follow the other steps.
         fields:
           - type: note
             severity: warning

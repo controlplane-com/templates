@@ -82,7 +82,8 @@ providers:
   userProvidedKeys: false # true = providers with no secret ask each user for their own key
 customEndpoints: [] # names unique, not a built-in: openAI, azureOpenAI, google, anthropic, assistants,
   # azureAssistants, agents, custom, bedrock, gptPlugins, chatGPTBrowser (any case). Private hosts
-  # (*.cpln.local, localhost, 10.x) are added to endpoints.allowedAddresses for you.
+  # (*.cpln.local, localhost, 10.x) work; their host:port also goes in endpoints.allowedAddresses,
+  # which LibreChat checks for URLs users add themselves (actions, MCP).
   # - name: ollama
   #   baseURL: http://my-ollama-ollama.GVC_NAME.cpln.local:11434/v1
   #   apiKeySecretName: ""   # opaque secret; "" = no key (local servers)
@@ -148,7 +149,7 @@ internalAccess:
 - **The admin secret is read on first start only.** LibreChat creates the account while the database has no users (the first user is the admin); afterwards change the password in the UI. Never change `CREDS_KEY` or `CREDS_IV`: saved user API keys become unreadable.
 - **Uploaded files are not backed up.** The shared files volume takes no snapshots; chats, users and settings live in MongoDB, which `mongodb.backup` backs up to object storage. Uninstall deletes every volume.
 - **Never put an API key in `config`.** The generated `librechat.yaml` is part of the workload spec; reference a key with `${VAR}`.
-- **Answers are capped at 10 minutes** per request by the platform; with Redis on, an answer in progress resumes after a reconnect, on any replica.
+- **Answers are capped at 10 minutes** per request by the platform; with Redis on, a browser that reconnects mid-answer picks it up on any replica, but an answer is lost if the replica generating it crashes.
 - **The datastores are single-instance.** More LibreChat replicas keep the chat tier up, but a MongoDB restart is a short outage.
 
 ## Links

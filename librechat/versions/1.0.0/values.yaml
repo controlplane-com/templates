@@ -47,7 +47,8 @@ providers:
   userProvidedKeys: false   # true = providers above with no secret ask each user for their own key
 
 # OpenAI-compatible endpoints (Ollama, vLLM, LiteLLM, OpenRouter, ...), shown by name in the model menu.
-# A private address (*.cpln.local, localhost, 10.x, ...) is allowed automatically for its host:port.
+# A private address (*.cpln.local, localhost, 10.x, ...) works; its host:port is also added to
+# endpoints.allowedAddresses, which LibreChat checks for URLs users add themselves (actions, MCP).
 customEndpoints: []
   # - name: ollama                                   # unique (any case); not a built-in: openAI, azureOpenAI, google, anthropic,
   #                                                  # assistants, azureAssistants, agents, custom, bedrock, gptPlugins, chatGPTBrowser

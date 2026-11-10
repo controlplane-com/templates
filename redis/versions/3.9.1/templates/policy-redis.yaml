@@ -1,0 +1,26 @@
+kind: policy
+name: {{ include "redis.policy.name" . }}
+tags: {{- include "redis.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis.identity.name" . }}
+targetKind: secret
+{{- /* Redis and Sentinel may share one auth secret: de-duplicated and sorted,
+as the API stores targetLinks. */}}
+{{- $links := list (printf "//secret/%s" (include "redis.secretConfig.name" .)) }}
+{{- if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "fromSecret") .Values.redis.auth.fromSecret.enabled }}
+{{- $links = append $links (printf "//secret/%s" .Values.redis.auth.fromSecret.name) }}
+{{- else if and (hasKey .Values.redis "auth") (hasKey .Values.redis.auth "password") .Values.redis.auth.password.enabled }}
+{{- $links = append $links (printf "//secret/%s" (include "redis.secretPassword.name" .)) }}
+{{- end }}
+{{- if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "fromSecret") .Values.sentinel.auth.fromSecret.enabled }}
+{{- $links = append $links (printf "//secret/%s" .Values.sentinel.auth.fromSecret.name) }}
+{{- else if and (hasKey .Values.sentinel "auth") (hasKey .Values.sentinel.auth "password") .Values.sentinel.auth.password.enabled }}
+{{- $links = append $links (printf "//secret/%s" (include "redis.sentinelSecretPassword.name" .)) }}
+{{- end }}
+targetLinks:
+{{- range (uniq $links | sortAlpha) }}
+  - {{ . }}
+{{- end }}

@@ -61,7 +61,13 @@ spec:
       metric: disabled
       minScale: 1
       maxScale: 1
+    {{- /* The API backfills these on a partial autoscaling block; declared so
+    the stored spec matches the rendered one (Console Drift tab). */}}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
+    timeoutSeconds: 5
   firewallConfig:
     {{- /* Every field is declared, empty lists included: the API backfills them,
     so omitting one makes a default install drift from the moment it is created. */}}

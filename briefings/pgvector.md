@@ -44,3 +44,5 @@
 
 ## Version history
 - **1.0.1** (2026-10): pgvector 0.8.7 for CVE-2026-103484 (IVFFlat index build overflow: a user who can create an index can run code as the server). `pgvector.validateImage` refuses an official `pgvector/pgvector` tag below 0.8.7, because a wizard install stores `image` in the release values and a `helm upgrade -f` would otherwise keep 0.8.6; other registries, digests and non-version tags (`pg18`) pass. The fix is in `vector.so`, so the upgrade's restart applies it; the 0.8.6→0.8.7 extension script only rewrites comments, and `\dx` reports 0.8.6 until `ALTER EXTENSION vector UPDATE`. Trivy does not see extension versions, so OS-package counts are unchanged between the two tags (same bookworm base).
+
+1.0.2 declares the fields the API backfills on the pgvector,PgBouncer workload(s) (`autoscaling.maxConcurrency: 0`, `scaleToZeroDelay: 300`, `target: 95`, `defaultOptions.timeoutSeconds: 5`), found by drift-diff on a template bundling 1.0.1. Its e2e drift check blocks (`driftBlocks: true`). Nothing about how it runs changes.

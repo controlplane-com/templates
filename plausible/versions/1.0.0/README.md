@@ -181,7 +181,7 @@ Use `http://localhost:8000` in step 2, not another host name: Plausible accepts 
 - **Analytics events have no scheduled backup or snapshot.** They live only on the ClickHouse volume. PostgreSQL is backed up only when `postgres.backup.enabled` is on.
 - **Uninstalling deletes both volumes.** Each keeps one final snapshot for 7 days; after that the data is gone.
 - **Do not change the signing key.** A new `SECRET_KEY_BASE` logs everyone out and breaks two-factor logins for every enrolled user.
-- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE_NAME-plausible --gvc GVC_NAME`; the deployment does not pick it up on its own.
+- **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for every workload whose message names it (`RELEASE_NAME-plausible`, and `RELEASE_NAME-clickhouse-server` for the ClickHouse secret); a deployment does not pick it up on its own.
 - **A `FATAL` about the location in the Plausible log** means `clickhouse.locations[0].name` is not your GVC's location, or the GVC has more than one location.
 - **Visitor IP and country** come from the leftmost `X-Forwarded-For` entry.
 - **Community Edition** has no funnels, ecommerce revenue goals, SSO or Sites API; those are Plausible Cloud features. The Stats API and shared dashboard links are available.

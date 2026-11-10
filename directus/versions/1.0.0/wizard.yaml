@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 3.4.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     after: email
@@ -67,7 +67,7 @@ imports:
           Directus connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
           Directus workload under Allowed workloads.
   - template: redis
-    version: 3.9.0
+    version: 3.9.1
     when: self.redis.enabled
     title: Redis
     after: email

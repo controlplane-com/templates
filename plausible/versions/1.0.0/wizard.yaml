@@ -13,13 +13,8 @@ imports:
   - template: postgres
     version: 3.4.2
     title: Bundled PostgreSQL
-    after: email
+    after: database
     steps:
-      - id: server
-        title: Database server
-        description: The PostgreSQL that holds Plausible's accounts, sites and goals.
-      - { id: storage, title: Database storage }
-      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
         title: Database backups
         description: Scheduled backups of accounts, sites and goals. Analytics events live in ClickHouse and are not included.
@@ -28,24 +23,27 @@ imports:
       - config.credentialsSecretName
       # Plausible connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
-    override:
-      internalAccess.type:
-        description: >-
-          Plausible connects to its database like any other workload: keep Same GVC, or add the Plausible
-          workload under Allowed workloads.
+      # Server, storage and network are rebound in the parent's Database step (one step instead of three); the
+      # child rules that went with them are restated there.
+      - image
+      - resources
+      - volumeset
+      - internalAccess
 
   - template: clickhouse
     version: 3.1.0
     title: Bundled ClickHouse
-    after: email
+    after: database
     steps:
-      - { id: locations, title: ClickHouse location, description: The one location ClickHouse runs in. }
       - id: server
         title: ClickHouse server
         description: The ClickHouse node that stores every event and session on its own volume.
     exclude:
       # A prerequisite Plausible reads too: chosen with the other secrets in the Plausible step.
       - database.credentialsSecretName
+      # Rebound in the Plausible step, so it is chosen early; the parent rules cover the
+      # child's location rules (one location, one replica, in the GVC).
+      - locations
       # Plausible keeps its events on the server volume (provider local); object storage is YAML only.
       - provider
       - aws
@@ -57,9 +55,10 @@ imports:
       - keeper
       - volumeset.keeper
     override:
-      locations:
-        description: Exactly one location with one replica, and it must be the location of the GVC you install into.
-        maxItems: 1
+      volumeset.server.capacity:
+        help: >-
+          Uninstalling the release deletes this volume with every event on it. It keeps one final snapshot for
+          7 days; after that the data is gone.
       server.internalAccess.type:
         description: >-
           Plausible connects to ClickHouse like any other workload: keep Same GVC, or add the Plausible workload
@@ -105,7 +104,10 @@ steps:
             severity: warning
             text: >-
               All three secrets must exist **before** you install. If one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
+              `cpln logs` shows nothing at all. After you create it, run `cpln workload force-redeployment` on
+              every workload whose deployment message names it (`RELEASE_NAME-plausible`, and
+              `RELEASE_NAME-clickhouse-server` for the ClickHouse secret): a deployment does not pick it up on
+              its own.
           - path: app.secretKeyBaseSecretName
             type: ref
             label: Signing key secret
@@ -218,6 +220,33 @@ steps:
             mirrors: plausible.validateApp
             paths: [app.baseUrl]
             message: The base URL must start with https:// or http://, such as https://stats.example.com.
+      - title: ClickHouse location
+        description: Plausible's events live on one ClickHouse node, which must run in the location of your GVC.
+        fields:
+          - path: clickhouse.locations
+            type: list
+            label: ClickHouse location
+            required: true
+            minItems: 1
+            maxItems: 1
+            widget: table
+            newItem: { name: "", replicas: 1 }
+            itemLabel: "item.name"
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Server replicas
+                  required: true
+                  readOnly: true
+                  min: 1
+                  max: 1
 
   - id: access
     title: Access
@@ -321,7 +350,160 @@ steps:
             paths: [smtp.host, smtp.fromEmail]
             message: The SMTP host and the sender address are required while the relay is on.
 
-# Rules over the imported values: their issues show on the imported fields' steps.
+  # The bundled PostgreSQL's server, storage and network, rebound from the postgres import (excluded there) so they
+  # fit one step; the postgres rules that went with them are restated below.
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL that holds Plausible's accounts, sites and goals.
+    sections:
+      - title: Server
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
+              different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed Postgres major version; a different major version
+              does not start on it. Upgrade with a dump and restore instead.
+      - title: Storage
+        fields:
+          - type: note
+            text: >-
+              Uninstalling the release deletes both volumes, this one and ClickHouse's. Each keeps one final
+              snapshot for 7 days; after that the data is gone.
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              Plausible connects to its database like any other workload: keep Same GVC, or add the Plausible
+              workload under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.postgres.internalAccess.type != 'none'
+            paths: [postgres.internalAccess.type]
+            message: '"None" also blocks Plausible, which connects to its database like any other workload.'
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible, or Plausible cannot reach its database.'"
+            message: Add the Plausible workload to the list, or Plausible cannot reach its database.
+          # Restated from the postgres import (its network step went with the rebound fields): the backup job
+          # connects through the same firewall, and the chart does not add it to the list.
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null && self.postgres.backup.enabled
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup, or the backup job cannot reach the database.'"
+            message: Add the backup workload to the list, or the backup job cannot reach the database.
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+
+# Rules over the ClickHouse values: their issues show on the steps of the fields they name.
 rules:
   - rule: >-
       size(self.clickhouse.locations) == 1 && self.clickhouse.locations[0].replicas != null &&
@@ -332,7 +514,7 @@ rules:
       Plausible runs on one ClickHouse node: list exactly one location, the location of your GVC, with
       1 replica.
   - when: context.gvcLocations != null && size(context.gvcLocations) == 1 && size(self.clickhouse.locations) == 1
-    rule: self.clickhouse.locations[0].name == context.gvcLocations[0]
+    rule: self.clickhouse.locations[0].name == '' || self.clickhouse.locations[0].name == context.gvcLocations[0]
     paths: [clickhouse.locations]
     messageExpression: "'Set the ClickHouse location to ' + context.gvcLocations[0] + ', the location of the GVC; Plausible refuses to start in another.'"
     message: Set the ClickHouse location to the location of the GVC; Plausible refuses to start in another.
@@ -344,15 +526,6 @@ rules:
     message: >-
       clickhouse.azure.accountKey is refused by the ClickHouse chart: put the key in a dictionary secret as
       `accountKey`, and remove it from the values.
-  - rule: self.postgres.internalAccess.type != 'none'
-    paths: [postgres.internalAccess.type]
-    message: '"None" also blocks Plausible, which connects to its database like any other workload.'
-  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
-    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible') in self.postgres.internalAccess.workloads
-    severity: warning
-    paths: [postgres.internalAccess.workloads]
-    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible, or Plausible cannot reach its database.'"
-    message: Add the Plausible workload to the list, or Plausible cannot reach its database.
   - rule: self.clickhouse.server.internalAccess.type != 'none'
     paths: [clickhouse.server.internalAccess.type]
     message: '"None" also blocks Plausible, which connects to ClickHouse like any other workload.'
@@ -384,13 +557,16 @@ yamlOnly:
     reason: Plausible runs one ClickHouse node, which needs no Keeper.
 
 # No Plausible version precedes 1.0.0, and every Plausible release bundles clickhouse 3.1.0 or later. These claim the
-# object-storage and Keeper keys of the clickhouse chart's own migrations (written for clickhouse 2.x releases),
+# object-storage, Keeper and location keys of the clickhouse chart's own migrations (written for clickhouse 2.x releases),
 # which this import excludes, so those migrations never run here.
 migrations:
   - fromVersions: "<1.0.0"
     to: clickhouse.provider
     valueExpr: "'local'"
     note: Plausible keeps its events on the ClickHouse server volume.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gvc.locations
+    note: No Plausible release carried this ClickHouse key; it is dropped.
   - fromVersions: "<1.0.0"
     from: clickhouse.aws.enabled
     note: No Plausible release carried this ClickHouse key; it is dropped.

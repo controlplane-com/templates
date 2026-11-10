@@ -14,36 +14,31 @@ imports:
     version: 3.4.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: email
+    # Right after the Database settings step, which holds the server, storage and network of the same database.
+    after: database
     steps:
-      - { id: server, title: Database server }
-      - { id: storage, title: Database storage }
-      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
         title: Database backups
         description: >-
           Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
           first (for AWS also the IAM policy); the steps are in the postgres template docs.
     exclude:
-      # Chosen in the Database section, next to the HA mode's secret, so both modes ask in one place.
+      # Chosen in the Directus step's prerequisite secrets, next to the HA mode's secret, so both modes ask in one place.
       - config.credentialsSecretName
       # Directus connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
-    override:
-      volumeset.capacity:
-        help: >-
-          Holds every collection, item, user and revision. Uninstalling the release deletes the volume set, so the
-          data does not survive a reinstall.
-      internalAccess.type:
-        description: >-
-          Directus connects to its database like any other workload: keep Same GVC, or add the Directus workload
-          under Allowed workloads.
+      # Bound in the Database settings step below, so the defaults a first install keeps fill one step instead
+      # of three (server, storage, network). The postgres chart's checks on them are restated there.
+      - image
+      - resources
+      - volumeset
+      - internalAccess
   - template: postgres-highly-available
     version: 2.8.1
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    after: email
+    after: database
     steps:
       - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Directus stores its data in. }
       - { id: storage, title: Database storage }
@@ -70,13 +65,9 @@ imports:
     version: 3.9.1
     when: self.redis.enabled
     title: Redis
-    after: email
-    steps:
-      - { id: topology, title: Redis engine, description: "The single Redis node that holds Directus's shared cache, locks and message bus. It holds no data of record." }
-      - { id: resources, title: Redis resources }
-      - { id: network, title: Redis network, description: Who can connect to the bundled Redis. }
-      - { id: backup, title: Redis backups }
-      - { id: advanced, title: Redis advanced, description: "Images, timeouts, health probes and extra workload settings." }
+    # Its remaining steps only apply to production mode, which the chart refuses; in dev mode every setting
+    # Directus needs sits in the Redis section of the Scaling and cache step.
+    after: scaling
     exclude:
       # Directus connects to one Redis endpoint and cannot follow Sentinel: the mode is fixed to dev (yamlOnly below).
       - deploymentMode
@@ -85,15 +76,142 @@ imports:
       - redis.auth.fromSecret
       # Directus reaches Redis on :6379 inside the GVC; public access moves it to other ports (directus.validateRedis).
       - redis.publicAccess
-    override:
-      redis.replicaDirect:
-        description: A DNS name per replica. Directus connects through the workload's own name, so it does not need one.
+      # Redis holds no data of record for Directus (cache, locks, message bus): a restart only empties it, so a
+      # persistent volume, backups, the metrics exporter, suspend and the engine choice stay at the redis
+      # chart's defaults (yamlOnly below).
+      - engine
+      - valkeyImage
+      - redis.persistence
+      - backup
+      - redis.exporter
+      - suspend
+      # Probe, timeout and workload tuning of a cache stays at the redis chart's defaults (yamlOnly below).
+      - redis.probes
+      - redis.timeoutSeconds
+      - redis.env
+      - redis.tags
+      - redis.requestRetryPolicy
+      # Directus connects through the workload's own name and needs no outbound access from Redis.
+      - redis.replicaDirect
+      - redis.firewall.external_inboundAllowCIDR
+      - redis.firewall.external_outboundAllowCIDR
+      # Bound in the Redis section of the Scaling and cache step, next to the switch that turns Redis on.
+      - redis.image
+      - redis.resources
+      - redis.firewall.internal_inboundAllowType
+      - redis.firewall.inboundAllowWorkload
 
 steps:
   - id: directus
     title: Directus
-    description: Where Directus runs, its server, its prerequisite secret, an optional license key, and its database.
+    description: The prerequisite secrets, where Directus runs, its server, an optional license key, and its database.
     sections:
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Directus secret
+            required: true
+            description: >-
+              A dictionary secret with `secret` (a random string of 32 or more characters, such as
+              `openssl rand -hex 32`), `adminEmail` and `adminPassword` (the first administrator).
+            help: >-
+              `adminEmail` and `adminPassword` are read on the first boot only; change the password later in the
+              Data Studio. Never change `secret`: every session and token is signed with it.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [secret, adminEmail, adminPassword]
+              create:
+                suggestName: "context.releaseName + '-directus-secrets'"
+          - type: note
+            when: >-
+              self.postgres.enabled &&
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            when: self.postgres.enabled
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, for the single-instance
+              PostgreSQL chosen under Database below.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Directus connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Directus.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-directus-db-credentials'"
+          - type: note
+            when: >-
+              self.postgresHA.enabled &&
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            when: self.postgresHA.enabled
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, for the highly available
+              PostgreSQL chosen under Database below.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Directus connects with
+              them. Changing it later is a database operation: follow the postgres-highly-available template's
+              password rotation steps, then update the secret and force a redeployment of Directus.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-directus-db-credentials'"
+        rules:
+          - rule: self.secrets.name != null && self.secrets.name != ''
+            mirrors: directus.validate
+            paths: [secrets.name]
+            message: The Directus secret is required.
+          # Restated from the postgres and postgres-highly-available descriptors: excluding their credentials
+          # field dropped these checks, which the subcharts still perform.
+          - when: self.postgres.enabled
+            rule: "!has(self.postgres.config.username) && !has(self.postgres.config.password) && !has(self.postgres.config.database)"
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              postgres.config.username, postgres.config.password and postgres.config.database are not supported.
+              Put them in the database credentials secret and remove them from the values.
+          - when: self.postgresHA.enabled
+            rule: "!has(self.postgresHA.postgres)"
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              The postgresHA.postgres block is not supported. Put the username, password and database in the
+              database credentials secret and remove the block from the values.
       - title: Location
         docs: "#location"
         fields:
@@ -143,38 +261,6 @@ steps:
             mirrors: directus.validate
             paths: [directus.publicUrl]
             message: Use a full URL with the scheme and no trailing slash, such as https://cms.example.com.
-      - title: Prerequisite secret
-        docs: "#prerequisites"
-        fields:
-          - type: note
-            severity: warning
-            text: >-
-              Two secrets must exist **before** you install: this one and the database credentials under Database
-              below. If one is missing, the deployment waits and `cpln logs` shows nothing at all.
-          - path: secrets.name
-            type: ref
-            label: Directus secret
-            required: true
-            description: >-
-              A dictionary secret with `secret` (a random string of 32 or more characters, such as
-              `openssl rand -hex 32`), `adminEmail` and `adminPassword` (the first administrator).
-            help: >-
-              `adminEmail` and `adminPassword` are read on the first boot only; change the password later in the
-              Data Studio. Never change `secret`: every session and token is signed with it.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [secret, adminEmail, adminPassword]
-              create:
-                suggestName: "context.releaseName + '-directus-secrets'"
-        rules:
-          - rule: self.secrets.name != null && self.secrets.name != ''
-            mirrors: directus.validate
-            paths: [secrets.name]
-            message: The Directus secret is required.
       - title: License key
         docs: "#prerequisites"
         fields:
@@ -200,9 +286,15 @@ steps:
       - title: Database
         docs: "#database"
         description: >-
-          Which PostgreSQL holds Directus's data. Its server, storage, network and backups follow in the last
-          steps; their defaults fit a first install.
+          Which PostgreSQL holds Directus's data. Its settings and backups follow in the next steps; their
+          defaults fit a first install.
         fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Switching the database type on a running release deploys a new, empty database: the collections,
+              items and users in the current one are not moved.
           - id: dbMode
             virtual: true
             type: enum
@@ -242,68 +334,6 @@ steps:
             text: >-
               The first upgrade after an install can restart the bundled database, which briefly interrupts the API
               and the Data Studio.
-      - id: single
-        title: Single-instance PostgreSQL
-        when: self.postgres.enabled
-        description: One PostgreSQL replica.
-        fields:
-          - type: note
-            when: >-
-              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
-              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
-            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
-            textExpression: >-
-              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
-              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
-          - path: postgres.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: A dictionary secret with the keys `username`, `password` and `database`.
-            help: >-
-              PostgreSQL reads these values only when its data directory is first initialized, and Directus connects
-              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
-              and force a redeployment of Directus.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-directus-db-credentials'"
-      - id: ha
-        title: Highly available PostgreSQL
-        when: self.postgresHA.enabled
-        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Directus connects through.
-        fields:
-          - type: note
-            when: >-
-              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
-              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
-            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
-            textExpression: >-
-              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
-              pick ' + self.postgres.config.credentialsSecretName + ' again.'
-          - path: postgresHA.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: A dictionary secret with the keys `username`, `password` and `database`.
-            help: >-
-              PostgreSQL reads these values only when its data is first initialized, and Directus connects with
-              them. Changing it later is a database operation: follow the postgres-highly-available template's
-              password rotation steps, then update the secret and force a redeployment of Directus.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-directus-db-credentials'"
     rules:
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
@@ -326,6 +356,153 @@ steps:
         message: >-
           Switching the database type deploys a new, empty database; the collections, items and users in the
           current one are not moved.
+
+  # The single-instance PostgreSQL's server, storage and network, bound here instead of in three imported steps
+  # (the postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: database
+    title: Database settings
+    description: The bundled single-instance PostgreSQL's image, compute, volume and firewall.
+    when: self.postgres.enabled
+    sections:
+      - title: Server
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
+              different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed Postgres major version; a different major version does
+              not start on it. Upgrade with a dump and restore instead.
+      - title: Storage
+        docs: "/reference/volumeset#capacity-and-billing"
+        fields:
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Database capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Holds every collection, item, user and revision. Uninstalling the release deletes the volume set, so the
+              data does not survive a reinstall.
+        rules:
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow database storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              Directus connects to its database like any other workload: keep Same GVC, or add the Directus workload
+              under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.postgres.internalAccess.type == 'workload-list' && self.postgres.backup.enabled && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+              context.releaseName + '-postgres-backup, or the backup job cannot connect.'
+            fix:
+              path: postgres.internalAccess.workloads
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup']"
+            message: The chart does not add its own workloads to the list; add the backup workload, or it cannot connect.
 
   - id: storage
     title: File storage
@@ -370,6 +547,12 @@ steps:
         when: self.storage.type == 's3'
         docs: "#storage-setup"
         fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket **before** you install. For AWS S3 also create the Control Plane cloud account and
+              the bucket-scoped IAM policy (the policy JSON is under Storage setup); for an S3-compatible server,
+              the access keys secret.
           - id: s3Flavour
             virtual: true
             type: enum
@@ -498,7 +681,8 @@ steps:
         docs: "#scaling-and-cache"
         description: >-
           One Redis node for the shared cache, locks, message bus, rate limits and scheduled-flow clock. It holds no
-          data of record: a Redis restart only empties the cache. Its server settings follow the Email step.
+          data of record: a Redis restart only empties the cache, and API requests briefly fail with 503 until
+          Directus reconnects.
         fields:
           - path: redis.redis.auth.fromSecret.enabled
             type: boolean
@@ -533,6 +717,45 @@ steps:
             when: self.redis.redis.auth.fromSecret.enabled
             pattern: '^[-._a-zA-Z0-9]+$'
             patternMessage: Use letters, digits, -, . and _.
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            advanced: true
+            maxRatio: 4
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to Redis
+            widget: cards
+            required: true
+            advanced: true
+            description: Directus connects to Redis like any other workload; keep Same GVC, or list the Directus workload.
+            options:
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # The redis chart writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: redis.redis.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Workloads allowed to reach Redis
+            advanced: true
+            description: Extra workloads allowed to connect, for example from another GVC.
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.redis.redis.firewall.internal_inboundAllowType == 'same-gvc'
         rules:
           - rule: "!self.redis.enabled || !self.redis.redis.auth.fromSecret.enabled || self.redis.redis.auth.fromSecret.name != ''"
             mirrors: directus.validateRedis
@@ -544,6 +767,38 @@ steps:
             severity: info
             paths: [redis.redis.auth.fromSecret.enabled]
             message: Turning the Redis password on or off restarts Redis and Directus.
+          # Restated from the redis descriptor's Authentication step, dropped with the excluded redis.auth.fromSecret.
+          - when: oldSelf != null && oldSelf.redis.redis.auth.fromSecret.enabled && self.redis.redis.auth.fromSecret.enabled
+            rule: >-
+              self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name &&
+              self.redis.redis.auth.fromSecret.passwordKey == oldSelf.redis.redis.auth.fromSecret.passwordKey
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name, redis.redis.auth.fromSecret.passwordKey]
+            message: >-
+              A different Redis password secret or key is a password change on a running release: the restarted
+              node cannot authenticate, so the rollout stops. Keep the installed secret and key unless the new one
+              holds the password Redis runs with today.
+          # Restated from the redis descriptor's Advanced and Network steps, dropped with the excluded paths.
+          - rule: >-
+              oldSelf == null || imageMajor(self.redis.redis.image) < 0 || imageMajor(oldSelf.redis.redis.image) < 0 ||
+              imageMajor(self.redis.redis.image) >= imageMajor(oldSelf.redis.redis.image)
+            severity: info
+            paths: [redis.redis.image]
+            message: An older Redis major version cannot load data written by the installed one.
+          - when: self.redis.redis.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null
+            rule: "!self.redis.redis.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [redis.redis.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.redis.redis.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the Redis list.
+          - when: self.redis.redis.firewall.internal_inboundAllowType == 'same-org'
+            rule: size(self.redis.redis.firewall.inboundAllowWorkload) == 0
+            severity: info
+            paths: [redis.redis.firewall.inboundAllowWorkload]
+            message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
       - title: Response cache
         docs: "#scaling-and-cache"
         fields:
@@ -555,8 +810,8 @@ steps:
               kept per replica.
 
   - id: access
-    title: Access
-    description: The public endpoint, and which workloads can reach Directus inside Control Plane.
+    title: Access and email
+    description: The public endpoint, which workloads can reach Directus inside Control Plane, and outgoing mail.
     sections:
       - title: Public endpoint
         docs: "#access"
@@ -605,15 +860,12 @@ steps:
             mirrors: directus.validate
             paths: [internalAccess.type]
             message: Choose None, Same GVC, Same org or Specific workloads.
-
-  - id: email
-    title: Email
-    description: The SMTP relay and sender for invitations and password-reset mail.
-    sections:
       - title: SMTP relay
         toggle: email.enabled
         docs: "#email"
-        description: Without it no mail is sent, so users cannot be invited by email or reset a forgotten password.
+        description: >-
+          The relay and sender for invitations and password-reset mail. Without it no mail is sent, so users cannot
+          be invited by email or reset a forgotten password.
         fields:
           - path: email.fromAddress
             type: string
@@ -653,8 +905,8 @@ steps:
             paths: [email.host, email.fromAddress]
             message: The SMTP host and from address are required.
 
-# Rules over the imported values and YAML-only settings: their issues show on the imported fields' steps,
-# or on Review when they have no paths.
+# Rules over the imported values and YAML-only settings: their issues show on the fields' steps, or on Review
+# when they have no paths.
 rules:
   # A `gvc` values key only arrives through YAML edits, so this root rule has no paths: it blocks Install
   # and shows on Review.
@@ -717,6 +969,24 @@ rules:
     paths: [redis.redis.firewall.inboundAllowWorkload]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-directus, or Directus cannot reach Redis.'"
     message: Add the Directus workload to the list, or Directus cannot reach Redis.
+  # Restated from the redis descriptor: the exclusions above dropped these checks, which the redis subchart still
+  # performs (redis.validateMode, redis.validateEngine, redis.validateBackupConfig). They only trip on YAML edits.
+  - when: self.redis.enabled
+    rule: >-
+      !self.redis.sentinel.publicAccess.enabled && !self.redis.sentinel.persistence.enabled &&
+      !self.redis.sentinel.auth.password.enabled && !self.redis.sentinel.auth.fromSecret.enabled
+    message: >-
+      Directus runs Redis in dev mode, which has no Sentinel: set redis.sentinel.publicAccess.enabled,
+      redis.sentinel.persistence.enabled, redis.sentinel.auth.password.enabled and
+      redis.sentinel.auth.fromSecret.enabled to false.
+  - when: self.redis.enabled
+    rule: >-
+      self.redis.engine in ['redis', 'valkey'] &&
+      (self.redis.engine != 'valkey' || (self.redis.valkeyImage != null && self.redis.valkeyImage != ''))
+    message: redis.engine must be redis or valkey, and redis.valkeyImage must be set when it is valkey.
+  - when: self.redis.enabled && self.redis.backup.enabled
+    rule: self.redis.backup.provider in ['aws', 'gcp']
+    message: Redis backups need redis.backup.provider set to aws or gcp.
 
 yamlOnly:
   - path: redis.mode
@@ -729,3 +999,52 @@ yamlOnly:
     reason: The chart refuses a plaintext Redis password (it would land in the release); use Require a Redis password with a secret.
   - path: redis.redis.publicAccess
     reason: The chart refuses Redis public access (directus.validateRedis); Directus connects to Redis on port 6379 inside the GVC.
+  - path: redis.engine
+    reason: Directus's Redis holds no data of record, so the server stays the redis chart's default (Redis).
+  - path: redis.valkeyImage
+    reason: Read only with redis.engine valkey, which stays at the Redis default.
+  - path: redis.redis.persistence
+    reason: Directus's Redis holds no data of record (cache, locks, message bus); a restart only empties the cache, so it needs no volume.
+  - path: redis.backup
+    reason: Directus's Redis holds no data of record, so there is nothing to back up; the database backups cover Directus's data.
+  - path: redis.redis.exporter
+    reason: A metrics sidecar for a cache Directus fills and empties itself; the platform's workload metrics cover the node.
+  - path: redis.suspend
+    reason: Suspending Redis stops Directus's shared cache, locks and message bus while Directus keeps running.
+  - path: redis.redis.probes
+    reason: The redis chart's health probes fit a node that starts empty, as Directus's Redis does.
+  - path: redis.redis.timeoutSeconds
+    reason: Request timeout tuning for the Redis workload; the redis chart's default fits Directus's short commands.
+  - path: redis.redis.env
+    reason: Extra Redis workload settings; Directus needs none.
+  - path: redis.redis.tags
+    reason: Extra Redis workload settings; Directus needs none.
+  - path: redis.redis.requestRetryPolicy
+    reason: Extra Redis workload settings; Directus needs none.
+  - path: redis.redis.replicaDirect
+    reason: Per-replica DNS names; Directus connects through the workload's own name, so it does not need one.
+
+# No Directus version precedes 1.0.0, and every Directus release bundles redis 3.9.1 or later. These claim the
+# redis keys this import excludes that the redis chart's own migrations touch (written for redis 3.7.0 and older
+# releases), so those migrations never run here.
+migrations:
+  - fromVersions: "<1.0.0"
+    assume: { redis.engine: redis, redis.backup.enabled: false, redis.redis.replicaDirect: false, redis.redis.image: "redis:8" }
+  - fromVersions: "<1.0.0"
+    from: redis.redis.resources.cpu
+    note: No Directus release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.resources.memory
+    note: No Directus release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.cpu
+    note: No Directus release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.memory
+    note: No Directus release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_inboundAllowCIDR
+    note: No Directus release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_outboundAllowCIDR
+    note: No Directus release carried this Redis key; it is dropped.

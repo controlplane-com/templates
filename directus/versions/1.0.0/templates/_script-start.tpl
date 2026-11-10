@@ -30,8 +30,12 @@ diagnostics reach the log:
   lock wait     until T0 + 300 s (polls pg_try_advisory_lock every 3 s)
 That leaves >= 160 s for `directus bootstrap` (install or migrations) plus
 server start and the first passing readiness probe. A bootstrap that runs past
-the window is killed with the container; PostgreSQL then releases the lock and
-the next start resumes the migrations.
+the window is killed with the container; PostgreSQL then releases the lock.
+Directus migrations are NOT safe to re-run after an interruption (a half-applied
+one fails with "already exists" on every later start), so nothing that can blip
+may kill the bootstrap: it runs WITHOUT Redis (no REDIS_*, every store in
+memory), and the Redis caches it would have flushed are cleared afterwards with
+`directus cache clear`, retried until T0 + 400 s (idempotent).
 */}}
 {{- define "directus.script.start" -}}
 'use strict';
@@ -48,6 +52,7 @@ const GATE_DEADLINE_S = 150;     // database must answer by T0 + 150 s
 const GATE_SLEEP_MS = 5000;
 const GATE_REQUIRED_OK = 3;
 const LOCK_DEADLINE_S = 300;     // the bootstrap lock must be held by T0 + 300 s
+const CACHE_CLEAR_DEADLINE_S = 400; // the Redis caches must be cleared by T0 + 400 s
 const LOCK_KEY = '4912120601';   // pg_advisory_lock key shared by every replica of every release on this database
 
 const log = (m) => console.log('[directus] ' + m);
@@ -177,15 +182,33 @@ async function main() {
       fatal('timed out waiting for the bootstrap lock. Another replica has held it until ' + LOCK_DEADLINE_S + 's after this one started; check its log. This replica restarts and waits again.');
     }
   }
-  log('bootstrap lock held; running directus bootstrap');
-  const code = await new Promise((resolve) => {
-    child = spawn(process.execPath, ['cli.js', 'bootstrap'], { cwd: '/directus', stdio: 'inherit' });
-    child.on('exit', (c, s) => resolve(c === null ? 1 : c));
-    child.on('error', (e) => { warn('bootstrap did not start: ' + e.message); resolve(1); });
+  log('bootstrap lock held; running directus bootstrap (without Redis)');
+  const run = (args, env) => new Promise((resolve) => {
+    child = spawn(process.execPath, ['cli.js'].concat(args), { cwd: '/directus', stdio: 'inherit', env });
+    child.on('exit', (c) => { child = null; resolve(c === null ? 1 : c); });
+    child.on('error', (e) => { child = null; warn(args[0] + ' did not start: ' + e.message); resolve(1); });
   });
-  child = null;
+  const noRedis = Object.assign({}, process.env);
+  for (const k of Object.keys(noRedis)) {
+    if (k.startsWith('REDIS_') || k.endsWith('_STORE')) delete noRedis[k];
+  }
+  const code = await run(['bootstrap'], noRedis);
   if (code !== 0) {
     fatal('directus bootstrap exited with ' + code + '; not starting Directus. See the bootstrap output above.');
+  }
+  if (process.env.REDIS_HOST) {
+    let cleared = false;
+    while (!cleared) {
+      cleared = (await run(['cache', 'clear'], process.env)) === 0;
+      if (!cleared) {
+        if (elapsed() > CACHE_CLEAR_DEADLINE_S) {
+          fatal('could not clear the Redis caches by ' + CACHE_CLEAR_DEADLINE_S + 's after start; check the Redis workload. The database is migrated, so the next start is quick.');
+        }
+        warn('Redis cache clear failed; retrying in 5 s');
+        await sleep(5000);
+      }
+    }
+    log('Redis caches cleared');
   }
   await lock.query('SELECT pg_advisory_unlock(' + LOCK_KEY + ')').catch(() => {});
   await lock.end().catch(() => {});

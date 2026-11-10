@@ -6,6 +6,9 @@
 #
 # Every connection goes to the replica's own IP with the root user (authSource admin), so the auth
 # checks exercise the credentials the install applied, not a localhost exception.
+# No drift left on a default install (mongodb 1.4.2): drift fails the run, not warns.
+driftBlocks: true
+
 checks:
   - id: write-read
     description: A document written over an authenticated TCP connection reads back.

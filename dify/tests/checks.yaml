@@ -267,7 +267,7 @@ checks:
             app=dict(name='e2e-code-' + secrets.token_hex(3), mode='workflow', icon='\U0001F916', icon_background='#FFEAD5', description=''),
             workflow=dict(graph=dict(nodes=[start, node, end], edges=edges, viewport=dict(x=0, y=0, zoom=1)),
                 features=dict(), environment_variables=[], conversation_variables=[]))
-        c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl)))
+        c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl, ensure_ascii=False)))
         imp = json.loads(b)
         app_id = imp.get('app_id')
         if not app_id:
@@ -355,7 +355,7 @@ checks:
             app=dict(name='e2e-egress-' + secrets.token_hex(3), mode='workflow', icon='\U0001F916', icon_background='#FFEAD5', description=''),
             workflow=dict(graph=dict(nodes=[start, node, end], edges=edges, viewport=dict(x=0, y=0, zoom=1)),
                 features=dict(), environment_variables=[], conversation_variables=[]))
-        c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl)))
+        c, b = req('POST', '/console/api/apps/imports', dict(mode='yaml-content', yaml_content=json.dumps(dsl, ensure_ascii=False)))
         imp = json.loads(b)
         app_id = imp.get('app_id')
         if not app_id:
@@ -524,7 +524,7 @@ checks:
         python3 - <<'PY'
         import base64, json, time, urllib.request, urllib.error
         B = 'http://127.0.0.1:5001'
-        PLUGIN = 'langgenius/json_process'
+        PLUGIN = 'langgenius/openai_api_compatible'
         JAR = dict()
         def req(m, p, body=None):
             h = dict()
@@ -564,17 +564,25 @@ checks:
             c, b = req('POST', '/console/api/workspaces/current/plugin/install/marketplace', dict(plugin_unique_identifiers=[ident]))
             if c != 200:
                 print('INSTALL_BAD %d %s' % (c, b[:300])); raise SystemExit
-            for _ in range(36):
+            task = (json.loads(b) or dict()).get('task_id')
+            last = ''
+            for _ in range(60):
                 if installed():
                     break
+                if task:
+                    tc, last = req('GET', '/console/api/workspaces/current/plugin/tasks/' + task)
+                    if '"status": "failed"' in last or '"status":"failed"' in last:
+                        break
                 time.sleep(5)
+            if not installed():
+                print('PLUGIN_BAD task=%s %s' % (task, last[:400])); raise SystemExit
         print('PLUGIN_OK' if installed() else 'PLUGIN_BAD')
         PY
     expect:
       stdout: "^PLUGIN_OK$"
-    retries: 3
+    retries: 2
     retryDelaySeconds: 30
-    timeoutSeconds: 420
+    timeoutSeconds: 480
 
   - id: extra-env-applied
     description: "dify.extraEnv reaches the API, so the baseline's UPLOAD_FILE_SIZE_LIMIT of 7 is the upload limit Dify reports."

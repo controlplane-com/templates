@@ -554,7 +554,7 @@ checks:
             time.sleep(20)
         def installed():
             c, b = req('GET', '/console/api/workspaces/current/plugin/list?page=1&page_size=100')
-            return c == 200 and ('"plugin_id": "' + PLUGIN + '"' in b or '"plugin_id":"' + PLUGIN + '"' in b)
+            return c == 200 and any(p.get('plugin_id') == PLUGIN for p in json.loads(b).get('plugins', []))
         if not installed():
             ua = dict(Accept='application/json')
             ua['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'

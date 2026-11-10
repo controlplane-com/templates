@@ -95,7 +95,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              These secrets must exist **before** you install. If one is missing, the deployment waits and
+              These secrets must exist **before** you install or upgrade. If one is missing, the deployment waits and
               `cpln logs` shows nothing; the reason is under `status.versions[].message` of
               `cpln workload get-deployments`.
           - path: keys.secretName
@@ -238,14 +238,10 @@ steps:
             type: boolean
             label: Users bring their own keys
             description: On, every provider above without a secret is still offered, and each user enters their own key in LibreChat.
-        rules:
-          - rule: >-
-              self.providers.userProvidedKeys || size(self.customEndpoints) > 0 ||
-              self.providers.openai.apiKeySecretName != '' || self.providers.anthropic.apiKeySecretName != '' ||
-              self.providers.google.apiKeySecretName != ''
+          - type: note
             severity: info
-            paths: [providers.userProvidedKeys]
-            message: >-
+            when: "!(self.providers.userProvidedKeys == true || (self.customEndpoints != null && size(self.customEndpoints) > 0) || (self.providers.openai.apiKeySecretName != null && self.providers.openai.apiKeySecretName != '') || (self.providers.anthropic.apiKeySecretName != null && self.providers.anthropic.apiKeySecretName != '') || (self.providers.google.apiKeySecretName != null && self.providers.google.apiKeySecretName != ''))"
+            text: >-
               With no provider key, no custom endpoint and users not bringing their own keys, LibreChat installs
               with an empty model menu. Choose a key, turn on Users bring their own keys, or add an endpoint.
       - title: OpenAI-compatible endpoints

@@ -10,7 +10,7 @@ This app deploys [Dify](https://dify.ai), an open-source builder for LLM applica
 - **Worker** (`RELEASE_NAME-dify-worker`) and **scheduler** (`RELEASE_NAME-dify-beat`): Celery processes that index documents and run asynchronous and periodic tasks. The scheduler always runs exactly one replica.
 - **Plugin daemon** (`RELEASE_NAME-dify-plugin-daemon`): installs and runs model-provider and tool plugins, one stateful replica with its own volume (`RELEASE_NAME-dify-plugins`) and its own `dify_plugin` database.
 - **Code sandbox** (`RELEASE_NAME-dify-sandbox`): runs the Python and JavaScript of Code and Template nodes. Omitted when `codeExecution.endpoint` points at your own executor.
-- **SSRF proxy** (`RELEASE_NAME-dify-ssrf-proxy`): squid on port 3128. HTTP Request nodes, tools and sandboxed code send their requests through it, and it refuses private, link-local and in-GVC addresses.
+- **SSRF proxy** (`RELEASE_NAME-dify-ssrf-proxy`): squid on port 3128. HTTP Request nodes, tools and Python HTTP calls in Code nodes go through it, and it refuses private, link-local and in-GVC addresses.
 - **File storage** (`RELEASE_NAME-dify-storage`): a shared volume that the API and worker mount at `/app/api/storage`.
 - **PostgreSQL**: the `postgres` template with the pgvector image (default), or `postgres-highly-available` (3 Patroni replicas, etcd and an HAProxy leader endpoint). It holds apps, users, conversations and knowledge-base vectors.
 - **Redis**: the `redis` template as one node, password required. It holds the cache, the task queue and plugin state.
@@ -77,6 +77,8 @@ pluginDaemon:
     capacity: 20                # GiB (minimum 10): installed plugins and their Python environments
 ```
 
+Each API and worker process holds up to 8 database connections (`SQLALCHEMY_POOL_SIZE` 5 + `SQLALCHEMY_MAX_OVERFLOW` 3), about 8 concurrent runs per API replica; raise both through `extraEnv` for more, within PostgreSQL's 100 connections.
+
 Each tier's resources are under `dify.resources`, `worker.resources`, `pluginDaemon.resources`, `codeExecution.sandbox.resources` and `ssrfProxy.resources` in `values.yaml`.
 
 ### Code execution and network
@@ -141,9 +143,10 @@ Dify builds every link, cookie and webhook from the public URL, and the login wo
 
 - The Dify licence allows one workspace per install, not a multi-tenant service, and forbids removing or changing the Dify logo and copyright in the console. The chart turns off self sign-up and creating more workspaces; invite members from Settings → Members.
 - Never rotate `secretKey` (it signs every login and shared link) and never delete the file storage volume (it holds the keys that decrypt the model provider credentials saved in Dify).
-- Anyone who can edit an app can run Python and JavaScript in the code sandbox. The sandbox cannot reach the other Dify tiers, but it can open connections to other services in this GVC, including the bundled PostgreSQL and Redis: their passwords are the guard. Give accounts only to people you trust.
-- With the SSRF proxy on, HTTP Request nodes, tools and Code nodes reach the internet only through it and cannot call services inside the GVC (`*.cpln.local`). Python code uses the proxy through `HTTP_PROXY`; JavaScript code has no internet access. Model-provider plugins run in the plugin daemon, not through the proxy, so the Ollama, vLLM and LiteLLM providers can use in-GVC URLs.
+- Anyone who can edit an app can run Python and JavaScript in the code sandbox, and that code can open direct connections to the internet. The Dify API, web and plugin daemon refuse the sandbox; other services in this GVC, including the bundled PostgreSQL and Redis, are guarded only by their passwords. Give accounts only to people you trust.
+- With the SSRF proxy on, HTTP Request nodes, tools and Python HTTP calls in Code nodes (`requests`) go through it and cannot call services inside the GVC (`*.cpln.local`). JavaScript code gets no proxy. Model-provider plugins run in the plugin daemon, not through the proxy, so the Ollama, vLLM and LiteLLM providers can use in-GVC URLs.
 - Plugins install from the Dify marketplace or an uploaded package, and only signed plugins are accepted.
+- Six failed logins lock an email out for 24 hours. To clear it: `cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --container redis -- sh -c 'REDISCLI_AUTH="$CUSTOM_REDIS_PASSWORD" redis-cli DEL login_error_rate_limit:USER_EMAIL'`.
 - Use a single-location GVC: the database, Redis, both volumes and the plugin daemon run in one location. The first `helm upgrade` after an install can restart the bundled database. Uninstalling deletes the database and both volumes, and with them every app, user, knowledge base and installed plugin.
 
 ## Links

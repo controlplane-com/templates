@@ -63,7 +63,9 @@ spec:
       inboundAllowCIDR: []
       inboundBlockedCIDR: []
       {{- if .Values.ssrfProxy.enabled }}
-      # User code reaches the internet only through the SSRF proxy.
+      # Python HTTP calls go through the SSRF proxy (HTTP_PROXY/HTTPS_PROXY above). This list does not stop
+      # raw TCP from user code; the Dify tiers' internal firewalls refuse the sandbox, and the database and
+      # Redis passwords guard the bundled backends.
       outboundAllowCIDR: []
       {{- else }}
       outboundAllowCIDR:

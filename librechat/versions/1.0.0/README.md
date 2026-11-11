@@ -92,6 +92,23 @@ customEndpoints: [] # names unique, not a built-in: openAI, azureOpenAI, google,
 config: {} # extra librechat.yaml settings merged over the generated file, e.g. interface.customWelcome
 ```
 
+### MCP servers (Control Plane example)
+
+MCP servers go in `config.mcpServers`. This connects the Control Plane MCP server; each user clicks **Connect** on it in the chat's MCP menu and signs in to Control Plane (OAuth), so no token is stored in the chart:
+
+```yaml
+config:
+  mcpServers:
+    cpln:
+      title: Control Plane
+      type: streamable-http
+      url: https://mcp.cpln.io/mcp?toolsets=full   # toolsets: readonly, core, mk8s or full
+      requiresOAuth: true
+      timeout: 60000
+```
+
+Every tool's description is sent with each message, and `full` has about 95 tools. If LibreChat reports the context is exceeded, raise **Max Context Tokens** in the model's parameters (up to the model's limit), or pick a smaller toolset.
+
 ### Search, document search and Redis
 
 ```yaml
@@ -158,4 +175,6 @@ internalAccess:
 - [LibreChat documentation](https://www.librechat.ai/docs)
 - [librechat.yaml reference](https://www.librechat.ai/docs/configuration/librechat_yaml)
 - [Custom endpoints](https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/custom_endpoint)
+- [MCP servers in librechat.yaml](https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers)
+- [Control Plane MCP server](https://docs.controlplane.com/ai/mcp)
 - [rag-api](https://github.com/LibreChat-AI/rag-api)

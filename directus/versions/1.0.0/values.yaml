@@ -126,7 +126,7 @@ postgresHA:
     mode: logical        # logical | wal-g
     resources:
       cpu: 100m
-      memory: 512Mi      # 128Mi OOM-kills wal-g mid-backup
+      memory: 512Mi      # wal-g backups need at least 512Mi
     logical:
       image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
       schedule: "0 2 * * *"   # daily at 02:00 UTC

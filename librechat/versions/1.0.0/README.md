@@ -107,7 +107,7 @@ config:
       timeout: 60000
 ```
 
-Every tool's description is sent with each message, and `full` has about 95 tools. If LibreChat reports the context is exceeded, raise **Max Context Tokens** in the model's parameters (up to the model's limit), or pick a smaller toolset.
+Every tool's description is sent with each message, and `full` has about 95 tools. If LibreChat reports the context is exceeded, raise **Max Context Tokens** in the model's parameters (up to the model's limit).
 
 ### Search, document search and Redis
 

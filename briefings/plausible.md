@@ -1,7 +1,5 @@
 # Plausible Analytics — Maintainer Briefing
 
-> Build-time draft (1.0.0, 2026-11-09). Reconcile against the test report before the post-test gate: add the measured surge-rollout continuity and replica-crash outage from the live round.
-
 ## What it is
 - Plausible Community Edition: privacy-friendly web analytics with no cookies, an alternative to Google Analytics.
 - License: **AGPL-3.0** (a strong open-source license: anyone offering a modified version as a service must share their changes). Free, nothing to buy.
@@ -25,7 +23,7 @@
 - Three prerequisite secrets (signing key, PostgreSQL credentials, ClickHouse credentials); the chart creates none.
 - One GVC location only. The app refuses to start in a GVC with more than one location, because postgres would run an empty copy per location, and an app on an empty database offers owner registration to anyone.
 - Image guard: Plausible CE tags below v3.2.1 are refused at render (CVE-2026-8467, `/storybook` remote code execution).
-- Upgrades use a surge rollout (the new replica is ready before the old one stops).
+- Upgrades use a surge rollout (the new replica is ready before the old one stops): rolling restarts measured 0 failed of 227 and 0 of 182 requests. A replica stop cost 2 of 151 requests (~1.5 s); ClickHouse down to recovery took 2 min 25 s (readiness lags the stop by ~50 s).
 
 ## Key knobs
 
@@ -53,3 +51,5 @@
 - **MaxMind dropped from 1.0.0** (no test key; maintainer ruling 2026-11-09): locations are DB-IP country-level only.
 - Probes declare `scheme: HTTP` (API backfill). A secret created after install needs `force-redeployment`.
 - **Fresh-install migration skip:** Plausible migration `20240801091615_capitalize_known_sources` sends ~1000-element arrays as ClickHouse HTTP query parameters; the mesh sidecar returns `431 headers_too_large` and `db migrate` fails. Only when ClickHouse stopped at `20240709181437` AND `events_v2` + `sessions_v2` are empty, the start script records it as applied and re-runs `db migrate` (the migration only rewrites existing rows). Maintainer ruling 2026-11-10. A future Plausible migration with large URL parameters would hit the same 431.
+- **Open (not fixed in 1.0.0):** `clickhouse.provider` is not validated by the parent, so `--set clickhouse.provider=aws` renders an S3 config and installs; the template is meant to keep ClickHouse local.
+- **Status:** live-tested 2026-11-10 in test-gvc-3 (two fresh installs, migration-skip guard negative control, drift clean, E2E 13/13); wizard rounds 1-2 passed; maintainer walkthrough approved 2026-11-11; shipped in #711.

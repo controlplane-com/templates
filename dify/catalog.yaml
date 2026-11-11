@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Dify
+category: ai
+topology: single
+
+summary: >-
+  Dify LLM app builder for chatbots, agents and visual workflows with RAG knowledge bases, published as web apps or
+  called through a REST API. Deploys the web console, API, worker, scheduler, plugin daemon, code sandbox and SSRF
+  proxy behind one gateway, on a bundled PostgreSQL with pgvector and Redis; HA PostgreSQL and up to three replicas
+  are optional. One workspace per install with the Dify logo kept, as its licence requires. Pick it to build LLM apps in a browser.
+
+keywords:
+  - llm app builder
+  - llmops
+  - ai workflows
+  - workflow builder
+  - visual workflow
+  - low-code ai
+  - no-code ai
+  - ai agents
+  - agent builder
+  - chatbot builder
+  - rag
+  - retrieval augmented generation
+  - knowledge base
+  - pgvector
+  - vector search
+  - prompt engineering
+  - mcp
+  - mcp server
+  - llm plugins
+  - code sandbox
+  - openai
+  - anthropic
+  - ollama
+  - service api
+
+useCases:
+  - Build chatbots and AI agents that answer from your own documents
+  - Design multi-step LLM workflows in a visual editor and run them through an API
+  - Publish an AI app as a web page or embed it in a website
+  - Upload documents into knowledge bases for retrieval-augmented generation
+  - Compare models and prompts from many providers in one place
+  - Expose a workflow as an MCP server for Claude, Cursor or another MCP client
+
+alternativeTo:
+  - Flowise
+  - Coze Studio
+
+pickInsteadIf:
+  - need: a canvas of LangChain-style components with Python custom components
+    template: langflow
+  - need: code-first LangGraph agents served behind the LangGraph Agent Server API
+    template: aegra
+  - need: general workflow automation across SaaS apps rather than LLM apps
+    template: n8n
+  - need: a chat UI for people to talk to models, without building apps
+    template: open-webui
+
+related:
+  - template: litellm
+    relation: companion
+    note: LiteLLM model gateway that Dify's OpenAI-compatible provider can call with one key
+  - template: ollama
+    relation: companion
+    note: Self-hosted open models that Dify's Ollama provider plugin connects to
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server on GPUs for Dify apps
+  - template: langfuse
+    relation: companion
+    note: Langfuse LLM observability, receives traces of Dify app runs
+  - template: qdrant
+    relation: companion
+    note: External vector store for teams that keep embeddings outside Dify
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [secretKey, initPassword, pluginDaemonKey, pluginInnerApiKey]
+    valuesPath: dify.secretName
+    required: true
+    description: Dify's signing key, the one-time /install password (at most 30 characters) and the plugin daemon's two keys. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: codeExecution.apiKeySecretName
+    required: true
+    description: The key Dify and the code sandbox (or your own executor) share. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Letters-and-digits credentials the bundled PostgreSQL initializes with and Dify connects with. A missing secret leaves the deployment waiting with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: true
+    description: Letters-and-digits password the bundled Redis requires and Dify connects with. A missing secret leaves the deployment waiting with no logs.
+  - kind: domain
+    valuesPath: dify.publicUrl
+    required: false
+    when: dify.publicUrl is set to a custom domain
+    description: A domain routed to the RELEASE_NAME-dify gateway workload; Dify builds every link and cookie from this URL.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

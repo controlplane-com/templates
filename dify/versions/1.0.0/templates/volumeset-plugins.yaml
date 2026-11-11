@@ -1,0 +1,9 @@
+kind: volumeset
+name: {{ include "dify.plugin.volumeset.name" . }}
+description: Dify plugin daemon storage (installed plugins and their Python environments)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  performanceClass: general-purpose-ssd
+  initialCapacity: {{ .Values.pluginDaemon.volumeset.capacity }}

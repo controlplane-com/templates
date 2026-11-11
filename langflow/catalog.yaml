@@ -42,9 +42,10 @@ useCases:
 
 alternativeTo:
   - Flowise
-  - Dify
 
 pickInsteadIf:
+  - need: a full LLM app platform with knowledge bases, a plugin marketplace and published chat apps
+    template: dify
   - need: code-first LangGraph agents served behind the LangGraph Agent Server API
     template: aegra
   - need: general workflow automation across SaaS apps rather than LLM flows

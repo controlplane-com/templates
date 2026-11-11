@@ -31,6 +31,7 @@ Backups and public access have their own prerequisites; see [Backing Up](#backin
 
 ### Important Notes
 
+- **Never turn `redis.multiZone` or `sentinel.multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **`mode: dev` has no failover and is not for production;** with persistence off its data is lost on every restart and upgrade.
 - **Do not change the Redis password on a running release,** in values or in the password secret. A restarted replica can no longer authenticate to the master, so the rollout stops advancing; setting the previous password back recovers it. To change the password, uninstall and reinstall.
 - **Turn persistence on at install when you can.** Adding it to a running release takes effect only once every node stops, so set `suspend: true` in the same upgrade, then `suspend: false` in the next one. Data held only in memory is lost.

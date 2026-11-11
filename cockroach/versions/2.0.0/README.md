@@ -379,6 +379,7 @@ Running the second statement without the first fails with
 
 ## Important Notes
 
+- **Never turn `multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **Before enabling `multiZone`, confirm every location in your GVC supports multi-zone placement.** A location that does not accepts the setting and then wedges — the workload never becomes ready and nothing explains why. Measured on `aws-us-west-2`, where a stateful workload with a block volumeset wedges while the same location works for standard workloads; `aws-us-east-1` and `aws-us-east-2` were unaffected. Check with your Control Plane contact if you are unsure, and leave it `false` if you are.
 - **A one-node deployment is refused at render.** Each node joins every *other* replica, so a single node has nothing to join. Use at least 3 replicas in total — 3 in one location is the smallest supported shape.
 - **Never `helm upgrade` a 1.x release onto 2.0.0** — it deletes the GVC the 1.x release created, and everything in it. See [Migrating from 1.x](#migrating-from-1x).

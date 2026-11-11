@@ -1412,3 +1412,13 @@ yamlOnly:
     reason: >-
       The JMX exporter rule set. The shipped rules cover the broker metrics, and a wrong pattern
       silently drops metrics.
+
+rules:
+  - rule: oldSelf == null || !oldSelf.kafka.multiZone || self.kafka.multiZone
+    paths: [kafka.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: oldSelf == null || self.kafka_connectors == null || oldSelf.kafka_connectors == null || self.kafka_connectors.all(c, !oldSelf.kafka_connectors.exists(o, o.name == c.name && has(o.multiZone) && o.multiZone == true) || (has(c.multiZone) && c.multiZone == true))
+    paths: [kafka_connectors]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.

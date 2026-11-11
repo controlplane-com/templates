@@ -233,6 +233,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 ## Important Notes
 
+- **Never turn `multiZone.enabled` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **Create the API-key secret before you install.** Without it the deployment waits on a secret that does not exist and looks broken rather than failing.
 - **Back up the API key yourself.** Rotating it means updating the secret and restarting the cluster; losing it locks you out of every collection.
 - **Use at least 3 replicas in production.** Raft needs a quorum to elect a leader and accept schema changes; a 2-node cluster cannot lose a node.

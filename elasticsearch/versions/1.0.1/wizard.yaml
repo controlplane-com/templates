@@ -625,3 +625,9 @@ steps:
         message: >-
           Same org already lets every workload of the org connect to Elasticsearch, so the workloads listed for
           Elasticsearch add nothing.
+
+rules:
+  - rule: oldSelf == null || !oldSelf.multiZone.enabled || self.multiZone.enabled
+    paths: [multiZone.enabled]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.

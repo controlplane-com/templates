@@ -783,6 +783,10 @@ steps:
             patternMessage: Leave out the leading /.
 
 rules:
+  - rule: oldSelf == null || !oldSelf.multiZone || self.multiZone
+    paths: [multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
   - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
     message: >-
       Do not upgrade a 1.x release to 2.0.0: the upgrade deletes the GVC the 1.x release created, with

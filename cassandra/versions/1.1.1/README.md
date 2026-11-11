@@ -264,6 +264,7 @@ cluster with incomplete data.
 
 ## Important Notes
 
+- **Never turn `multiZone.enabled` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **Minimum replicas for production**: Use at least 3 replicas with a replication factor of 3 so the cluster can survive a node failure while still achieving quorum
 - **JVM heap**: Set `jvmHeapSize` to approximately 50% of `memory` — Cassandra relies heavily on off-heap memory for bloom filters, row cache, and OS page cache
 - **gc_grace_seconds**: The default is 10 days. Ensure repair runs at least once within this window on all nodes, or deleted data may reappear after a node recovers from downtime

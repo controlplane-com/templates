@@ -975,3 +975,9 @@ migrations:
   - { fromVersions: "<1.2.0", from: redpanda.memory, to: redpanda.maxMemory }
   - { fromVersions: "<1.2.0", from: redpanda_console.cpu, to: redpanda_console.maxCpu }
   - { fromVersions: "<1.2.0", from: redpanda_console.memory, to: redpanda_console.maxMemory }
+
+rules:
+  - rule: oldSelf == null || !oldSelf.redpanda.multiZone || self.redpanda.multiZone
+    paths: [redpanda.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.

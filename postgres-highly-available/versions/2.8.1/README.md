@@ -353,6 +353,7 @@ release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 
 ## Important Notes
 
+- **Never turn `multiZone` or `etcd.multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **`walLevel` sets `wal_level` only when the cluster is created** — on an existing release follow [WAL level and logical replication](#wal-level-and-logical-replication).
 - **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Minimum Replicas**: For production use, maintain at least 3 PostgreSQL replicas and 3 etcd replicas

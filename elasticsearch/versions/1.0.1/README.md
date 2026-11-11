@@ -260,6 +260,7 @@ Always use the fully-qualified internal hostname. The bare workload name is not 
 
 ## Important Notes
 
+- **Never turn `multiZone.enabled` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **X-Pack security is disabled, so there is no authentication.** Anything `internal_access` admits has full admin access to every index, and there are no credentials anywhere in this template. Keep `internal_access` as narrow as your deployment allows.
 - **`replicas` must be odd**, or the cluster cannot elect a master.
 - **`jvmHeap` is not derived from `resources`.** Raising the container memory limit does not raise the heap, and setting the heap above about half the limit will get the process OOM-killed.

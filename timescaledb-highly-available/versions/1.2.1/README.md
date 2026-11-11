@@ -323,6 +323,7 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
 ## Important Notes
 
+- **Never turn `multiZone` or `etcd.multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
 - **Create the credentials secret before installing** — the deployment wedges silently without it, and `cpln logs` returns zero lines. Credentials are baked into the data directory at first boot, so changing the secret later does not change the database password; to reset, uninstall (which deletes the volumes) and reinstall.
 - **Always connect via the proxy, never a replica** — the leader moves on failover; a pinned replica address will break. PgBouncer and backups already route through the proxy.

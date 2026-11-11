@@ -1623,6 +1623,14 @@ steps:
                     - { value: retriable-status-codes, label: retriable-status-codes }
 
 rules:
+  - rule: oldSelf == null || !oldSelf.redis.multiZone || self.redis.multiZone
+    paths: [redis.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: oldSelf == null || !oldSelf.sentinel.multiZone || self.sentinel.multiZone
+    paths: [sentinel.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
   - rule: >-
       context.mode != 'upgrade' || context.fromVersion == null || oldSelf == null ||
       semverCompare(context.fromVersion, '3.1.1') >= 0 ||

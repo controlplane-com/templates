@@ -30,6 +30,7 @@ already written against the Elasticsearch API rather than OpenSearch's.
 
 ## Troubleshooting traps
 
+- **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
 - **X-Pack security is deliberately disabled** — `xpack.security.enabled: false` and
   `autoconfiguration.enabled: false` in the startup config, with a comment that Control Plane handles network
   security via mTLS. So there are **no credentials anywhere in this template**, and anything `internal_access`

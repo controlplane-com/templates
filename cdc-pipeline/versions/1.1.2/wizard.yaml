@@ -385,6 +385,18 @@ steps:
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
+  - rule: oldSelf == null || !oldSelf['postgres-highly-available'].multiZone || self['postgres-highly-available'].multiZone
+    paths: [postgres-highly-available.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: oldSelf == null || !oldSelf['postgres-highly-available'].etcd.multiZone || self['postgres-highly-available'].etcd.multiZone
+    paths: [postgres-highly-available.etcd.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: oldSelf == null || !oldSelf.kafka.kafka.multiZone || self.kafka.kafka.multiZone
+    paths: [kafka.kafka.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
   - rule: >-
       'client' in self.kafka.kafka.listeners && self.kafka.kafka.listeners['client'].sasl != null &&
       self.kafka.kafka.listeners['client'].sasl.admin != null &&

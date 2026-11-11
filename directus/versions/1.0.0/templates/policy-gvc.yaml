@@ -1,0 +1,21 @@
+{{- /*
+  The app reads its OWN GVC at boot to report which other locations the GVC has
+  — the bundled PostgreSQL (and Redis) subcharts run in all of them and this
+  chart cannot pin them, so those extra copies are invisible cost that nothing
+  else reports.
+
+  Scoped to the ONE install GVC; never `target: all`, which would grant view on
+  every GVC in the org.
+*/ -}}
+kind: policy
+name: {{ include "directus.gvcPolicy.name" . }}
+description: Directus GVC read policy
+tags: {{- include "directus.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "directus.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

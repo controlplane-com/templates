@@ -1,0 +1,90 @@
+# librechat 1.0.0 — the default shape at the chart's default sizes: one LibreChat replica on the bundled
+# MongoDB, conversation search on (Meilisearch), and document search on (rag-api + pgvector) so its wiring
+# is covered. The OpenAI and embeddings keys are dummies (no model call is made); the custom endpoint
+# points at a closed local port and exists only to prove the generated librechat.yaml. All credentials
+# are prerequisite secrets CI creates (hex, so they are URL-safe inside the MongoDB connection string).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  k1: hex
+  k2: hex
+  iv: hex
+  jwt: hex
+  jwtr: hex
+  adminpw: hex
+  mongopw: hex
+  meili: hex
+  pgpw: hex
+  dummy: hex
+
+secrets:
+  keys:
+    type: dictionary
+    entries:
+      CREDS_KEY: "{gen.k1}{gen.k2}"      # 64 hex = 32 bytes
+      CREDS_IV: "{gen.iv}"               # 32 hex = 16 bytes
+      JWT_SECRET: "{gen.jwt}"
+      JWT_REFRESH_SECRET: "{gen.jwtr}"
+  admin:
+    type: dictionary
+    entries:
+      email: e2e-admin@example.com
+      password: "{gen.adminpw}"
+  mongo:
+    type: dictionary
+    entries:
+      username: librechat
+      password: "{gen.mongopw}"
+      database: LibreChat
+  meili:
+    type: opaque
+    payload: "{gen.meili}"
+  pgv:
+    type: dictionary
+    entries:
+      username: rag
+      password: "{gen.pgpw}"
+      database: rag
+  openai:
+    type: opaque
+    payload: "sk-e2e-{gen.dummy}"
+  embed:
+    type: opaque
+    payload: "sk-e2e-{gen.dummy}"
+
+vars:
+  admin_email: e2e-admin@example.com
+  admin_password: "{gen.adminpw}"
+
+values:
+  keys:
+    secretName: "{secrets.keys.name}"
+  admin:
+    secretName: "{secrets.admin.name}"
+  mongodb:
+    config:
+      credentialsSecretName: "{secrets.mongo.name}"
+  meilisearch:
+    auth:
+      secretName: "{secrets.meili.name}"
+  providers:
+    openai:
+      apiKeySecretName: "{secrets.openai.name}"
+  customEndpoints:
+    - name: e2e
+      baseURL: "http://127.0.0.1:9/v1"
+      models: [e2e-model]
+      fetchModels: false
+  config:
+    interface:
+      customWelcome: e2e-welcome
+  rag:
+    enabled: true
+    embeddings:
+      apiKeySecretName: "{secrets.embed.name}"
+  pgvector:
+    config:
+      credentialsSecretName: "{secrets.pgv.name}"
+
+# New template: no earlier version to upgrade from.

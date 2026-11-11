@@ -731,3 +731,9 @@ migrations:
     to: backup.gcp.cloudAccountName
     valueExpr: "self.backup.enabled && self.backup.provider == 'gcp' ? self.backup.gcp.cloudAccountName : null"
     note: The release keeps the backup destination it used.
+
+rules:
+  - rule: oldSelf == null || !oldSelf.multiZone.enabled || self.multiZone.enabled
+    paths: [multiZone.enabled]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.

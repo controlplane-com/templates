@@ -714,3 +714,9 @@ migrations:
     note: >-
       Moved to the keyspace key of the dictionary secret named under Credentials; create the secret with the
       keyspace the cluster already has.
+
+rules:
+  - rule: oldSelf == null || !oldSelf.multiZone.enabled || self.multiZone.enabled
+    paths: [multiZone.enabled]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.

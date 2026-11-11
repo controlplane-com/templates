@@ -426,6 +426,10 @@ steps:
           items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-etcd']"
 
 rules:
+  - rule: oldSelf == null || !oldSelf.multiZone || self.multiZone
+    paths: [multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
   # _helpers.tpl:46-56: with global.locations set the chart wants replicas 1 and 3 or more locations in an odd
   # count, one member per location (secret.yaml:25-38). This template allows one location (gvc above) and
   # needs at least 3 members, so no setting passes both: refuse the mode. Helm treats an empty list as unset.

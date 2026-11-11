@@ -640,6 +640,14 @@ steps:
               MinIO credentials secret and remove them from the values.
 
 rules:
+  - rule: oldSelf == null || !oldSelf.multiZone || self.multiZone
+    paths: [multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: oldSelf == null || !oldSelf.etcd.multiZone || self.etcd.multiZone
+    paths: [etcd.multiZone]
+    message: >-
+      Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
   # Workload names are limited to 49 characters, and the chart's longest workload suffix is
   # -postgres-ha-backup (19, logical backups), then -postgres-ha-proxy (18, proxy or PgBouncer).
   - when: context.releaseName != null

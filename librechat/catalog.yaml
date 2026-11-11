@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: LibreChat
+category: ai
+topology: stateless
+
+summary: >-
+  LibreChat, a multi-provider ChatGPT-style chat UI with agents, presets and conversation search
+  (Meilisearch) on a bundled MongoDB. It connects to OpenAI, Anthropic, Google and any
+  OpenAI-compatible server, such as an Ollama, vLLM or LiteLLM workload; chat over uploaded files
+  (rag-api with pgvector) and 2-4 replicas with Redis are optional. The admin comes from a secret,
+  so it serves on a public URL from the first start. Pick it for one chat UI over many models.
+
+keywords:
+  - chat ui
+  - llm chat interface
+  - multi-provider chat
+  - chatgpt clone
+  - ai agents
+  - openai-compatible
+  - anthropic
+  - claude
+  - gemini
+  - ollama ui
+  - rag
+  - file search
+  - conversation search
+  - meilisearch
+  - mongodb
+  - team ai assistant
+
+useCases:
+  - One chat UI for a team over OpenAI, Anthropic, Google and self-hosted models
+  - Agents, presets and shared prompts with per-user accounts
+  - Let users bring their own provider API keys
+  - Search across past conversations
+  - Chat over uploaded documents with retrieval
+
+alternativeTo:
+  - ChatGPT
+  - ChatGPT Team
+  - Claude for Work
+  - TypingMind
+  - LobeChat
+  - AnythingLLM
+
+pickInsteadIf:
+  - need: a chat UI with built-in local document RAG and Ollama model management in one workload
+    template: open-webui
+  - need: run open-weight models on your own GPU, with a chat UI in the same workload
+    template: ollama
+  - need: an OpenAI-compatible gateway with virtual keys, budgets and rate limits
+    template: litellm
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local models LibreChat chats with through a custom endpoint
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server LibreChat can chat through as a custom endpoint
+  - template: litellm
+    relation: companion
+    note: One OpenAI-compatible endpoint for LibreChat in front of many providers
+  - template: open-webui
+    relation: alternative
+    note: Single-workload chat UI with built-in document chat and Ollama model management
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [CREDS_KEY, CREDS_IV, JWT_SECRET, JWT_REFRESH_SECRET]
+    valuesPath: keys.secretName
+    required: true
+    description: Keys that encrypt saved user API keys and sign sessions. Create before installing (a missing one leaves the deployment waiting); never change the CREDS keys.
+  - kind: secret
+    secretType: dictionary
+    keys: [email, password]
+    valuesPath: admin.secretName
+    required: true
+    description: The admin account, created at first boot before the UI serves. Password of 8 or more characters.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: mongodb.config.credentialsSecretName
+    required: true
+    description: Credentials the bundled MongoDB initializes with and LibreChat connects with. URL-safe values only, they go into the connection string.
+  - kind: secret
+    secretType: opaque
+    valuesPath: meilisearch.auth.secretName
+    required: false
+    when: search.enabled (on by default)
+    description: Meilisearch master key, 16 or more bytes, used by the bundled Meilisearch and by LibreChat for conversation search.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: pgvector.config.credentialsSecretName
+    required: false
+    when: rag.enabled
+    description: Credentials of the bundled pgvector database that stores document embeddings.
+  - kind: secret
+    secretType: opaque
+    valuesPath: rag.embeddings.apiKeySecretName
+    required: false
+    when: rag.enabled with OpenAI embeddings (rag.embeddings.baseUrl empty)
+    description: API key the document-search service uses to embed uploaded files.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: false
+    when: redis.enabled (required for replicas above 1)
+    description: URL-safe password the bundled Redis requires and LibreChat connects with.
+  - kind: secret
+    secretType: opaque
+    valuesPath:
+      - providers.openai.apiKeySecretName
+      - providers.anthropic.apiKeySecretName
+      - providers.google.apiKeySecretName
+    required: false
+    when: that provider is used with a shared key
+    description: The provider's API key, shared by every user. Empty leaves the provider off, or asks each user for a key with userProvidedKeys.
+  - kind: other
+    valuesPath: customEndpoints
+    required: false
+    when: a custom endpoint needs an API key
+    description: An opaque secret per keyed custom endpoint, named in that entry's apiKeySecretName. Local servers such as Ollama need none.
+  - kind: domain
+    valuesPath: customDomain
+    required: false
+    when: customDomain is set
+    description: A Control Plane domain you create and verify for that hostname, routed to the LibreChat workload; the chart only sets the app's URL.
+  - kind: bucket
+    required: false
+    when: mongodb.backup.enabled
+    description: Object storage bucket (mongodb.backup.aws.bucket or mongodb.backup.gcp.bucket) that receives the scheduled MongoDB backups.
+  - kind: cloud-account
+    required: false
+    when: mongodb.backup.enabled
+    description: Control Plane cloud account for the backup bucket (mongodb.backup.aws or .gcp cloudAccountName), plus a bucket-scoped IAM policy on AWS.

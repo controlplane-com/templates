@@ -1,0 +1,40 @@
+kind: workload
+name: {{ include "dify.beat.name" . }}
+description: Dify Celery beat (periodic task scheduler, exactly one replica)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "dify.identity.name" . }}
+  containers:
+    - name: beat
+      image: {{ .Values.dify.apiImage }}
+      inheritEnv: false
+      minCpu: {{ .Values.dify.resources.beat.minCpu | quote }}
+      minMemory: {{ .Values.dify.resources.beat.minMemory | quote }}
+      cpu: {{ .Values.dify.resources.beat.maxCpu | quote }}
+      memory: {{ .Values.dify.resources.beat.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.backendScript" (dict "root" . "self" (include "dify.beat.name" .))) | quote }}
+      env:
+        - name: MODE
+          value: beat
+        - name: MIGRATION_ENABLED
+          value: "false"
+        {{- include "dify.backendEnv" . | nindent 8 }}
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" 1 "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    {{- include "dify.backendFirewall" (dict "root" . "from" (list)) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      The old scheduler stops BEFORE the new one starts, so a rollout never runs two
+      schedulers (every periodic task twice). Retained on `standard`.
+    */}}
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

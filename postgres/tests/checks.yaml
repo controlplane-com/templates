@@ -5,6 +5,9 @@
 #
 # Every connection goes to the replica's own IP, not 127.0.0.1: the image trusts loopback without a
 # password, so a loopback connection would pass the auth checks whatever the password was.
+# No drift left on a default install (postgres 3.4.2 / redis 3.9.1): drift fails the run, not warns.
+driftBlocks: true
+
 checks:
   - id: write-read
     description: A row written over an authenticated TCP connection reads back.

@@ -42,3 +42,5 @@ evolving schema where a single instance is enough.
   `-mongo`, not `-mongodb`; the README named the wrong one until it was fixed in place.
 - **`appVersion` said `6` until 1.4.1** while the image was `mongo:8.2.3`, so the marketplace displayed a
   MongoDB 8 template as v6.
+
+1.4.2 declares the fields the API backfills on the mongo workload(s) (`autoscaling.maxConcurrency: 0`, `scaleToZeroDelay: 300`, `target: 95`, `defaultOptions.timeoutSeconds: 5`), found by drift-diff on a template bundling 1.4.1. Its e2e drift check blocks (`driftBlocks: true`). Nothing about how it runs changes.

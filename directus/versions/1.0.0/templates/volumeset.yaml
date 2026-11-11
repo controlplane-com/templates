@@ -1,0 +1,21 @@
+{{- if eq .Values.storage.type "local" }}
+{{- /*
+  READ-WRITE-MANY on purpose: one volume per location, mounted by every replica,
+  so 2+ replicas see the same uploaded files. A block volumeset (ext4/xfs) would
+  give each replica its own volume, and cannot be mounted by a standard workload.
+
+  `performanceClass: shared` is declared explicitly: omitting it makes the API
+  backfill exactly that value, which is permanent drift from creation.
+
+  No `snapshots` block: shared volumes take none (see Important Notes in the README).
+*/}}
+kind: volumeset
+name: {{ include "directus.volume.name" . }}
+description: Directus uploaded files (/directus/uploads)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "directus.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ .Values.storage.local.capacity }}
+  performanceClass: shared
+{{- end }}

@@ -1,0 +1,31 @@
+# clickhouse 3.1.0 single node with provider: local — table data on the server volumeset, no bucket, so
+# CI needs no cloud account. One location with one replica (no Keeper), at the chart's default sizes. The
+# credentials secret is a prerequisite CI creates. The bucket providers need a cloud bucket and account in
+# the CI org and are not part of this baseline.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  chpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      password: "{gen.chpw}"
+      database: e2edb
+
+vars:
+  ch_password: "{gen.chpw}"
+  ch_db: e2edb
+
+values:
+  provider: local
+  locations:
+    - name: aws-us-east-1
+      replicas: 1
+  database:
+    credentialsSecretName: "{secrets.creds.name}"
+
+# 3.0.0 has no local provider (it needs a bucket), so there is no upgrade source yet.
+upgradeFrom: []

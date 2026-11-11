@@ -1,0 +1,52 @@
+# plausible 1.0.0 at its default shape: one Plausible replica, the bundled single-instance PostgreSQL and a
+# single-node ClickHouse keeping its data on its volume (clickhouse 3.1.0 `provider: local`, so no bucket),
+# in one location, at the chart's default sizes. The three required secrets are prerequisites CI creates.
+# Public access stays off, as the chart defaults it: until the first account exists, anyone who can reach
+# the dashboard could register as its owner. The checks seed that account themselves, from inside the GVC.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  skb1: hex     # 32 hex characters each; SECRET_KEY_BASE needs at least 32 bytes, so two are joined (64)
+  skb2: hex
+  pgpw: hex
+  chpw: hex
+  ownerpw: hex
+
+secrets:
+  skb:
+    type: opaque
+    payload: "{gen.skb1}{gen.skb2}"
+  db:
+    type: dictionary
+    entries:
+      username: plausible
+      password: "{gen.pgpw}"
+      database: plausible
+  ch:
+    type: dictionary
+    entries:
+      password: "{gen.chpw}"
+      database: plausible_events_db
+
+vars:
+  ch_password: "{gen.chpw}"
+  ch_db: plausible_events_db
+  owner_password: "{gen.ownerpw}"
+  app_version: v3.2.1
+
+values:
+  app:
+    secretKeyBaseSecretName: "{secrets.skb.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  clickhouse:
+    locations:
+      - name: aws-us-east-1
+        replicas: 1
+    database:
+      credentialsSecretName: "{secrets.ch.name}"
+
+# A new template: no earlier version to upgrade from.
+upgradeFrom: []

@@ -1,0 +1,20 @@
+kind: policy
+name: {{ include "plausible.policy.name" . }}
+description: Plausible secret access
+tags: {{- include "plausible.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plausible.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Prerequisite secrets the user creates, granted by name, nothing broader:
+  # the signing key, both bundled stores' credentials and, only when set, the
+  # SMTP credentials.
+  - //secret/{{ .Values.app.secretKeyBaseSecretName }}
+  - //secret/{{ .Values.postgres.config.credentialsSecretName }}
+  - //secret/{{ .Values.clickhouse.database.credentialsSecretName }}
+  {{- if and .Values.smtp.enabled .Values.smtp.credentialsSecretName }}
+  - //secret/{{ .Values.smtp.credentialsSecretName }}
+  {{- end }}

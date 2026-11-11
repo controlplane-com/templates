@@ -221,7 +221,10 @@ class Target:
         self.results = []          # {scenario, check, status, detail, new}
         self.created_secrets = []
         self.known = {}            # scenario → note: an upgradeFrom marked knownIssue warns instead of failing
-        self.checks = load_yaml(os.path.join(ROOT, service, "tests", "checks.yaml")).get("checks", [])
+        checks = load_yaml(os.path.join(ROOT, service, "tests", "checks.yaml"))
+        self.checks = checks.get("checks", [])
+        # driftBlocks: true opts a template in to a FAILING drift check (it has no drift left to warn about).
+        self.drift_blocks = checks.get("driftBlocks") is True
 
     def baseline(self, version):
         return load_yaml(os.path.join(ROOT, self.service, "tests", "baselines", f"{version}.yaml"))
@@ -285,6 +288,8 @@ def generate_pkcs12(passphrase):
 def generate(kind):
     if kind == "kraft-cluster-id":  # a KRaft cluster id is a base64url UUID without padding
         return base64.urlsafe_b64encode(pysecrets.token_bytes(16)).decode().rstrip("=")
+    if kind == "fernet":  # a Fernet key is 32 random bytes, base64url WITH padding (44 characters)
+        return base64.urlsafe_b64encode(pysecrets.token_bytes(32)).decode()
     return pysecrets.token_hex(16)
 
 
@@ -429,11 +434,12 @@ def check_drift(t, scenario, version, vfile):
     if env:
         log(f"  (environment-dependent, not drift: {'; '.join(env)[:300]})")
     # Drift warns for now: most shipped templates still drift, so it would block every PR until they are
-    # fixed. A resource that could not be read still fails, since that is not drift.
-    if drifted and not errors:
+    # fixed. A template whose tests/checks.yaml sets `driftBlocks: true` has none left, so for it drift
+    # fails. A resource that could not be read always fails, since that is not drift.
+    if drifted and not errors and not t.drift_blocks:
         log(f"::warning::{t.service}/{t.version} {scenario}: drift — {detail[:300]}")
     return t.record(scenario, "rendered == stored (Console Drift tab)", not (drifted or errors), detail,
-                    warn=not errors)
+                    warn=not errors and not t.drift_blocks)
 
 
 def stored_specs(t):

@@ -78,6 +78,10 @@ steps:
             type: boolean
             label: Spread replicas across zones
             description: Applies to the pgEdge nodes, PgBouncer and HAProxy in every listed location.
+            help: >-
+              Turn it on at install or at any later upgrade, never off once it has been on: each node's
+              volume stays in the zone it was created in, and a node whose volume is in another zone
+              cannot start without it.
       - title: Image and resources
         docs: "#image-and-resources"
         fields:
@@ -99,6 +103,11 @@ steps:
             cpu: { min: 25m }
             memory: { min: 32Mi }
     rules:
+      - rule: oldSelf == null || !oldSelf.multiZone || self.multiZone
+        paths: [multiZone]
+        message: >-
+          Keep this on. The nodes' volumes are spread across zones, and with it off a node whose volume
+          is in another zone cannot be scheduled and stays initializing.
       - rule: size(self.locations) > 0
         mirrors: pgedge.validateLocations
         paths: [locations]

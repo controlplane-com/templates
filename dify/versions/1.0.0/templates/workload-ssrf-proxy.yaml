@@ -1,0 +1,50 @@
+{{- if .Values.ssrfProxy.enabled }}
+kind: workload
+name: {{ include "dify.ssrf.name" . }}
+description: Dify SSRF proxy (squid) for outbound requests made by flows, tools and code
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: squid
+      image: {{ .Values.ssrfProxy.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.ssrfProxy.resources.minCpu | quote }}
+      minMemory: {{ .Values.ssrfProxy.resources.minMemory | quote }}
+      cpu: {{ .Values.ssrfProxy.resources.maxCpu | quote }}
+      memory: {{ .Values.ssrfProxy.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.ssrfScript" .) | quote }}
+      ports:
+        - number: 3128
+          protocol: tcp
+      readinessProbe:
+        tcpSocket:
+          port: 3128
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 3128
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.dify.replicas "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    {{- $from := list "dify.api.name" "dify.worker.name" }}
+    {{- if not .Values.codeExecution.endpoint }}
+    {{- $from = append $from "dify.sandbox.name" }}
+    {{- end }}
+    {{- include "dify.backendFirewall" (dict "root" . "from" $from) | nindent 4 }}
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}
+{{- end }}

@@ -109,3 +109,8 @@ structure, and drift fields (`terminationGracePeriodSeconds: 90`, the empty fire
 declared. Hard break, no compatibility shim — the version bump is the migration path. **Not yet
 deployed**: the wedge-and-recovery timings above are inherited from sibling templates, and whether
 the API retains `rolloutOptions` on the `serverless` PgBouncer tier is unverified.
+
+3.4.2 declares the fields the API backfills on the postgres and PgBouncer workloads
+(`autoscaling.maxConcurrency: 0`, `scaleToZeroDelay: 300`, `target: 95`, `defaultOptions.timeoutSeconds: 5`,
+and `rolloutOptions.minReadySeconds: 0` on postgres), found by drift-diff on a template bundling 3.4.1.
+Nothing about how PostgreSQL runs changes.

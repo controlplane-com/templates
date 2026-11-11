@@ -1,0 +1,20 @@
+{{- if .Values.rag.enabled }}
+kind: policy
+name: {{ include "librechat.rag.policy.name" . }}
+description: LibreChat document search (rag-api) secret access
+tags: {{- include "librechat.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "librechat.rag.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.keys.secretName }}
+  - //secret/{{ .Values.pgvector.config.credentialsSecretName }}
+  {{- with .Values.rag.embeddings.apiKeySecretName }}
+  {{- if and (ne . $.Values.keys.secretName) (ne . $.Values.pgvector.config.credentialsSecretName) }}
+  - //secret/{{ . }}
+  {{- end }}
+  {{- end }}
+{{- end }}

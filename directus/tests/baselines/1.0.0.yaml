@@ -1,0 +1,56 @@
+# directus 1.0.0 — the production-leaning shape at the smallest size that runs: two Directus replicas on
+# the bundled single PostgreSQL, a one-node Redis that requires a password (required for 2+ replicas),
+# and uploaded files on the shared volume. Two replicas on a fresh database exercise the bootstrap lock,
+# the Redis message bus and the read-write-many volume on every run. All credentials are prerequisite
+# secrets CI creates.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  dirsecret: hex
+  adminpw: hex
+  pgpw: hex
+  redispw: hex
+
+secrets:
+  app:
+    type: dictionary
+    entries:
+      secret: "{gen.dirsecret}"
+      adminEmail: admin@example.com
+      adminPassword: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: directus
+      password: "{gen.pgpw}"
+      database: directus
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  admin_email: admin@example.com
+  admin_password: "{gen.adminpw}"
+  redis_password: "{gen.redispw}"
+  directus_version: "12.6.1"       # the version /server/info reports; bump with the image tag
+
+values:
+  location: aws-us-east-1
+  secrets:
+    name: "{secrets.app.name}"
+  directus:
+    replicas: 2
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    enabled: true
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# New template: no earlier version to upgrade from.

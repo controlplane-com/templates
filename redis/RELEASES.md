@@ -1,3 +1,10 @@
+# Release Notes - Version 3.9.1
+
+## What's New
+
+- **Fix: Console Drift tab**: the Redis and Sentinel workloads now declare `rolloutOptions.minReadySeconds` and `terminationGracePeriodSeconds` as the API stores them, so a fresh install shows no drift. The volume sets declare `snapshots.createFinalSnapshot: true` as the API stores it, and the Redis and Sentinel policies list each secret once, sorted, so a shared Redis/Sentinel auth secret no longer shows as drift. Nothing about how Redis runs changes.
+
+
 # Release Notes - Version 3.9.0
 
 ## What's New

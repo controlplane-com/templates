@@ -1,0 +1,29 @@
+apiVersion: v2
+name: dify
+description: Dify LLM app builder for workflows, agents, RAG knowledge bases and APIs
+type: application
+version: 1.0.0
+appVersion: "1.19.0"
+
+annotations:
+  created: "2026-11-10"
+  lastModified: "2026-11-10"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.4.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.8.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: redis
+    version: 3.9.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: redis.enabled

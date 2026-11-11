@@ -1,0 +1,39 @@
+kind: workload
+name: {{ include "dify.worker.name" . }}
+description: Dify Celery worker (document indexing, workflow and async tasks)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "dify.identity.name" . }}
+  containers:
+    - name: worker
+      image: {{ .Values.dify.apiImage }}
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.backendScript" (dict "root" . "self" (include "dify.worker.name" .))) | quote }}
+      env:
+        - name: MODE
+          value: worker
+        - name: MIGRATION_ENABLED
+          value: "false"
+        - name: CELERY_WORKER_AMOUNT
+          value: "4"
+        {{- include "dify.backendEnv" . | nindent 8 }}
+      volumes:
+        - path: /app/api/storage
+          uri: cpln://volumeset/{{ include "dify.storage.name" . }}
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.worker.replicas "timeout" 300) | nindent 4 }}
+  firewallConfig:
+    {{- include "dify.backendFirewall" (dict "root" . "from" (list)) | nindent 4 }}
+  securityOptions:
+    filesystemGroupId: 1001
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}

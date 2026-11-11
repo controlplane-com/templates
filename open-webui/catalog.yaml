@@ -39,7 +39,6 @@ useCases:
 alternativeTo:
   - ChatGPT
   - ChatGPT Team
-  - LibreChat
   - AnythingLLM
   - LobeChat
   - TypingMind
@@ -67,6 +66,9 @@ related:
   - template: searxng
     relation: companion
     note: Web search provider for chats that need live results
+  - template: librechat
+    relation: alternative
+    note: Multi-provider chat UI with agents, conversation search and optional chat over files
 
 prerequisites:
   - kind: secret

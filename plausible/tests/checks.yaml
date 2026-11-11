@@ -1,0 +1,171 @@
+# Feature checks for the plausible template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (ch_password,
+# ch_db, owner_password, app_version). The runner reads any {word} as a placeholder, so the scripts write
+# $VAR, never the braced form.
+#
+# The Plausible image is Alpine with BusyBox (sh, wget, nc, timeout; no curl, no bash). The checks run in
+# the Plausible container and talk to it on 127.0.0.1:8000, with raw HTTP over nc where a status line or a
+# header has to be read (BusyBox wget follows redirects and cannot show them). ClickHouse is queried over
+# its HTTP interface with the credentials from the baseline.
+checks:
+  - id: ready-json
+    description: The readiness endpoint reports PostgreSQL and ClickHouse reachable (it answers 200 only when both are).
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        wget -q -O - http://127.0.0.1:8000/api/system/health/ready
+    expect:
+      stdout: '"clickhouse":"ok".*"postgres":"ok"|"postgres":"ok".*"clickhouse":"ok"'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: version
+    description: The running build is the Plausible CE release the chart pins.
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        # The CE image reports build.version null, so the running image tag is the version.
+        case "$CPLN_IMAGE" in *:{app_version}) echo VERSION_OK ;; *) echo "VERSION_BAD $CPLN_IMAGE" ;; esac
+    expect:
+      stdout: "^VERSION_OK$"
+
+  - id: first-launch-redirect
+    description: >-
+      Before any account exists, the login page redirects to owner registration (first launch). Runs before
+      the seed; on a release that already has the seeded account it reports that instead.
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        if /app/bin/plausible rpc 'IO.puts(if Plausible.Repo.exists?(Plausible.Auth.User), do: "HAS_USERS", else: "NO_USERS")' | grep -q '^HAS_USERS$'; then
+          echo ALREADY_SEEDED
+          exit 0
+        fi
+        (printf 'GET /login HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n'; sleep 2) | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-login.txt
+        head -1 /tmp/e2e-login.txt
+        tr -d '\r' < /tmp/e2e-login.txt | grep -i '^location:' | sed 's/^[Ll]ocation: */FIRST_LAUNCH_REDIRECT /'
+    expect:
+      stdout: "^FIRST_LAUNCH_REDIRECT /register$|^ALREADY_SEEDED$"
+
+  - id: seed
+    description: An owner account and the site e2e.example are created headlessly (idempotent).
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        cat > /tmp/e2e-seed.exs <<'EOF'
+        alias Plausible.{Repo, Auth}
+        email = "e2e-owner@example.com"
+        password = "{owner_password}"
+        user =
+          Repo.get_by(Auth.User, email: email) ||
+            Repo.insert!(Auth.User.new(%{email: email, name: "E2E Owner", password: password, password_confirmation: password}))
+        if is_nil(Repo.get_by(Plausible.Site, domain: "e2e.example")) do
+          {:ok, _} = Plausible.Sites.create(user, %{"domain" => "e2e.example", "timezone" => "Etc/UTC"})
+        end
+        IO.puts("SEEDED e2e.example")
+        EOF
+        /app/bin/plausible rpc 'Code.eval_file("/tmp/e2e-seed.exs")'
+    expect:
+      stdout: "^SEEDED e2e.example$"
+
+  - id: registration-invite-only
+    description: Once an account exists, invite_only (the default) sends /register to the login page.
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        (printf 'GET /register HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n'; sleep 2) | timeout 10 nc 127.0.0.1 8000 > /tmp/e2e-register.txt
+        head -1 /tmp/e2e-register.txt
+        tr -d '\r' < /tmp/e2e-register.txt | grep -i '^location:' | sed 's/^[Ll]ocation: */REGISTER_REDIRECT /'
+    expect:
+      stdout: "^REGISTER_REDIRECT /login$"
+
+  - id: ingest-and-geo
+    description: >-
+      A pageview for e2e.example posted to /api/event with X-Forwarded-For 8.8.8.8 is stored in ClickHouse
+      with the country from the bundled DB-IP database (US).
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        q() { wget -q -O - --header='X-ClickHouse-User: default' --header='X-ClickHouse-Key: {ch_password}' \
+          --post-data "$1" 'http://{release}-clickhouse-server.{gvc}.cpln.local:8123/?database={ch_db}'; }
+        UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
+        n=0
+        for i in 1 2 3 4 5 6 7 8; do
+          wget -q -O /dev/null --header="User-Agent: $UA" --header='X-Forwarded-For: 8.8.8.8' \
+            --header='Content-Type: application/json' \
+            --post-data '{"n":"pageview","u":"https://e2e.example/{version}","d":"e2e.example"}' \
+            http://127.0.0.1:8000/api/event || echo "POST failed"
+          sleep 8
+          row=$(q "SELECT count(), any(country_code) FROM events_v2 WHERE pathname = '/{version}' FORMAT TSV")
+          n=$(echo "$row" | cut -f1)
+          [ "$n" -ge 1 ] 2>/dev/null && break
+        done
+        echo "ROWS $row" | tr '\t' ' '
+    expect:
+      stdout: "^ROWS [1-9][0-9]* US$"
+    retries: 4
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
+  - id: ingest-unknown-domain
+    description: The same pageview for a domain with no site stores nothing (control for the check above).
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        q() { wget -q -O - --header='X-ClickHouse-User: default' --header='X-ClickHouse-Key: {ch_password}' \
+          --post-data "$1" 'http://{release}-clickhouse-server.{gvc}.cpln.local:8123/?database={ch_db}'; }
+        UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
+        wget -q -O /dev/null --header="User-Agent: $UA" --header='X-Forwarded-For: 8.8.8.8' \
+          --header='Content-Type: application/json' \
+          --post-data '{"n":"pageview","u":"https://unknown.example/unknown-{version}","d":"unknown.example"}' \
+          http://127.0.0.1:8000/api/event || echo "POST failed"
+        sleep 20
+        known=$(q "SELECT count() FROM events_v2 WHERE pathname = '/{version}'")
+        echo "ROWS $(q "SELECT count() FROM events_v2 WHERE pathname = '/unknown-{version}'") KNOWN $known"
+    expect:
+      stdout: "^ROWS 0 KNOWN [1-9]"
+
+  - id: ws-origin
+    description: >-
+      The LiveView websocket accepts the BASE_URL origin (http://localhost:8000 on a private install) and
+      refuses another origin, so login and registration work through the port-forward and nowhere else.
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        ws() { (printf 'GET /live/websocket?vsn=2.0.0 HTTP/1.1\r\nHost: localhost:8000\r\nOrigin: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' "$1"; sleep 2) \
+          | timeout 5 nc 127.0.0.1 8000 | head -1 | cut -d' ' -f2; }
+        echo "WS $(ws http://localhost:8000) $(ws https://evil.example)"
+    expect:
+      stdout: "^WS 101 403$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The pageview stored on {installed_version} is still in ClickHouse; on a fresh install this reads back
+      the row written by ingest-and-geo.
+    since: 1.0.0
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        n=$(wget -q -O - --header='X-ClickHouse-User: default' --header='X-ClickHouse-Key: {ch_password}' \
+          --post-data "SELECT count() FROM events_v2 WHERE pathname = '/{installed_version}'" \
+          'http://{release}-clickhouse-server.{gvc}.cpln.local:8123/?database={ch_db}')
+        [ "$n" -ge 1 ] 2>/dev/null && echo "PERSISTED $n"
+    expect:
+      stdout: "^PERSISTED [1-9]"

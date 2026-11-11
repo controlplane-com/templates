@@ -2,7 +2,8 @@
 
 **What it is.** ClickHouse, the column-oriented analytical database (Apache-2.0 — fully free to self-host,
 no paid edition), backed by object storage as its primary data store with a local volume for metadata and
-read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
+read cache — or, **from 3.1.0, `provider: local`: all data on the server volumeset, no bucket**.
+**From 3.0.0 it deploys into an existing GVC and creates none.**
 
 **Common use cases.**
 - Real-time analytics and product metrics over large append-mostly datasets
@@ -16,8 +17,8 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
 |---|---|
 | workload `-clickhouse-server` (stateful, replicaDirect) | the database; replicas per location |
 | workload `-clickhouse-keeper` (stateful, replicaDirect) | Raft coordination; **cluster modes only**, replica-0 of the first 3 locations |
-| volumesets (server, keeper) | metadata, `store/`, Keeper state — NOT the table data |
-| secrets | server + keeper startup scripts, one storage-config XML per provider |
+| volumesets (server, keeper) | metadata, `store/`, Keeper state — NOT the table data (except `provider: local`, where the server volume IS the table data) |
+| secrets | server + keeper startup scripts, one storage-config XML per bucket provider (none for `local`) |
 | identity + `-policy` | `reveal` on this release's secrets and the user's prerequisite secrets; AWS cloud binding for the bucket |
 | **`-gvc-policy` (new in 3.0.0)** | `view` on **only** the install GVC, so containers can read their own location list at boot |
 
@@ -34,13 +35,21 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
 | Knob | Default | Notes |
 |---|---|---|
 | `locations` | `[{name: aws-us-east-1, replicas: 1}]` | **must already exist in your GVC**; sets the mode |
-| `provider` | `aws` | `aws` (keyless, Cloud Account) / `gcp` / `azure` / `hetzner` |
+| `provider` | `aws` | `aws` (keyless, Cloud Account) / `gcp` / `azure` / `hetzner` / `local` (3.1.0: no bucket, no storage.xml, implicit `default` policy on `/var/lib/clickhouse`; size `volumeset.server.capacity` for all data) |
 | `database.credentialsSecretName` | `my-clickhouse-credentials` | **prerequisite** `dictionary` secret: `password` + `database`, **no `username`** |
 | `clusterName` | `my_cluster` | bare identifier only — becomes an XML tag and unquoted `ON CLUSTER` DDL; validated at render |
 | `server.image` / `keeper.image` | `clickhouse/clickhouse-{server,keeper}:25.10` | |
 | `server.resources` / `keeper.resources` | `cpu: 2`, `memory: 2Gi` | limit only, so bare names |
 | `volumeset.{server,keeper}.capacity` | `10` | GiB |
 | `server.internalAccess.type` | `same-gvc` | renamed from `internal_access` in 3.0.0; the `workloads` list is now actually applied — in 2.x it was hardcoded to `[]`, so `workload-list` silently blocked everything |
+
+- **3.1.0 `provider: local`** (work item 4912, built for plausible's bundled ClickHouse): the only render change is
+  `validateStorage` accepting `local`; every provider-specific block was already gated, so aws/gcp/azure/hetzner
+  render byte-identically to 3.0.0 apart from version labels (proved per provider × single/one-shard/multi-shard).
+  It also onboards `clickhouse/tests/` (the baseline uses `local`, so CI needs no bucket).
+  `local` is for a single node only (cluster modes render but are not a supported shape), and it has **no
+  scheduled snapshot or backup**: the server volume is the only copy; uninstall keeps one final snapshot
+  for 7 days. `upgradeFrom: []` in the 3.1.0 baseline (3.0.0 needs a bucket) is pending a maintainer ruling.
 
 ## Troubleshooting / considerations
 
@@ -61,7 +70,7 @@ read cache. **From 3.0.0 it deploys into an existing GVC and creates none.**
   crash a live cluster. Freshness marker is `/var/lib/clickhouse/metadata` (absent on a new volume, created
   on first successful start, survives a clean shutdown — `status` does not, which is why it is not used).
 - **If EVERY declared location is absent from the GVC, nothing starts and nothing complains** — no container
-  boots, so no guard can fire. Symptom: zero replicas, `desiredScale: None`, empty logs. Check
+  boots, so no guard can fire. Symptom: zero replicas, `desiredScale: 0`, empty logs. Check
   `cpln gvc get NAME -o json` → `spec.staticPlacement.locationLinks` **before** installing.
 - **Keeper quorum is checked arithmetically before Keeper starts.** Below a majority of the first-3
   locations the container exits with a named error instead of waiting for an election that can never

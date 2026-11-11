@@ -114,6 +114,7 @@ database.
 
 ## Troubleshooting traps
 
+- **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
 - **Patroni drops replication slots it does not manage** on its next slot reload (restart, promotion) unless
   `ignore_slots` matches them — pgHA 2.8.0 writes `ignore_slots: [{type: logical}]` with `walLevel: logical`.
   A cluster upgraded from 1.0.4 needs it PATCHed in with the `wal_level` change (README step 3), BEFORE the

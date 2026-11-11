@@ -38,6 +38,7 @@ The repair cron and the backup job reach nodes on `*.svc.cluster.local`, which r
 
 ## Troubleshooting traps
 
+- **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
 - **Credentials are a prerequisite secret from 1.1.0.** Four keys: `superuserPassword` (the built-in
   `cassandra` role, used for JMX and by the repair cron), plus `username`, `password` and `keyspace` for the
   application role. Through 1.0.1 these were values with working defaults — `supersecretpassword`,

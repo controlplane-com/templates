@@ -396,6 +396,7 @@ See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/
 
 ### Important Notes
 
+- **Never turn `kafka.multiZone` or a connector's `multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **`kafka.replicas` sets the cluster size, and the first nodes take the controller role.** Shrinking a running cluster below the controller quorum will make it unavailable.
 - **Set `kafka.credentialsSecretName` to keep the broker passwords out of the Helm release.** Inline passwords still work but are stored in the release values; their defaults are non-working placeholders.
 - **A changed password in a credentials secret takes effect only after `cpln workload force-redeployment`** of the workloads that read it.

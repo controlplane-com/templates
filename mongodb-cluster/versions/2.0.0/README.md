@@ -323,6 +323,7 @@ Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves
 
 ## Important Notes
 
+- **Never turn `multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **Both prerequisite secrets must exist BEFORE you install.** A missing one wedges the deployment silently — `cpln logs` returns nothing, and the secret is named only in `status.versions[].message` from `cpln workload get-deployments`. It self-heals within roughly 6–10 minutes once the secret exists, or immediately after `cpln workload force-redeployment`.
 - **The keyfile must be valid base64, or mongod will not start.** 6–1024 characters from `A-Z a-z 0-9 + / =` only — generate it with `openssl rand -base64 756`. The container checks this at boot and says so explicitly.
 - **The keyfile cannot be changed after the cluster is initialized.** It authenticates members to each other; rotating it means a full cluster rebuild.

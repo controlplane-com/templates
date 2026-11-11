@@ -80,6 +80,7 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 
 ### Important Notes
 
+- **Never turn `multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **`replicas` must be odd and at least 3.** An even count gains no fault tolerance and risks split votes.
 - **Compaction is required, not optional.** etcd retains every superseded revision until told otherwise, so a cluster left uncompacted will fill its backend quota and go read-only. The `tuning` values control this and cannot switch it off.
 - **A full backend quota puts the cluster into a read-only alarm** that survives restarts — it must be cleared explicitly after compacting and defragmenting.

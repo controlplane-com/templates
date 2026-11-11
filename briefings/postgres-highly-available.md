@@ -26,6 +26,7 @@
 `replicas` (3) | `config.credentialsSecretName` (`my-postgres-ha-credentials`, **must exist before install**) | `walLevel` (`replica` \| `logical`; render `fail` on anything else) | `image` | `resources.*` (500m-1 / 1-2Gi) | `volumeset.capacity` (10) | `multiZone` (false) | `proxy.enabled` | `pgbouncer.enabled` (false) | `backup.enabled` (false) / `backup.mode` (`logical` | `wal-g`) / `backup.provider` (`aws` | `gcp` | `minio`) | `backup.minio.credentialsSecretName`
 
 ## Troubleshooting / considerations
+- **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
 - **Patroni metrics are scraped from port 8008, and that port MUST stay `protocol: tcp`.**
   2.7.0 wires `metrics: {path: /metrics, port: 8008}` on the patroni container; the platform
   scrapes it with no exporter. Declaring 8008 as `protocol: http` - which is what three of the

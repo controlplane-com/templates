@@ -254,6 +254,7 @@ Two behaviours change, both deliberately:
 
 ## Important Notes
 
+- **Never turn `redpanda.multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - A missing prerequisite secret wedges the deployment **silently**: `cpln logs` returns zero lines because the container never starts. The only diagnostic is `cpln workload get-deployments {release}-cluster --gvc {gvc} -o yaml` → `status.versions[].message`, which names the missing secret. After creating it, recovery takes 5.5–8.5 minutes, or run `cpln workload force-redeployment {release}-cluster --gvc {gvc}` to cut that to about 90 seconds.
 - Anyone who can reach the console acts as the cluster superuser — there is no login. Keep external inbound closed unless the console sits behind your own authenticating proxy.
 - **Console crash-loops for roughly 34 seconds on a cold install**, logging a red `Invalid credentials`. Broker-0's `postStart` hook has not created the SASL users yet; it self-heals with no action needed.

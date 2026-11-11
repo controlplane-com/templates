@@ -49,6 +49,12 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   correct — authorization edge cache). Inline: 0/3 stalls, ready in ~42 s. Don't move them back into secrets.
 - **Volume snapshots never ran before 3.0.0** (no schedule rendered; README claimed daily). Now scheduled; the
   platform rejects anything more frequent than hourly at apply, so the chart and wizard refuse it at render.
+- **`multiZone` is one-way (measured 2026-11-11, 3 nodes, aws-us-east-1):** false → true is safe (volumes stay in one
+  zone, nodes keep scheduling). true → false strands every node whose volume is in another zone ("didn't match Pod's node
+  affinity/selector", stays initializing). `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it resets it
+  to false. Recovery: upgrade with true + `force-redeployment` (~4 min, data kept); true alone did not recover in 4.5 min. The
+  chart writes it into every `localOptions` entry, so editing only the workload default does nothing. No chart guard is
+  possible (`lookup` is empty and every upgrade renders as revision 1); the wizard has an error rule over `oldSelf`.
 - **Never `helm upgrade` 1.x → 2.x+:** it deletes the GVC 1.x created (proven, 6 s, "upgraded successfully").
   In-place path (2026-10-29, render-verified only, not run live): `scripts/keep-gvc.py`, then 1.1.1 → 3.0.0 directly with
   `--gvc <old GVC>` (node workload/volumeset/identity names match; pgcat → pgbouncer); README "Upgrading in place from 1.1.1".

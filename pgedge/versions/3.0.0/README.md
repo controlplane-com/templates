@@ -208,6 +208,15 @@ multiZone: false  # Set to true to spread replicas across availability zones wit
 
 The first entry of `locations` is special: it is the only location the backup cron runs in.
 
+**`multiZone`** spreads each location's pgEdge nodes, PgBouncer and HAProxy across that location's
+availability zones. Turn it on at install or at any later upgrade, but **never turn it off once it has
+been on**: each node's volume stays in the zone it was created in, and with `multiZone: false` a node
+whose volume is in another zone cannot be scheduled and stays `initializing`. `cpln helm upgrade` does
+not reuse earlier values, so keep `multiZone: true` in your values file (or pass `--set multiZone=true`)
+on every upgrade. Change it through the release, not by editing a workload: the chart sets it for each
+location, and those settings override the workload default. If it was turned off, upgrade again with
+`multiZone: true`, then run `cpln workload force-redeployment RELEASE_NAME-pgedge --gvc GVC_NAME`.
+
 **Replica counts:**
 
 | Environment | Replicas per location |
@@ -564,6 +573,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - **Surviving a location loss needs your application in at least 2 locations** — clients reach only their own location's PgBouncer. See [Resiliency](#resiliency)
 - **Conflict resolution is last-update-wins** — concurrent writes to the same row from different nodes resolve by commit timestamp. For stronger consistency, route a given entity's writes to one node in your application
 - **Run at least 2 nodes per location for zero-downtime upgrades.** An upgrade restarts the nodes one at a time within each location, and the failover tier carries traffic; with a single node per location every location loses its node together — plan a write interruption of about a minute
+- **Never turn `multiZone` off once it has been on** — nodes whose volumes are in another zone stop scheduling. Keep `multiZone: true` on every `helm upgrade`; see [pgEdge Settings](#pgedge-settings)
 - **Release names must be unique per organization** (secrets are org-wide)
 
 ## Links

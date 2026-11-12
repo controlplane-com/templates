@@ -1,0 +1,29 @@
+apiVersion: v2
+name: nextcloud
+description: Nextcloud file sync, sharing and collaboration with PostgreSQL and Redis
+type: application
+version: 1.0.0
+appVersion: "34.0.5"
+
+annotations:
+  created: "2026-11-12"
+  lastModified: "2026-11-12"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres
+    version: 3.4.2
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 2.8.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: redis
+    version: 3.9.1
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: redis.enabled

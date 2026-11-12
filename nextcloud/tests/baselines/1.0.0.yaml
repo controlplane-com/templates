@@ -1,0 +1,50 @@
+# nextcloud 1.0.0 — the default production shape at the smallest size that runs: one Nextcloud web
+# replica and the cron worker on the shared volume, the bundled single PostgreSQL, and a one-node Redis
+# that requires a password (file locks, cache and sessions). Files on the shared volume. All
+# credentials are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+# First boot: code copy, database gate and the CLI install, inside the 920 s startup window, plus scheduling.
+timeoutSeconds: 1200
+
+generated:
+  adminpw: hex
+  pgpw: hex
+  redispw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: nextcloud
+      password: "{gen.pgpw}"
+      database: nextcloud
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  admin_user: e2eadmin
+  admin_password: "{gen.adminpw}"
+
+values:
+  location: aws-us-east-1
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    enabled: true
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# New template: no earlier version to upgrade from.

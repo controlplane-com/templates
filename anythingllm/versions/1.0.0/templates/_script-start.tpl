@@ -11,6 +11,14 @@ It replaces the image's unversioned docker-entrypoint.sh with the same steps in 
 {{- define "anythingllm.script.start" -}}
 set -euo pipefail
 S=/app/server/storage
+
+# 0. AnythingLLM allows every request when AUTH_TOKEN or JWT_SECRET is empty: refuse to start at all.
+for k in AUTH_TOKEN JWT_SECRET SIG_KEY SIG_SALT; do
+  if [ -z "$(printenv "$k" | tr -d '[:space:]')" ]; then
+    echo "anythingllm-bootstrap: FATAL $k in keys.secretName is empty; set it to a random value such as the output of openssl rand -hex 32" >&2
+    exit 1
+  fi
+done
 mkdir -p "$S/plugins"
 
 # 1. Settings changed in the UI are written to /app/server/.env, outside the volume: keep it on the volume.

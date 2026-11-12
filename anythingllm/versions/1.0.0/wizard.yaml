@@ -25,8 +25,8 @@ steps:
         docs: "#keys-and-admin-account"
         description: >-
           A dictionary secret with the keys `JWT_SECRET`, `SIG_KEY`, `SIG_SALT` and `AUTH_TOKEN`, each a random
-          value such as the output of `openssl rand -hex 32`. Keep it forever: `SIG_KEY` and `SIG_SALT` encrypt
-          stored data.
+          value such as the output of `openssl rand -hex 32`; with an empty one AnythingLLM refuses to start. Keep
+          it forever: `SIG_KEY` and `SIG_SALT` encrypt stored data.
         ref:
           kind: secret
           format: name

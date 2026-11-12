@@ -15,8 +15,8 @@ imports:
     version: 3.4.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    # Right after the Database settings step, which holds the server, storage and network of the same database.
-    after: database
+    # After the Advanced step, which holds the server, storage and network of the same database.
+    after: advanced
     steps:
       - id: backup
         title: Database backups
@@ -28,8 +28,8 @@ imports:
       - config.credentialsSecretName
       # Nextcloud connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
-      # Bound in the Database settings step below, so the defaults a first install keeps fill one step instead
-      # of three (server, storage, network). The postgres chart's checks on them are restated there.
+      # Bound in the Advanced step's database sections, so the defaults a first install keeps fill no step of
+      # their own (server, storage, network). The postgres chart's checks on them are restated there.
       - image
       - resources
       - volumeset
@@ -39,7 +39,8 @@ imports:
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    after: database
+    # After the Advanced step: the defaults of every database step fit a first install.
+    after: advanced
     steps:
       - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Nextcloud stores its metadata in. }
       - { id: storage, title: Database storage }
@@ -67,12 +68,12 @@ imports:
     when: self.redis.enabled
     title: Redis
     # Its remaining steps only apply to production mode, which the chart refuses; in dev mode every setting
-    # Nextcloud needs sits in the Redis section of the Scaling and cache step.
+    # Nextcloud needs sits in the Redis section of the Scaling and access step.
     after: scaling
     exclude:
       # Nextcloud connects to one Redis endpoint and cannot follow Sentinel: the mode is fixed to dev (yamlOnly below).
       - deploymentMode
-      # Redis always requires a password here, read from the secret chosen in the Scaling and cache step; a
+      # Redis always requires a password here, read from the secret chosen in the Scaling and access step; a
       # password in values is refused (nextcloud.validateRedis).
       - redisAuth
       - redis.auth.fromSecret
@@ -97,7 +98,7 @@ imports:
       - redis.replicaDirect
       - redis.firewall.external_inboundAllowCIDR
       - redis.firewall.external_outboundAllowCIDR
-      # Bound in the Redis section of the Scaling and cache step, next to the switch that turns Redis on.
+      # Bound in the Redis section of the Scaling and access step, next to the switch that turns Redis on.
       - redis.image
       - redis.resources
       - redis.firewall.internal_inboundAllowType
@@ -106,16 +107,66 @@ imports:
 steps:
   - id: nextcloud
     title: Nextcloud
-    description: The prerequisite secrets, where Nextcloud runs, its address, and its database.
+    description: Nextcloud's database, the prerequisite secrets, and the location it runs in.
     sections:
+      - title: Database
+        description: >-
+          Which PostgreSQL holds Nextcloud's users, shares and file index; the credentials secret below follows
+          this choice. Its settings and backups come in and after the Advanced step; their defaults fit a first
+          install.
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Switching the database type on a running release deploys a new, empty database: the users, shares
+              and file index in the current one are not moved.
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every user, share and the file index.
       - title: Prerequisite secrets
         docs: "#prerequisites"
         fields:
           - type: note
             severity: warning
             text: >-
-              The secrets must exist **before** you install. If one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
+              Three dictionary secrets must exist **before** you install: the admin login and the database
+              credentials below, and the Redis password (chosen in the Redis section of Scaling and access). If
+              one is missing, the deployment waits and `cpln logs` shows nothing at all.
+            textExpression: >-
+              self.redis.enabled ?
+              'Three dictionary secrets must exist **before** you install: the admin login and the database credentials below, and the Redis password (chosen in the Redis section of Scaling and access). If one is missing, the deployment waits and `cpln logs` shows nothing at all.' :
+              'Two dictionary secrets must exist **before** you install: the admin login and the database credentials below. If one is missing, the deployment waits and `cpln logs` shows nothing at all.'
           - path: admin.secretName
             type: ref
             label: Admin secret
@@ -151,7 +202,7 @@ steps:
             when: self.postgres.enabled
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`, for the single-instance
-              PostgreSQL chosen under Database below.
+              PostgreSQL chosen under Database above.
             help: >-
               PostgreSQL reads these values only when its data directory is first initialized, and Nextcloud connects
               with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
@@ -181,7 +232,7 @@ steps:
             when: self.postgresHA.enabled
             description: >-
               A dictionary secret with the keys `username`, `password` and `database`, for the highly available
-              PostgreSQL chosen under Database below.
+              PostgreSQL chosen under Database above.
             help: >-
               PostgreSQL reads these values only when its data is first initialized, and Nextcloud connects with
               them. Changing it later is a database operation: follow the postgres-highly-available template's
@@ -234,68 +285,6 @@ steps:
           - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
             paths: [location]
             message: This location is not enabled on the target GVC; nothing would run.
-      - title: Address
-        docs: "#configuration"
-        fields:
-          - path: nextcloud.publicUrl
-            type: string
-            format: url
-            label: Public URL
-            placeholder: https://cloud.example.com
-            description: >-
-              Only for a custom domain: the scheme and host, with no path or trailing slash. Empty uses the
-              canonical endpoint, or the internal address when the public endpoint is off.
-            help: Share links, notification emails and the desktop and mobile clients use this address.
-        rules:
-          - rule: self.nextcloud.publicUrl == '' || self.nextcloud.publicUrl.matches('^https?://[^/:]+(:[0-9]+)?$')
-            mirrors: nextcloud.validate
-            paths: [nextcloud.publicUrl]
-            message: Use the scheme and host only, with no path or trailing slash, such as https://cloud.example.com.
-
-      - title: Database
-        description: >-
-          Which PostgreSQL holds Nextcloud's users, shares and file index. Its settings and backups follow in the
-          next steps; their defaults fit a first install.
-        fields:
-          - type: note
-            severity: warning
-            when: context.mode == 'upgrade'
-            text: >-
-              Switching the database type on a running release deploys a new, empty database: the users, shares
-              and file index in the current one are not moved.
-          - id: dbMode
-            virtual: true
-            type: enum
-            label: Database
-            widget: cards
-            required: true
-            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
-            options:
-              - value: single
-                label: Single-instance PostgreSQL
-                description: One PostgreSQL replica; upgrades and restarts cause a short outage.
-                set: { postgresHA.enabled: false, postgres.enabled: true }
-              - value: ha
-                label: Highly available PostgreSQL
-                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
-                set: { postgresHA.enabled: true, postgres.enabled: false }
-          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
-          - path: postgres.enabled
-            type: boolean
-            label: Single-instance PostgreSQL on
-            readOnly: true
-            advanced: true
-            when: self.postgres.enabled == null   # never shown: the Database choice writes it
-            description: Set by the database choice above.
-          - path: postgresHA.enabled
-            type: boolean
-            label: Highly available PostgreSQL on
-            readOnly: true
-            advanced: true
-            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
-            description: Set by the database choice above.
-          - type: note
-            text: Uninstalling deletes the database volume, and with it every user, share and the file index.
     rules:
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
@@ -318,153 +307,6 @@ steps:
         message: >-
           Switching the database type deploys a new, empty database; the users, shares and file index in the
           current one are not moved.
-
-  # The single-instance PostgreSQL's server, storage and network, bound here instead of in three imported steps
-  # (the postgres import excludes these paths); the checks of the postgres descriptor are restated below.
-  - id: database
-    title: Database settings
-    description: The bundled single-instance PostgreSQL's image, compute, volume and firewall.
-    when: self.postgres.enabled
-    sections:
-      - title: Server
-        fields:
-          - path: postgres.image
-            type: string
-            format: image
-            label: Postgres image
-            required: true
-            help: >-
-              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
-              different major on an existing volume does not start.
-          - path: postgres.resources
-            type: resources
-            label: Postgres resources
-            required: true
-            maxRatio: 4
-            cpu: { min: 25m }
-            memory: { min: 32Mi }
-        rules:
-          - rule: >-
-              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
-              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
-            severity: warning
-            paths: [postgres.image]
-            message: >-
-              The data directory belongs to the installed Postgres major version; a different major version does
-              not start on it. Upgrade with a dump and restore instead.
-      - title: Storage
-        docs: "/reference/volumeset#capacity-and-billing"
-        fields:
-          - path: postgres.volumeset.capacity
-            type: integer
-            label: Database capacity
-            unit: GiB
-            min: 10
-            max: 65536
-            required: true
-            suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            help: >-
-              Holds the users, shares, file index and activity. Uninstalling the release deletes the volume set, so
-              the data does not survive a reinstall.
-        rules:
-          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
-            paths: [postgres.volumeset.capacity]
-            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
-      - id: autoscaling
-        title: Grow database storage automatically
-        toggle: postgres.volumeset.autoscaling.enabled
-        docs: "/reference/volumeset#autoscaling"
-        fields:
-          - path: postgres.volumeset.autoscaling.maxCapacity
-            type: integer
-            label: Maximum capacity
-            unit: GiB
-            min: 10
-            max: 65536
-            required: true
-            suggestions: [50, 100, 250, 500, 1000, 2000]
-          - path: postgres.volumeset.autoscaling.minFreePercentage
-            type: integer
-            label: Scale up below this free space
-            unit: "%"
-            min: 1
-            max: 100
-            required: true
-            suggestions: [10, 20, 30]
-          - path: postgres.volumeset.autoscaling.scalingFactor
-            type: number
-            label: Scaling factor
-            min: 1.1
-            step: 0.1
-            required: true
-            suggestions:
-              - { value: 1.1, label: "1.1×" }
-              - { value: 1.2, label: "1.2× (default)" }
-              - { value: 1.5, label: "1.5×" }
-              - { value: 2, label: "2×" }
-        rules:
-          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
-            paths: [postgres.volumeset.autoscaling.maxCapacity]
-            message: The maximum capacity must be at least the initial capacity.
-      - title: Network access
-        docs: /reference/workload/firewall
-        fields:
-          - path: postgres.internalAccess.type
-            type: enum
-            label: Who can connect to the database
-            widget: cards
-            required: true
-            description: >-
-              Both Nextcloud workloads connect to the database like any other workload: keep Same GVC, or add them
-              under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
-            options:
-              - value: none
-                label: None
-                description: No workload can connect.
-              - value: same-gvc
-                label: Same GVC
-                description: Any workload in this GVC.
-              - value: same-org
-                label: Same org
-                description: Any workload in this org.
-              - value: workload-list
-                label: Specific workloads
-                description: Only the workloads listed below.
-          - path: postgres.internalAccess.workloads
-            type: list
-            label: Allowed workloads
-            description: Extra workloads allowed to connect, for example from another GVC.
-            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
-            widget: tags
-            item:
-              type: ref
-              ref:
-                kind: workload
-                gvc: any
-                format: relativeLink
-                mustExist: warning
-                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
-        rules:
-          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
-            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
-            severity: info
-            paths: [postgres.internalAccess.workloads]
-            messageExpression: >-
-              'Same GVC already allows every workload in this GVC: ' +
-              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
-              ' can be removed from the list.'
-            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
-          - when: self.postgres.internalAccess.type == 'workload-list' && self.postgres.backup.enabled && context.gvc != null
-            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
-            severity: warning
-            paths: [postgres.internalAccess.workloads]
-            messageExpression: >-
-              'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
-              context.releaseName + '-postgres-backup, or the backup job cannot connect.'
-            fix:
-              path: postgres.internalAccess.workloads
-              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup']"
-            message: The chart does not add its own workloads to the list; add the backup workload, or it cannot connect.
 
   - id: storage
     title: File storage
@@ -529,7 +371,7 @@ steps:
             options:
               - value: aws
                 label: AWS S3
-                description: Keyless access through a Control Plane cloud account; static keys are not accepted.
+                description: Keyless access through a Control Plane cloud account. Choosing it clears the S3 endpoint and the static keys secret.
                 set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
               - value: compatible
                 label: S3-compatible
@@ -625,8 +467,8 @@ steps:
             message: AWS S3 needs a cloud account and an IAM policy name.
 
   - id: scaling
-    title: Scaling and cache
-    description: How many Nextcloud web replicas run, and the Redis they share for file locks, cache and sessions.
+    title: Scaling and access
+    description: How many Nextcloud web replicas run, the Redis they share, and who can reach Nextcloud.
     sections:
       - title: Replicas
         docs: "#configuration"
@@ -765,11 +607,6 @@ steps:
             severity: info
             paths: [redis.redis.firewall.inboundAllowWorkload]
             message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
-
-  - id: access
-    title: Access
-    description: The public endpoint, and which workloads can reach Nextcloud inside Control Plane.
-    sections:
       - title: Public endpoint
         docs: "#connecting"
         fields:
@@ -780,6 +617,20 @@ steps:
               The web UI, WebDAV and the sync clients on a public `*.cpln.app` URL. Off, reach Nextcloud only
               inside the GVC or through `cpln port-forward`. Firewall changes take 30 seconds to a few minutes to
               take effect.
+          - path: nextcloud.publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://cloud.example.com
+            description: >-
+              Only for a custom domain: the scheme and host, with no path or trailing slash. Empty uses the
+              canonical endpoint, or the internal address when the public endpoint is off.
+            help: Share links, notification emails and the desktop and mobile clients use this address.
+        rules:
+          - rule: self.nextcloud.publicUrl == '' || self.nextcloud.publicUrl.matches('^https?://[^/:]+(:[0-9]+)?$')
+            mirrors: nextcloud.validate
+            paths: [nextcloud.publicUrl]
+            message: Use the scheme and host only, with no path or trailing slash, such as https://cloud.example.com.
       - title: Internal access
         fields:
           - path: internalAccess.type
@@ -821,11 +672,21 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: The image, compute, PHP and upload limits of the web tier and the cron worker.
+    description: The web tier's image, compute, PHP and upload limits, the cron worker, and the single-instance database's settings.
     sections:
       - title: Web tier
         docs: "#configuration"
         fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              A new Nextcloud version takes Nextcloud offline for a few minutes while `occ upgrade` runs in
+              maintenance mode (HTTP 503). Upgrade one major version at a time and never downgrade. Copy
+              `config/config.php` somewhere safe first.
+            textExpression: >-
+              'A new Nextcloud version takes Nextcloud offline for a few minutes while `occ upgrade` runs in maintenance mode (HTTP 503). Upgrade one major version at a time and never downgrade. Copy `config/config.php` somewhere safe first.' +
+              (self.postgres.enabled ? ' The first upgrade of a release can also briefly restart the single-instance PostgreSQL, and Nextcloud with it.' : '')
           - path: nextcloud.image
             type: string
             format: image
@@ -868,6 +729,17 @@ steps:
               The largest single request body. Browser and desktop uploads are chunked and not bound by it; single
               WebDAV PUTs are, and must also finish within 600 seconds.
         rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.nextcloud.image) < 0 || imageMajor(oldSelf.nextcloud.image) < 0 ||
+              (imageMajor(self.nextcloud.image) >= imageMajor(oldSelf.nextcloud.image) &&
+              imageMajor(self.nextcloud.image) <= imageMajor(oldSelf.nextcloud.image) + 1)
+            severity: warning
+            paths: [nextcloud.image]
+            messageExpression: >-
+              imageMajor(self.nextcloud.image) < imageMajor(oldSelf.nextcloud.image) ?
+              'Nextcloud cannot downgrade: the installed data is on version ' + string(imageMajor(oldSelf.nextcloud.image)) + '. Keep that major version or a newer one.' :
+              'Nextcloud upgrades one major version at a time: go from ' + string(imageMajor(oldSelf.nextcloud.image)) + ' to ' + string(imageMajor(oldSelf.nextcloud.image) + 1) + ' first, then on.'
+            message: Upgrade Nextcloud one major version at a time, and never downgrade.
           - rule: self.nextcloud.maxRequestWorkers >= 5 && self.nextcloud.maxRequestWorkers <= 200
             mirrors: nextcloud.validate
             paths: [nextcloud.maxRequestWorkers]
@@ -895,6 +767,149 @@ steps:
             description: One replica, always; it runs Nextcloud's background jobs every 5 minutes.
             cpu: { min: 50m }
             memory: { min: 256Mi }
+      - title: Database server
+        when: self.postgres.enabled
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
+              different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed Postgres major version; a different major version does
+              not start on it. Upgrade with a dump and restore instead.
+      - title: Database storage
+        when: self.postgres.enabled
+        docs: "/reference/volumeset#capacity-and-billing"
+        fields:
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Database capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Holds the users, shares, file index and activity. Uninstalling the release deletes the volume set, so
+              the data does not survive a reinstall.
+        rules:
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow database storage automatically
+        when: self.postgres.enabled
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Database network
+        when: self.postgres.enabled
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              Both Nextcloud workloads connect to the database like any other workload: keep Same GVC, or add them
+              under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.postgres.internalAccess.type == 'workload-list' && self.postgres.backup.enabled && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+              context.releaseName + '-postgres-backup, or the backup job cannot connect.'
+            fix:
+              path: postgres.internalAccess.workloads
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup']"
+            message: The chart does not add its own workloads to the list; add the backup workload, or it cannot connect.
 
 # Rules over the imported values and YAML-only settings: their issues show on the fields' steps, or on Review
 # when they have no paths.

@@ -86,7 +86,7 @@ def in_range(version, check):
 
 
 def fill(obj, ctx):
-    """Replace {release}, {gvc}, {org} and {secrets.NAME.KEY|name} placeholders in every string."""
+    """Replace {release}, {gvc}, {org}, {locations.N} and {secrets.NAME.KEY|name} placeholders in every string."""
     if isinstance(obj, dict):
         return {k: fill(v, ctx) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -228,6 +228,13 @@ class Target:
 
     def baseline(self, version):
         return load_yaml(os.path.join(ROOT, self.service, "tests", "baselines", f"{version}.yaml"))
+
+    def base_ctx(self, installed, base):
+        """Placeholders every scenario has: {locations.0}, {locations.1}, ... follow the baseline's list order."""
+        ctx = {"release": self.release, "gvc": self.gvc, "org": self.org, "installed_version": installed}
+        for i, loc in enumerate(base.get("locations") or ["aws-us-east-1"]):
+            ctx[f"locations.{i}"] = loc
+        return ctx
 
     def record(self, scenario, check, ok, detail="", new=False, skipped=False, warn=False):
         """warn=True: a failure is reported as a warning and does not fail the run."""
@@ -500,6 +507,10 @@ def exec_check(t, c, ctx):
         cmd = ["workload", "exec", e["workload"], "--gvc", t.gvc]
         if e.get("container"):
             cmd += ["--container", e["container"]]
+        if e.get("location"):  # run in one location's replica (multi-location templates)
+            cmd += ["--location", e["location"]]
+        if e.get("replica"):
+            cmd += ["--replica", e["replica"]]
         cmd += ["--", e.get("shell", "sh"), "-c", e["script"]]
         code, out, err = cpln(*cmd, timeout=int(c.get("timeoutSeconds", 120)))
         problems = []
@@ -553,7 +564,7 @@ def scenario_fresh(t, timeout_s):
     sc = f"install {t.version}"
     group(sc)
     base = t.baseline(t.version)
-    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org, "installed_version": t.version}
+    ctx = t.base_ctx(t.version, base)
     prepare(t, base, ctx, t.version)
     vfile = values_file(base, ctx)
     code, out = helm(t, "install", t.version, vfile, timeout_s)
@@ -577,7 +588,7 @@ def scenario_upgrade(t, src, timeout_s):
     install_timeout = timeout_s
     timeout_s = int(src.get("timeoutSeconds", timeout_s))
     old_base, new_base = t.baseline(old), t.baseline(t.version)
-    ctx = {"release": t.release, "gvc": t.gvc, "org": t.org, "installed_version": old}
+    ctx = t.base_ctx(old, new_base)
     prepare(t, old_base, ctx, old)
     old_vfile = values_file(old_base, ctx)
     code, out = helm(t, "install", old, old_vfile, install_timeout)

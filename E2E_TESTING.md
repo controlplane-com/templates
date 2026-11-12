@@ -54,7 +54,7 @@ replica counts) at the smallest size that runs. Keep any resource reduction mode
 that only works because CI is lenient tests nothing.
 
 ```yaml
-locations: [aws-us-east-1]          # the GVC CI creates; a multi-location template lists three
+locations: [aws-us-east-1]          # the GVC CI creates; a multi-location template lists every location it needs
 timeoutSeconds: 900                 # per install / upgrade
 
 generated:                          # random per run, masked in the logs → {gen.NAME}
@@ -92,10 +92,19 @@ An `upgradeFrom` entry marked `knownIssue` records an upgrade path that is known
 version. Its failures warn with the note, except a leak on uninstall, which still fails. Keep a working
 upgrade source next to it, so an upgrade regression still blocks, and remove the entry with the fix.
 
-Always-available placeholders: `{release}`, `{gvc}`, `{org}`. Checks also get `{version}` (the version
+Always-available placeholders: `{release}`, `{gvc}`, `{org}`, and `{locations.0}`, `{locations.1}`, …
+(the baseline's `locations`, in the order listed). Checks also get `{version}` (the version
 running now) and `{installed_version}` (the one the scenario installed first), so a check can write a
 row tagged with `{version}` and prove the row tagged `{installed_version}` survived the upgrade. Pick `upgradeFrom` versions from current
 customer usage, most-used first; do not commit usage data itself (it names customer orgs).
+
+### Multi-location baselines
+
+A template whose point is several locations lists them in its baseline, and CI creates the GVC with
+exactly those. Prove the cross-location behaviour with checks that write in one location and read in
+another (`exec.location`). Cross-location traffic is billed, so keep it minimal: pick nearby regions
+(`aws-us-east-1` + `aws-us-east-2`) unless the behaviour needs distance, and move a handful of small
+messages or rows, never a bulk load.
 
 ## Checks
 
@@ -109,6 +118,8 @@ checks:
     exec:
       workload: "{release}-client"
       container: kafka
+      location: "{locations.1}"     # optional: run in this location's replica (default: any)
+      replica: "{release}-client-0" # optional: one replica by name
       shell: bash                   # default sh
       script: |
         ...

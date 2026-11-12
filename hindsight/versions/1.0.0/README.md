@@ -99,6 +99,8 @@ Other LLM providers, with the provider's own key in `llm.apiKeySecretName` (empt
 | vLLM template | `openai` | the served model name | `http://VLLM_RELEASE-vllm.GVC_NAME.cpln.local:8000/v1` |
 | LiteLLM template | `openai` | a model name LiteLLM routes | `http://LITELLM_RELEASE-litellm.GVC_NAME.cpln.local:4000/v1` |
 
+A small local model on CPU can need minutes for one reflect; raise `hindsight.requestTimeoutSeconds` (up to 3600) or give Ollama a GPU.
+
 **Self-hosted embeddings and the slim image.** The `-slim` image is less than half the size but has no local models: set `embeddings.provider: openai` with an OpenAI-compatible server and `reranker.provider: rrf` (rank fusion, no model):
 
 ```yaml
@@ -147,6 +149,8 @@ A bank is created on first use. Without the key every `/v1` and `/mcp` call retu
 claude mcp add --transport http hindsight https://CANONICAL_ENDPOINT/mcp/my-agent/ \
   --header "Authorization: Bearer $HINDSIGHT_API_KEY"
 ```
+
+With `--scope project`, Claude Code lists the server as pending until you approve it the next time you start `claude`.
 
 **From your machine**, while private, forward the API or the web UI (then open `http://localhost:9999` and log in with the access key):
 

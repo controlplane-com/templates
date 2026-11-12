@@ -38,4 +38,5 @@
 - **Single uploads over 600 s are cut** (platform request cap). Browser and desktop uploads are chunked; curl/rclone single PUTs are not.
 - **Admin password is first boot only.** Reset with `OC_PASS=… occ user:resetpassword --password-from-env <user>`. Rotating any secret needs `force-redeployment` on both workloads.
 - **Redis restart signs browsers out**; sync clients (app passwords) carry on.
+- **"PreStopHook failed" in the web tier's event log on every rollout is expected:** the hook drains 20 s, then `apachectl -k graceful-stop`; Apache is PID 1, so its exit ends the hook. A 5 s drain left the edge routing to a closed listener (503s); at 20 s a 2-replica rolling restart served every request.
 - **2+ replicas without Redis, Redis production mode, a plaintext Redis password and Redis public access are refused at render.**

@@ -1,0 +1,91 @@
+{{- if .Values.ui.enabled }}
+kind: workload
+name: {{ include "hindsight.ui.name" . }}
+description: Hindsight web UI
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "hindsight.ui.identity.name" . }}
+  containers:
+    - name: ui
+      image: {{ .Values.ui.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.ui.resources.minCpu | quote }}
+      minMemory: {{ .Values.ui.resources.minMemory | quote }}
+      cpu: {{ .Values.ui.resources.maxCpu | quote }}
+      memory: {{ .Values.ui.resources.maxMemory | quote }}
+      workingDir: /app/control-plane
+      command: node
+      args:
+        - server.js
+      env:
+        # Next.js standalone binds $HOSTNAME, which Control Plane sets to the replica name.
+        - name: HOSTNAME
+          value: "0.0.0.0"
+        - name: PORT
+          value: "9999"
+        - name: HINDSIGHT_CP_DATAPLANE_API_URL
+          value: 'http://{{ include "hindsight.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8888'
+        - name: HINDSIGHT_CP_DATAPLANE_API_KEY
+          value: 'cpln://secret/{{ .Values.auth.apiKeySecretName }}.payload'
+        - name: HINDSIGHT_CP_ACCESS_KEY
+          value: 'cpln://secret/{{ .Values.ui.accessKeySecretName }}.payload'
+      ports:
+        - number: 9999
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 9999
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 9999
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 3
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.hindsight.requestTimeoutSeconds }}
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.ui }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+{{- end }}

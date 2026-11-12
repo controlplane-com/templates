@@ -1,0 +1,170 @@
+# ─── Hindsight API (REST + MCP) ───────────────────────────────────────────────
+hindsight:
+  # Full image: bundles the local embedding and reranker models. For the smaller
+  # ghcr.io/vectorize-io/hindsight-api:1.2.1-slim set embeddings.provider: openai and reranker.provider: rrf.
+  image: ghcr.io/vectorize-io/hindsight-api:1.2.1
+  # set hindsight.replicas: 2, worker.enabled: true and postgresHA.enabled: true for near-zero-downtime upgrades and failover
+  replicas: 1                   # 1-10 interchangeable API replicas sharing PostgreSQL
+  requestTimeoutSeconds: 300    # longest request (a sync retain or reflect waits on the LLM) before it is cut (1-3600)
+  dbPoolMaxSize: 20             # PostgreSQL connections per process; (replicas + worker replicas) x this must be <= 90
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 1Gi
+    maxMemory: 3Gi
+  # Plain upstream settings (HINDSIGHT_API_*), applied to the API and workers.
+  extraEnv: []
+  # extraEnv:
+  #   - name: HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS   # needed for models with < 65k output tokens
+  #     value: "16000"
+  # Optional prerequisite `dictionary` secret: each listed key becomes an env var of the same name. "" = none.
+  extraSecrets:
+    secretName: ""              # e.g. my-hindsight-extra-secrets
+    keys: []                    # e.g. [HINDSIGHT_API_RERANKER_COHERE_API_KEY]
+
+# ─── API key (required) ───────────────────────────────────────────────────────
+auth:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+  # An `opaque` secret (encoding: plain): the Bearer token for the REST API, MCP and the web UI's backend.
+  # It opens every memory bank. See README Prerequisites.
+  apiKeySecretName: my-hindsight-api-key
+
+# ─── LLM (fact extraction, reflect, consolidation) ────────────────────────────
+llm:
+  provider: openai              # e.g. openai, anthropic, gemini, groq, ollama, litellm (see README)
+  model: gpt-5-mini             # must support JSON-schema output
+  baseUrl: ""                   # "" = provider default; e.g. http://my-ollama.my-gvc.cpln.local:11434/v1
+  # PREREQUISITE SECRET — an `opaque` secret with the provider API key, created BEFORE install.
+  # "" only for keyless providers (ollama) or a baseUrl that needs no key.
+  apiKeySecretName: my-hindsight-llm-key
+
+# ─── Embeddings ───────────────────────────────────────────────────────────────
+embeddings:
+  provider: local               # local (bundled BAAI/bge-small-en-v1.5, 384 dims) | openai (OpenAI or OpenAI-compatible)
+  model: ""                     # openai only; "" = text-embedding-3-small. Changing it later needs a re-embed
+  baseUrl: ""                   # openai only; e.g. http://my-ollama.my-gvc.cpln.local:11434/v1
+  apiKeySecretName: ""          # openai only; opaque secret. "" = use the LLM key
+
+# ─── Reranker ─────────────────────────────────────────────────────────────────
+reranker:
+  provider: local               # local (bundled hs-rerank-1) | rrf (no model; required with the slim image)
+
+# ─── Dedicated workers (optional) ─────────────────────────────────────────────
+worker:
+  enabled: false                # true = background tasks move off the API into their own workload
+  replicas: 1                   # 1-10
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m               # at most 4x minCpu
+    minMemory: 1Gi
+    maxMemory: 3Gi
+
+# ─── Web UI ───────────────────────────────────────────────────────────────────
+ui:
+  enabled: true                 # browse banks, entities and documents; test recall and reflect
+  image: ghcr.io/vectorize-io/hindsight-control-plane:1.2.1
+  # REQUIRED PREREQUISITE SECRET when enabled — an `opaque` secret: the key you type to log in to the web UI.
+  accessKeySecretName: my-hindsight-ui-access-key
+  resources:
+    minCpu: 100m
+    maxCpu: 500m
+    minMemory: 256Mi
+    maxMemory: 512Mi
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  api: false                    # true = REST + MCP on a public *.cpln.app URL (API key still required)
+  ui: false                     # true = web UI on a public *.cpln.app URL (access key still required)
+internalAccess:                 # who in Control Plane may call the API
+  type: same-gvc                # none | same-gvc | same-org | workload-list (none needs ui.enabled: false)
+  workloads: []                 # used with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: single PostgreSQL with pgvector (default) ─────────────────────
+# Every knob of the `pgvector` template is available under this key. Enable exactly one of pgvector / postgresHA.
+pgvector:
+  enabled: true
+  config:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+    # A `dictionary` secret with exactly username, password and database, LETTERS AND DIGITS ONLY.
+    credentialsSecretName: my-hindsight-db-credentials
+  resources:
+    minCpu: 300m
+    minMemory: 512Mi
+    maxCpu: 1000m
+    maxMemory: 2048Mi
+  volumeset:
+    capacity: 10                # GiB (minimum 10)
+  backup: # pass-through to the pgvector template's backup feature
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"       # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-hindsight-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-hindsight-backup-cloudaccount
+      policyName: my-hindsight-backup-policy
+      prefix: pgvector/backups
+    gcp:
+      bucket: my-hindsight-backup-bucket
+      cloudAccountName: my-hindsight-backup-cloudaccount
+      prefix: pgvector/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-hindsight-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the pgvector template docs).
+      credentialsSecretName: my-hindsight-minio-credentials
+      prefix: pgvector/backups
+
+# ─── Database: highly available PostgreSQL ───────────────────────────────────
+# 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint; every knob of the
+# `postgres-highly-available` template is available under this key.
+postgresHA:
+  enabled: false
+  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  config:
+    # REQUIRED PREREQUISITE SECRET when enabled — same keys and letters-and-digits rule as pgvector.config above.
+    credentialsSecretName: my-hindsight-db-credentials
+  replicas: 3
+  resources:                    # per Patroni replica
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10                # GiB per replica (minimum 10)
+  backup: # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical               # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"     # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600    # every 6 hours
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-hindsight-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-hindsight-backup-cloudaccount
+      policyName: my-hindsight-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-hindsight-backup-bucket
+      cloudAccountName: my-hindsight-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-hindsight-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres-highly-available docs).
+      credentialsSecretName: my-hindsight-minio-credentials
+      prefix: postgres/backups

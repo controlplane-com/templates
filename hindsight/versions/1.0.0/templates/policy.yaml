@@ -1,0 +1,36 @@
+kind: policy
+name: {{ include "hindsight.policy.name" . }}
+description: Hindsight API and worker secret access
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "hindsight.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- $targets := list (include "hindsight.db.secretName" .) .Values.auth.apiKeySecretName .Values.llm.apiKeySecretName }}
+  {{- if eq (toString .Values.embeddings.provider) "openai" }}
+  {{- $targets = append $targets .Values.embeddings.apiKeySecretName }}
+  {{- end }}
+  {{- $targets = append $targets .Values.hindsight.extraSecrets.secretName }}
+  {{- range $targets | compact | uniq }}
+  - //secret/{{ . }}
+  {{- end }}
+{{- if .Values.ui.enabled }}
+---
+kind: policy
+name: {{ include "hindsight.ui.policy.name" . }}
+description: Hindsight web UI secret access
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "hindsight.ui.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- range list .Values.auth.apiKeySecretName .Values.ui.accessKeySecretName | uniq }}
+  - //secret/{{ . }}
+  {{- end }}
+{{- end }}

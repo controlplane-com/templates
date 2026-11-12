@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Hindsight
+category: ai
+topology: stateless
+
+summary: >-
+  Hindsight agent memory: agents retain conversations and documents, an LLM extracts facts and entities
+  into a per-bank memory graph on PostgreSQL with pgvector, and agents recall and reflect over it through
+  a REST API or the built-in MCP server. Bundles local embedding and reranker models, a web UI behind an
+  access key, optional dedicated workers and optional highly available PostgreSQL. Works with OpenAI,
+  Anthropic, Gemini, Ollama, LiteLLM or any OpenAI-compatible endpoint; API key required, private by default.
+
+keywords:
+  - agent memory
+  - long-term memory
+  - llm memory
+  - memory bank
+  - mcp server
+  - model context protocol
+  - retain recall reflect
+  - knowledge graph
+  - fact extraction
+  - pgvector
+  - embeddings
+  - reranker
+  - ollama
+  - litellm
+  - ai agents
+  - mem0 alternative
+
+useCases:
+  - Give AI agents and chatbots memory of users across sessions
+  - Add long-term memory to Claude Code, Claude Desktop or other MCP clients
+  - Run one shared memory service for several agents, with a separate bank per agent or user
+  - Keep agent memories self-hosted with a local LLM such as Ollama or vLLM
+  - Ask an LLM to reason over everything an agent has learned
+
+alternativeTo:
+  - Mem0
+  - Zep
+  - Letta
+
+compatibleWith: []
+
+pickInsteadIf:
+  - need: store and query your own embeddings with no LLM fact extraction
+    template: pgvector
+  - need: a dedicated vector database for embeddings
+    template: qdrant
+  - need: a visual RAG and LLM app builder over documents
+    template: dify
+  - need: an agent server that runs your LangGraph graphs
+    template: aegra
+
+related:
+  - template: ollama
+    relation: companion
+    note: Self-hosted LLM and embeddings; pair with the slim image
+  - template: litellm
+    relation: companion
+    note: One OpenAI-compatible URL and key in front of many model providers
+  - template: vllm
+    relation: companion
+    note: GPU model server for the fact-extraction LLM
+
+prerequisites:
+  - kind: secret
+    secretType: opaque
+    valuesPath: auth.apiKeySecretName
+    required: true
+    description: API key for the REST API, MCP and the web UI's backend; one key opens every bank. When missing the workloads wait with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [pgvector.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Database credentials, letters and digits only (they go into a connection URL). When missing the deployment waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: ui.accessKeySecretName
+    required: true
+    description: The key you type to log in to the web UI. Needed while the web UI is on (the default); when missing it waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: llm.apiKeySecretName
+    required: true
+    description: API key of the LLM provider. Not needed for Ollama or an OpenAI-compatible URL without auth; when missing the API waits with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: embeddings.apiKeySecretName
+    required: false
+    when: embeddings.provider openai with a key other than the LLM key
+    description: API key of the OpenAI or OpenAI-compatible embeddings endpoint; empty uses the LLM key.
+  - kind: other
+    valuesPath: hindsight.extraSecrets.secretName
+    required: false
+    when: hindsight.extraSecrets.secretName is set
+    description: A dictionary secret with extra Hindsight settings that are secrets, such as a Cohere reranker key; each key in hindsight.extraSecrets.keys becomes an env var.
+  - kind: bucket
+    valuesPath: [pgvector.backup.aws.bucket, pgvector.backup.gcp.bucket, pgvector.backup.minio.bucket, postgresHA.backup.aws.bucket, postgresHA.backup.gcp.bucket, postgresHA.backup.minio.bucket]
+    required: false
+    when: pgvector.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath: [pgvector.backup.aws.cloudAccountName, pgvector.backup.gcp.cloudAccountName, postgresHA.backup.aws.cloudAccountName, postgresHA.backup.gcp.cloudAccountName]
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS.
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath: [pgvector.backup.minio.credentialsSecretName, postgresHA.backup.minio.credentialsSecretName]
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

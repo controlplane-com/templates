@@ -73,7 +73,7 @@ imports:
     exclude:
       # Nextcloud connects to one Redis endpoint and cannot follow Sentinel: the mode is fixed to dev (yamlOnly below).
       - deploymentMode
-      # Redis always requires a password here, read from the secret chosen in the Scaling and access step; a
+      # Redis always requires a password here, read from the secret chosen under Prerequisite secrets; a
       # password in values is refused (nextcloud.validateRedis).
       - redisAuth
       - redis.auth.fromSecret
@@ -160,13 +160,13 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Three dictionary secrets must exist **before** you install: the admin login and the database
-              credentials below, and the Redis password (chosen in the Redis section of Scaling and access). If
-              one is missing, the deployment waits and `cpln logs` shows nothing at all.
+              The dictionary secrets below must exist **before** you install or upgrade. If one is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
             textExpression: >-
-              self.redis.enabled ?
-              'Three dictionary secrets must exist **before** you install: the admin login and the database credentials below, and the Redis password (chosen in the Redis section of Scaling and access). If one is missing, the deployment waits and `cpln logs` shows nothing at all.' :
-              'Two dictionary secrets must exist **before** you install: the admin login and the database credentials below. If one is missing, the deployment waits and `cpln logs` shows nothing at all.'
+              (self.redis.enabled ? 'Three dictionary secrets' : 'Two dictionary secrets') + ' must exist **before** you ' +
+              (context.mode == 'upgrade' ? 'upgrade' : 'install') + ': the admin login' +
+              (self.redis.enabled ? ', the database credentials and the Redis password below.' : ' and the database credentials below.') +
+              ' If one is missing, the deployment waits and `cpln logs` shows nothing at all.'
           - path: admin.secretName
             type: ref
             label: Admin secret
@@ -246,11 +246,46 @@ steps:
               requiredKeys: [username, password, database]
               create:
                 suggestName: "context.releaseName + '-nextcloud-db-credentials'"
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            when: self.redis.enabled
+            description: >-
+              A dictionary secret for the bundled Redis (Scaling and access); its `password` key, or the key set
+              there, holds the password. Use a hex value, such as `openssl rand -hex 32`.
+            help: >-
+              To change the password later, update the value in this secret, then force a redeployment of Redis
+              first and of both Nextcloud workloads after it. Browser sessions sign out; sync clients carry on.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-nextcloud-redis'"
         rules:
           - rule: self.admin.secretName != null && self.admin.secretName != ''
             mirrors: nextcloud.validate
             paths: [admin.secretName]
             message: The admin secret is required.
+          - rule: "!self.redis.enabled || self.redis.redis.auth.fromSecret.name != ''"
+            mirrors: nextcloud.validateRedis
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+          # Restated from the redis descriptor's Authentication step, dropped with the excluded redis.auth.fromSecret.
+          - when: oldSelf != null && oldSelf.redis.enabled && self.redis.enabled
+            rule: >-
+              self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name &&
+              self.redis.redis.auth.fromSecret.passwordKey == oldSelf.redis.redis.auth.fromSecret.passwordKey
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name, redis.redis.auth.fromSecret.passwordKey]
+            message: >-
+              A different Redis password secret or key is a password change on a running release: the restarted
+              node cannot authenticate, so the rollout stops. Keep the installed secret and key unless the new one
+              holds the password Redis runs with today.
           # Restated from the postgres and postgres-highly-available descriptors: excluding their credentials
           # field dropped these checks, which the subcharts still perform.
           - when: self.postgres.enabled
@@ -319,6 +354,7 @@ steps:
             widget: cards
             required: true
             immutable: Nextcloud cannot move files between storage types after install.
+            description: Cannot be changed after install; Nextcloud cannot move files between storage types.
             docs: "#storage-setup"
             options:
               - value: local
@@ -505,25 +541,8 @@ steps:
           - type: note
             severity: warning
             text: >-
-              Redis always requires a password here. The secret must exist **before** you install or upgrade; if it
-              is missing, the deployment waits and `cpln logs` shows nothing.
-          - path: redis.redis.auth.fromSecret.name
-            type: ref
-            label: Redis password secret
-            required: true
-            description: A dictionary secret; the key named below holds the password. Use a hex value, such as `openssl rand -hex 32`.
-            help: >-
-              To change the password later, update the value in this secret, then force a redeployment of Redis
-              first and of both Nextcloud workloads after it. Browser sessions sign out; sync clients carry on.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
-              create:
-                suggestName: "context.releaseName + '-nextcloud-redis'"
+              Redis always requires a password here, read from the Redis password secret chosen under Prerequisite
+              secrets on the Nextcloud step.
           - path: redis.redis.auth.fromSecret.passwordKey
             type: string
             label: Password key
@@ -571,21 +590,6 @@ steps:
                 mustExist: warning
                 excludeTargetGvcWhen: self.redis.redis.firewall.internal_inboundAllowType == 'same-gvc'
         rules:
-          - rule: "!self.redis.enabled || self.redis.redis.auth.fromSecret.name != ''"
-            mirrors: nextcloud.validateRedis
-            paths: [redis.redis.auth.fromSecret.name]
-            message: The Redis password secret is required.
-          # Restated from the redis descriptor's Authentication step, dropped with the excluded redis.auth.fromSecret.
-          - when: oldSelf != null && oldSelf.redis.enabled && self.redis.enabled
-            rule: >-
-              self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name &&
-              self.redis.redis.auth.fromSecret.passwordKey == oldSelf.redis.redis.auth.fromSecret.passwordKey
-            severity: warning
-            paths: [redis.redis.auth.fromSecret.name, redis.redis.auth.fromSecret.passwordKey]
-            message: >-
-              A different Redis password secret or key is a password change on a running release: the restarted
-              node cannot authenticate, so the rollout stops. Keep the installed secret and key unless the new one
-              holds the password Redis runs with today.
           # Restated from the redis descriptor's Advanced and Network steps, dropped with the excluded paths.
           - rule: >-
               oldSelf == null || imageMajor(self.redis.redis.image) < 0 || imageMajor(oldSelf.redis.redis.image) < 0 ||
@@ -672,7 +676,7 @@ steps:
 
   - id: advanced
     title: Advanced
-    description: The web tier's image, compute, PHP and upload limits, the cron worker, and the single-instance database's settings.
+    description: The web tier's image, compute, PHP and upload limits, the cron worker, and with single-instance PostgreSQL its settings.
     sections:
       - title: Web tier
         docs: "#configuration"

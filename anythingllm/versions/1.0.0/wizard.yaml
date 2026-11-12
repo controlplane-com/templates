@@ -263,15 +263,16 @@ steps:
           - type: note
             when: size(self.mcp.servers) > 0 || self.cplnMcp.keySecretName != ''
             text: >-
-              With servers listed here, AnythingLLM's MCP config is rewritten on every start, and edits made in
-              Settings → Agent Skills are replaced.
+              With servers listed here, the chart rewrites AnythingLLM's whole MCP config on every start, and
+              servers added to the file by hand are replaced.
           - path: mcp.servers
             type: map
             label: Servers
             description: >-
               A stdio server sets a command (such as `uvx`) and runs inside the container with AnythingLLM's
               environment, including its keys; add only servers you trust. An HTTP server sets a URL instead.
-              Leave empty to manage servers in the UI.
+              AnythingLLM has no screen for adding servers (Settings → Agent Skills only turns them on or off and
+              removes them); leave this empty to edit the config file yourself with cpln workload exec.
             keys:
               label: Name
               pattern: '^[A-Za-z0-9_-]{1,40}$'
@@ -409,7 +410,9 @@ steps:
       - type: note
         severity: warning
         when: context.mode == 'upgrade'
-        text: Every upgrade restarts the single replica, so AnythingLLM is briefly down.
+        text: >-
+          An upgrade that changes the workload restarts the single replica, so AnythingLLM is unavailable for a
+          few minutes.
       - path: image
         type: string
         format: image
@@ -471,7 +474,7 @@ steps:
         toggle: backup.enabled
         description: >-
           Crash-consistent platform snapshots of the volume, with no bucket or cloud account. They include
-          provider keys saved in the UI. Restoring one is a manual step that loses everything written after it.
+          provider keys saved in the UI. Restoring one with cpln volumeset snapshot restore loses everything written after it.
         docs: "#backing-up"
         fields:
           - path: backup.schedule

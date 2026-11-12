@@ -43,6 +43,31 @@ checks:
     retryDelaySeconds: 20
     timeoutSeconds: 120
 
+  - id: public-ui
+    description: >-
+      On the default public access, the canonical endpoint serves the AnythingLLM UI and API from outside the
+      workload, and still requires a sign-in there.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const ep = process.env.CPLN_GLOBAL_ENDPOINT || '';
+        (async () => {
+          const ping = await fetch(ep + '/api/ping').then((r) => r.json()).catch(() => null);
+          console.log(ping && ping.online === true ? 'PING_OK' : 'PING_BAD ' + ep);
+          const html = await fetch(ep + '/').then((r) => r.text()).catch(() => '');
+          console.log(/<title[^>]*>[^<]*AnythingLLM/i.test(html) ? 'UI_OK' : 'UI_BAD ' + html.slice(0, 120));
+          const anon = await fetch(ep + '/api/workspaces').then((r) => r.status).catch(() => 0);
+          console.log(anon === 401 ? 'ANON_REFUSED' : 'ANON_GOT ' + anon);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^PING_OK\nUI_OK\nANON_REFUSED$"
+    retries: 10
+    retryDelaySeconds: 20
+    timeoutSeconds: 120
+
   - id: storage-on-volume
     description: >-
       /app/server/storage is a mounted volume holding the database, and /app/server/.env (where settings saved
@@ -109,7 +134,8 @@ checks:
           if (!doc.success) { console.log('DOC_BAD ' + JSON.stringify(doc).slice(0, 300)); return; }
           const vs = await post('/v1/workspace/' + ws.slug + '/vector-search', { query: 'What is the secret e2e marker word?', topN: 4 }, key);
           const hit = (vs.results || []).some((x) => (x.text || '').includes(marker));
-          console.log(hit ? 'RAG_OK' : 'RAG_BAD ' + JSON.stringify(vs).slice(0, 300));
+          const lance = require('fs').existsSync(process.env.STORAGE_DIR + '/lancedb/' + ws.slug + '.lance');
+          console.log(hit && lance ? 'RAG_OK' : 'RAG_BAD lancedb=' + lance + ' ' + JSON.stringify(vs).slice(0, 300));
         })().catch((e) => console.log('ERROR ' + e.message));
         JS
     expect:
@@ -241,7 +267,9 @@ checks:
     timeoutSeconds: 240
 
   - id: data-written
-    description: A workspace named after the running version is stored and listed again.
+    description: >-
+      A workspace named after the running version, holding a document with a version marker, is stored, and a
+      vector search in it returns the marker.
     exec:
       workload: "{release}-anythingllm"
       container: anythingllm
@@ -253,8 +281,15 @@ checks:
           const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
           const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
           const list = async () => ((await (await fetch(B + '/v1/workspaces', { headers: { authorization: 'Bearer ' + key } })).json()).workspaces || []).map((w) => w.name);
-          if (!(await list()).includes('persist-{version}')) await post('/v1/workspace/new', { name: 'persist-{version}' }, key);
-          console.log((await list()).includes('persist-{version}') ? 'WRITTEN' : 'WRITE_BAD');
+          const marker = 'persistmark' + '{version}'.replace(/[^0-9]/g, '');
+          let ws = ((await (await fetch(B + '/v1/workspaces', { headers: { authorization: 'Bearer ' + key } })).json()).workspaces || []).find((w) => w.name === 'persist-{version}');
+          if (!ws) {
+            ws = (await post('/v1/workspace/new', { name: 'persist-{version}' }, key)).workspace;
+            await post('/v1/document/raw-text', { textContent: 'The persisted e2e marker word is ' + marker + '.', addToWorkspaces: ws.slug, metadata: { title: 'e2e-' + marker } }, key);
+          }
+          const vs = await post('/v1/workspace/' + ws.slug + '/vector-search', { query: 'What is the persisted e2e marker word?', topN: 4 }, key);
+          const hit = (vs.results || []).some((x) => (x.text || '').includes(marker));
+          console.log((await list()).includes('persist-{version}') && hit ? 'WRITTEN' : 'WRITE_BAD ' + JSON.stringify(vs).slice(0, 200));
         })().catch((e) => console.log('ERROR ' + e.message));
         JS
     expect:
@@ -265,7 +300,8 @@ checks:
   - id: data-persists
     description: >-
       The workspace written on the version this scenario installed first is still there. On a fresh install
-      that is the same version; after an upgrade it proves the volume carried over. Never writes.
+      that is the same version; after an upgrade it proves the volume carried over, its vectors included.
+      Never writes data.
     exec:
       workload: "{release}-anythingllm"
       container: anythingllm
@@ -274,8 +310,14 @@ checks:
         const B = 'http://127.0.0.1:3001/api';
         (async () => {
           const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
-          const ws = ((await (await fetch(B + '/workspaces', { headers: { authorization: 'Bearer ' + jwt } })).json()).workspaces || []).map((w) => w.name);
-          console.log(ws.includes('persist-{installed_version}') ? 'PERSISTED' : 'MISSING (no workspace named persist-{installed_version})');
+          const post = async (p, body, tok) => (await fetch(B + p, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify(body) })).json();
+          const ws = ((await (await fetch(B + '/workspaces', { headers: { authorization: 'Bearer ' + jwt } })).json()).workspaces || []).find((w) => w.name === 'persist-{installed_version}');
+          if (!ws) { console.log('MISSING (no workspace named persist-{installed_version})'); return; }
+          const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
+          const marker = 'persistmark' + '{installed_version}'.replace(/[^0-9]/g, '');
+          const vs = await post('/v1/workspace/' + ws.slug + '/vector-search', { query: 'What is the persisted e2e marker word?', topN: 4 }, key);
+          const hit = (vs.results || []).some((x) => (x.text || '').includes(marker));
+          console.log(hit ? 'PERSISTED' : 'VECTOR_MISSING ' + JSON.stringify(vs).slice(0, 200));
         })().catch((e) => console.log('ERROR ' + e.message));
         JS
     expect:

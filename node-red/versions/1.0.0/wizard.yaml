@@ -128,6 +128,9 @@ steps:
             label: Context storage
             widget: segmented
             required: true
+            description: >-
+              File writes flow and global context to the volume set, so it survives restarts and upgrades. Memory
+              (Node-RED's own default) loses it on every restart.
             options:
               - value: localfilesystem
                 label: File
@@ -135,6 +138,12 @@ steps:
               - value: memory
                 label: Memory
                 description: Context is lost on every restart (Node-RED's own default).
+          - type: note
+            severity: warning
+            when: self.contextStorage == 'memory'
+            text: >-
+              Flow and global context is kept in memory only, so every restart, upgrade or secret change empties
+              it.
         rules:
           - rule: self.contextStorage in ['localfilesystem', 'memory']
             mirrors: node-red.validateContextStorage
@@ -162,9 +171,28 @@ steps:
             paths: [volumeset.capacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
 
+      - title: Recovery
+        fields:
+          - path: safeMode
+            type: boolean
+            label: Start without running flows
+            description: >-
+              Safe mode: the editor starts but no flow runs, so you can fix a flow that crashes Node-RED. Deploy
+              from the editor to start the flows, then turn this off.
+        rules:
+          - rule: >-
+              type(self.safeMode) == bool && type(self.projects.enabled) == bool &&
+              type(self.publicAccess.enabled) == bool && type(self.backup.enabled) == bool &&
+              type(self.palette.allowInstall) == bool
+            mirrors: node-red.validateFlags
+            paths: [safeMode]
+            message: Switches must be true or false.
+
   - id: nodes
-    title: Nodes and projects
-    description: Which extra nodes are installed, and whether the editor may install more.
+    title: Nodes, projects and environment
+    description: >-
+      Which extra nodes are installed, whether the editor may install more, and the environment variables your
+      flows read.
     sections:
       - fields:
           - path: palette.packages
@@ -198,6 +226,108 @@ steps:
             paths: [palette.packages]
             message: Each node package must be a name and an exact version, such as node-red-contrib-foo@1.2.3.
 
+      - title: Environment for flows
+        description: >-
+          Variables flows read with env.get() or ${NAME} in node settings. Changing them restarts Node-RED.
+        fields:
+          - path: extraEnv
+            type: list
+            label: Plain variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: Non-secret settings, such as an MQTT broker host. Put passwords and tokens in the secret below.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and _, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+          - id: envFromSecret
+            virtual: true
+            type: enum
+            label: Variables from a secret
+            widget: segmented
+            required: true
+            init: "self.envSecret.secretName == null || self.envSecret.secretName == '' ? 'none' : 'secret'"
+            description: Switching to None clears the secret and keys you chose.
+            options:
+              - value: none
+                label: None
+                set: { envSecret.secretName: "", envSecret.keys: [] }
+              - value: secret
+                label: From a secret
+                description: Passwords and tokens your flows read, from a dictionary secret.
+          - path: envSecret.secretName
+            type: ref
+            label: Variables secret
+            required: true
+            when: ui.envFromSecret == 'secret'
+            description: >-
+              A dictionary secret you create; each key listed below becomes an environment variable of the same
+              name.
+            help: >-
+              Rotating the secret does not restart Node-RED; run
+              `cpln workload force-redeployment RELEASE_NAME-node-red` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "self.envSecret.keys"
+          - path: envSecret.keys
+            type: list
+            label: Keys
+            widget: tags
+            unique: true
+            required: true
+            when: ui.envFromSecret == 'secret'
+            description: The keys of the secret to load, for example `API_TOKEN`. Each must exist in the secret.
+            item:
+              type: string
+              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              patternMessage: Use letters, digits and _, not starting with a digit.
+        rules:
+          - rule: (self.envSecret.secretName == '') == (size(self.envSecret.keys) == 0)
+            mirrors: node-red.validateEnv
+            paths: [envSecret.keys]
+            message: List at least one key of the variables secret, or clear the secret.
+          - rule: >-
+              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
+              !(n.upperAscii() in ['NR_ADMIN_USERNAME', 'NR_ADMIN_PASSWORD', 'NR_CREDENTIAL_SECRET',
+              'NR_HTTP_NODE_USERNAME', 'NR_HTTP_NODE_PASSWORD', 'NR_PALETTE_PACKAGES', 'NODE_RED_ENABLE_SAFE_MODE',
+              'NODE_RED_ENABLE_PROJECTS', 'NODE_RED_HOME', 'NODE_PATH', 'PATH', 'TZ', 'PORT']))
+            mirrors: node-red.validateEnv
+            paths: [envSecret.keys, extraEnv]
+            message: >-
+              The chart sets the login, credential key, palette, safe mode, timezone and Node.js path variables
+              itself (NR_*, NODE_RED_ENABLE_*, NODE_PATH, PATH, TZ, PORT); remove them.
+          - rule: (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n, !n.upperAscii().startsWith('CPLN_'))
+            mirrors: node-red.validateEnv
+            paths: [envSecret.keys, extraEnv]
+            message: Names starting with CPLN_ are reserved by Control Plane.
+          - rule: >-
+              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
+              n == '' || n.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
+            mirrors: node-red.validateEnv
+            paths: [envSecret.keys, extraEnv]
+            message: Environment variable names use letters, digits and _, and do not start with a digit.
+          - rule: >-
+              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
+              (self.envSecret.keys + self.extraEnv.map(e, e.name)).filter(m, m == n).size() == 1)
+            mirrors: node-red.validateEnv
+            paths: [envSecret.keys, extraEnv]
+            message: Each name may appear only once across the secret keys and the plain variables.
+
   - id: access
     title: Access
     description: Whether Node-RED is on the internet, who can call its HTTP endpoints, and which workloads can reach it inside Control Plane.
@@ -227,7 +357,8 @@ steps:
             required: true
             init: "self.httpNodeAuth.secretName == null || self.httpNodeAuth.secretName == '' ? 'open' : 'login'"
             description: >-
-              Basic authentication on every HTTP In endpoint and on the Dashboard, its live-data connection included. The editor has its own login.
+              Basic authentication on every HTTP In endpoint and on the Dashboard, its live-data connection
+              included. The editor has its own login. Switching to No login clears the secret you chose.
             options:
               - value: open
                 label: No login
@@ -236,12 +367,22 @@ steps:
               - value: login
                 label: Username and password
                 description: One shared login from a secret.
+          - type: note
+            severity: warning
+            when: ui.httpLogin == 'open' && self.publicAccess.enabled
+            text: >-
+              With no login on the public endpoint, anyone who can reach the URL can call your HTTP In endpoints
+              and read and press the Dashboard. Choose Username and password unless the flows are meant to be
+              open.
           - path: httpNodeAuth.secretName
             type: ref
             label: HTTP endpoint login secret
             required: true
             when: ui.httpLogin == 'login'
             description: A dictionary secret with `username` and `password`.
+            help: >-
+              Changing the secret does not restart Node-RED; run
+              `cpln workload force-redeployment RELEASE_NAME-node-red` afterwards.
             ref:
               kind: secret
               format: name
@@ -333,131 +474,11 @@ steps:
             label: Keep each snapshot for
             required: true
             description: >-
-              Also how long the final snapshot, taken when the release is uninstalled, is kept.
+              Also how long the final snapshot, taken when the release is uninstalled, is kept. Uninstalling
+              does not delete the secrets you created.
             suggestions: [7d, 14d, 30d]
         rules:
           - rule: self.backup.retention.matches('^[0-9]+(\\.[0-9]+)?[dhm]$')
             mirrors: node-red.validateBackup
             paths: [backup.retention]
             message: Enter a number followed by d, h or m, such as 7d.
-
-  - id: advanced
-    title: Advanced
-    description: Recovery mode, and environment variables your flows read.
-    sections:
-      - title: Recovery
-        fields:
-          - path: safeMode
-            type: boolean
-            label: Start without running flows
-            description: >-
-              Safe mode: the editor starts but no flow runs, so you can fix a flow that crashes Node-RED. Deploy
-              from the editor to start the flows, then turn this off.
-        rules:
-          - rule: >-
-              type(self.safeMode) == bool && type(self.projects.enabled) == bool &&
-              type(self.publicAccess.enabled) == bool && type(self.backup.enabled) == bool &&
-              type(self.palette.allowInstall) == bool
-            mirrors: node-red.validateFlags
-            paths: [safeMode]
-            message: Switches must be true or false.
-      - title: Environment for flows
-        description: >-
-          Variables flows read with env.get() or ${NAME} in node settings. Changing them restarts Node-RED.
-        fields:
-          - path: extraEnv
-            type: list
-            label: Plain variables
-            widget: table
-            uniqueBy: [name]
-            newItem: { name: "", value: "" }
-            itemLabel: "item.name"
-            description: Non-secret settings, such as an MQTT broker host. Put passwords and tokens in the secret below.
-            item:
-              type: object
-              fields:
-                - path: name
-                  type: string
-                  label: Name
-                  required: true
-                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
-                  patternMessage: Use letters, digits and _, not starting with a digit.
-                - path: value
-                  type: string
-                  label: Value
-                  required: true
-          - id: envFromSecret
-            virtual: true
-            type: enum
-            label: Variables from a secret
-            widget: segmented
-            required: true
-            init: "self.envSecret.secretName == null || self.envSecret.secretName == '' ? 'none' : 'secret'"
-            options:
-              - value: none
-                label: None
-                set: { envSecret.secretName: "", envSecret.keys: [] }
-              - value: secret
-                label: From a secret
-                description: Passwords and tokens your flows read, from a dictionary secret.
-          - path: envSecret.secretName
-            type: ref
-            label: Variables secret
-            required: true
-            when: ui.envFromSecret == 'secret'
-            description: >-
-              A dictionary secret you create; each key listed below becomes an environment variable of the same
-              name.
-            help: >-
-              Rotating the secret does not restart Node-RED; run
-              `cpln workload force-redeployment RELEASE_NAME-node-red` afterwards.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeysFrom: "self.envSecret.keys"
-          - path: envSecret.keys
-            type: list
-            label: Keys
-            widget: tags
-            unique: true
-            required: true
-            when: ui.envFromSecret == 'secret'
-            description: The keys of the secret to load, for example `API_TOKEN`. Each must exist in the secret.
-            item:
-              type: string
-              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
-              patternMessage: Use letters, digits and _, not starting with a digit.
-        rules:
-          - rule: (self.envSecret.secretName == '') == (size(self.envSecret.keys) == 0)
-            mirrors: node-red.validateEnv
-            paths: [envSecret.keys]
-            message: List at least one key of the variables secret, or clear the secret.
-          - rule: >-
-              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
-              !(n.upperAscii() in ['NR_ADMIN_USERNAME', 'NR_ADMIN_PASSWORD', 'NR_CREDENTIAL_SECRET',
-              'NR_HTTP_NODE_USERNAME', 'NR_HTTP_NODE_PASSWORD', 'NR_PALETTE_PACKAGES', 'NODE_RED_ENABLE_SAFE_MODE',
-              'NODE_RED_ENABLE_PROJECTS', 'NODE_RED_HOME', 'NODE_PATH', 'PATH', 'TZ', 'PORT']))
-            mirrors: node-red.validateEnv
-            paths: [envSecret.keys, extraEnv]
-            message: >-
-              The chart sets the login, credential key, palette, safe mode, timezone and Node.js path variables
-              itself (NR_*, NODE_RED_ENABLE_*, NODE_PATH, PATH, TZ, PORT); remove them.
-          - rule: (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n, !n.upperAscii().startsWith('CPLN_'))
-            mirrors: node-red.validateEnv
-            paths: [envSecret.keys, extraEnv]
-            message: Names starting with CPLN_ are reserved by Control Plane.
-          - rule: >-
-              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
-              n == '' || n.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
-            mirrors: node-red.validateEnv
-            paths: [envSecret.keys, extraEnv]
-            message: Environment variable names use letters, digits and _, and do not start with a digit.
-          - rule: >-
-              (self.envSecret.keys + self.extraEnv.map(e, e.name)).all(n,
-              (self.envSecret.keys + self.extraEnv.map(e, e.name)).filter(m, m == n).size() == 1)
-            mirrors: node-red.validateEnv
-            paths: [envSecret.keys, extraEnv]
-            message: Each name may appear only once across the secret keys and the plain variables.

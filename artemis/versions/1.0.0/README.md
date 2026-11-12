@@ -23,7 +23,7 @@ cpln secret create-dictionary \
 
 Read the password back with `cpln secret reveal my-artemis-credentials -o yaml`.
 
-**Set `locations` to your GVC's location(s).** A listed location the GVC does not have (a typo, or the unchanged default `aws-us-east-1`) runs nothing: the platform accepts it silently, and the deployment message reads `maxScale is set to 0`.
+**Set `locations` to your GVC's location(s).** A listed location the GVC does not have (a typo, or the unchanged default `aws-us-east-1`) runs nothing: the platform accepts it silently, and the deployment message reads `maxScale is set to 0`. With two locations, a new broker whose peer location is missing stops with `FATAL: the mirror peer's location '…' is not in GVC '…'`.
 
 ## Configuration
 
@@ -43,6 +43,7 @@ locations:
 ### Credentials
 
 ```yaml
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
 credentialsSecretName: my-artemis-credentials
 ```
 
@@ -103,7 +104,7 @@ Log in with the `username` and `password` from your credentials secret. `RELEASE
 | Web console (private) | `cpln port-forward RELEASE-artemis 8161:8161 --gvc GVC`, then `http://localhost:8161/console` |
 | Web console (public) | `status.canonicalEndpoint` from `cpln workload get RELEASE-artemis --gvc GVC -o yaml` |
 
-The message ports are reachable only from inside Control Plane, as `internalAccess` allows; they are never public.
+The message ports are reachable only from inside Control Plane, as `internalAccess` allows; they are never public. Port 61617 carries the mirror between locations; do not point clients at it.
 
 ### Client failover (two locations)
 
@@ -134,7 +135,7 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 - A restarted broker refuses clients until it has caught up from its peer, or until `mirror.catchUpTimeoutSeconds` has passed.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
 - Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored.
-- The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
+- The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`. Rotate the password and keep the username: a new username adds a second admin, and the old one keeps working.
 - Changes to `internalAccess` and `publicAccess` take a few minutes to apply.
 
 ## Links

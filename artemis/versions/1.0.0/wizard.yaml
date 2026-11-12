@@ -169,7 +169,8 @@ steps:
         help: >-
           Use a hex password, for example from `openssl rand -hex 24`: no spaces, quotes or backslashes.
           The brokers apply the secret on every start, so after you change it, force a redeployment of
-          the workload.
+          the workload. Rotate the password and keep the username: a new username adds a second admin,
+          and the old one keeps working.
         ref:
           kind: secret
           format: name

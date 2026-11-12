@@ -127,6 +127,12 @@ steps:
             min: 1
             when: self.llm.provider in ['ollama', 'generic-openai', 'litellm']
             description: The model's token limit.
+          - type: note
+            severity: warning
+            when: >-
+              self.llm.provider in ['openai', 'anthropic'] &&
+              (self.llm.apiKeySecretName == null || self.llm.apiKeySecretName == '')
+            text: OpenAI and Anthropic need an API key secret. Choose or create one below.
           - path: llm.apiKeySecretName
             type: ref
             label: API key secret
@@ -283,26 +289,32 @@ steps:
                 - path: command
                   type: string
                   label: Command (stdio)
+                  when: "!(item.url != null && string(item.url) != '')"
+                  description: Fill in a command for a stdio server, or a URL for an HTTP server.
                   placeholder: uvx
                 - path: args
                   type: list
                   label: Arguments (stdio)
                   widget: tags
+                  when: "!(item.url != null && string(item.url) != '')"
                   item: { type: string }
-                - path: type
-                  type: enum
-                  label: Transport (HTTP)
-                  options:
-                    - { value: streamable, label: Streamable HTTP }
-                    - { value: sse, label: SSE }
                 - path: url
                   type: string
                   format: url
                   label: URL (HTTP)
+                  when: "!(item.command != null && string(item.command) != '')"
                   placeholder: http://my-mcp.GVC_NAME.cpln.local:8000/mcp
+                - path: type
+                  type: enum
+                  label: Transport (HTTP)
+                  when: "(item.url != null && string(item.url) != '') || (item.type != null && string(item.type) != '')"
+                  options:
+                    - { value: streamable, label: Streamable HTTP }
+                    - { value: sse, label: SSE }
                 - path: bearerTokenSecretName
                   type: ref
                   label: Bearer token secret (HTTP)
+                  when: "(item.url != null && string(item.url) != '') || (item.bearerTokenSecretName != null && string(item.bearerTokenSecretName) != '')"
                   description: "Sent as `Authorization: Bearer <value>`."
                   ref:
                     kind: secret
@@ -370,8 +382,7 @@ steps:
             when: ui.cplnMcpMode == 'on'
             label: Service-account key secret
             description: >-
-              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
-              empty for no Control Plane MCP server.
+              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`).
             ref:
               kind: secret
               format: name
@@ -404,41 +415,41 @@ steps:
             message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
 
   - id: server
-    title: Server
-    description: The AnythingLLM image and the compute of its single stateful replica.
-    fields:
-      - type: note
-        severity: warning
-        when: context.mode == 'upgrade'
-        text: >-
-          An upgrade that changes the workload restarts the single replica, so AnythingLLM is unavailable for a
-          few minutes.
-      - path: image
-        type: string
-        format: image
-        label: AnythingLLM image
-        required: true
-        docs: "#server"
-      - path: resources
-        type: resources
-        label: Resources
-        required: true
-        description: >-
-          The built-in embedding model and document parsing run in this container, so keep the maximum memory
-          at 2 GiB or more.
-        maxRatio: 4
-        cpu: { min: 25m }
-        memory: { min: 32Mi }
-      - path: telemetry.enabled
-        type: boolean
-        label: Send anonymous usage data to AnythingLLM
-        advanced: true
-
-  - id: storage
-    title: Storage and snapshots
-    description: The volume and its scheduled snapshots.
+    title: Server and storage
+    description: The AnythingLLM image, the compute of its single stateful replica, its volume and snapshots.
     sections:
-      - fields:
+      - id: compute
+        title: Server
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              An upgrade that changes the workload restarts the single replica, so AnythingLLM is unavailable for a
+              few minutes.
+          - path: image
+            type: string
+            format: image
+            label: AnythingLLM image
+            required: true
+            docs: "#server"
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: >-
+              The built-in embedding model and document parsing run in this container, so keep the maximum memory
+              at 2 GiB or more.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: telemetry.enabled
+            type: boolean
+            label: Send anonymous usage data to AnythingLLM
+            advanced: true
+      - id: volume
+        title: Volume
+        fields:
           - path: volumeset.capacity
             type: integer
             label: Initial capacity
@@ -484,7 +495,7 @@ steps:
             required: true
             pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
             patternMessage: >-
-              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              Use 5 fields with a single fixed minute, such as 0 3 * * *; macros such as @daily are not
               accepted. Snapshots cannot run more often than hourly.
             rules:
               - rule: >-

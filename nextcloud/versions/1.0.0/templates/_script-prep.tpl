@@ -58,7 +58,7 @@ LimitRequestBody {{ include "nextcloud.bytes" $v.nextcloud.uploads.maxSize }}
     MaxRequestWorkers {{ $v.nextcloud.maxRequestWorkers }}
 </IfModule>
 # graceful-stop (preStop) lets in-flight requests finish inside the 90 s grace.
-GracefulShutdownTimeout 75
+GracefulShutdownTimeout 60
 Header always set Strict-Transport-Security "max-age=15552000"
 CONF
 

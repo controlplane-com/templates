@@ -44,12 +44,16 @@ spec:
       lifecycle:
         preStop:
           exec:
-            # Let the endpoint leave rotation, then finish in-flight requests
-            # (GracefulShutdownTimeout 75) inside the 90 s termination grace.
+            # Keep serving for 20 s while the edge drops this replica (5 s was too
+            # short: Apache closed its listener while requests still arrived and
+            # they failed with 503), then finish in-flight requests
+            # (GracefulShutdownTimeout 60): 20 + 65 s fits the 90 s grace. Apache
+            # is PID 1, so its exit ends the hook and the event log records
+            # "PreStopHook failed"; that is expected.
             command:
               - /bin/sh
               - "-c"
-              - sleep 5; apachectl -k graceful-stop; timeout 78 sh -c 'while pidof apache2 >/dev/null; do sleep 1; done'
+              - sleep 20; apachectl -k graceful-stop; timeout 65 sh -c 'while pidof apache2 >/dev/null; do sleep 1; done'
       readinessProbe:
         # The login page runs the full stack (config, database, Redis sessions)
         # and answers 503 in maintenance mode or with an upgrade pending.

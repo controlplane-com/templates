@@ -173,6 +173,7 @@ A forwarded web UI can stop responding in a browser after a while; restart the f
   cpln workload exec RELEASE_NAME-hindsight --gvc GVC_NAME --container hindsight -- hindsight-admin reembed --all-schemas --finish
   ```
   Between the first and second command, retains to the old servers return `503`; recall keeps working. The install wizard refuses this change, so make it with the CLI.
+- **Webhooks and mental models.** Webhooks deliver only to public addresses by default; to reach a receiver inside Control Plane (`*.cpln.local`), list its exact hostname (comma-separated, no wildcards, e.g. `my-receiver.my-gvc.cpln.local`) in `HINDSIGHT_API_WEBHOOK_ALLOWED_HOSTS` through `hindsight.extraEnv`. Mental models and pages are written by an agentic reflect loop that needs a capable LLM: a small local model on CPU may not finish before `HINDSIGHT_API_REFLECT_WALL_TIMEOUT` (300 s), so use a hosted or GPU-served model, or raise that timeout through `hindsight.extraEnv`.
 - **Stuck background tasks.** A task claimed by a process that was hard-killed (an out-of-memory kill, a lost node) stays claimed under that process's id. List them with `hindsight-admin worker-status` and hand them back with `hindsight-admin decommission-worker WORKER_ID`, through `cpln workload exec RELEASE_NAME-hindsight --gvc GVC_NAME --container hindsight -- ...`.
 - **One location; uninstall deletes the data.** The bundled database runs in one location, so install into a GVC with a single location. Uninstalling deletes the database volume and every memory bank with it.
 

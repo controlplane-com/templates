@@ -275,6 +275,13 @@ uploads; browser and desktop uploads are chunked).
 {{- if not .Values.storage.s3.bucket -}}
 {{- fail "nextcloud: storage.s3.bucket is required when storage.type is s3" -}}
 {{- end -}}
+{{- /* Both are written into single-quoted PHP in cpln.config.php. */ -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" .Values.storage.s3.bucket) -}}
+{{- fail (printf "nextcloud: storage.s3.bucket may contain only letters, digits, '.', '-' and '_' — got '%s'" .Values.storage.s3.bucket) -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z0-9_-]+$" .Values.storage.s3.region) -}}
+{{- fail (printf "nextcloud: storage.s3.region must be a region name such as us-east-1 (letters, digits, '-' and '_') — got '%s'" .Values.storage.s3.region) -}}
+{{- end -}}
 {{- if .Values.storage.s3.endpoint -}}
 {{- if not (regexMatch "^https?://[^/:]+(:[0-9]+)?$" .Values.storage.s3.endpoint) -}}
 {{- fail (printf "nextcloud: storage.s3.endpoint must be a scheme, host and optional port with no path, e.g. http://my-minio.my-gvc.cpln.local:9000 — got '%s'" .Values.storage.s3.endpoint) -}}

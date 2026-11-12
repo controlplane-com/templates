@@ -595,6 +595,14 @@ steps:
             mirrors: nextcloud.validate
             paths: [storage.s3.bucket]
             message: The bucket is required.
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket == '' || self.storage.s3.bucket.matches('^[A-Za-z0-9._-]+$')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.bucket]
+            message: Use only letters, digits, '.', '-' and '_' in the bucket name.
+          - rule: self.storage.type != 's3' || self.storage.s3.region.matches('^[A-Za-z0-9_-]+$')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.region]
+            message: Use a region name such as us-east-1 (letters, digits, '-' and '_').
           - rule: >-
               self.storage.type != 's3' || self.storage.s3.endpoint == '' ||
               self.storage.s3.endpoint.matches('^https?://[^/:]+(:[0-9]+)?$')
@@ -662,6 +670,9 @@ steps:
             label: Redis password secret
             required: true
             description: A dictionary secret; the key named below holds the password. Use a hex value, such as `openssl rand -hex 32`.
+            help: >-
+              To change the password later, update the value in this secret, then force a redeployment of Redis
+              first and of both Nextcloud workloads after it. Browser sessions sign out; sync clients carry on.
             ref:
               kind: secret
               format: name

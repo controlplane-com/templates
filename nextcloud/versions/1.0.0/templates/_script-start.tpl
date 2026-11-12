@@ -78,24 +78,63 @@ log "database{{ if .Values.redis.enabled }} and Redis{{ end }} reachable after $
 # exactly one may install or upgrade. PostgreSQL releases the lock if the holder
 # dies. A waiting replica polls and keeps no statement open between tries; once
 # it holds the lock it re-reads the state, so it usually has nothing to do.
+# The holder keeps its session busy (SELECT 1 every 20 s) while the install or
+# upgrade runs: with postgresHA the connection goes through HAProxy, which drops
+# a connection idle for 2 minutes, and the lock with it.
 cat > /tmp/cpln-lock.php <<'PHP'
 <?php
 [$self, $deadline, $key, $cmd] = $argv;
-$dsn = sprintf("pgsql:host=%s;port=%s;dbname=%s", getenv("NC_dbhost"), getenv("NC_dbport"), getenv("NC_dbname"));
-$pdo = new PDO($dsn, getenv("NC_dbuser"), getenv("NC_dbpassword"), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$key = (int) $key;
+const KEEPALIVE = 20;
+function cpln_connect(): PDO {
+  $dsn = sprintf("pgsql:host=%s;port=%s;dbname=%s", getenv("NC_dbhost"), getenv("NC_dbport"), getenv("NC_dbname"));
+  return new PDO($dsn, getenv("NC_dbuser"), getenv("NC_dbpassword"), [PDO::ATTR_TIMEOUT => 5, PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+}
+function cpln_try_lock(PDO $pdo, int $key): bool {
+  $ok = $pdo->query("SELECT pg_try_advisory_lock($key)")->fetchColumn();
+  return $ok === true || $ok === "t" || $ok === 1;
+}
+function cpln_log(string $msg): void { fwrite(STDERR, "cpln-nextcloud: $msg\n"); }
+
+$pdo = cpln_connect();
 $waited = false;
-while (true) {
-  $ok = $pdo->query("SELECT pg_try_advisory_lock(" . (int) $key . ")")->fetchColumn();
-  if ($ok === true || $ok === "t" || $ok === 1) { break; }
+while (!cpln_try_lock($pdo, $key)) {
   if (time() >= (int) $deadline) {
-    fwrite(STDERR, "cpln-nextcloud: FATAL: timed out waiting for the install/upgrade lock; another replica holds it - check its log. This replica restarts and waits again.\n");
+    cpln_log("FATAL: timed out waiting for the install/upgrade lock; another replica holds it - check its log. This replica restarts and waits again.");
     exit(1);
   }
-  if (!$waited) { fwrite(STDERR, "cpln-nextcloud: another replica is installing or upgrading; waiting for the lock\n"); $waited = true; }
+  if (!$waited) { cpln_log("another replica is installing or upgrading; waiting for the lock"); $waited = true; }
   sleep(3);
 }
-passthru($cmd, $rc);
-$pdo->query("SELECT pg_advisory_unlock(" . (int) $key . ")");
+
+$proc = proc_open($cmd, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes);
+if (!is_resource($proc)) { cpln_log("FATAL: could not start the install/upgrade step"); exit(1); }
+$next = time() + KEEPALIVE;
+while (true) {
+  $st = proc_get_status($proc);
+  if (!$st["running"]) { $rc = $st["exitcode"] < 0 ? 1 : $st["exitcode"]; break; }
+  if (time() >= $next) {
+    try {
+      $pdo->query("SELECT 1");
+    } catch (Throwable $e) {
+      // The session, and the lock with it, is gone. The step keeps running (stopping
+      // it mid-upgrade is worse); take the lock again so a restarting replica waits.
+      cpln_log("WARNING: lost the database session holding the install/upgrade lock: " . $e->getMessage());
+      try {
+        $pdo = cpln_connect();
+        cpln_log(cpln_try_lock($pdo, $key) ? "re-took the install/upgrade lock" : "WARNING: another replica took the install/upgrade lock");
+      } catch (Throwable $e2) { cpln_log("WARNING: could not reconnect to re-take the lock: " . $e2->getMessage()); }
+    }
+    $next = time() + KEEPALIVE;
+  }
+  usleep(500000);
+}
+proc_close($proc);
+try {
+  $pdo->query("SELECT pg_advisory_unlock($key)");
+} catch (Throwable $e) {
+  cpln_log("WARNING: could not release the install/upgrade lock (PostgreSQL drops it with the session): " . $e->getMessage());
+}
 exit($rc);
 PHP
 
@@ -107,8 +146,10 @@ log() { echo "cpln-nextcloud: $*" >&2; }
 occ() { setpriv --reuid=33 --regid=33 --init-groups php "$WEBROOT/occ" "$@"; }
 field() { php -r '$s = json_decode(stream_get_contents(STDIN), true); $v = $s[$argv[1]] ?? null; echo is_bool($v) ? ($v ? "true" : "false") : (string) $v;' "$1"; }
 
-# occ refuses to run unless the caller owns config.php; on a fresh volume it is
-# created empty (Nextcloud fills it during the install).
+# occ runs as www-data, and console.php exits unless the caller's uid is the
+# owner of config.php (fileowner() of a missing file is false, which never
+# matches). On a fresh volume it is created empty and owned by www-data;
+# Nextcloud fills it during the install.
 if [ ! -e "$STATE/config/config.php" ]; then
   install -o www-data -g www-data -m 0640 /dev/null "$STATE/config/config.php"
 fi

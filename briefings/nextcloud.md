@@ -13,7 +13,7 @@
 ## Architecture on cpln
 | Resource | Purpose |
 |---|---|
-| `{rel}-nextcloud` (standard, 1-10 replicas, :80) | Web UI + WebDAV. Inline boot script: PHP/Apache limits, location guard, rsync of the code to local disk, config written from values, then install or `occ upgrade` under a Postgres advisory lock (a database-held mutex), then Apache |
+| `{rel}-nextcloud` (standard, 1-10 replicas, :80) | Web UI + WebDAV. Inline boot script: PHP/Apache limits, location guard, rsync of the code to local disk, config written from values, then install or `occ upgrade` under a Postgres advisory lock (a database-held mutex, kept alive with `SELECT 1` every 20 s so HAProxy's 2 m idle timeout cannot drop it), then Apache |
 | `{rel}-nextcloud-cron` (standard, 1 replica, no ports) | Runs `cron.php` every 5 min; never installs, waits for the web tier |
 | `{rel}-nextcloud-data` (shared volumeset, 10 GiB) | `/srv/nextcloud`: `config/` (instance secret), `custom_apps/`, `data/` (files when `storage.type: local`); not snapshotted |
 | `postgres` 3.4.2 (default) or `postgresHA` 2.8.1 | users, shares, calendars, contacts, file index |
@@ -36,7 +36,7 @@
 - **config.php restore gap (ruling 5):** `secret`, `passwordsalt`, `instanceid` exist only on the non-snapshotted volume, so a DB backup alone cannot fully restore an instance. v1 documents a manual copy-out (README Important Notes); shipping those as prerequisite-secret keys is a follow-up.
 - **Local files are not backed up and die with uninstall.** Use S3 for real data.
 - **Single uploads over 600 s are cut** (platform request cap). Browser and desktop uploads are chunked; curl/rclone single PUTs are not.
-- **Admin password is first boot only.** Reset with `OC_PASS=… occ user:resetpassword --password-from-env <user>`. Rotating any secret needs `force-redeployment` on both workloads.
-- **Redis restart signs browsers out**; sync clients (app passwords) carry on.
+- **Secret rotation, per secret:** admin = first boot only (reset with `OC_PASS=… occ user:resetpassword --password-from-env <user>`); DB = `ALTER ROLE` first, then the secret, then force-redeploy both workloads; Redis = new value in the same secret, force-redeploy Redis, then both workloads (browsers sign out; sync clients carry on).
+- **Boot clock:** DB/Redis gate until T0+300 s; a waiting replica gives up on the install/upgrade lock at T0+600 s (spec said 420; raised so a waiter outlasts a normal install) and restarts to wait again. The lock holder's step must finish before the platform kills a never-ready container (~T0+900-920 s).
 - **"PreStopHook failed" in the web tier's event log on every rollout is expected:** the hook drains 20 s, then `apachectl -k graceful-stop`; Apache is PID 1, so its exit ends the hook. A 5 s drain left the edge routing to a closed listener (503s); at 20 s a 2-replica rolling restart served every request.
 - **2+ replicas without Redis, Redis production mode, a plaintext Redis password and Redis public access are refused at render.**

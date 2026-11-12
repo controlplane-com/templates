@@ -53,6 +53,8 @@ pickInsteadIf:
     template: airflow
   - need: internal tools and admin panels built on top of databases and APIs
     template: tooljet
+  - need: device and MQTT event flows with a lightweight visual runtime
+    template: node-red
 
 related:
   - template: ollama

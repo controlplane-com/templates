@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Node-RED
+category: workflow
+topology: single
+
+summary: >-
+  Node-RED, a low-code flow editor and runtime on one stateful replica, with its flows, encrypted
+  credentials, installed nodes and file-backed context on a persistent volume with daily snapshots.
+  The editor login and the credential key come from secrets, HTTP In endpoints and Dashboard pages can
+  sit behind their own login, and pinned palette nodes install at start. Pick it to wire APIs, MQTT
+  devices and webhooks into event-driven flows in a browser; it has no clustering, so a restart
+  briefly pauses flows.
+
+keywords:
+  - flow-based programming
+  - low-code
+  - visual programming
+  - workflow automation
+  - iot
+  - mqtt
+  - event-driven
+  - http endpoints
+  - webhooks
+  - dashboard
+  - home automation
+  - industrial iot
+  - data integration
+  - node.js
+
+useCases:
+  - Subscribe to MQTT topics and route device events to APIs and databases
+  - Build HTTP endpoints and webhooks with a visual flow editor
+  - Run scheduled jobs that poll APIs and transform the data
+  - Glue together SaaS APIs and internal services without a full codebase
+  - Show live device or flow data on a Dashboard
+
+alternativeTo:
+  - Zapier
+  - IFTTT
+  - Microsoft Power Automate
+  - AWS IoT Events
+  - Azure Logic Apps
+  - FlowFuse Cloud
+
+pickInsteadIf:
+  - need: SaaS app integrations and AI agent workflows with a built-in credential library
+    template: n8n
+  - need: workflows written as code that survive crashes and run for hours or days
+    template: temporal
+  - need: scheduled data pipelines defined as Python DAGs
+    template: airflow
+
+related:
+  - template: postgres
+    relation: companion
+    note: A database flows can read and write with a PostgreSQL node
+  - template: timescaledb
+    relation: companion
+    note: Stores device time series written by flows
+  - template: grafana
+    relation: companion
+    note: Dashboards over the data flows collect
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Editor admin login; the password must be at least 12 characters. Re-applied on every start. A missing secret leaves Node-RED waiting with no logs.
+  - kind: secret
+    secretType: opaque
+    valuesPath: credentialSecret.secretName
+    required: true
+    description: Key of at least 16 characters that encrypts the credentials stored in flows. Back it up and never change it.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: httpNodeAuth.secretName
+    required: false
+    when: httpNodeAuth.secretName is set
+    description: Basic-auth login for HTTP In endpoints and the Dashboard pages (not the Dashboard's live-data socket).
+  - kind: other
+    valuesPath: envSecret.secretName
+    required: false
+    when: envSecret.secretName is set
+    description: A dictionary secret of values for flows; each key listed in envSecret.keys becomes an environment variable of the same name.

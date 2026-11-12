@@ -31,7 +31,7 @@ auth:
 
 # ─── LLM (fact extraction, reflect, consolidation) ────────────────────────────
 llm:
-  provider: openai              # e.g. openai, anthropic, gemini, groq, ollama, litellm (see README)
+  provider: openai              # e.g. openai, anthropic, gemini, groq, ollama, litellm
   model: gpt-5-mini             # must support JSON-schema output
   baseUrl: ""                   # "" = provider default; e.g. http://my-ollama.my-gvc.cpln.local:11434/v1
   # PREREQUISITE SECRET — an `opaque` secret with the provider API key, created BEFORE install.

@@ -70,12 +70,13 @@ password, database). The database subchart reads it by name and Hindsight connec
 
 
 {{/*
-Env names the chart renders itself. Refused in hindsight.extraEnv and hindsight.extraSecrets.keys,
-together with the CPLN_ prefix. HINDSIGHT_API_MCP_AUTH_TOKEN and HINDSIGHT_API_TENANT_MCP_AUTH_DISABLED
-are never rendered: either would switch off the API-key check on MCP.
+Env names the chart renders itself. Refused (compared upper-cased) in hindsight.extraEnv and
+hindsight.extraSecrets.keys, together with the CPLN_ and HINDSIGHT_API_TENANT_ prefixes (the tenant
+extension's settings, which the chart owns). HINDSIGHT_API_MCP_AUTH_TOKEN is never rendered: a legacy MCP
+token is checked instead of the API key.
 */}}
 {{- define "hindsight.reservedEnv" -}}
-HS_DB_USER HS_DB_PASSWORD HS_DB_NAME HINDSIGHT_API_DATABASE_URL HINDSIGHT_API_MIGRATION_DATABASE_URL HINDSIGHT_API_READ_DATABASE_URL HINDSIGHT_API_DB_POOL_MIN_SIZE HINDSIGHT_API_DB_POOL_MAX_SIZE HINDSIGHT_API_TENANT_EXTENSION HINDSIGHT_API_TENANT_API_KEY HINDSIGHT_API_TENANT_MCP_AUTH_DISABLED HINDSIGHT_API_MCP_AUTH_TOKEN HINDSIGHT_API_MCP_STATELESS HINDSIGHT_API_WORKER_ENABLED HINDSIGHT_API_WORKER_ID HINDSIGHT_API_WORKER_HTTP_PORT HINDSIGHT_API_LLM_PROVIDER HINDSIGHT_API_LLM_MODEL HINDSIGHT_API_LLM_BASE_URL HINDSIGHT_API_LLM_API_KEY HINDSIGHT_API_EMBEDDINGS_PROVIDER HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS HINDSIGHT_API_RERANKER_PROVIDER HINDSIGHT_API_HOST HINDSIGHT_API_PORT HF_HUB_OFFLINE HINDSIGHT_ENABLE_API HINDSIGHT_ENABLE_CP
+HS_DB_USER HS_DB_PASSWORD HS_DB_NAME HINDSIGHT_API_DATABASE_URL HINDSIGHT_API_MIGRATION_DATABASE_URL HINDSIGHT_API_READ_DATABASE_URL HINDSIGHT_API_DB_POOL_MIN_SIZE HINDSIGHT_API_DB_POOL_MAX_SIZE HINDSIGHT_API_MCP_AUTH_TOKEN HINDSIGHT_API_MCP_STATELESS HINDSIGHT_API_WORKER_ENABLED HINDSIGHT_API_WORKER_ID HINDSIGHT_API_WORKER_HTTP_PORT HINDSIGHT_API_LLM_PROVIDER HINDSIGHT_API_LLM_MODEL HINDSIGHT_API_LLM_BASE_URL HINDSIGHT_API_LLM_API_KEY HINDSIGHT_API_EMBEDDINGS_PROVIDER HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS HINDSIGHT_API_RERANKER_PROVIDER HINDSIGHT_API_HOST HINDSIGHT_API_PORT HF_HUB_OFFLINE HINDSIGHT_ENABLE_API HINDSIGHT_ENABLE_CP
 {{- end }}
 
 {{/*
@@ -190,7 +191,11 @@ so every $ is doubled and the container receives the script unchanged.
 {{- end }}
 
 {{- define "hindsight.validateReplicas" -}}
-{{- range $k, $v := dict "hindsight.replicas" .Values.hindsight.replicas "worker.replicas" .Values.worker.replicas -}}
+{{- $counts := dict "hindsight.replicas" .Values.hindsight.replicas -}}
+{{- if .Values.worker.enabled -}}
+{{- $_ := set $counts "worker.replicas" .Values.worker.replicas -}}
+{{- end -}}
+{{- range $k, $v := $counts -}}
 {{- if or (not (regexMatch "^[0-9]+$" (toString $v))) (lt (int $v) 1) (gt (int $v) 10) -}}
 {{- fail (printf "hindsight: %s must be a whole number between 1 and 10 (got %v)" $k $v) -}}
 {{- end -}}
@@ -243,11 +248,11 @@ so every $ is doubled and the container receives the script unchanged.
 {{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" .) -}}
 {{- fail (printf "hindsight: %q is not a valid env var name (letters, digits and _, not starting with a digit)" .) -}}
 {{- end -}}
-{{- if hasPrefix "CPLN_" . -}}
+{{- if hasPrefix "CPLN_" (upper .) -}}
 {{- fail (printf "hindsight: env var names starting with CPLN_ are reserved by Control Plane (%s)" .) -}}
 {{- end -}}
-{{- if has . $reserved -}}
-{{- fail (printf "hindsight: env var %s is set by the chart (or would disable its API-key check) and cannot be set in hindsight.extraEnv or hindsight.extraSecrets.keys" .) -}}
+{{- if or (has (upper .) $reserved) (hasPrefix "HINDSIGHT_API_TENANT_" (upper .)) -}}
+{{- fail (printf "hindsight: env var %s is set by the chart, or is an HINDSIGHT_API_TENANT_* / MCP auth setting that could switch off its API-key check, and cannot be set in hindsight.extraEnv or hindsight.extraSecrets.keys" .) -}}
 {{- end -}}
 {{- if hasKey $seen . -}}
 {{- fail (printf "hindsight: env var %s is defined more than once across hindsight.extraEnv and hindsight.extraSecrets.keys" .) -}}

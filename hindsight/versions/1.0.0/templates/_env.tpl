@@ -33,9 +33,14 @@ enters a render (it is not percent-encoded: the credentials must be letters and 
 - name: HINDSIGHT_API_LLM_BASE_URL
   value: {{ . | toString | quote }}
 {{- end }}
-{{- with .Values.llm.apiKeySecretName }}
+{{- if .Values.llm.apiKeySecretName }}
 - name: HINDSIGHT_API_LLM_API_KEY
-  value: 'cpln://secret/{{ . }}.payload'
+  value: 'cpln://secret/{{ .Values.llm.apiKeySecretName }}.payload'
+{{- else if not (has (toString .Values.llm.provider) (list "ollama" "lmstudio" "mock" "none")) }}
+{{- /* A server at llm.baseUrl without auth: Hindsight refuses to start with no key at all for this
+provider, so it gets a placeholder the server ignores. Not a credential. */}}
+- name: HINDSIGHT_API_LLM_API_KEY
+  value: unused
 {{- end }}
 - name: HINDSIGHT_API_EMBEDDINGS_PROVIDER
   value: {{ .Values.embeddings.provider | toString | quote }}
@@ -48,9 +53,14 @@ enters a render (it is not percent-encoded: the credentials must be letters and 
 - name: HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL
   value: {{ . | toString | quote }}
 {{- end }}
-{{- with .Values.embeddings.apiKeySecretName }}
+{{- if .Values.embeddings.apiKeySecretName }}
 - name: HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY
-  value: 'cpln://secret/{{ . }}.payload'
+  value: 'cpln://secret/{{ .Values.embeddings.apiKeySecretName }}.payload'
+{{- else if not .Values.llm.apiKeySecretName }}
+{{- /* An embeddings server at embeddings.baseUrl without auth (validateEmbeddings requires the URL
+here): Hindsight refuses to start the openai provider with no key, so it gets a placeholder. */}}
+- name: HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY
+  value: unused
 {{- end }}
 {{- end }}
 - name: HINDSIGHT_API_RERANKER_PROVIDER

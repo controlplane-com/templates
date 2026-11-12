@@ -35,7 +35,7 @@ spec:
         periodSeconds: 20
         failureThreshold: 3
         successThreshold: 1
-        timeoutSeconds: 30
+        timeoutSeconds: 5
       livenessProbe:
         httpGet:
           path: /health/live
@@ -45,7 +45,7 @@ spec:
         periodSeconds: 30
         failureThreshold: 3
         successThreshold: 1
-        timeoutSeconds: 30
+        timeoutSeconds: 5
   defaultOptions:
     autoscaling:
       maxConcurrency: 0

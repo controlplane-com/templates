@@ -278,16 +278,16 @@ steps:
               This provider cannot run in this deployment (llamacpp is not in the image; the others need an
               interactive login). Use an API-key provider, or Ollama or vLLM through a base URL.
           - rule: >-
-              self.llm.apiKeySecretName != '' || self.llm.baseUrl != '' ||
+              (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '') || (self.llm.baseUrl != null && self.llm.baseUrl != '') ||
               self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none']
             mirrors: hindsight.validateLlm
             paths: [llm.apiKeySecretName]
             message: Choose the API key secret, or set a base URL for a server without authentication.
-          - rule: self.llm.model != '' || self.llm.provider == 'none'
+          - rule: "(self.llm.model != null && self.llm.model != '') || self.llm.provider == 'none'"
             mirrors: hindsight.validateLlm
             paths: [llm.model]
             message: The model is required.
-          - rule: self.llm.baseUrl == '' || self.llm.baseUrl.matches('^https?://\\S+[^/]$')
+          - rule: "(self.llm.baseUrl == null || self.llm.baseUrl == '') || self.llm.baseUrl.matches('^https?://\\\\S+[^/]$')"
             mirrors: hindsight.validateUrls
             paths: [llm.baseUrl]
             message: Use a URL that starts with http:// or https://, with no spaces and no trailing /.
@@ -336,12 +336,12 @@ steps:
             paths: [embeddings.provider]
             message: Choose the bundled model or OpenAI or compatible.
           - rule: >-
-              self.embeddings.provider != 'openai' || self.embeddings.baseUrl != '' ||
-              self.embeddings.apiKeySecretName != '' || self.llm.apiKeySecretName != ''
+              self.embeddings.provider != 'openai' || (self.embeddings.baseUrl != null && self.embeddings.baseUrl != '') ||
+              (self.embeddings.apiKeySecretName != null && self.embeddings.apiKeySecretName != '') || (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '')
             mirrors: hindsight.validateEmbeddings
             paths: [embeddings.apiKeySecretName]
             message: Choose an API key secret (here or for the LLM), or set the base URL of a server without authentication.
-          - rule: self.embeddings.baseUrl == '' || self.embeddings.baseUrl.matches('^https?://\\S+[^/]$')
+          - rule: "(self.embeddings.baseUrl == null || self.embeddings.baseUrl == '') || self.embeddings.baseUrl.matches('^https?://\\\\S+[^/]$')"
             mirrors: hindsight.validateUrls
             paths: [embeddings.baseUrl]
             message: Use a URL that starts with http:// or https://, with no spaces and no trailing /.
@@ -475,7 +475,7 @@ steps:
             cpu: { min: 25m }
             memory: { min: 512Mi }
         rules:
-          - rule: self.worker.replicas >= 1 && self.worker.replicas <= 10
+          - rule: "!self.worker.enabled || (self.worker.replicas >= 1 && self.worker.replicas <= 10)"
             mirrors: hindsight.validateReplicas
             paths: [worker.replicas]
             message: Use between 1 and 10 worker replicas.
@@ -678,23 +678,23 @@ steps:
     rules:
       - rule: >-
           (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n,
-          !(n in ['HS_DB_USER', 'HS_DB_PASSWORD', 'HS_DB_NAME', 'HINDSIGHT_API_DATABASE_URL',
+          !(n.upperAscii() in ['HS_DB_USER', 'HS_DB_PASSWORD', 'HS_DB_NAME', 'HINDSIGHT_API_DATABASE_URL',
           'HINDSIGHT_API_MIGRATION_DATABASE_URL', 'HINDSIGHT_API_READ_DATABASE_URL', 'HINDSIGHT_API_DB_POOL_MIN_SIZE',
-          'HINDSIGHT_API_DB_POOL_MAX_SIZE', 'HINDSIGHT_API_TENANT_EXTENSION', 'HINDSIGHT_API_TENANT_API_KEY',
-          'HINDSIGHT_API_TENANT_MCP_AUTH_DISABLED', 'HINDSIGHT_API_MCP_AUTH_TOKEN', 'HINDSIGHT_API_MCP_STATELESS',
+          'HINDSIGHT_API_DB_POOL_MAX_SIZE', 'HINDSIGHT_API_MCP_AUTH_TOKEN', 'HINDSIGHT_API_MCP_STATELESS',
           'HINDSIGHT_API_WORKER_ENABLED', 'HINDSIGHT_API_WORKER_ID', 'HINDSIGHT_API_WORKER_HTTP_PORT',
           'HINDSIGHT_API_LLM_PROVIDER', 'HINDSIGHT_API_LLM_MODEL', 'HINDSIGHT_API_LLM_BASE_URL',
           'HINDSIGHT_API_LLM_API_KEY', 'HINDSIGHT_API_EMBEDDINGS_PROVIDER', 'HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL',
           'HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL', 'HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY',
           'HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS', 'HINDSIGHT_API_RERANKER_PROVIDER', 'HINDSIGHT_API_HOST',
-          'HINDSIGHT_API_PORT', 'HF_HUB_OFFLINE', 'HINDSIGHT_ENABLE_API', 'HINDSIGHT_ENABLE_CP']))
+          'HINDSIGHT_API_PORT', 'HF_HUB_OFFLINE', 'HINDSIGHT_ENABLE_API', 'HINDSIGHT_ENABLE_CP']) &&
+          !n.upperAscii().startsWith('HINDSIGHT_API_TENANT_'))
         mirrors: hindsight.validateEnvNames
         paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
         message: >-
-          The chart sets the database, API key, MCP, worker, LLM, embeddings and reranker variables itself (and
-          refuses the two that would switch off the API-key check on MCP); set those in the Models and Hindsight
-          steps instead.
-      - rule: (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n, !n.startsWith('CPLN_'))
+          The chart sets the database, API key, MCP, worker, LLM, embeddings and reranker variables itself, and
+          refuses every HINDSIGHT_API_TENANT_* setting and HINDSIGHT_API_MCP_AUTH_TOKEN, which could switch off the
+          API-key check; set the others in the Models and Hindsight steps instead.
+      - rule: (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n, !n.upperAscii().startsWith('CPLN_'))
         mirrors: hindsight.validateEnvNames
         paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
         message: Names starting with CPLN_ are reserved by Control Plane.

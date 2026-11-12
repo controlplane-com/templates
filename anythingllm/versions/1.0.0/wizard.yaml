@@ -100,8 +100,9 @@ steps:
               - { value: generic-openai, label: OpenAI-compatible (vLLM and others) }
               - { value: litellm, label: LiteLLM }
             description: >-
-              With "Choose in the UI", pick the model in Settings → AI Providers → LLM after signing in. A
-              provider chosen here wins over the UI on every restart.
+              With "Choose in the UI", pick the model in Settings → AI Providers → LLM after signing in; until
+              then chats and the developer API's vector search fail. A provider chosen here wins over the UI on
+              every restart.
           - path: llm.model
             type: string
             label: Model
@@ -176,12 +177,15 @@ steps:
             severity: warning
             when: oldSelf != null
             text: >-
-              Changing the embedding engine or model breaks search over documents already embedded. Remove them
-              from each workspace and add them again.
+              Documents already embedded stay unsearchable with a different engine or model until they are added
+              again. Changing the embedder in the UI instead deletes every workspace's vectors and document links.
           - path: embedding.engine
             type: enum
             label: Engine
             required: true
+            description: >-
+              The built-in embedder runs on this container's CPU and is slow for large uploads; for big document
+              sets choose Ollama or an OpenAI-compatible endpoint.
             options:
               - { value: native, label: "Built in (CPU, no key)" }
               - { value: ollama, label: Ollama }
@@ -389,8 +393,9 @@ steps:
             when: self.cplnMcp.keySecretName != ''
             suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
             description: >-
-              The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete
-              tools as well, and grant the service account only what agents need.
+              The service-account key is sent to this URL, so use only the Control Plane MCP server. The default
+              `?toolsets=readonly` offers only read-only tools; remove it for create, update and delete tools as
+              well, and grant the service account only what agents need.
         rules:
           - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
             mirrors: anythingllm.validateCplnMcp
@@ -440,8 +445,9 @@ steps:
             description: >-
               Holds the database, the vector store, documents, the embedding model and the settings saved in the UI.
             help: >-
-              Uninstalling the release deletes the volume set after a final snapshot, so a reinstall starts empty,
-              admin account included.
+              Changing it on an existing release does not resize the live volume: grow it with
+              `cpln volumeset expand` (see the docs). Uninstalling the release deletes the volume set after a final
+              snapshot, so a reinstall starts empty, admin account included.
             docs: "/reference/volumeset#capacity-and-billing"
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
           - path: backup.retention

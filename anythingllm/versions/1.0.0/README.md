@@ -74,7 +74,7 @@ llm:
   apiKeySecretName: ""  # opaque secret with the API key; required for openai and anthropic
 ```
 
-With `provider: ""`, choose the model in Settings → AI Providers → LLM after signing in; the choice is kept on the volume. Use `generic-openai` for vLLM or any other OpenAI-compatible server, with `baseUrl` ending in `/v1`.
+With `provider: ""`, choose the model in Settings → AI Providers → LLM after signing in; the choice is kept on the volume. Until a model is chosen, chats and the developer API's vector search fail. Use `generic-openai` for vLLM or any other OpenAI-compatible server, with `baseUrl` ending in `/v1`.
 
 ### Embedding model
 
@@ -86,6 +86,8 @@ embedding:
   maxChunkLength: 8192  # characters per chunk sent to the embedder (ollama / generic-openai)
   apiKeySecretName: ""  # opaque secret; generic-openai only, optional
 ```
+
+The built-in embedder runs on the container's CPU and is slow for large uploads (many megabytes of text). For big document sets, use `ollama` or `generic-openai`, or raise `resources`.
 
 ### MCP tool servers
 
@@ -132,6 +134,12 @@ backup:
   retention: 7d
 ```
 
+Changing `capacity` on an existing release does not resize the live volume. Grow it with:
+
+```bash
+cpln volumeset expand RELEASE_NAME-anythingllm-storage --new-size 20 --location LOCATION --volume-index 0 --gvc GVC_NAME
+```
+
 ### Server
 
 ```yaml
@@ -161,10 +169,11 @@ telemetry:
 - Never change or delete the keys secret: `SIG_KEY` and `SIG_SALT` encrypt stored data, and a new `JWT_SECRET` signs everyone out.
 - The admin secret is read on first start only. Change the password in the UI; later changes to the secret are ignored.
 - Values set in `llm` and `embedding` win over the UI on every restart. With `llm.provider: ""`, the chat model chosen in the UI stays; the embedder always comes from `embedding`.
-- Changing the embedding engine or model after documents are embedded breaks their search. Remove the documents from each workspace and add them again.
+- Changing the embedding engine or model in the UI deletes every workspace's embedded vectors and document links; add the documents again afterwards. Changing `embedding` in the values deletes nothing, but documents already embedded stay unsearchable until they are added again.
 - The volume and its snapshots hold provider keys entered in the UI in plain text (`.env`), alongside every document. Treat snapshots as sensitive.
 - A chat widget answers only on the websites listed under its allowed domains; an embed with no allowed domains refuses every chat.
 - A stdio MCP server runs inside the container with AnythingLLM's environment, which includes the provider keys and `JWT_SECRET`. Add only servers you trust. The admin password and MCP tokens are kept out of that environment.
+- `cplnMcp.url` receives the service-account key, so point it only at the Control Plane MCP server.
 - The start script logs one line starting `cpln-mcp:` that says whether the Control Plane MCP server accepted the service-account key. The unfiltered tool list is large, so prefer the read-only URL, and a model with a large context window.
 - Rotating any optional secret does not restart AnythingLLM; run `cpln workload force-redeployment RELEASE_NAME-anythingllm --gvc GVC_NAME` afterwards.
 - AnythingLLM runs as one replica: a restart or upgrade is a short outage. Use a single-location GVC.

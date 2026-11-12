@@ -1,0 +1,14 @@
+---
+kind: policy
+name: {{ include "artemis.policy.name" . }}
+description: Apache Artemis policy
+tags: {{- include "artemis.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "artemis.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- /* the user's prerequisite credentials secret */}}
+  - //secret/{{ .Values.credentialsSecretName }}

@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Apache Artemis
+category: messaging
+topology: multi-location
+
+summary: >-
+  Apache Artemis, the successor to ActiveMQ Classic: a JMS, MQTT, STOMP and OpenWire message broker
+  that speaks AMQP 1.0, unlike RabbitMQ's AMQP 0-9-1. It runs one broker in one location, or one
+  broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror. Both locations
+  accept writes, each queue is consumed in one location at a time, and failover clients move to the
+  surviving location. Pick it for JMS or AMQP 1.0 queues that survive a region loss, not for a
+  retained, replayable log.
+
+keywords:
+  - activemq
+  - activemq artemis
+  - jms
+  - jakarta messaging
+  - amqp 1.0
+  - mqtt
+  - stomp
+  - openwire
+  - message broker
+  - message queue
+  - queues and topics
+  - broker mirroring
+  - disaster recovery
+  - multi-region
+  - active-active
+  - failover
+  - qpid-jms
+
+useCases:
+  - Run a JMS broker for Java applications
+  - Keep a message broker writable when a whole region goes down
+  - Accept messages in two regions with per-region queues
+  - Replace an ActiveMQ Classic broker
+  - Bridge MQTT devices and AMQP services through one broker
+
+alternativeTo:
+  - Apache ActiveMQ Classic
+  - Amazon MQ
+  - IBM MQ
+  - Azure Service Bus
+  - Red Hat AMQ Broker
+
+compatibleWith: [amqp, mqtt]
+
+pickInsteadIf:
+  - need: a retained, replayable event log or stream processing
+    template: kafka
+  - need: AMQP 0-9-1 clients and RabbitMQ client libraries
+    template: rabbitmq
+  - need: lightweight pub/sub and request-reply with NATS clients
+    template: nats
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: credentialsSecretName
+    required: true
+    description: Broker admin, console and client login, also used by the mirror. Create it before installing; when missing the workload waits with no logs.
+  - kind: other
+    valuesPath: locations
+    required: true
+    description: An existing GVC containing every location listed in locations; a listed location the GVC lacks runs nothing.

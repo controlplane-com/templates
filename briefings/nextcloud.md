@@ -21,7 +21,7 @@
 | identity + 2 policies | `reveal` on exactly the named secrets; `view` on its own GVC only |
 
 - Pinned to one GVC location (`defaultOptions` 0/0 + one `localOptions`); the wizard requires a 1-location GVC.
-- Availability: restarts and config changes roll surge-first. **Nextcloud version upgrades always take minutes of maintenance mode (503).** Default is single everything (ruling 2026-08-06: file sharing fails the cascade test); `replicas: 2` + `postgresHA.enabled` is the documented HA shape.
+- Availability: restarts and config changes roll surge-first. **Nextcloud version upgrades always take minutes of maintenance mode (503).** Default is single everything (ruling 2026-08-06: file sharing fails the cascade test); `replicas: 2` + `postgresHA.enabled` is the documented HA shape. With `postgresHA.enabled` the Drift tab shows six probe fields on the Patroni workload: postgres-highly-available 2.8.1's known, deferred drift (see its briefing), not this chart's.
 - `log_type errorlog` (ruling 4): Nextcloud's log goes to stderr, so `cpln logs` has it; the Logging app's log viewer is empty by design.
 - The database password stays OFF the volume (env `NC_dbpassword`, deleted from config.php after install). The Redis password and any S3 static keys DO land in config.php: Nextcloud's config writer persists the merged config (upstream behaviour).
 

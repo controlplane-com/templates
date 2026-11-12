@@ -30,7 +30,7 @@
 - Login changed? The admin secret is re-applied on **every** start: edit the secret, then `force-redeployment`.
 - Never change `credentialSecret`: stored flow credentials (API keys, broker passwords) become undecryptable. Projects use their own per-project key, which the chart does not manage.
 - The editor login is effectively shell access (exec and function nodes, npm). Upstream has no login rate limit, so use a long random password.
-- **Dashboard 2.0's live-data socket (`/dashboard/socket.io`) is NOT behind `httpNodeAuth`**: the pages return 401, but an anonymous socket connects and receives the Dashboard config. Upstream behaviour; the README says so.
+- **Dashboard 2.0's live-data socket (`/dashboard/socket.io`) is not covered by upstream `httpNodeAuth`**: an anonymous socket gets the config and live widget data and can press buttons (runs flows). The chart closes it: with `httpNodeAuth` set, settings.js adds `dashboard.ioMiddleware` checking the same Basic credentials on the socket handshake (anonymous / wrong password refused, right password works). Without `httpNodeAuth` the Dashboard is open by design.
 - A flow crashes the runtime on boot → `safeMode: true`, fix the flow in the editor, set it back.
 - Nothing runs anywhere → `location` is not one of the GVC's locations.
 - `palette.packages` failure → a FATAL npm line (300 s cap); entries must be pinned `name@version`. Removing an entry does not uninstall it. npm 11 warns (does not block) about install scripts.

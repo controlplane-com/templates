@@ -9,7 +9,7 @@ topology: single
 summary: >-
   Node-RED, a low-code flow editor and runtime on one stateful replica, with its flows, encrypted
   credentials, installed nodes and file-backed context on a persistent volume with daily snapshots.
-  The editor login and the credential key come from secrets, HTTP In endpoints and Dashboard pages can
+  The editor login and the credential key come from secrets, HTTP In endpoints and the Dashboard can
   sit behind their own login, and pinned palette nodes install at start. Pick it to wire APIs, MQTT
   devices and webhooks into event-driven flows in a browser; it has no clustering, so a restart
   briefly pauses flows.
@@ -82,7 +82,7 @@ prerequisites:
     valuesPath: httpNodeAuth.secretName
     required: false
     when: httpNodeAuth.secretName is set
-    description: Basic-auth login for HTTP In endpoints and the Dashboard pages (not the Dashboard's live-data socket).
+    description: Basic-auth login for HTTP In endpoints and the Dashboard, its live-data socket included.
   - kind: other
     valuesPath: envSecret.secretName
     required: false

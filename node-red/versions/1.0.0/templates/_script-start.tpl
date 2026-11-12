@@ -65,7 +65,20 @@ const adminPass = take('NR_ADMIN_PASSWORD');
 const credSecret = take('NR_CREDENTIAL_SECRET');
 {{- if .Values.httpNodeAuth.secretName }}
 const nodeUser = take('NR_HTTP_NODE_USERNAME');
-const nodePass = take('NR_HTTP_NODE_PASSWORD');
+const nodePassHash = bcrypt.hashSync(take('NR_HTTP_NODE_PASSWORD'), 8);
+// Dashboard 2.0 serves its live-data socket (/dashboard/socket.io) outside httpNodeAuth: without
+// this check an anonymous client receives widget data and can trigger flows. Require the same
+// Basic credentials on the socket.io handshake (the browser sends them after the page's login).
+function socketAuth(socket, next) {
+  const h = (socket.request && socket.request.headers && socket.request.headers.authorization) || '';
+  const m = /^Basic\s+(.+)$/i.exec(h);
+  if (m) {
+    const s = Buffer.from(m[1], 'base64').toString('utf8');
+    const i = s.indexOf(':');
+    if (i > 0 && s.slice(0, i) === nodeUser && bcrypt.compareSync(s.slice(i + 1), nodePassHash)) return next();
+  }
+  next(new Error('Unauthorized'));
+}
 {{- end }}
 module.exports = {
   flowFile: 'flows.json',
@@ -78,7 +91,8 @@ module.exports = {
     users: [{ username: adminUser, password: bcrypt.hashSync(adminPass, 8), permissions: '*' }],
   },
 {{- if .Values.httpNodeAuth.secretName }}
-  httpNodeAuth: { user: nodeUser, pass: bcrypt.hashSync(nodePass, 8) },
+  httpNodeAuth: { user: nodeUser, pass: nodePassHash },
+  dashboard: { ioMiddleware: socketAuth },
 {{- end }}
 {{- if eq .Values.contextStorage "localfilesystem" }}
   contextStorage: { default: { module: 'localfilesystem' } },

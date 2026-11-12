@@ -1,6 +1,6 @@
 # Node-RED
 
-A low-code flow editor and runtime: Node-RED wires APIs, MQTT devices, webhooks, schedules and databases together as flows you build in the browser and deploy with one click. This template deploys a single Node-RED on a persistent volume with daily snapshots, the editor behind an admin login taken from a secret, an optional login on HTTP endpoints and Dashboard pages, and pinned extra nodes installed at start.
+A low-code flow editor and runtime: Node-RED wires APIs, MQTT devices, webhooks, schedules and databases together as flows you build in the browser and deploy with one click. This template deploys a single Node-RED on a persistent volume with daily snapshots, the editor behind an admin login taken from a secret, an optional login on HTTP endpoints and the Dashboard, and pinned extra nodes installed at start.
 
 Node-RED is Apache-2.0 licensed, with no paid tier or feature gate.
 
@@ -29,7 +29,7 @@ cpln secret create-dictionary --name my-node-red-admin \
 printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name my-node-red-credential-secret --encoding plain -f -
 ```
 
-**HTTP endpoint login (optional)** — a `dictionary` with `username` and `password` for `httpNodeAuth.secretName`, protecting every HTTP In endpoint and the Dashboard pages:
+**HTTP endpoint login (optional)** — a `dictionary` with `username` and `password` for `httpNodeAuth.secretName`, protecting every HTTP In endpoint and the Dashboard:
 
 ```bash
 cpln secret create-dictionary --name my-node-red-http-auth \
@@ -58,7 +58,7 @@ backup:
   retention: 7d                  # also how long the final snapshot at uninstall is kept
 admin: { secretName: my-node-red-admin }                          # Prerequisites 1
 credentialSecret: { secretName: my-node-red-credential-secret }   # Prerequisites 2
-httpNodeAuth: { secretName: "" }  # optional login for HTTP In endpoints and Dashboard pages
+httpNodeAuth: { secretName: "" }  # optional login for HTTP In endpoints and the Dashboard
 palette:
   allowInstall: true             # false = no installs from the editor or function nodes
   packages: []                   # pinned name@version, e.g. ["@flowfuse/node-red-dashboard@1.36.1"]
@@ -73,7 +73,7 @@ internalAccess:
 
 **Extra nodes.** `palette.packages` is installed into `/data` with npm when the list changes, adding up to a few minutes to that start; an unchanged list skips npm, so a registry outage does not block a restart. A package that fails to install stops the start with a `cpln-node-red: FATAL:` log line. Nodes installed from the editor's palette manager are kept on the volume too. With `palette.allowInstall: false` neither the palette manager nor function nodes can install modules.
 
-**Dashboard.** Add `@flowfuse/node-red-dashboard@1.36.1` to `palette.packages` (or install it from the palette manager); it serves `/dashboard` on the same port. `httpNodeAuth` protects the Dashboard pages but not their live-data socket (`/dashboard/socket.io`), so anyone who can reach the endpoint can connect to that socket without the login and receive the Dashboard's configuration. Keep sensitive data and controls off a Dashboard on the public endpoint, or turn `publicAccess.enabled` off.
+**Dashboard.** Add `@flowfuse/node-red-dashboard@1.36.1` to `palette.packages` (or install it from the palette manager); it serves `/dashboard` on the same port. With `httpNodeAuth` set, the Dashboard pages and its live-data socket (`/dashboard/socket.io`) both require the HTTP endpoint login. Without it, anyone who can reach the endpoint can read the Dashboard and press its buttons, so set `httpNodeAuth` or turn `publicAccess.enabled` off for a Dashboard with controls.
 
 **Projects.** With `projects.enabled: true` the editor offers to create or clone a git project. Each project asks for its own credential key, which the chart does not manage; keep a copy of it.
 

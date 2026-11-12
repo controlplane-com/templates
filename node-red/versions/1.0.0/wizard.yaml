@@ -227,11 +227,11 @@ steps:
             required: true
             init: "self.httpNodeAuth.secretName == null || self.httpNodeAuth.secretName == '' ? 'open' : 'login'"
             description: >-
-              Basic authentication on every HTTP In endpoint and on the Dashboard pages; the Dashboard's live-data socket stays open. The editor has its own login.
+              Basic authentication on every HTTP In endpoint and on the Dashboard, its live-data connection included. The editor has its own login.
             options:
               - value: open
                 label: No login
-                description: Anyone who can reach the endpoint can call your HTTP In flows.
+                description: Anyone who can reach the endpoint can call your HTTP In flows and use the Dashboard.
                 set: { httpNodeAuth.secretName: "" }
               - value: login
                 label: Username and password

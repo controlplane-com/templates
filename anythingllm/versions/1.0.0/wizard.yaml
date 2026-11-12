@@ -1,0 +1,541 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: AnythingLLM
+# One stateful replica with its own volume and no location handling: every GVC location would run its own
+# AnythingLLM with its own workspaces and accounts.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: sign-in
+    title: Keys and admin account
+    description: The prerequisite secrets that hold the encryption keys and the admin account.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Both secrets must exist **before** you install. If one is missing, the deployment waits and
+          `cpln logs` shows nothing at all.
+      - path: keys.secretName
+        type: ref
+        label: Keys secret
+        required: true
+        docs: "#keys-and-admin-account"
+        description: >-
+          A dictionary secret with the keys `JWT_SECRET`, `SIG_KEY`, `SIG_SALT` and `AUTH_TOKEN`, each a random
+          value such as the output of `openssl rand -hex 32`; with an empty one AnythingLLM refuses to start. Keep
+          it forever: `SIG_KEY` and `SIG_SALT` encrypt stored data.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [JWT_SECRET, SIG_KEY, SIG_SALT, AUTH_TOKEN]
+          create:
+            suggestName: "context.releaseName + '-anythingllm-keys'"
+      - path: admin.secretName
+        type: ref
+        label: Admin account secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `username` and `password`. AnythingLLM creates this admin on first
+          start, before anyone can sign in. The username is lowercase letters, digits, `.`, `_`, `@` or `-`,
+          starting with a letter; the password has 8 characters or more.
+        help: >-
+          Read on first start only. To change the password later, use the UI; changing the secret changes nothing.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            suggestName: "context.releaseName + '-anythingllm-admin'"
+    rules:
+      - rule: self.keys.secretName != null && self.keys.secretName != ''
+        mirrors: anythingllm.validateSecrets
+        paths: [keys.secretName]
+        message: The keys secret is required.
+      - rule: self.admin.secretName != null && self.admin.secretName != ''
+        mirrors: anythingllm.validateSecrets
+        paths: [admin.secretName]
+        message: The admin account secret is required.
+      - rule: >-
+          oldSelf == null || oldSelf.keys.secretName == null || oldSelf.keys.secretName == '' ||
+          self.keys.secretName == oldSelf.keys.secretName
+        severity: warning
+        paths: [keys.secretName]
+        message: >-
+          Different keys make stored data unreadable and sign everyone out. Another secret holding the same
+          values does not.
+      - rule: >-
+          oldSelf == null || oldSelf.admin.secretName == null || oldSelf.admin.secretName == '' ||
+          self.admin.secretName == oldSelf.admin.secretName
+        severity: info
+        paths: [admin.secretName]
+        message: >-
+          The admin account secret is read on first start only, so another secret changes no login. Change the
+          admin password in the UI instead.
+
+  - id: models
+    title: Models
+    description: The chat model and the embedding model that indexes documents.
+    sections:
+      - id: llm
+        title: Chat model
+        docs: "#chat-model"
+        fields:
+          - path: llm.provider
+            type: enum
+            label: Provider
+            options:
+              - { value: "", label: Choose in the UI }
+              - { value: openai, label: OpenAI }
+              - { value: anthropic, label: Anthropic }
+              - { value: ollama, label: Ollama }
+              - { value: generic-openai, label: OpenAI-compatible (vLLM and others) }
+              - { value: litellm, label: LiteLLM }
+            description: >-
+              With "Choose in the UI", pick the model in Settings → AI Providers → LLM after signing in; until
+              then chats and the developer API's vector search fail. A provider chosen here wins over the UI on
+              every restart.
+          - path: llm.model
+            type: string
+            label: Model
+            required: true
+            when: self.llm.provider != ''
+            placeholder: gpt-4.1-mini
+          - path: llm.baseUrl
+            type: string
+            format: url
+            label: Base URL
+            required: true
+            when: self.llm.provider in ['ollama', 'generic-openai', 'litellm']
+            placeholder: http://my-ollama-ollama.GVC_NAME.cpln.local:11434
+            description: >-
+              A workload in this GVC is reached at `http://<workload>.<gvc>.cpln.local:<port>`. For an
+              OpenAI-compatible server, include `/v1`.
+          - path: llm.contextWindow
+            type: integer
+            label: Context window
+            unit: tokens
+            required: true
+            min: 1
+            when: self.llm.provider in ['ollama', 'generic-openai', 'litellm']
+            description: The model's token limit.
+          - path: llm.apiKeySecretName
+            type: ref
+            label: API key secret
+            when: self.llm.provider != ''
+            description: >-
+              An opaque secret (encoding plain) holding the provider's API key. Required for OpenAI and
+              Anthropic; optional for the others.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-anythingllm-llm-key'"
+        rules:
+          - rule: self.llm.provider in ['', 'openai', 'anthropic', 'ollama', 'generic-openai', 'litellm']
+            mirrors: anythingllm.validateLlm
+            paths: [llm.provider]
+            message: Choose one of the listed providers, or Choose in the UI.
+          - rule: self.llm.provider == '' || (self.llm.model != null && self.llm.model != '')
+            mirrors: anythingllm.validateLlm
+            paths: [llm.model]
+            message: Enter the model name.
+          - rule: >-
+              !(self.llm.provider in ['openai', 'anthropic']) ||
+              (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '')
+            mirrors: anythingllm.validateLlm
+            paths: [llm.apiKeySecretName]
+            message: OpenAI and Anthropic need an API key secret.
+          - rule: >-
+              !(self.llm.provider in ['ollama', 'generic-openai', 'litellm']) ||
+              self.llm.baseUrl.startsWith('http://') || self.llm.baseUrl.startsWith('https://')
+            mirrors: anythingllm.validateLlm
+            paths: [llm.baseUrl]
+            message: Enter the base URL with http:// or https://.
+          - rule: >-
+              !(self.llm.provider in ['ollama', 'generic-openai', 'litellm']) || self.llm.contextWindow >= 1
+            mirrors: anythingllm.validateLlm
+            paths: [llm.contextWindow]
+            message: The context window must be a positive number of tokens.
+      - id: embedding
+        title: Embedding model
+        docs: "#embedding-model"
+        fields:
+          - type: note
+            severity: warning
+            when: oldSelf != null
+            text: >-
+              Documents already embedded stay unsearchable with a different engine or model until they are added
+              again. Changing the embedder in the UI instead deletes every workspace's vectors and document links.
+          - path: embedding.engine
+            type: enum
+            label: Engine
+            required: true
+            description: >-
+              The built-in embedder runs on this container's CPU and is slow for large uploads; for big document
+              sets choose Ollama or an OpenAI-compatible endpoint.
+            options:
+              - { value: native, label: "Built in (CPU, no key)" }
+              - { value: ollama, label: Ollama }
+              - { value: generic-openai, label: OpenAI-compatible }
+          - path: embedding.model
+            type: string
+            label: Model
+            required: true
+            when: self.embedding.engine != 'native'
+            placeholder: nomic-embed-text
+          - path: embedding.baseUrl
+            type: string
+            format: url
+            label: Base URL
+            required: true
+            when: self.embedding.engine != 'native'
+            placeholder: https://api.openai.com/v1
+          - path: embedding.maxChunkLength
+            type: integer
+            label: Maximum chunk length
+            unit: characters
+            required: true
+            min: 1
+            when: self.embedding.engine != 'native'
+          - path: embedding.apiKeySecretName
+            type: ref
+            label: API key secret
+            when: self.embedding.engine == 'generic-openai'
+            description: An opaque secret (encoding plain) holding the endpoint's API key, if it needs one.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                encoding: plain
+                suggestName: "context.releaseName + '-anythingllm-embedding-key'"
+        rules:
+          - rule: self.embedding.engine in ['native', 'ollama', 'generic-openai']
+            mirrors: anythingllm.validateEmbedding
+            paths: [embedding.engine]
+            message: Choose one of the listed engines.
+          - rule: self.embedding.engine == 'native' || (self.embedding.model != null && self.embedding.model != '')
+            mirrors: anythingllm.validateEmbedding
+            paths: [embedding.model]
+            message: Enter the embedding model name.
+          - rule: >-
+              self.embedding.engine == 'native' ||
+              self.embedding.baseUrl.startsWith('http://') || self.embedding.baseUrl.startsWith('https://')
+            mirrors: anythingllm.validateEmbedding
+            paths: [embedding.baseUrl]
+            message: Enter the base URL with http:// or https://.
+          - rule: self.embedding.engine == 'native' || self.embedding.maxChunkLength >= 1
+            mirrors: anythingllm.validateEmbedding
+            paths: [embedding.maxChunkLength]
+            message: The maximum chunk length must be a positive number of characters.
+          - rule: >-
+              self.embedding.engine != 'ollama' ||
+              self.embedding.apiKeySecretName == null || self.embedding.apiKeySecretName == ''
+            mirrors: anythingllm.validateEmbedding
+            paths: [embedding.engine]
+            message: >-
+              An embedding API key secret is used only with an OpenAI-compatible engine; clear
+              embedding.apiKeySecretName in the YAML.
+
+  - id: tools
+    title: Agent tools
+    description: MCP tool servers that AnythingLLM's agents can call.
+    sections:
+      - id: mcp
+        title: MCP tool servers
+        docs: "#mcp-tool-servers"
+        fields:
+          - type: note
+            when: size(self.mcp.servers) > 0 || self.cplnMcp.keySecretName != ''
+            text: >-
+              With servers listed here, the chart rewrites AnythingLLM's whole MCP config on every start, and
+              servers added to the file by hand are replaced.
+          - path: mcp.servers
+            type: map
+            label: Servers
+            description: >-
+              A stdio server sets a command (such as `uvx`) and runs inside the container with AnythingLLM's
+              environment, including its keys; add only servers you trust. An HTTP server sets a URL instead.
+              AnythingLLM has no screen for adding servers (Settings → Agent Skills only turns them on or off and
+              removes them); leave this empty to edit the config file yourself with cpln workload exec.
+            keys:
+              label: Name
+              pattern: '^[A-Za-z0-9_-]{1,40}$'
+              patternMessage: Use 1-40 letters, digits, _ or -.
+            values:
+              type: object
+              fields:
+                - path: command
+                  type: string
+                  label: Command (stdio)
+                  placeholder: uvx
+                - path: args
+                  type: list
+                  label: Arguments (stdio)
+                  widget: tags
+                  item: { type: string }
+                - path: type
+                  type: enum
+                  label: Transport (HTTP)
+                  options:
+                    - { value: streamable, label: Streamable HTTP }
+                    - { value: sse, label: SSE }
+                - path: url
+                  type: string
+                  format: url
+                  label: URL (HTTP)
+                  placeholder: http://my-mcp.GVC_NAME.cpln.local:8000/mcp
+                - path: bearerTokenSecretName
+                  type: ref
+                  label: Bearer token secret (HTTP)
+                  description: "Sent as `Authorization: Bearer <value>`."
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [opaque] }
+                    mustExist: error
+                    allowCreate: true
+                    create: { secretType: opaque, encoding: plain }
+        rules:
+          - rule: >-
+              self.mcp.servers.all(k, (self.mcp.servers[k].command != null && string(self.mcp.servers[k].command) != '') != (self.mcp.servers[k].url != null && string(self.mcp.servers[k].url) != ''))
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: Give each server either a command (stdio) or a URL (HTTP), not both.
+          - rule: >-
+              self.mcp.servers.all(k, !(self.mcp.servers[k].command != null && string(self.mcp.servers[k].command) != '') ||
+              (!(self.mcp.servers[k].type != null && string(self.mcp.servers[k].type) != '') && !(self.mcp.servers[k].bearerTokenSecretName != null && string(self.mcp.servers[k].bearerTokenSecretName) != '')))
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: A stdio server takes no transport or bearer token secret; remove them.
+          - rule: >-
+              self.mcp.servers.all(k, !(self.mcp.servers[k].url != null && string(self.mcp.servers[k].url) != '') ||
+              ((self.mcp.servers[k].type != null && string(self.mcp.servers[k].type) != '') && self.mcp.servers[k].type in ['streamable', 'sse']))
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: Choose the transport (Streamable HTTP or SSE) for each HTTP server.
+          - rule: >-
+              self.mcp.servers.all(k, !(self.mcp.servers[k].url != null && string(self.mcp.servers[k].url) != '') ||
+              string(self.mcp.servers[k].url).startsWith('http://') || string(self.mcp.servers[k].url).startsWith('https://'))
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: Each HTTP server URL starts with http:// or https://.
+          - rule: >-
+              self.mcp.servers.all(k, !(self.mcp.servers[k].url != null && string(self.mcp.servers[k].url) != '') || !(self.mcp.servers[k].args != null && size(self.mcp.servers[k].args) > 0))
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: An HTTP server takes no arguments; remove them.
+          - rule: self.cplnMcp.keySecretName == '' || !('cpln' in self.mcp.servers)
+            mirrors: anythingllm.validateMcp
+            paths: [mcp.servers]
+            message: The name cpln is taken by the Control Plane MCP server; rename your server.
+      - id: cpln-mcp
+        title: Control Plane MCP server
+        docs: "#control-plane-mcp-server"
+        description: >-
+          Adds the Control Plane MCP server as `cpln`, so agents can work with your org. AnythingLLM's MCP client
+          has no OAuth sign-in, so it authenticates with a service-account key.
+        fields:
+          - id: cplnMcpMode
+            virtual: true
+            type: enum
+            label: Control Plane MCP server
+            widget: segmented
+            required: true
+            init: "self.cplnMcp.keySecretName == null || self.cplnMcp.keySecretName == '' ? 'off' : 'on'"
+            options:
+              - value: "off"
+                label: "Off"
+                set: { cplnMcp.keySecretName: "" }
+              - value: "on"
+                label: "On"
+          - path: cplnMcp.keySecretName
+            type: ref
+            required: true
+            when: ui.cplnMcpMode == 'on'
+            label: Service-account key secret
+            description: >-
+              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
+              empty for no Control Plane MCP server.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-anythingllm-cpln-mcp-key'"
+                encoding: plain
+          - type: note
+            severity: warning
+            when: self.cplnMcp.keySecretName != ''
+            text: >-
+              Every agent run that uses this server acts as the service account. Grant it only what agents need.
+          - path: cplnMcp.url
+            type: string
+            label: MCP server URL
+            advanced: true
+            required: true
+            when: self.cplnMcp.keySecretName != ''
+            suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
+            description: >-
+              The service-account key is sent to this URL, so use only the Control Plane MCP server. The default
+              `?toolsets=readonly` offers only read-only tools; remove it for create, update and delete tools as
+              well, and grant the service account only what agents need.
+        rules:
+          - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
+            mirrors: anythingllm.validateCplnMcp
+            paths: [cplnMcp.url]
+            message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
+
+  - id: server
+    title: Server
+    description: The AnythingLLM image and the compute of its single stateful replica.
+    fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          An upgrade that changes the workload restarts the single replica, so AnythingLLM is unavailable for a
+          few minutes.
+      - path: image
+        type: string
+        format: image
+        label: AnythingLLM image
+        required: true
+        docs: "#server"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: >-
+          The built-in embedding model and document parsing run in this container, so keep the maximum memory
+          at 2 GiB or more.
+        maxRatio: 4
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      - path: telemetry.enabled
+        type: boolean
+        label: Send anonymous usage data to AnythingLLM
+        advanced: true
+
+  - id: storage
+    title: Storage and snapshots
+    description: The volume and its scheduled snapshots.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            required: true
+            description: >-
+              Holds the database, the vector store, documents, the embedding model and the settings saved in the UI.
+            help: >-
+              Changing it on an existing release does not resize the live volume: grow it with
+              `cpln volumeset expand` (see the docs). Uninstalling the release deletes the volume set after a final
+              snapshot, so a reinstall starts empty, admin account included.
+            docs: "/reference/volumeset#capacity-and-billing"
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+          - path: backup.retention
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            description: Also applies to the final snapshot taken when the volume set is deleted.
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 720h.
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: anythingllm.validateStorage
+            paths: [volumeset.capacity]
+            message: The initial capacity must be at least 10 GiB.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
+      - id: backup
+        title: Scheduled snapshots
+        toggle: backup.enabled
+        description: >-
+          Crash-consistent platform snapshots of the volume, with no bucket or cloud account. They include
+          provider keys saved in the UI. Restoring one with cpln volumeset snapshot restore loses everything written after it.
+        docs: "#backing-up"
+        fields:
+          - path: backup.schedule
+            type: string
+            format: cron
+            label: Schedule (UTC)
+            required: true
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.backup.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: anythingllm.validateStorage
+                message: Use 5 fields with a single fixed minute, such as 0 3 * * *.
+
+  - id: access
+    title: Access
+    description: Where AnythingLLM is served and which workloads can call its API.
+    fields:
+      - path: publicAccess.enabled
+        type: boolean
+        label: Reachable from the internet
+        docs: "#access"
+        description: >-
+          Serves the UI, the chat widget and the API on the canonical `*.cpln.app` URL; a sign-in is always
+          required, and chat widgets need it to answer on your website. Off, reach the UI with `cpln port-forward`.
+      - path: internalAccess.type
+        type: enum
+        label: Workloads that can connect
+        widget: cards
+        required: true
+        description: Other workloads calling the AnythingLLM API on port 3001.
+        options:
+          - value: none
+            label: Nobody
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref: { kind: workload, gvc: any, format: relativeLink, mustExist: warning }
+    rules:
+      - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+        mirrors: anythingllm.validateAccess
+        paths: [internalAccess.type]
+        message: Choose which workloads can connect.
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: warning
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload can connect.

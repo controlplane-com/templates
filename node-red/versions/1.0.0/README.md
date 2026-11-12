@@ -10,7 +10,7 @@ Node-RED is Apache-2.0 licensed, with no paid tier or feature gate.
 - **`{release}-node-red-data`** — a volume set mounted at `/data`: flows, their encrypted credentials, installed nodes, file-backed context and projects. Snapshotted on `backup.schedule`, with a final snapshot when the release is uninstalled.
 - **Identity and policy** — `reveal` on exactly the secrets Node-RED reads. The chart creates no secrets.
 
-The settings file is generated at every start from `values.yaml`. The admin and HTTP endpoint passwords are hashed with bcrypt when Node-RED starts, and every credential variable is removed from the process environment before flows run, so `env.get()` and exec nodes cannot read them.
+The settings file is generated at every start from `values.yaml`. The admin and HTTP endpoint passwords are hashed with bcrypt when Node-RED starts, and every credential variable is removed from the process environment before flows run, so `env.get()` and `${VAR}` in node properties cannot read them. Function and exec nodes still run code inside the container, which can read those values, so the editor login is shell access.
 
 ## Prerequisites
 
@@ -41,6 +41,8 @@ cpln secret create-dictionary --name my-node-red-http-auth \
 ```bash
 cpln secret create-dictionary --name my-node-red-env --entry API_TOKEN=YOUR_TOKEN
 ```
+
+Node-RED reads the variables at start, so after changing this secret run `cpln workload force-redeployment {release}-node-red --gvc {gvc}`.
 
 ## Configuration
 
@@ -105,7 +107,7 @@ cpln workload force-redeployment {release}-node-red --gvc {gvc}
 
 - **Editor access is shell access.** Function and exec nodes run any code in the container, so treat the admin login like a shell password. Node-RED has no sign-in rate limit; keep the password long.
 - **One replica, short restarts.** Every upgrade, restart or secret change restarts the single replica: flows, HTTP endpoints and the Dashboard pause for that time. Inject nodes set to run at start fire again.
-- **Location.** A workload runs in every location of its GVC; this chart scales Node-RED to zero everywhere except `location`. A `location` your GVC does not have starts nothing, with no error.
+- **Location.** A workload runs in every location of its GVC; this chart scales Node-RED to zero everywhere except `location`. A `location` your GVC does not have starts nothing, with no install error: `cpln workload get-deployments {release}-node-red --gvc {gvc}` reports `maxScale is set to 0` for every location.
 - **Restoring a snapshot** replaces `/data` and restarts Node-RED onto it. List the snapshots, then restore one:
 
   ```bash

@@ -119,10 +119,23 @@ checks:
             fn('e2ef2', 'e2er', "msg.payload = JSON.stringify([env.get('NR_ADMIN_PASSWORD') || '', env.get('NR_CREDENTIAL_SECRET') || '', env.get('NR_HTTP_NODE_PASSWORD') || '', env.get('TZ')]); return msg;"),
             hin('e2eh3', '/e2e-ctx', 'e2ef3'),
             fn('e2ef3', 'e2er', "global.set('e2e', msg.req.query.v); msg.payload = 'SET ' + global.get('e2e'); return msg;"),
+            hin('e2eh4', '/e2e-mark', 'e2ef4'),
+            fn('e2ef4', 'e2er', "global.set('persist-' + msg.req.query.v, 'kept-' + msg.req.query.v); msg.payload = 'MARKED'; return msg;"),
+            hin('e2eh5', '/e2e-get', 'e2ef5'),
+            fn('e2ef5', 'e2er', "msg.payload = String(global.get(msg.req.query.k)); return msg;"),
             dict(id='e2er', type='http response', z='e2etab', wires=[]),
             dict(id='e2ec', type='http request', z='e2etab', method='GET', ret='txt', url='http://127.0.0.1:1880/',
                  authType='basic', wires=[[]], credentials=dict(user='e2e-cred-user', password='e2e-cred-pass')),
         ]
+        # Keep the persist-* tabs earlier versions deployed and add this version's, so a later check can
+        # find the tab tagged with the version this scenario installed first.
+        c, b = req('GET', '/flows', h=auth)
+        old = json.loads(b) if c == 200 else []
+        keep = set(n['id'] for n in old if n.get('type') == 'tab' and str(n.get('label', '')).startswith('persist-'))
+        mine = 'e2ep-' + '{version}'.replace('.', '-')
+        keep.discard(mine)
+        nodes += [n for n in old if n['id'] in keep or n.get('z') in keep]
+        nodes.append(dict(id=mine, type='tab', label='persist-{version}'))
         h = dict(auth)
         h['Node-RED-Deployment-Type'] = 'full'
         c, b = req('POST', '/flows', nodes, h)
@@ -132,6 +145,7 @@ checks:
         PY
         sleep 2
         A='{http_user}:{http_password}'
+        curl -s -o /dev/null -u "$A" 'http://127.0.0.1:1880/e2e-mark?v={version}'
         code() { curl -s -o /dev/null -D - "$@" | head -1 | cut -d' ' -f2; }
         printf 'NOAUTH %s\n' "$(code http://127.0.0.1:1880/e2e-ok)"
         printf 'BADAUTH %s\n' "$(code -u '{http_user}:wrong-e2e' http://127.0.0.1:1880/e2e-ok)"
@@ -180,8 +194,8 @@ checks:
 
   - id: context-file-backed
     description: >-
-      Global context set by a flow is written to the volume (contextStorage localfilesystem), so it
-      survives a restart.
+      Global context set by a flow is written to /data/context on the volume (contextStorage
+      localfilesystem), not kept only in memory.
     exec:
       workload: "{release}-node-red"
       container: node-red
@@ -196,3 +210,41 @@ checks:
     expect:
       stdout: "(?m)^SET e2e-[0-9]+\nCTX_ON_DISK$"
     timeoutSeconds: 120
+
+  - id: flows-persist
+    description: >-
+      The flow tab tagged with the version this scenario installed first is still deployed. On a fresh
+      install that is the same version; after an upgrade it proves the flows on the volume carried over.
+      Never writes.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:1880'
+        body = json.dumps(dict(client_id='node-red-admin', grant_type='password', scope='*',
+                               username='{admin_user}', password='{admin_password}')).encode()
+        r = urllib.request.Request(B + '/auth/token', data=body, headers=dict([('Content-Type', 'application/json')]), method='POST')
+        with urllib.request.urlopen(r, timeout=60) as x:
+            t = json.loads(x.read())['access_token']
+        r = urllib.request.Request(B + '/flows', headers=dict(Authorization='Bearer ' + t))
+        with urllib.request.urlopen(r, timeout=60) as x:
+            flows = json.loads(x.read())
+        found = [n for n in flows if n.get('type') == 'tab' and n.get('label') == 'persist-{installed_version}']
+        print('FLOW_PERSISTED' if found else 'FLOW_MISSING (no tab persist-{installed_version})')
+        PY
+    expect:
+      stdout: "^FLOW_PERSISTED$"
+
+  - id: context-persists
+    description: >-
+      The global context value the version this scenario installed first stored is still readable by a
+      flow. After an upgrade (a restart) it proves the file-backed context was reloaded from the volume.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        curl -s -u '{http_user}:{http_password}' 'http://127.0.0.1:1880/e2e-get?k=persist-{installed_version}'; echo
+    expect:
+      stdout: "^kept-[0-9][0-9.]*$"

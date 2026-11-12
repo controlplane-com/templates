@@ -309,8 +309,8 @@ steps:
         title: Scheduled snapshots
         toggle: backup.enabled
         description: >-
-          Volume set snapshots on a schedule; no bucket or cloud account is needed. Restore one by creating a new
-          volume set from it.
+          Volume set snapshots on a schedule; no bucket or cloud account is needed. Restore one in place with
+          `cpln volumeset snapshot restore`, which replaces /data and restarts Node-RED onto it.
         fields:
           - path: backup.schedule
             type: string

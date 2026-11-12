@@ -1,0 +1,67 @@
+# anythingllm 1.0.0 — the usual install at its shipped size: one replica on a 10 GiB volume with daily
+# snapshots, the built-in embedder and LanceDB, public access on. A chat model is set through values (an
+# OpenAI-compatible endpoint that is never called: the checks need no paid provider), plus one stdio and one
+# HTTP MCP server and the Control Plane MCP server. Every credential is a prerequisite secret CI creates; the
+# service-account key is fake, so mcp.cpln.io refuses it.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  jwt: hex
+  sigkey: hex
+  sigsalt: hex
+  authtoken: hex
+  adminpw: hex
+  mcptoken: hex
+  fakecplnkey: hex
+
+secrets:
+  keys:
+    type: dictionary
+    entries:
+      JWT_SECRET: "{gen.jwt}"
+      SIG_KEY: "{gen.sigkey}"
+      SIG_SALT: "{gen.sigsalt}"
+      AUTH_TOKEN: "{gen.authtoken}"
+  admin:
+    type: dictionary
+    entries:
+      username: e2e-admin
+      password: "{gen.adminpw}"
+  mcptoken:
+    type: opaque
+    payload: "{gen.mcptoken}"
+  cplnkey:
+    type: opaque
+    payload: "{gen.fakecplnkey}"
+
+vars:
+  admin_user: e2e-admin
+  admin_password: "{gen.adminpw}"
+  auth_token: "{gen.authtoken}"
+  mcp_token: "{gen.mcptoken}"
+  cpln_key: "{gen.fakecplnkey}"
+
+values:
+  keys:
+    secretName: "{secrets.keys.name}"
+  admin:
+    secretName: "{secrets.admin.name}"
+  llm:
+    provider: generic-openai
+    model: e2e-model
+    baseUrl: http://127.0.0.1:9/v1
+    contextWindow: 8192
+  mcp:
+    servers:
+      time:
+        command: uvx
+        args: [mcp-server-time]
+      e2e-http:
+        type: streamable
+        url: http://127.0.0.1:9/mcp
+        bearerTokenSecretName: "{secrets.mcptoken.name}"
+  cplnMcp:
+    keySecretName: "{secrets.cplnkey.name}"
+
+# New template: no earlier version to upgrade from.

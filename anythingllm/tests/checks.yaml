@@ -1,0 +1,284 @@
+# Feature checks for the anythingllm template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_user, admin_password, auth_token, mcp_token, cpln_key).
+#
+# The checks are Node scripts (the image has Node 18 and no Python) run in the AnythingLLM container against
+# its own API on 127.0.0.1:3001. The runner reads any {word} as a placeholder, so the scripts use string
+# concatenation, never template literals, and every object literal has a space after its opening brace.
+checks:
+  - id: admin-sign-in
+    description: >-
+      Multi-user mode is on from the first start: the admin from the admin secret signs in, a wrong password and
+      the AUTH_TOKEN alone are refused, and an anonymous API call is refused.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        const call = async (m, p, body, tok) => {
+          const h = Object.assign({ 'content-type': 'application/json' }, tok ? { authorization: 'Bearer ' + tok } : null);
+          const r = await fetch(B + p, { method: m, headers: h, body: body ? JSON.stringify(body) : undefined });
+          const t = await r.text();
+          let j = null; try { j = JSON.parse(t); } catch (e) { j = null; }
+          return { s: r.status, j: j || Object.create(null) };
+        };
+        (async () => {
+          const mode = await call('GET', '/system/multi-user-mode');
+          console.log(mode.j.multiUserMode === true ? 'MULTI_USER_ON' : 'MULTI_USER_OFF');
+          const bad = await call('POST', '/request-token', { username: '{admin_user}', password: 'not-the-password' });
+          console.log(bad.j.valid === false && !bad.j.token ? 'WRONG_REFUSED' : 'WRONG_GOT ' + bad.s);
+          const at = await call('POST', '/request-token', { password: '{auth_token}' });
+          console.log(at.j.valid === false && !at.j.token ? 'TOKEN_ONLY_REFUSED' : 'TOKEN_ONLY_GOT ' + at.s);
+          const anon = await call('GET', '/workspaces');
+          console.log(anon.s === 401 ? 'ANON_REFUSED' : 'ANON_GOT ' + anon.s);
+          const ok = await call('POST', '/request-token', { username: '{admin_user}', password: '{admin_password}' });
+          console.log(ok.j.valid && ok.j.token && ok.j.user && ok.j.user.role === 'admin' ? 'ADMIN_OK' : 'ADMIN_BAD ' + ok.s);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^MULTI_USER_ON\nWRONG_REFUSED\nTOKEN_ONLY_REFUSED\nANON_REFUSED\nADMIN_OK$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 120
+
+  - id: storage-on-volume
+    description: >-
+      /app/server/storage is a mounted volume holding the database, and /app/server/.env (where settings saved
+      in the UI go) is a link onto it.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const mounts = fs.readFileSync('/proc/mounts', 'utf8').split('\n').map((l) => l.split(' ')[1]);
+        console.log(mounts.includes('/app/server/storage') ? 'MOUNT_OK' : 'MOUNT_MISSING');
+        let link = '';
+        try { link = fs.readlinkSync('/app/server/.env'); } catch (e) { link = 'not a link'; }
+        console.log(link === '/app/server/storage/.env' ? 'ENV_ON_VOLUME' : 'ENV_BAD ' + link);
+        console.log(fs.existsSync('/app/server/storage/anythingllm.db') ? 'DB_ON_VOLUME' : 'DB_MISSING');
+        JS
+    expect:
+      stdout: "(?s)^MOUNT_OK\nENV_ON_VOLUME\nDB_ON_VOLUME$"
+
+  - id: settings-from-values
+    description: >-
+      The chat model, the built-in embedder, LanceDB and telemetry off reach AnythingLLM's settings from the
+      values (llm.*, embedding.engine, telemetry.enabled).
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        (async () => {
+          const r = await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) });
+          const tok = (await r.json()).token;
+          const s = (await (await fetch(B + '/setup-complete', { headers: { authorization: 'Bearer ' + tok } })).json()).results;
+          const ok = s.LLMProvider === 'generic-openai' && s.GenericOpenAiBasePath === 'http://127.0.0.1:9/v1' &&
+            s.GenericOpenAiModelPref === 'e2e-model' && s.EmbeddingEngine === 'native' && s.VectorDB === 'lancedb' &&
+            String(s.DisableTelemetry) === 'true';
+          console.log(ok ? 'SETTINGS_OK' : 'SETTINGS_BAD ' + JSON.stringify([s.LLMProvider, s.GenericOpenAiBasePath, s.GenericOpenAiModelPref, s.EmbeddingEngine, s.VectorDB, s.DisableTelemetry]));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^SETTINGS_OK$"
+    retries: 3
+    retryDelaySeconds: 20
+
+  - id: rag-native
+    description: >-
+      A document added through the developer API is embedded by the built-in embedder into LanceDB, and a
+      vector search in its workspace returns the random marker it holds.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        const crypto = require('crypto');
+        const post = async (p, body, tok) => (await fetch(B + p, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify(body) })).json();
+        (async () => {
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
+          const marker = 'marker-' + crypto.randomBytes(6).toString('hex');
+          const ws = (await post('/v1/workspace/new', { name: 'e2e-rag-' + crypto.randomBytes(3).toString('hex') }, key)).workspace;
+          const doc = await post('/v1/document/raw-text', { textContent: 'The secret e2e marker word is ' + marker + '.', addToWorkspaces: ws.slug, metadata: { title: 'e2e-' + marker } }, key);
+          if (!doc.success) { console.log('DOC_BAD ' + JSON.stringify(doc).slice(0, 300)); return; }
+          const vs = await post('/v1/workspace/' + ws.slug + '/vector-search', { query: 'What is the secret e2e marker word?', topN: 4 }, key);
+          const hit = (vs.results || []).some((x) => (x.text || '').includes(marker));
+          console.log(hit ? 'RAG_OK' : 'RAG_BAD ' + JSON.stringify(vs).slice(0, 300));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^RAG_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 300
+
+  - id: scrape-link
+    description: >-
+      The collector scrapes a web page with its bundled Chromium (which needs the no-sandbox arguments the
+      chart sets) and returns the page text.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        const post = async (p, body, tok) => (await fetch(B + p, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify(body) })).json();
+        (async () => {
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
+          const r = await post('/v1/document/upload-link', { link: 'https://example.com' }, key);
+          const text = r.success && r.documents && r.documents[0] ? r.documents[0].pageContent || '' : '';
+          console.log(text.includes('Example Domain') ? 'SCRAPE_OK' : 'SCRAPE_BAD ' + JSON.stringify(r).slice(0, 300));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^SCRAPE_OK$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 240
+
+  - id: embed-widget
+    description: >-
+      The chat widget script is served, and a widget answers only a page on one of its allowed domains: an
+      embed with no allowed domains and a request from another site are refused.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        const crypto = require('crypto');
+        const post = async (p, body, tok) => (await fetch(B + p, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify(body) })).json();
+        (async () => {
+          const js = await fetch('http://127.0.0.1:3001/embed/anythingllm-chat-widget.min.js');
+          console.log(js.status === 200 && (js.headers.get('content-type') || '').includes('javascript') ? 'WIDGET_JS' : 'WIDGET_GOT ' + js.status);
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
+          const ws = (await post('/v1/workspace/new', { name: 'e2e-embed-' + crypto.randomBytes(3).toString('hex') }, key)).workspace;
+          const allowed = (await post('/embeds/new', { workspace_id: ws.id, chat_mode: 'query', allowlist_domains: ['https://e2e.example.com'] }, jwt)).embed;
+          const open = (await post('/embeds/new', { workspace_id: ws.id, chat_mode: 'query' }, jwt)).embed;
+          const sid = crypto.randomUUID();
+          const chat = async (uuid, origin) => (await fetch(B + '/embed/' + uuid + '/stream-chat', { method: 'POST', headers: { 'content-type': 'application/json', origin: origin }, body: JSON.stringify({ sessionId: sid, message: 'hello' }) })).status;
+          const a = await chat(open.uuid, 'https://e2e.example.com');
+          console.log(a === 401 ? 'NO_ALLOWLIST_REFUSED' : 'NO_ALLOWLIST_GOT ' + a);
+          const b = await chat(allowed.uuid, 'https://elsewhere.example.org');
+          console.log(b === 401 ? 'OTHER_SITE_REFUSED' : 'OTHER_SITE_GOT ' + b);
+          const c = await chat(allowed.uuid, 'https://e2e.example.com');
+          console.log(c === 200 ? 'ALLOWED_SITE_ANSWERED' : 'ALLOWED_SITE_GOT ' + c);
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^WIDGET_JS\nNO_ALLOWLIST_REFUSED\nOTHER_SITE_REFUSED\nALLOWED_SITE_ANSWERED$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: mcp-config
+    description: >-
+      The chart wrote the MCP config from mcp.servers and cplnMcp, readable by its owner only, with each bearer
+      token from its secret; the admin login and the tokens never reach AnythingLLM's own environment.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const fs = require('fs');
+        const f = '/app/server/storage/plugins/anythingllm_mcp_servers.json';
+        const st = fs.statSync(f);
+        console.log((st.mode & 0o777) === 0o600 ? 'MODE_600' : 'MODE_' + (st.mode & 0o777).toString(8));
+        const s = JSON.parse(fs.readFileSync(f, 'utf8')).mcpServers;
+        const names = Object.keys(s).sort().join(',');
+        console.log(names === 'cpln,e2e-http,time' ? 'SERVERS_OK' : 'SERVERS_GOT ' + names);
+        const auth = (n) => (s[n] && s[n].headers && s[n].headers.Authorization) || '';
+        const ok = auth('e2e-http') === 'Bearer {mcp_token}' && auth('cpln') === 'Bearer {cpln_key}' &&
+          s.cpln.url === 'https://mcp.cpln.io/mcp?toolsets=readonly' && s.cpln.type === 'streamable' && !s.time.headers;
+        console.log(ok ? 'TOKENS_OK' : 'TOKENS_BAD');
+        const pids = fs.readdirSync('/proc').filter((p) => /^[0-9]+$/.test(p));
+        let server = '';
+        for (const p of pids) {
+          try {
+            const argv = fs.readFileSync('/proc/' + p + '/cmdline', 'utf8').split('\0');
+            if (argv[0].endsWith('node') && argv[1] === '/app/server/index.js') server = p;
+          } catch (e) { /* gone */ }
+        }
+        const env = server ? fs.readFileSync('/proc/' + server + '/environ', 'utf8').split('\0') : ['NO_SERVER'];
+        const leaked = env.filter((l) => /^ANYTHINGLLM_(ADMIN|MCP|CPLN_MCP)_/.test(l) || l === 'NO_SERVER').map((l) => l.split('=')[0]);
+        console.log(leaked.length === 0 ? 'ENV_CLEAN' : 'ENV_LEAKED ' + leaked.join(','));
+        JS
+    expect:
+      stdout: "(?s)^MODE_600\nSERVERS_OK\nTOKENS_OK\nENV_CLEAN$"
+
+  - id: mcp-tools
+    description: >-
+      Agents get the tools of the stdio server from mcp.servers (time starts and lists get_current_time),
+      while the Control Plane MCP server refuses the baseline's fake service-account key and is not started.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        (async () => {
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const r = await (await fetch(B + '/mcp-servers/force-reload', { headers: { authorization: 'Bearer ' + jwt } })).json();
+          const by = (n) => (r.servers || []).find((s) => s.name === n) || Object.create(null);
+          const time = by('time');
+          console.log(time.running && (time.tools || []).some((t) => t.name === 'get_current_time') ? 'TIME_TOOLS' : 'TIME_BAD ' + JSON.stringify(time).slice(0, 200));
+          const cpln = by('cpln');
+          console.log(cpln.name === 'cpln' && !cpln.running ? 'CPLN_REFUSED' : 'CPLN_GOT ' + JSON.stringify(cpln).slice(0, 200));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "(?s)^TIME_TOOLS\nCPLN_REFUSED$"
+    retries: 3
+    retryDelaySeconds: 30
+    timeoutSeconds: 240
+
+  - id: data-written
+    description: A workspace named after the running version is stored and listed again.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        const post = async (p, body, tok) => (await fetch(B + p, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify(body) })).json();
+        (async () => {
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const key = (await post('/admin/generate-api-key', Object.create(null), jwt)).apiKey.secret;
+          const list = async () => ((await (await fetch(B + '/v1/workspaces', { headers: { authorization: 'Bearer ' + key } })).json()).workspaces || []).map((w) => w.name);
+          if (!(await list()).includes('persist-{version}')) await post('/v1/workspace/new', { name: 'persist-{version}' }, key);
+          console.log((await list()).includes('persist-{version}') ? 'WRITTEN' : 'WRITE_BAD');
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^WRITTEN$"
+    retries: 3
+    retryDelaySeconds: 20
+
+  - id: data-persists
+    description: >-
+      The workspace written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volume carried over. Never writes.
+    exec:
+      workload: "{release}-anythingllm"
+      container: anythingllm
+      script: |
+        node - <<'JS'
+        const B = 'http://127.0.0.1:3001/api';
+        (async () => {
+          const jwt = (await (await fetch(B + '/request-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: '{admin_user}', password: '{admin_password}' }) })).json()).token;
+          const ws = ((await (await fetch(B + '/workspaces', { headers: { authorization: 'Bearer ' + jwt } })).json()).workspaces || []).map((w) => w.name);
+          console.log(ws.includes('persist-{installed_version}') ? 'PERSISTED' : 'MISSING (no workspace named persist-{installed_version})');
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 3
+    retryDelaySeconds: 20

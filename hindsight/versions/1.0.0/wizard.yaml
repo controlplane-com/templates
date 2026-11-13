@@ -60,7 +60,7 @@ imports:
 steps:
   - id: credentials
     title: Credentials
-    description: The prerequisite secrets (API key, LLM key, web UI access key, database credentials) and which PostgreSQL holds the memories.
+    description: The prerequisite secrets (API key, LLM key, web UI access key, database credentials), the LLM provider and which PostgreSQL holds the memories.
     sections:
       - title: API key
         docs: "#prerequisites"
@@ -95,20 +95,34 @@ steps:
             mirrors: hindsight.validateAuth
             paths: [auth.apiKeySecretName]
             message: The API key secret is required.
-      - title: LLM key
-        when: self.llm.provider != 'mock' && self.llm.provider != 'none'
+      - title: LLM
+        docs: "#configuration"
         fields:
+          - path: llm.provider
+            type: string
+            label: Provider
+            required: true
+            pattern: '^[a-z0-9-]+$'
+            patternMessage: Use a provider name in lowercase, such as openai or ollama.
+            suggestions: [openai, anthropic, gemini, groq, ollama, litellm, lmstudio]
+            description: >-
+              Any API-key provider Hindsight supports. For a self-hosted model use `ollama`, or `openai` with the
+              server's URL in the Models step (vLLM, LiteLLM).
+          - type: note
+            when: self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none']
+            text: Ollama, LM Studio, mock and none need no API key. Set an Ollama or LM Studio server's URL in the Models step.
           - id: llmAuth
             virtual: true
             type: enum
             label: LLM authentication
             widget: segmented
             required: true
+            when: "!(self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none'])"
             init: >-
               (self.llm.apiKeySecretName == null || self.llm.apiKeySecretName == '') &&
               (self.llm.provider in ['ollama', 'lmstudio'] || (self.llm.baseUrl != null && self.llm.baseUrl != '')) ? 'none' : 'key'
             description: >-
-              Choose No key for Ollama or a self-hosted server without authentication; you set its URL in the
+              Choose No key for a self-hosted server without authentication (vLLM, LiteLLM); you set its URL in the
               Models step.
             options:
               - value: key
@@ -120,8 +134,8 @@ steps:
             type: ref
             label: LLM API key secret
             required: true
-            when: ui.llmAuth == 'key'
-            description: An opaque secret holding the LLM provider's API key (OpenAI by default).
+            when: "ui.llmAuth == 'key' && !(self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none'])"
+            description: An opaque secret holding the LLM provider's API key.
             help: Rotating it does not restart Hindsight; force a redeployment of the API and the workers afterwards.
             ref:
               kind: secret
@@ -131,6 +145,19 @@ steps:
               allowCreate: true
               create:
                 suggestName: "context.releaseName + '-hindsight-llm-key'"
+        rules:
+          - rule: self.llm.provider.matches('^[a-z0-9-]+$')
+            mirrors: hindsight.validateLlm
+            paths: [llm.provider]
+            message: Use a provider name in lowercase, such as openai or ollama.
+          - rule: >-
+              !(self.llm.provider in ['llamacpp', 'claude-code', 'chatgpt', 'openai-codex', 'github-copilot',
+              'cursor', 'nous', 'xai-oauth'])
+            mirrors: hindsight.validateLlm
+            paths: [llm.provider]
+            message: >-
+              This provider cannot run in this deployment (llamacpp is not in the image; the others need an
+              interactive login). Use an API-key provider, or Ollama or vLLM through a base URL.
       - title: Web UI access key
         when: self.ui.enabled
         fields:
@@ -283,19 +310,9 @@ steps:
     title: Models
     description: The LLM that extracts facts and answers reflect, and the embedding and reranking models recall uses.
     sections:
-      - title: LLM
+      - title: LLM model
         docs: "#configuration"
         fields:
-          - path: llm.provider
-            type: string
-            label: Provider
-            required: true
-            pattern: '^[a-z0-9-]+$'
-            patternMessage: Use a provider name in lowercase, such as openai or ollama.
-            suggestions: [openai, anthropic, gemini, groq, ollama, litellm, lmstudio]
-            description: >-
-              Any API-key provider Hindsight supports. For a self-hosted model use `ollama`, or `openai` with the
-              server's URL below (vLLM, LiteLLM).
           - path: llm.model
             type: string
             label: Model
@@ -316,18 +333,6 @@ steps:
               Leave empty for the provider's own endpoint. For a model server in Control Plane use its internal
               name, for example `http://RELEASE-ollama.GVC.cpln.local:11434/v1`.
         rules:
-          - rule: self.llm.provider.matches('^[a-z0-9-]+$')
-            mirrors: hindsight.validateLlm
-            paths: [llm.provider]
-            message: Use a provider name in lowercase, such as openai or ollama.
-          - rule: >-
-              !(self.llm.provider in ['llamacpp', 'claude-code', 'chatgpt', 'openai-codex', 'github-copilot',
-              'cursor', 'nous', 'xai-oauth'])
-            mirrors: hindsight.validateLlm
-            paths: [llm.provider]
-            message: >-
-              This provider cannot run in this deployment (llamacpp is not in the image; the others need an
-              interactive login). Use an API-key provider, or Ollama or vLLM through a base URL.
           # With an API key chosen, the key field's REQUIRED covers this check.
           - when: ui.llmAuth == 'none'
             rule: >-

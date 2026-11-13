@@ -14,7 +14,7 @@ imports:
     version: 1.0.2
     when: self.pgvector.enabled
     title: Single-instance PostgreSQL
-    after: advanced
+    after: access
     steps:
       - { id: server, title: Database server, description: "The PostgreSQL with pgvector that holds every memory bank, fact, entity and document." }
       - { id: storage, title: Database storage }
@@ -38,7 +38,7 @@ imports:
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    after: advanced
+    after: access
     steps:
       - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold every memory bank, fact, entity and document." }
       - { id: storage, title: Database storage }
@@ -60,7 +60,7 @@ imports:
 steps:
   - id: credentials
     title: Credentials
-    description: The prerequisite secrets with the API key and the database credentials, and which PostgreSQL holds the memories.
+    description: The prerequisite secrets (API key, LLM key, web UI access key, database credentials) and which PostgreSQL holds the memories.
     sections:
       - title: API key
         docs: "#prerequisites"
@@ -68,8 +68,9 @@ steps:
           - type: note
             severity: warning
             text: >-
-              These secrets must exist **before** you install; if one is missing, the deployment waits and
-              `cpln logs` shows nothing at all.
+              These secrets must exist **before** you install: the API key, the LLM provider's key (unless your
+              model server needs none), the web UI access key (while the web UI is on) and the database
+              credentials. If one is missing, the deployment waits and `cpln logs` shows nothing at all.
           - path: auth.apiKeySecretName
             type: ref
             label: API key secret
@@ -94,6 +95,66 @@ steps:
             mirrors: hindsight.validateAuth
             paths: [auth.apiKeySecretName]
             message: The API key secret is required.
+      - title: LLM key
+        when: self.llm.provider != 'mock' && self.llm.provider != 'none'
+        fields:
+          - id: llmAuth
+            virtual: true
+            type: enum
+            label: LLM authentication
+            widget: segmented
+            required: true
+            init: >-
+              (self.llm.apiKeySecretName == null || self.llm.apiKeySecretName == '') &&
+              (self.llm.provider in ['ollama', 'lmstudio'] || (self.llm.baseUrl != null && self.llm.baseUrl != '')) ? 'none' : 'key'
+            description: >-
+              Choose No key for Ollama or a self-hosted server without authentication; you set its URL in the
+              Models step.
+            options:
+              - value: key
+                label: API key secret
+              - value: none
+                label: No key
+                set: { llm.apiKeySecretName: "" }
+          - path: llm.apiKeySecretName
+            type: ref
+            label: LLM API key secret
+            required: true
+            when: ui.llmAuth == 'key'
+            description: An opaque secret holding the LLM provider's API key (OpenAI by default).
+            help: Rotating it does not restart Hindsight; force a redeployment of the API and the workers afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-llm-key'"
+      - title: Web UI access key
+        when: self.ui.enabled
+        fields:
+          - path: ui.accessKeySecretName
+            type: ref
+            label: Access key secret
+            required: true
+            description: An opaque secret holding the key you type to log in to the web UI (turn the web UI off in the Access step).
+            help: >-
+              Create it with `printf '%s' "$(openssl rand -hex 16)" | cpln secret create-opaque --name SECRET_NAME
+              --encoding plain -f -`. Rotating it takes effect after a forced redeployment of the web UI.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-ui-key'"
+        rules:
+          - rule: self.ui.accessKeySecretName != null && self.ui.accessKeySecretName != ''
+            mirrors: hindsight.validateUi
+            paths: [ui.accessKeySecretName]
+            message: The access key secret is required.
       - title: Database
         fields:
           - id: dbMode
@@ -128,11 +189,17 @@ steps:
             when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - type: note
+            severity: warning
+            when: oldSelf != null && self.postgresHA.enabled != oldSelf.postgresHA.enabled
+            text: >-
+              Switching the database type deploys a new, empty database; the memory banks in the current one are
+              not moved.
+          - type: note
             text: Uninstalling deletes the database volume, and with it every memory bank.
       - id: single
         title: Single-instance PostgreSQL
         when: self.pgvector.enabled
-        description: One PostgreSQL replica with pgvector. Its server, storage, network and backups follow the Advanced step.
+        description: One PostgreSQL replica with pgvector. Its server, storage, network and backups follow the Access step.
         fields:
           - type: note
             when: >-
@@ -165,7 +232,7 @@ steps:
       - id: ha
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
-        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Hindsight connects through. Their settings follow the Advanced step.
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Hindsight connects through. Their settings follow the Access step.
         fields:
           - type: note
             when: >-
@@ -211,12 +278,6 @@ steps:
         message: >-
           PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
           does not change the existing user or password.
-      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
-        severity: warning
-        paths: [postgresHA.enabled]
-        message: >-
-          Switching the database type deploys a new, empty database; the memory banks in the current one are not
-          moved.
 
   - id: models
     title: Models
@@ -239,8 +300,14 @@ steps:
             type: string
             label: Model
             required: true
+            when: self.llm.provider != 'none'
             suggestions: [gpt-5-mini, gpt-5, claude-sonnet-4-5, gemini-2.5-flash]
-            description: Must support JSON-schema (structured) output.
+            description: >-
+              Must support JSON-schema (structured) output.
+            help: >-
+              Hindsight asks for up to 65k output tokens per retain call. For a model with a smaller output limit,
+              add `HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS` (above 3000) under Extra environment variables in the
+              Hindsight step.
           - path: llm.baseUrl
             type: string
             label: Base URL
@@ -248,22 +315,6 @@ steps:
             description: >-
               Leave empty for the provider's own endpoint. For a model server in Control Plane use its internal
               name, for example `http://RELEASE-ollama.GVC.cpln.local:11434/v1`.
-          - path: llm.apiKeySecretName
-            type: ref
-            label: API key secret
-            when: self.llm.provider != 'mock' && self.llm.provider != 'none'
-            description: >-
-              An opaque secret holding the provider's API key. Leave empty for Ollama or a self-hosted server
-              without authentication.
-            help: Rotating it does not restart Hindsight; force a redeployment of the API and the workers afterwards.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              allowCreate: true
-              create:
-                suggestName: "context.releaseName + '-hindsight-llm-key'"
         rules:
           - rule: self.llm.provider.matches('^[a-z0-9-]+$')
             mirrors: hindsight.validateLlm
@@ -277,12 +328,16 @@ steps:
             message: >-
               This provider cannot run in this deployment (llamacpp is not in the image; the others need an
               interactive login). Use an API-key provider, or Ollama or vLLM through a base URL.
-          - rule: >-
+          # With an API key chosen, the key field's REQUIRED covers this check.
+          - when: ui.llmAuth == 'none'
+            rule: >-
               (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '') || (self.llm.baseUrl != null && self.llm.baseUrl != '') ||
               self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none']
             mirrors: hindsight.validateLlm
-            paths: [llm.apiKeySecretName]
-            message: Choose the API key secret, or set a base URL for a server without authentication.
+            paths: [llm.baseUrl]
+            message: >-
+              With No key chosen in the Credentials step, set the base URL of a server without authentication, or go
+              back and choose the LLM API key secret.
           - rule: "(self.llm.model != null && self.llm.model != '') || self.llm.provider == 'none'"
             mirrors: hindsight.validateLlm
             paths: [llm.model]
@@ -293,6 +348,13 @@ steps:
             message: Use a URL that starts with http:// or https://, with no spaces and no trailing /.
       - title: Embeddings
         fields:
+          - type: note
+            severity: warning
+            when: oldSelf == null
+            text: >-
+              Choose the embedding model now. Stored memories keep the vectors of the model that wrote them, so
+              changing it after install means re-embedding every memory with the CLI ("Changing the embedding
+              model" in the README); this wizard does not allow the change on upgrade.
           - path: embeddings.provider
             type: enum
             label: Embeddings
@@ -375,7 +437,7 @@ steps:
 
   - id: server
     title: Hindsight
-    description: The API image, its replicas and compute, and how long a request may run.
+    description: The API image, its replicas and compute, the optional workers and extra settings.
     sections:
       - title: API server
         docs: "#configuration"
@@ -412,7 +474,9 @@ steps:
             min: 1
             max: 3600
             suggestions: [60, 300, 900]
-            description: The longest request before it is cut; a synchronous retain or reflect waits on the LLM.
+            description: >-
+              The longest request before it is cut; a synchronous retain or reflect waits on the LLM. A small local
+              model on CPU can need minutes for one reflect: raise it (up to 3600).
           - path: hindsight.dbPoolMaxSize
             type: integer
             label: Database connections per process
@@ -483,127 +547,8 @@ steps:
             mirrors: hindsight.validateWorkerCpu
             paths: [worker.resources]
             message: Raise the worker's minimum CPU to at least a quarter of its maximum.
-
-  - id: ui
-    title: Web UI
-    description: The Hindsight web UI for browsing banks, entities and documents and trying recall and reflect.
-    sections:
-      - id: web-ui
-        title: Web UI
-        toggle: ui.enabled
-        docs: "#connecting"
-        description: >-
-          A web UI behind an access key you type to log in. It calls the API inside the GVC with the API key,
-          so anyone who logs in can read and change every bank.
-        fields:
-          - path: ui.accessKeySecretName
-            type: ref
-            label: Access key secret
-            required: true
-            description: An opaque secret holding the key you type to log in.
-            help: >-
-              Create it with `printf '%s' "$(openssl rand -hex 16)" | cpln secret create-opaque --name SECRET_NAME
-              --encoding plain -f -`. Rotating it takes effect after a forced redeployment of the web UI.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              allowCreate: true
-              create:
-                suggestName: "context.releaseName + '-hindsight-ui-key'"
-          - path: publicAccess.ui
-            type: boolean
-            label: Serve the web UI on a public HTTPS endpoint
-            description: >-
-              A public `*.cpln.app` URL; the access key is still required. Off, reach it with `cpln port-forward`.
-              Firewall changes take 30 seconds to a few minutes to take effect.
-          - path: ui.image
-            type: string
-            format: image
-            label: Web UI image
-            required: true
-            advanced: true
-            description: Keep its version the same as the API image.
-          - path: ui.resources
-            type: resources
-            label: Web UI resources
-            required: true
-            advanced: true
-            cpu: { min: 25m }
-            memory: { min: 128Mi }
-        rules:
-          - rule: self.ui.accessKeySecretName != null && self.ui.accessKeySecretName != ''
-            mirrors: hindsight.validateUi
-            paths: [ui.accessKeySecretName]
-            message: The access key secret is required.
-
-  - id: access
-    title: Access
-    description: The API's public endpoint and which workloads can reach it inside Control Plane.
-    sections:
-      - title: Public endpoint
-        docs: "#connecting"
-        fields:
-          - path: publicAccess.api
-            type: boolean
-            label: Serve the API and MCP on a public HTTPS endpoint
-            description: >-
-              A public `*.cpln.app` URL for MCP clients and agents outside Control Plane; the API key is still
-              required. Firewall changes take 30 seconds to a few minutes to take effect.
-      - title: Internal access
-        fields:
-          - path: internalAccess.type
-            type: enum
-            label: Who can connect internally
-            widget: cards
-            required: true
-            description: The web UI, when on, is always allowed. Firewall changes take 30 seconds to a few minutes to take effect.
-            options:
-              - value: none
-                label: None
-                description: No workload can connect.
-              - value: same-gvc
-                label: Same GVC
-                description: Any workload in this GVC.
-              - value: same-org
-                label: Same org
-                description: Any workload in this org.
-              - value: workload-list
-                label: Specific workloads
-                description: Only the workloads listed below.
-          - path: internalAccess.workloads
-            type: list
-            label: Allowed workloads
-            when: self.internalAccess.type == 'workload-list'
-            widget: tags
-            unique: true
-            item:
-              type: ref
-              ref:
-                kind: workload
-                gvc: any
-                format: relativeLink
-                mustExist: warning
-        rules:
-          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
-            mirrors: hindsight.validateInternalAccess
-            paths: [internalAccess.type]
-            message: Choose None, Same GVC, Same org or Specific workloads.
-          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
-            mirrors: hindsight.validateInternalAccess
-            paths: [internalAccess.workloads]
-            message: List at least one workload, or choose another option.
-          - rule: self.internalAccess.type != 'none' || !self.ui.enabled
-            mirrors: hindsight.validateInternalAccess
-            paths: [internalAccess.type]
-            message: '"None" also blocks the web UI, which calls the API inside the GVC; choose another option or turn the web UI off.'
-
-  - id: advanced
-    title: Advanced
-    description: Extra Hindsight settings, plain and secret, applied to the API and the workers.
-    sections:
       - title: Extra environment variables
+        advanced: true
         fields:
           - path: hindsight.extraEnv
             type: list
@@ -613,8 +558,9 @@ steps:
             newItem: { name: "", value: "" }
             itemLabel: "item.name"
             description: >-
-              Plain upstream settings (`HINDSIGHT_API_*`), for example `HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS`
-              for a model with a small output limit. Put keys and tokens in Extra secrets instead.
+              Plain upstream settings (`HINDSIGHT_API_*`) for the API and the workers, for example
+              `HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS` for a model with a small output limit. Put keys and tokens
+              in Extra secrets instead.
             item:
               type: object
               fields:
@@ -629,6 +575,7 @@ steps:
                   label: Value
                   required: true
       - title: Extra secrets
+        advanced: true
         fields:
           - id: extraSecretsMode
             virtual: true
@@ -710,6 +657,95 @@ steps:
         mirrors: hindsight.validateEnvNames
         paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
         message: Each name may appear only once across the secret keys and the extra variables.
+
+  - id: access
+    title: Access and web UI
+    description: The public endpoints of the API and the web UI, and which workloads can reach the API inside Control Plane.
+    sections:
+      - title: Public API endpoint
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.api
+            type: boolean
+            label: Serve the API and MCP on a public HTTPS endpoint
+            description: >-
+              A public `*.cpln.app` URL for MCP clients and agents outside Control Plane; the API key is still
+              required. Firewall changes take 30 seconds to a few minutes to take effect.
+      - id: web-ui
+        title: Web UI
+        toggle: ui.enabled
+        description: >-
+          A web UI for browsing banks, entities and documents and trying recall and reflect, behind the access key
+          from the Credentials step. It calls the API inside the GVC with the API key, so anyone who logs in can
+          read and change every bank.
+        fields:
+          - path: publicAccess.ui
+            type: boolean
+            label: Serve the web UI on a public HTTPS endpoint
+            description: >-
+              A public `*.cpln.app` URL; the access key is still required. Off, reach it with `cpln port-forward`.
+              Firewall changes take 30 seconds to a few minutes to take effect.
+          - path: ui.image
+            type: string
+            format: image
+            label: Web UI image
+            required: true
+            advanced: true
+            description: Keep its version the same as the API image.
+          - path: ui.resources
+            type: resources
+            label: Web UI resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 128Mi }
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: The web UI, when on, is always allowed. Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+          - rule: self.internalAccess.type != 'none' || !self.ui.enabled
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.type]
+            message: '"None" also blocks the web UI, which calls the API inside the GVC; choose another option or turn the web UI off.'
 
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:

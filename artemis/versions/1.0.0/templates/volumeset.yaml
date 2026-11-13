@@ -1,10 +1,26 @@
----
 kind: volumeset
 name: {{ include "artemis.volume.name" . }}
 description: Apache Artemis volumeset
 gvc: {{ .Values.global.cpln.gvc }}
 tags: {{- include "artemis.tags" . | nindent 2 }}
 spec:
+  {{- if .Values.ha.enabled }}
+  {{- /*
+    ha.enabled: ONE shared filesystem per location, mounted by both brokers. The
+    shared-store HA lock lives on it, so the backup can take over the primary's
+    journal. Both fields declared: the API backfills performanceClass: shared.
+    Shared volumes take no snapshots, so no snapshots block.
+  */}}
+  fileSystemType: shared
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: shared
+  {{- else }}
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity }}
   {{- if .Values.volumeset.autoscaling.enabled }}
@@ -20,3 +36,4 @@ spec:
     {{- if .Values.volumeset.snapshots.schedule }}
     schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
     {{- end }}
+  {{- end }}

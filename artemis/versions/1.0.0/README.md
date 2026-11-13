@@ -1,11 +1,12 @@
 # Apache Artemis
 
-Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, AMQP 1.0, MQTT, STOMP and OpenWire clients. This template runs one broker in one location, or one broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror, either active-passive (one location serves clients and the other takes over when it is down) or active-active (both serve clients).
+Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, AMQP 1.0, MQTT, STOMP and OpenWire clients. This template runs one broker in one location, a primary and a backup broker in one location (`ha.enabled`), or one broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror, either active-passive (one location serves clients and the other takes over when it is down) or active-active (both serve clients).
 
 ## Architecture
 
 - **Workload** — a `stateful` workload running the official `apache/artemis` image, one broker in each location listed in `locations` (nothing runs in the GVC's other locations). Each broker gets a stable per-location address (`replica-0.…`).
 - **Volume set** — one volume per broker at `/var/lib/artemis-instance`, holding the broker configuration and the message journal, with daily snapshots.
+- **High availability (`ha.enabled`, one location)** — two brokers, `replica-0` (primary) and `replica-1` (backup), share one `shared` volume at `/var/lib/artemis-data` holding the journal, bindings, paging and large messages. The broker holding the lock on it serves clients; the other waits and takes it over within seconds when the active broker stops. No snapshots (shared volumes take none).
 - **Identity + policies** — `reveal` on exactly your credentials secret; with two locations, also `view` on the install GVC, so each broker can check at start that its peer's location exists.
 - **Mirror (two locations)** — each broker copies every message, acknowledgement and queue creation or deletion to the other over port 61617. A restarted broker refuses clients until it has caught up from its peer.
 - **Mirror mode** — `active-passive` (default): the primary location serves clients; the other broker keeps its client ports closed, opens them when the primary broker has been unreachable for `mirror.takeoverSeconds`, and closes them again once the primary is back and caught up. `active-active`: both brokers serve clients.
@@ -48,6 +49,14 @@ locations:
 credentialsSecretName: my-artemis-credentials
 ```
 
+### High availability
+
+```yaml
+ha:
+  enabled: false  # true: a primary and a backup broker in your ONE location share a volume; the backup takes over in seconds
+                  # choose at install: changing it later is not supported, and messages do not carry over to a new release
+```
+
 ### Mirror
 
 ```yaml
@@ -74,8 +83,8 @@ resources:
 
 ```yaml
 volumeset:
-  capacity: 10  # GiB per broker (minimum 10)
-  snapshots:
+  capacity: 10  # GiB per broker (minimum 10); with ha.enabled one shared volume holds both brokers' data
+  snapshots:                # not taken with ha.enabled (shared volumes have no snapshots)
     schedule: "0 3 * * *"   # daily at 3am UTC; at most hourly; "" turns them off
     retentionDuration: 7d   # how long each snapshot is kept
   autoscaling:
@@ -107,6 +116,7 @@ Log in with the `username` and `password` from your credentials secret. `RELEASE
 | STOMP | `RELEASE-artemis.GVC.cpln.local:61613` |
 | MQTT | `RELEASE-artemis.GVC.cpln.local:1883` |
 | One location's broker | `replica-0.RELEASE-artemis.LOCATION.GVC.cpln.local:61616` |
+| `ha.enabled` (AMQP, qpid-jms) | `failover:(amqp://replica-0.RELEASE-artemis.LOCATION.GVC.cpln.local:61616,amqp://replica-1.RELEASE-artemis.LOCATION.GVC.cpln.local:61616)?failover.maxReconnectAttempts=-1` |
 | Web console (private) | `cpln port-forward RELEASE-artemis 8161:8161 --gvc GVC`, then `http://localhost:8161/console` |
 | Web console (public) | `status.canonicalEndpoint` from `cpln workload get RELEASE-artemis --gvc GVC -o yaml` |
 
@@ -141,7 +151,10 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 ## Important Notes
 
 - **Create the credentials secret first.** Without it the deployment waits and `cpln logs` is empty; `cpln workload get-deployments RELEASE-artemis --gvc GVC -o yaml` shows the missing secret in `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
-- **An upgrade that changes the workload restarts the brokers in every location at the same time**, so clients are refused until they are back.
+- **An upgrade that changes the workload restarts the brokers in every location at the same time**, so clients are refused until they are back. With `ha.enabled` the two brokers restart one at a time instead, which causes one or two short handovers.
+- **Choose `ha.enabled` at install.** A volume set's type cannot be changed in place, so turning it on or off for an existing release is not supported; to switch, install a new release. Messages on the old release do not carry over.
+- **`ha.enabled` supports AMQP failover clients only**, with the URL above listing both brokers; the workload address can reach the waiting broker, and Core and OpenWire clients are not supported for failover. A message in flight during a takeover can be delivered again.
+- **`ha.enabled` trades send speed for availability:** every persistent write is synced to a shared network filesystem, so a producer sends persistent messages roughly ten times more slowly than to a single broker; run producers in parallel for more throughput.
 - A restarted broker refuses clients until it has caught up from its peer, or until `mirror.catchUpTimeoutSeconds` has passed.
 - **Active-passive takeover and failback.** When the primary broker has been unreachable for `mirror.takeoverSeconds`, the other broker opens and failover clients move to it. A primary that restarts within that time (a crash restart usually does) is not taken over: clients wait for it to come back, and a primary that is up but still catching up is not taken over either. When the primary returns, it catches up from the other broker, opens, and the other broker closes again, which moves clients back. Messages the primary had not yet copied when it went down are delivered after it returns, so consumers must tolerate a redelivered message. If the link between the locations breaks while both brokers are up, the other broker also opens after the takeover delay, and both serve clients until the link is back.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.

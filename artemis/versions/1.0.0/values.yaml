@@ -29,6 +29,11 @@ mirror:
   takeoverSeconds: 60         # active-passive: how long the primary broker must be unreachable before the other location opens
   catchUpTimeoutSeconds: 180  # a restarted broker opens client ports once caught up from its peer, or after this long
 
+# ─── High availability (one location) ─────────────────────────────────────────
+ha:
+  enabled: false  # true: a primary and a backup broker in your ONE location share a volume; the backup takes over in seconds
+                  # choose at install: changing it later is not supported, and messages do not carry over to a new release
+
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:
   cpu: 1000m
@@ -36,8 +41,8 @@ resources:
 
 # ─── Storage ──────────────────────────────────────────────────────────────────
 volumeset:
-  capacity: 10  # GiB per broker (minimum 10)
-  snapshots:
+  capacity: 10  # GiB per broker (minimum 10); with ha.enabled one shared volume holds both brokers' data
+  snapshots:                # not taken with ha.enabled (shared volumes have no snapshots)
     schedule: "0 3 * * *"   # daily at 3am UTC; at most hourly; "" turns them off
     retentionDuration: 7d   # how long each snapshot is kept
   autoscaling:

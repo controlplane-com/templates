@@ -32,6 +32,10 @@ spec:
         - name: ARTEMIS_TAKEOVER
           value: {{ .Values.mirror.takeoverSeconds | int | toString | quote }}
         {{- include "artemis.locationEnv" . | nindent 8 }}
+        {{- if .Values.ha.enabled }}
+        - name: ARTEMIS_HA
+          value: "true"
+        {{- end }}
       {{- /*
         8161 is listed FIRST: with publicAccess on, the canonical endpoint serves
         the first port, which must be the web console. 5445 (legacy HornetQ) is
@@ -58,6 +62,26 @@ spec:
         nothing beyond readiness, and a wrong one would kill a broker mid journal
         load.
       */}}
+      {{- if .Values.ha.enabled }}
+      {{- /*
+        ha.enabled: ready while the broker JVM is alive (the start script writes
+        its pid). No port is open on every role: a waiting backup has no client
+        ports, and a waiting PRIMARY (after a takeover) not even the console, so a
+        port probe would have the platform restart it in a loop; a probe that is
+        ready only on the ACTIVE broker stalls every rollout at the backup.
+      */}}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - "-c"
+            - "kill -0 `cat /tmp/artemis/broker.pid`"
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 3
+        successThreshold: 1
+        failureThreshold: 3
+      {{- else }}
       readinessProbe:
         tcpSocket:
           port: 61617
@@ -66,15 +90,18 @@ spec:
         timeoutSeconds: 3
         successThreshold: 1
         failureThreshold: 3
+      {{- end }}
       volumes:
-        - path: /var/lib/artemis-instance
+        {{- /* ha.enabled: only the data dirs are on the shared volume; each broker rebuilds its instance (etc/) locally every boot */}}
+        - path: {{ if .Values.ha.enabled }}/var/lib/artemis-data{{ else }}/var/lib/artemis-instance{{ end }}
           recoveryPolicy: retain
           uri: cpln://volumeset/{{ include "artemis.volume.name" . }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "artemis.identity.name" . }}
   defaultOptions:
     {{- /*
       minScale/maxScale 0: a GVC location this release does not list runs
-      NOTHING. localOptions below runs one broker in each listed location.
+      NOTHING. localOptions below runs one broker in each listed location, or
+      with ha.enabled a primary (replica-0) and a backup (replica-1).
     */}}
     autoscaling:
       maxConcurrency: 0
@@ -88,13 +115,14 @@ spec:
     suspend: false
     timeoutSeconds: 5
   localOptions:
+    {{- $n := 1 }}{{ if .Values.ha.enabled }}{{ $n = 2 }}{{ end }}
     {{- range .Values.locations }}
     - location: //location/{{ .name }}
       autoscaling:
         maxConcurrency: 0
-        maxScale: 1
+        maxScale: {{ $n }}
         metric: disabled
-        minScale: 1
+        minScale: {{ $n }}
         scaleToZeroDelay: 300
         target: 100
       capacityAI: false
@@ -152,7 +180,7 @@ spec:
     direct:
       enabled: false
       ports: []
-    replicaDirect: true  # a stable per-location address (replica-0...) for the mirror
+    replicaDirect: true  # stable per-replica addresses (replica-0...) for the mirror and the HA pair
   securityOptions:
     filesystemGroupId: 1001  # the image runs as uid/gid 1001; the volume mounts root-owned
   supportDynamicTags: false

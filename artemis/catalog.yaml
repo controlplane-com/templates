@@ -8,11 +8,10 @@ topology: multi-location
 
 summary: >-
   Apache Artemis, the successor to ActiveMQ Classic: a JMS, MQTT, STOMP and OpenWire message broker
-  that speaks AMQP 1.0, unlike RabbitMQ's AMQP 0-9-1. It runs one broker in one location, or one
-  broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror, active-passive
-  (a standby location takes over when the primary is down, and hands back when it returns) or
-  active-active (both locations accept writes). Failover clients move to the serving location. Pick it for JMS or AMQP 1.0 queues that survive a region loss, not for a
-  retained, replayable log.
+  that speaks AMQP 1.0, unlike RabbitMQ's AMQP 0-9-1. It runs one broker; a primary and a backup in
+  one location sharing a volume, the backup taking over in seconds; or one broker in each of two
+  locations kept in sync by a two-way AMQP mirror, active-passive or active-active. Pick it for JMS
+  or AMQP 1.0 queues that survive a broker or region loss, not for a retained, replayable log.
 
 keywords:
   - activemq
@@ -32,11 +31,14 @@ keywords:
   - active-passive
   - active-active
   - failover
+  - high availability
+  - primary backup
   - qpid-jms
 
 useCases:
   - Run a JMS broker for Java applications
   - Keep a standby broker in a second region for disaster recovery
+  - Run a backup broker that takes over within seconds in one location
   - Keep a message broker writable when a whole region goes down
   - Accept messages in two regions with per-region queues
   - Replace an ActiveMQ Classic broker

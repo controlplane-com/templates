@@ -10,7 +10,9 @@ umask 077
 INST=/var/lib/artemis-instance
 HOME_BIN=/opt/artemis/bin/artemis
 PROPS=/tmp/artemis/broker.properties
+PIDFILE=/tmp/artemis/broker.pid
 log() { echo "[artemis] $*"; }
+mkdir -p /tmp/artemis
 
 ME="${CPLN_LOCATION##*/}"
 WL="${CPLN_WORKLOAD##*/}"
@@ -98,9 +100,60 @@ if [ -n "${PEERLOC}" ]; then
   fi
 fi
 
+# --- ha.enabled: a shared-store primary/backup pair in this location --------
+# replica-0 starts as the primary, replica-1 as the backup. The journal,
+# bindings, paging and large messages live on the SHARED volume; whichever
+# broker holds the file lock on it is active and opens the client ports, the
+# other waits for the lock. The instance (etc/) is local and rebuilt from the
+# values and the secret on every boot.
+# Backup allow-failback=false: with failback, a restarted primary takes the
+# lock back and the backup stops for good (its console stays up), leaving the
+# pair without a backup. Without it, the roles simply swap and the restarted
+# broker becomes the one waiting. failover-on-shutdown=true on both: a broker
+# stopped by a rollout hands over instead of leaving the pair with no active
+# broker until it is back.
+if [ "${ARTEMIS_HA:-}" = "true" ]; then
+  IDX="${HOSTNAME##*-}"
+  case "${IDX}" in 0|1) : ;; *) log "FATAL: ha.enabled expects replicas 0 and 1, this is '${HOSTNAME}'"; exit 1 ;; esac
+  SELF="replica-${IDX}.${WL}.${ME}.${GVC}.cpln.local"
+  OTHER="replica-$((1 - IDX)).${WL}.${ME}.${GVC}.cpln.local"
+  HAROLE=primary; HAARG=""
+  [ "${IDX}" = 1 ] && { HAROLE=backup; HAARG="--backup"; }
+  INST=/tmp/artemis/instance
+  DATA=/var/lib/artemis-data/broker
+  mkdir -p "${DATA}" || { log "FATAL: cannot create ${DATA} on the shared volume"; exit 1; }
+  rm -rf "${INST}"
+  log "ha: replica ${IDX} starts as the ${HAROLE}; peer ${OTHER}; shared data ${DATA}"
+  "${HOME_BIN}" create --user "${ARTEMIS_USER}" --password "${ARTEMIS_PASSWORD}" --silent --require-login \
+    --http-host 0.0.0.0 --relax-jolokia --java-memory "${ARTEMIS_HEAP_MB}M" \
+    --shared-store ${HAARG} --failover-on-shutdown --clustered \
+    --cluster-user "${ARTEMIS_USER}" --cluster-password "${ARTEMIS_PASSWORD}" \
+    --host "${SELF}" --staticCluster "tcp://${OTHER}:61616" \
+    --data "${DATA}" --nio --no-autotune "${INST}" >/dev/null \
+    || { log "FATAL: artemis create failed"; exit 1; }
+  # Acceptors listen on every interface; the connectors keep this replica's
+  # address, which is what the peer and the clients are told.
+  sed -i "/<acceptor /s#tcp://${SELF}:#tcp://0.0.0.0:#" "${INST}/etc/broker.xml"
+  if [ "${HAROLE}" = backup ]; then
+    if grep -q '<backup/>' "${INST}/etc/broker.xml"; then
+      sed -i 's#<backup/>#<backup><allow-failback>false</allow-failback></backup>#' "${INST}/etc/broker.xml"
+    else
+      sed -i 's#<backup>#<backup><allow-failback>false</allow-failback>#' "${INST}/etc/broker.xml"
+    fi
+    grep -q '<allow-failback>false</allow-failback>' "${INST}/etc/broker.xml" \
+      || { log "FATAL: could not set allow-failback=false on the backup"; exit 1; }
+  fi
+  grep -q '<failover-on-shutdown>true</failover-on-shutdown>' "${INST}/etc/broker.xml" \
+    || { log "FATAL: the ${HAROLE} is missing failover-on-shutdown=true"; exit 1; }
+  if grep -q "<acceptor .*tcp://${SELF}:" "${INST}/etc/broker.xml"; then
+    log "FATAL: could not bind the acceptors to 0.0.0.0"; exit 1
+  fi
+fi
+
 # --- First boot: create the instance ---------------------------------------
 # The same `artemis create` the image's docker-run.sh runs, with the arguments
 # quoted, run only while the engine-created etc/broker.xml is absent.
+# (ha.enabled has just created it above.)
 if [ ! -f "${INST}/etc/broker.xml" ]; then
   log "creating the broker instance in ${INST}"
   "${HOME_BIN}" create --user "${ARTEMIS_USER}" --password "${ARTEMIS_PASSWORD}" --silent --require-login \
@@ -138,7 +191,8 @@ sed -i -E "s/-Xmx[0-9]+[GgMmKk]?/-Xmx${ARTEMIS_HEAP_MB}M/; s/-Xms[0-9]+[GgMmKk]?
 # The public endpoint ends TLS at the edge, so the browser's https Origin
 # reaches Jolokia over plain HTTP and is discarded, leaving the console empty
 # after login. Jolokia's own access file says to enable <ignore-scheme/> for a
-# TLS-terminating proxy. The file lives on the volume, so this runs every boot.
+# TLS-terminating proxy. The file lives on the volume (or, with ha.enabled, is
+# rebuilt), so this runs every boot.
 sed -i 's#<!--[[:space:]]*ignore-scheme/[[:space:]]*-->#<ignore-scheme/>#' etc/jolokia-access.xml
 grep -q '<ignore-scheme/>' etc/jolokia-access.xml \
   || log "WARNING: could not enable <ignore-scheme/> in etc/jolokia-access.xml; the public console may be empty after login"
@@ -147,6 +201,11 @@ grep -q '<ignore-scheme/>' etc/jolokia-access.xml \
 # Client acceptors start CLOSED; the gate below opens them. The mirror has its
 # own always-open acceptor on 61617, which is also the readiness port.
 mkdir -p "${PROPS%/*}"
+if [ "${ARTEMIS_HA:-}" = "true" ]; then
+  # ha.enabled: no mirror and no gate. The client acceptors open on whichever
+  # broker holds the lock, as soon as it activates.
+  printf 'name=%s\nacceptorConfigurations.hornetq.params.autoStart=false\n' "${ME}-${IDX}" > "${PROPS}"
+else
 cat > "${PROPS}" <<PROPS_EOF
 name=${ME}
 acceptorConfigurations.artemis.params.autoStart=false
@@ -172,6 +231,7 @@ AMQPConnections.${C}.connectionElements.mirror.queueCreation=true
 AMQPConnections.${C}.connectionElements.mirror.queueRemoval=true
 PROPS_EOF
 fi
+fi
 
 # --- Gate: open the client acceptors ----------------------------------------
 # ROLE is single (one location), active (active-active, or the primary of
@@ -188,6 +248,7 @@ fi
 #   its own catch-up timeout as well); close again once the primary serves
 #   again, which moves failover clients back to it.
 ROLE=single
+[ "${ARTEMIS_HA:-}" = "true" ] && ROLE=ha
 if [ -n "${PEERLOC}" ]; then
   ROLE=active
   if [ "${ARTEMIS_MIRROR_MODE}" = "active-passive" ] && [ "${ME}" != "${ARTEMIS_PRIMARY}" ]; then ROLE=passive; fi
@@ -291,11 +352,17 @@ standby() {
     sleep 5
   done
 }
-if [ "${ROLE}" = "passive" ]; then standby & else gate & fi
+case "${ROLE}" in
+  passive) standby & ;;
+  ha) : ;;
+  *) gate & ;;
+esac
 
 # --- Run the broker as a child, forwarding SIGTERM for a graceful stop -------
 ./bin/artemis run --properties "${PROPS}" &
 pid=$!
+# The ha.enabled readiness probe checks that this process is alive.
+echo "${pid}" > "${PIDFILE}"
 stopping=0
 trap 'stopping=1; kill -TERM "${pid}" 2>/dev/null' TERM INT
 wait "${pid}"; rc=$?

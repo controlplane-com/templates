@@ -14,9 +14,14 @@ steps:
     sections:
       - fields:
           - type: note
-            when: context.mode == 'upgrade'
+            when: context.mode == 'upgrade' && !self.ha.enabled
             text: >-
               An upgrade restarts every broker at once; clients are refused until the brokers are back.
+          - type: note
+            when: context.mode == 'upgrade' && self.ha.enabled
+            text: >-
+              An upgrade restarts the two brokers one at a time. Each restart of the active broker hands
+              its clients to the other one, which takes a couple of seconds.
           - type: note
             when: >-
               context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
@@ -57,6 +62,23 @@ steps:
                   message: >-
                     This location is not on the target GVC, so no broker would run there. Add it to the
                     GVC or pick one of its locations.
+      - id: ha
+        title: High availability
+        docs: "#high-availability"
+        when: size(self.locations) == 1 || self.ha.enabled
+        fields:
+          - path: ha.enabled
+            type: boolean
+            label: Primary and backup broker
+            description: >-
+              Runs a primary and a backup broker in your one location on a shared volume. When the active
+              broker stops, the other takes over in about two seconds. Choose at install: it cannot be
+              changed later.
+            help: >-
+              Persistent messages are sent much more slowly than on a single broker, because every write
+              is synced to a shared network filesystem. Clients must use AMQP failover URLs that list both
+              brokers; Core-protocol (JMS `tcp://`) clients do not follow a takeover. One location only:
+              it does not combine with the two-location mirror.
       - id: mirror
         title: Mirror
         docs: "#mirror"
@@ -170,6 +192,17 @@ steps:
         mirrors: artemis.validateResources
         paths: [resources]
         message: Give each broker its memory as a whole number of `Mi` or `Gi`, at least `1Gi`.
+      - rule: "!self.ha.enabled || size(self.locations) == 1"
+        mirrors: artemis.validateHa
+        paths: [ha.enabled]
+        message: >-
+          A primary and backup broker run in one location and do not combine with the two-location mirror.
+          List one location, or turn this off.
+      - rule: oldSelf == null || self.ha.enabled == oldSelf.ha.enabled
+        paths: [ha.enabled]
+        message: >-
+          Keep this as installed. It changes the broker's volume type, which an existing volume cannot be
+          changed to, and messages do not carry over. To switch, install a new release.
       - rule: size(self.locations) != 1
         severity: info
         paths: [locations]
@@ -238,7 +271,7 @@ steps:
 
   - id: storage
     title: Storage
-    description: The volume of each broker, its snapshots and its growth.
+    description: The broker volumes, their snapshots and their growth.
     sections:
       - fields:
           - path: volumeset.capacity
@@ -252,13 +285,15 @@ steps:
             docs: "/reference/volumeset#capacity-and-billing"
             description: >-
               While one location is down, the other broker keeps the messages to copy to it, so its volume
-              grows with traffic for as long as the outage lasts.
+              grows with traffic for as long as the outage lasts. With a primary and backup broker, one
+              shared volume holds the data of both.
       - id: snapshots
         title: Volume snapshots
         description: >-
           Snapshots of every broker's volume. A final snapshot is taken when the volume set is deleted,
           with or without a schedule.
         docs: "/reference/volumeset#snapshots"
+        when: "!self.ha.enabled"
         fields:
           - path: volumeset.snapshots.schedule
             type: string

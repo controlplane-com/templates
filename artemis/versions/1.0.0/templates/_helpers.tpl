@@ -160,6 +160,19 @@ Memory in Mi or Gi, at least 1Gi: the JVM heap is half of it.
 {{- end -}}
 
 {{/*
+ha.enabled runs a primary/backup pair in ONE location; it does not combine
+with the two-location mirror.
+*/}}
+{{- define "artemis.validateHa" -}}
+{{- if not (kindIs "bool" .Values.ha.enabled) -}}
+{{- fail (printf "artemis: ha.enabled must be true or false (got %v)." .Values.ha.enabled) -}}
+{{- end -}}
+{{- if and .Values.ha.enabled (ne (len .Values.locations) 1) -}}
+{{- fail "artemis: ha.enabled runs a primary/backup pair in one location and does not combine with the two-location mirror. List exactly one location, or set ha.enabled: false." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Mirror settings: the catch-up timeout, the mode, the active-passive primary
 (one of the listed locations) and the takeover delay.
 */}}
@@ -216,6 +229,7 @@ unconditionally rendered -- so `is validation still wired up?` is one grep.
 {{- include "artemis.validateLocations" . -}}
 {{- include "artemis.validateCredentials" . -}}
 {{- include "artemis.validateResources" . -}}
+{{- include "artemis.validateHa" . -}}
 {{- include "artemis.validateMirror" . -}}
 {{- include "artemis.validateAccess" . -}}
 {{- include "artemis.validateSnapshots" . -}}

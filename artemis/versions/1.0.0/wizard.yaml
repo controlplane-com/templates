@@ -96,7 +96,7 @@ steps:
             max: 1800
             suggestions: [60, 120, 300]
             description: >-
-              How long the primary must stop serving clients before the other location opens to them.
+              How long the primary broker must be unreachable before the other location opens to clients. A shorter primary restart is waited out.
           - type: note
             when: self.mirror.mode == 'active-active'
             text: >-

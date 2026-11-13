@@ -183,9 +183,10 @@ fi
 #   cannot be reached. A small backlog rather than exactly 0: while the peer is
 #   taking writes its mirror queue always holds a few events in flight.
 # passive: stay closed while the primary serves clients; open once the primary
-#   has not served for ARTEMIS_TAKEOVER seconds; close again once the primary
-#   serves again (it catches up from this broker first), which moves failover
-#   clients back to it.
+#   broker has been unreachable for ARTEMIS_TAKEOVER seconds (a primary that
+#   is up but still catching up is not taken over unless it stays closed past
+#   its own catch-up timeout as well); close again once the primary serves
+#   again, which moves failover clients back to it.
 ROLE=single
 if [ -n "${PEERLOC}" ]; then
   ROLE=active
@@ -193,12 +194,13 @@ if [ -n "${PEERLOC}" ]; then
 fi
 log "role: ${ROLE} (mirror mode ${ARTEMIS_MIRROR_MODE:-n/a}, primary ${ARTEMIS_PRIMARY:-n/a})"
 
+# jx JSON [HOST]: one Jolokia request to this broker, or to HOST's broker.
 jx() {
-  local b="$1" a
+  local b="$1" h="${2:-localhost}" a
   a=$(printf '%s:%s' "${ARTEMIS_USER}" "${ARTEMIS_PASSWORD}" | base64 -w0)
-  exec 4<>/dev/tcp/127.0.0.1/8161 || return 1
-  printf 'POST /console/jolokia/ HTTP/1.0\r\nHost: localhost\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' \
-    "$a" "${#b}" "$b" >&4
+  exec 4<>"/dev/tcp/${2:-127.0.0.1}/8161" || return 1
+  printf 'POST /console/jolokia/ HTTP/1.0\r\nHost: %s\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' \
+    "$h" "$a" "${#b}" "$b" >&4
   timeout 5 cat <&4
   exec 4<&-
 }
@@ -216,16 +218,19 @@ acceptors() {
     [ "${ok}" = 1 ] || log "WARNING: could not ${op} the ${a} acceptor"
   done
 }
-# serving HOST: does HOST answer an AMQP protocol header on its client port?
-# Real bytes, not a TCP connect: through the platform mesh a connect always
-# succeeds, and a closed acceptor answers nothing.
-serving() {
+# peer_state: the primary's state, read from its own broker over Jolokia
+# (an HTTP answer, not a TCP connect: through the platform mesh a connect
+# always succeeds). serving = its client acceptor is started; up = the broker
+# answers but its client acceptor is closed (starting or catching up);
+# down = no answer.
+peer_state() {
   local r
-  r=$(timeout 8 bash -c 'exec 5<>"/dev/tcp/$0/61616" || exit 1
-    printf "AMQP\x03\x01\x00\x00" >&5
-    IFS= read -r -t 6 -N 4 x <&5
-    printf "%s" "${x}"' "$1" 2>/dev/null)
-  [ "${r}" = "AMQP" ]
+  r=$(jx "{\"type\":\"read\",\"mbean\":\"org.apache.activemq.artemis:broker=\\\"${PEERLOC}\\\",component=acceptors,name=\\\"artemis\\\"\",\"attribute\":\"Started\"}" "${PEER}" 2>/dev/null)
+  case "${r}" in
+    *'"value":true'*) echo serving ;;
+    *'"status":200'*) echo up ;;
+    *) echo down ;;
+  esac
 }
 started() {
   until jx "{\"type\":\"read\",\"mbean\":\"${MB}\",\"attribute\":\"Started\"}" 2>/dev/null | grep -q '"value":true'; do sleep 2; done
@@ -257,20 +262,28 @@ gate() {
 }
 standby() {
   started
-  local open=0 since="" up=0
+  local open=0 down="" closed="" up=0 st T=${ARTEMIS_TAKEOVER:-60} C=${ARTEMIS_CATCHUP_TIMEOUT:-180}
   log "broker started; standing by -- client acceptors stay closed while the primary ${PEERLOC} serves clients"
   while true; do
-    if serving "${PEER}"; then
-      since=""; up=$((up + 1))
+    st=$(peer_state)
+    if [ "${st}" = serving ]; then
+      down=""; closed=""; up=$((up + 1))
       if [ "${open}" = 1 ] && [ "${up}" -ge 2 ]; then
         acceptors stop; open=0
         log "FAILBACK: primary ${PEERLOC} serves clients again -- client acceptors CLOSED"
       fi
     else
-      up=0; [ -z "${since}" ] && since=${SECONDS}
-      if [ "${open}" = 0 ] && [ $((SECONDS - since)) -ge "${ARTEMIS_TAKEOVER:-60}" ]; then
-        acceptors start; open=1
-        log "TAKEOVER: primary ${PEERLOC} has not served clients for $((SECONDS - since))s -- client acceptors OPEN"
+      up=0
+      [ -z "${closed}" ] && closed=${SECONDS}
+      if [ "${st}" = down ]; then [ -z "${down}" ] && down=${SECONDS}; else down=""; fi
+      if [ "${open}" = 0 ]; then
+        if [ -n "${down}" ] && [ $((SECONDS - down)) -ge "${T}" ]; then
+          acceptors start; open=1
+          log "TAKEOVER: primary ${PEERLOC} unreachable for $((SECONDS - down))s -- client acceptors OPEN"
+        elif [ $((SECONDS - closed)) -ge $((T + C)) ]; then
+          acceptors start; open=1
+          log "TAKEOVER: primary ${PEERLOC} up but not serving clients for $((SECONDS - closed))s -- client acceptors OPEN"
+        fi
       fi
     fi
     sleep 5

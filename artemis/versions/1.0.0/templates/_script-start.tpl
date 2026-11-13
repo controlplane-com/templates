@@ -195,11 +195,13 @@ fi
 log "role: ${ROLE} (mirror mode ${ARTEMIS_MIRROR_MODE:-n/a}, primary ${ARTEMIS_PRIMARY:-n/a})"
 
 # jx JSON [HOST]: one Jolokia request to this broker, or to HOST's broker.
+# HTTP/1.1 with the peer's own Host: the platform mesh answers an HTTP/1.0
+# request, or one for another host, with nothing.
 jx() {
   local b="$1" h="${2:-localhost}" a
   a=$(printf '%s:%s' "${ARTEMIS_USER}" "${ARTEMIS_PASSWORD}" | base64 -w0)
   exec 4<>"/dev/tcp/${2:-127.0.0.1}/8161" || return 1
-  printf 'POST /console/jolokia/ HTTP/1.0\r\nHost: %s\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' \
+  printf 'POST /console/jolokia/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' \
     "$h" "$a" "${#b}" "$b" >&4
   timeout 5 cat <&4
   exec 4<&-

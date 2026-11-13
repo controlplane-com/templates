@@ -31,7 +31,8 @@
 - Missing secret: no logs at all; check `cpln workload get-deployments … -o yaml` → `status.versions[].message`.
 - Two regions consuming the SAME queue get duplicates. Supported: per-region queues, or one consuming region. Not Kafka: no replay (point them to `kafka`).
 - Asked for three regions? Not possible: a three-broker mesh was measured to duplicate (brokers pass mirrored copies on to each other). Only revisited if upstream adds loop prevention.
-- "Refused for a while after a region came back" is the gate catching up. The plain internal name can route there during that window until internal routing (5354) lands; a failover URL avoids it.
+- "Refused for a while after a region came back" is the gate catching up.
+- The plain internal name `RELEASE-artemis.GVC.cpln.local` does NOT fall back to the other location when the local broker is down (measured: TCP reset / 503 from the US client, EU fine). Failover is manual for now: failover URL or repoint clients. Once internal routing (5354) ships, re-test the fallback, then add it to the README and docs.
 - A Core client `(tcp://a,tcp://b)` list is NOT failover; use qpid-jms (the AMQP 1.0 JMS client) `failover:` or reconnect in code.
 - A long outage of one region grows the survivor's disk (queued mirror events); suggest volume autoscaling.
 - Adding a second location later does not copy existing messages.

@@ -114,7 +114,7 @@ The message ports are reachable only from inside Control Plane, as `internalAcce
   ```
 - **OpenWire** (ActiveMQ clients) — the same shape: `failover:(tcp://replica-0.…:61616,tcp://replica-0.…:61616)`.
 - **Core clients** — a `(tcp://a,tcp://b)` connection list does not move a live connection to the other broker; reconnect in your application.
-- **No client setup** — `RELEASE-artemis.GVC.cpln.local` reaches the local broker and falls back to the other location while the local one is down. A returning broker refuses clients while it catches up, and this name can route to it in that window; a failover URL avoids the gap.
+- **Failover is manual for now** — `RELEASE-artemis.GVC.cpln.local` reaches the broker in the client's own location and does not move to the other location while that broker is down. For clients that must keep working through a location outage, use a failover URL as above, or point them at the other location's broker yourself.
 - Delivery is at least once: consumers that move on failover must tolerate a redelivered message.
 
 ## Active-active: what is and isn't supported

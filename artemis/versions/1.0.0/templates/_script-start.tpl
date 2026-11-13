@@ -134,6 +134,15 @@ log "admin user '${ARTEMIS_USER}' applied from the credentials secret"
 # --- Every boot: heap from resources.memory ---------------------------------
 sed -i -E "s/-Xmx[0-9]+[GgMmKk]?/-Xmx${ARTEMIS_HEAP_MB}M/; s/-Xms[0-9]+[GgMmKk]?/-Xms$((ARTEMIS_HEAP_MB / 2))M/" etc/artemis.profile
 
+# --- Every boot: console behind the platform's TLS edge ---------------------
+# The public endpoint ends TLS at the edge, so the browser's https Origin
+# reaches Jolokia over plain HTTP and is discarded, leaving the console empty
+# after login. Jolokia's own access file says to enable <ignore-scheme/> for a
+# TLS-terminating proxy. The file lives on the volume, so this runs every boot.
+sed -i 's#<!--[[:space:]]*ignore-scheme/[[:space:]]*-->#<ignore-scheme/>#' etc/jolokia-access.xml
+grep -q '<ignore-scheme/>' etc/jolokia-access.xml \
+  || log "WARNING: could not enable <ignore-scheme/> in etc/jolokia-access.xml; the public console may be empty after login"
+
 # --- Broker properties, layered over broker.xml ------------------------------
 # Client acceptors start CLOSED; the gate below opens them. The mirror has its
 # own always-open acceptor on 61617, which is also the readiness port.

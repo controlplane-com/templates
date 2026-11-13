@@ -174,13 +174,25 @@ PROPS_EOF
 fi
 
 # --- Gate: open the client acceptors ----------------------------------------
-# One location: as soon as the broker has started. Two locations: once this
-# broker has caught up from its peer (the peer's mirror queue towards us has a
-# consumer and at most CATCHUP_MAX messages on two polls in a row), or after
-# ARTEMIS_CATCHUP_TIMEOUT seconds when the peer cannot be reached. A small
-# backlog rather than exactly 0: while the peer is taking writes its mirror
-# queue always holds a few events in flight, and waiting for 0 would hold the
-# client ports closed until the timeout.
+# ROLE is single (one location), active (active-active, or the primary of
+# active-passive) or passive (the other location of active-passive).
+# single: open as soon as the broker has started.
+# active: open once this broker has caught up from its peer (the peer's
+#   mirror queue towards us has a consumer and at most CATCHUP_MAX messages on
+#   two polls in a row), or after ARTEMIS_CATCHUP_TIMEOUT seconds when the peer
+#   cannot be reached. A small backlog rather than exactly 0: while the peer is
+#   taking writes its mirror queue always holds a few events in flight.
+# passive: stay closed while the primary serves clients; open once the primary
+#   has not served for ARTEMIS_TAKEOVER seconds; close again once the primary
+#   serves again (it catches up from this broker first), which moves failover
+#   clients back to it.
+ROLE=single
+if [ -n "${PEERLOC}" ]; then
+  ROLE=active
+  if [ "${ARTEMIS_MIRROR_MODE}" = "active-passive" ] && [ "${ME}" != "${ARTEMIS_PRIMARY}" ]; then ROLE=passive; fi
+fi
+log "role: ${ROLE} (mirror mode ${ARTEMIS_MIRROR_MODE:-n/a}, primary ${ARTEMIS_PRIMARY:-n/a})"
+
 jx() {
   local b="$1" a
   a=$(printf '%s:%s' "${ARTEMIS_USER}" "${ARTEMIS_PASSWORD}" | base64 -w0)
@@ -190,11 +202,38 @@ jx() {
   timeout 5 cat <&4
   exec 4<&-
 }
-gate() {
-  local MB="org.apache.activemq.artemis:broker=\\\"${ME}\\\""
+MB="org.apache.activemq.artemis:broker=\\\"${ME}\\\""
+# acceptors start|stop: the client acceptors (the mirror's 61617 is never touched).
+acceptors() {
+  local op="$1" a ok
+  for a in artemis amqp stomp mqtt; do
+    ok=0
+    for _ in 1 2 3 4 5; do
+      jx "{\"type\":\"exec\",\"mbean\":\"${MB},component=acceptors,name=\\\"${a}\\\"\",\"operation\":\"${op}\"}" 2>/dev/null \
+        | grep -q '"status":200' && { ok=1; break; }
+      sleep 2
+    done
+    [ "${ok}" = 1 ] || log "WARNING: could not ${op} the ${a} acceptor"
+  done
+}
+# serving HOST: does HOST answer an AMQP protocol header on its client port?
+# Real bytes, not a TCP connect: through the platform mesh a connect always
+# succeeds, and a closed acceptor answers nothing.
+serving() {
+  local r
+  r=$(timeout 8 bash -c 'exec 5<>"/dev/tcp/$0/61616" || exit 1
+    printf "AMQP\x03\x01\x00\x00" >&5
+    IFS= read -r -t 6 -N 4 x <&5
+    printf "%s" "${x}"' "$1" 2>/dev/null)
+  [ "${r}" = "AMQP" ]
+}
+started() {
   until jx "{\"type\":\"read\",\"mbean\":\"${MB}\",\"attribute\":\"Started\"}" 2>/dev/null | grep -q '"value":true'; do sleep 2; done
+}
+gate() {
+  started
   local t0=${SECONDS} why="no peer"
-  if [ -n "${PEERLOC}" ]; then
+  if [ "${ROLE}" = "active" ]; then
     log "broker started; client acceptors closed until caught up from ${PEERLOC}"
     local MYQ='$ACTIVEMQ_ARTEMIS_MIRROR_to_'"${ME//-/_}" row CATCHUP_MAX=20 near=0
     why="timeout"
@@ -213,19 +252,31 @@ gate() {
     done
     why="${why} after $((SECONDS - t0))s"
   fi
-  local a ok
-  for a in artemis amqp stomp mqtt; do
-    ok=0
-    for _ in 1 2 3 4 5; do
-      jx "{\"type\":\"exec\",\"mbean\":\"${MB},component=acceptors,name=\\\"${a}\\\"\",\"operation\":\"start\"}" 2>/dev/null \
-        | grep -q '"status":200' && { ok=1; break; }
-      sleep 2
-    done
-    [ "${ok}" = 1 ] || log "WARNING: could not start the ${a} acceptor"
-  done
+  acceptors start
   log "client acceptors OPEN (${why})"
 }
-gate &
+standby() {
+  started
+  local open=0 since="" up=0
+  log "broker started; standing by -- client acceptors stay closed while the primary ${PEERLOC} serves clients"
+  while true; do
+    if serving "${PEER}"; then
+      since=""; up=$((up + 1))
+      if [ "${open}" = 1 ] && [ "${up}" -ge 2 ]; then
+        acceptors stop; open=0
+        log "FAILBACK: primary ${PEERLOC} serves clients again -- client acceptors CLOSED"
+      fi
+    else
+      up=0; [ -z "${since}" ] && since=${SECONDS}
+      if [ "${open}" = 0 ] && [ $((SECONDS - since)) -ge "${ARTEMIS_TAKEOVER:-60}" ]; then
+        acceptors start; open=1
+        log "TAKEOVER: primary ${PEERLOC} has not served clients for $((SECONDS - since))s -- client acceptors OPEN"
+      fi
+    fi
+    sleep 5
+  done
+}
+if [ "${ROLE}" = "passive" ]; then standby & else gate & fi
 
 # --- Run the broker as a child, forwarding SIGTERM for a graceful stop -------
 ./bin/artemis run --properties "${PROPS}" &

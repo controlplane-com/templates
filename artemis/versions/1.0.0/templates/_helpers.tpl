@@ -61,6 +61,14 @@ are rejected by the API at apply time, invisibly to `helm template`.
 {{- end -}}
 
 {{/*
+The active-passive primary location: mirror.primary, or the first listed
+location when it is empty.
+*/}}
+{{- define "artemis.primary" -}}
+{{- .Values.mirror.primary | default (index .Values.locations 0).name -}}
+{{- end -}}
+
+{{/*
 JVM maximum heap in MiB: half of resources.memory (Mi or Gi only, enforced by
 artemis.validateResources). The image's own default is -Xmx2G, which
 OOM-kills a smaller container, so the heap must follow the memory knob.
@@ -152,12 +160,26 @@ Memory in Mi or Gi, at least 1Gi: the JVM heap is half of it.
 {{- end -}}
 
 {{/*
-The catch-up gate timeout, in seconds.
+Mirror settings: the catch-up timeout, the mode, the active-passive primary
+(one of the listed locations) and the takeover delay.
 */}}
 {{- define "artemis.validateMirror" -}}
 {{- $t := toString .Values.mirror.catchUpTimeoutSeconds -}}
 {{- if or (not (regexMatch "^[0-9]+$" $t)) (lt (int $t) 30) (gt (int $t) 1800) -}}
 {{- fail (printf "artemis: mirror.catchUpTimeoutSeconds must be a whole number of seconds from 30 to 1800 (got %v)." .Values.mirror.catchUpTimeoutSeconds) -}}
+{{- end -}}
+{{- if not (has (toString .Values.mirror.mode) (list "active-passive" "active-active")) -}}
+{{- fail (printf "artemis: mirror.mode must be active-passive or active-active (got %v)." .Values.mirror.mode) -}}
+{{- end -}}
+{{- $k := toString .Values.mirror.takeoverSeconds -}}
+{{- if or (not (regexMatch "^[0-9]+$" $k)) (lt (int $k) 30) (gt (int $k) 1800) -}}
+{{- fail (printf "artemis: mirror.takeoverSeconds must be a whole number of seconds from 30 to 1800 (got %v)." .Values.mirror.takeoverSeconds) -}}
+{{- end -}}
+{{- if .Values.mirror.primary -}}
+{{- $names := list }}{{ range .Values.locations }}{{ $names = append $names (toString .name) }}{{ end -}}
+{{- if not (has (toString .Values.mirror.primary) $names) -}}
+{{- fail (printf "artemis: mirror.primary %q is not one of the listed locations (%s). Name one of them, or leave it empty for the first." .Values.mirror.primary (join ", " $names)) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

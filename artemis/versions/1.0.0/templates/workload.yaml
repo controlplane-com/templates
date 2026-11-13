@@ -25,6 +25,12 @@ spec:
           value: {{ include "artemis.heapMb" . | quote }}
         - name: ARTEMIS_CATCHUP_TIMEOUT
           value: {{ .Values.mirror.catchUpTimeoutSeconds | int | toString | quote }}
+        - name: ARTEMIS_MIRROR_MODE
+          value: {{ .Values.mirror.mode | quote }}
+        - name: ARTEMIS_PRIMARY
+          value: {{ include "artemis.primary" . | quote }}
+        - name: ARTEMIS_TAKEOVER
+          value: {{ .Values.mirror.takeoverSeconds | int | toString | quote }}
         {{- include "artemis.locationEnv" . | nindent 8 }}
       {{- /*
         8161 is listed FIRST: with publicAccess on, the canonical endpoint serves

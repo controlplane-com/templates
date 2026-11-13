@@ -21,8 +21,13 @@ locations:
   - name: aws-us-east-1
 #  - name: aws-us-west-2   # add a second location for a broker that survives a region loss
 
+# Two locations only (ignored with one):
 mirror:
-  catchUpTimeoutSeconds: 180  # two locations: a restarted broker opens client ports once caught up from its peer, or after this long
+  mode: active-passive        # active-passive: the primary serves clients, the other location takes over when it is down
+                              # active-active: both locations serve clients (consume each queue in one location only)
+  primary: ""                 # active-passive: the location that serves clients; "" = the first entry in `locations`
+  takeoverSeconds: 60         # active-passive: how long the primary must stop serving before the other location opens
+  catchUpTimeoutSeconds: 180  # a restarted broker opens client ports once caught up from its peer, or after this long
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 resources:

@@ -40,9 +40,9 @@ steps:
               One location runs one broker; two run one broker each, mirrored. A location not in this
               GVC runs nothing.
             help: >-
-              With two locations, both brokers accept writes and copy every message, acknowledgement and
-              queue change to each other. Consume each queue in one location at a time: two locations
-              consuming one queue at once get duplicates.
+              With two locations, the brokers copy every message, acknowledgement and queue change to each
+              other. Choose below whether one location serves clients (active-passive) or both do
+              (active-active).
             item:
               type: object
               fields:
@@ -62,7 +62,43 @@ steps:
         docs: "#mirror"
         when: size(self.locations) == 2
         fields:
+          - path: mirror.mode
+            type: enum
+            label: Mode
+            widget: cards
+            required: true
+            options:
+              - value: active-passive
+                label: Active-passive
+                description: >-
+                  The primary location serves clients; the other keeps a copy and takes over when the
+                  primary stops serving.
+              - value: active-active
+                label: Active-active
+                description: >-
+                  Both locations serve clients. Consume each queue in one location at a time, or messages
+                  are delivered twice.
+          - path: mirror.primary
+            type: enum
+            label: Primary location
+            when: self.mirror.mode == 'active-passive'
+            optionsFrom: >-
+              [{'value': '', 'label': 'First location in the list'}] +
+              self.locations.filter(l, l.name != null && l.name != '').map(l, {'value': l.name, 'label': l.name})
+            description: The location that serves clients while it is up.
+          - path: mirror.takeoverSeconds
+            type: integer
+            label: Takeover delay
+            unit: seconds
+            when: self.mirror.mode == 'active-passive'
+            required: true
+            min: 30
+            max: 1800
+            suggestions: [60, 120, 300]
+            description: >-
+              How long the primary must stop serving clients before the other location opens to them.
           - type: note
+            when: self.mirror.mode == 'active-active'
             text: >-
               Each queue is consumed in one location at a time; two locations consuming one queue at once
               get duplicates.
@@ -114,6 +150,20 @@ steps:
         mirrors: artemis.validateMirror
         paths: [mirror.catchUpTimeoutSeconds]
         message: Set the catch-up timeout from 30 to 1800 seconds.
+      - rule: self.mirror.mode == 'active-passive' || self.mirror.mode == 'active-active'
+        mirrors: artemis.validateMirror
+        paths: [mirror.mode]
+        message: Choose active-passive or active-active.
+      - rule: self.mirror.takeoverSeconds >= 30 && self.mirror.takeoverSeconds <= 1800
+        mirrors: artemis.validateMirror
+        paths: [mirror.takeoverSeconds]
+        message: Set the takeover delay from 30 to 1800 seconds.
+      - rule: >-
+          self.mirror.primary == null || self.mirror.primary == '' ||
+          self.locations.exists(l, l.name == self.mirror.primary)
+        mirrors: artemis.validateMirror
+        paths: [mirror.primary]
+        message: The primary location must be one of the listed locations.
       - rule: >-
           self.resources.memory.matches('^[0-9]+(Mi|Gi)$') &&
           memoryBytes(self.resources.memory) >= memoryBytes('1Gi')

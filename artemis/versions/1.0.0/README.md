@@ -1,6 +1,6 @@
 # Apache Artemis
 
-Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, AMQP 1.0, MQTT, STOMP and OpenWire clients. This template runs one broker in one location, or one broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror.
+Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, AMQP 1.0, MQTT, STOMP and OpenWire clients. This template runs one broker in one location, or one broker in each of two locations kept in sync by a two-way asynchronous AMQP mirror, either active-passive (one location serves clients and the other takes over when it is down) or active-active (both serve clients).
 
 ## Architecture
 
@@ -8,6 +8,7 @@ Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, 
 - **Volume set** — one volume per broker at `/var/lib/artemis-instance`, holding the broker configuration and the message journal, with daily snapshots.
 - **Identity + policies** — `reveal` on exactly your credentials secret; with two locations, also `view` on the install GVC, so each broker can check at start that its peer's location exists.
 - **Mirror (two locations)** — each broker copies every message, acknowledgement and queue creation or deletion to the other over port 61617. A restarted broker refuses clients until it has caught up from its peer.
+- **Mirror mode** — `active-passive` (default): the primary location serves clients; the other broker keeps its client ports closed, opens them when the primary has not served clients for `mirror.takeoverSeconds`, and closes them again once the primary is back and caught up. `active-active`: both brokers serve clients.
 - **Web console** (optional public access) — the Artemis console on port 8161, published over HTTPS only when `publicAccess.enabled` is `true`.
 
 ## Prerequisites
@@ -50,8 +51,13 @@ credentialsSecretName: my-artemis-credentials
 ### Mirror
 
 ```yaml
+# Two locations only (ignored with one):
 mirror:
-  catchUpTimeoutSeconds: 180  # two locations: a restarted broker opens client ports once caught up from its peer, or after this long
+  mode: active-passive        # active-passive: the primary serves clients, the other location takes over when it is down
+                              # active-active: both locations serve clients (consume each queue in one location only)
+  primary: ""                 # active-passive: the location that serves clients; "" = the first entry in `locations`
+  takeoverSeconds: 60         # active-passive: how long the primary must stop serving before the other location opens
+  catchUpTimeoutSeconds: 180  # a restarted broker opens client ports once caught up from its peer, or after this long
 ```
 
 ### Image and resources
@@ -108,23 +114,27 @@ The message ports are reachable only from inside Control Plane, as `internalAcce
 
 ### Client failover (two locations)
 
-- **AMQP 1.0 / JMS with qpid-jms** — list both brokers in a failover URL; a client moves to the other location when its broker goes away:
+Give every client both brokers in a failover URL, **primary first** in active-passive mode: the client connects to the first broker that accepts it and moves when that broker goes away or closes its client ports.
+
+- **AMQP 1.0 / JMS with qpid-jms** — tries the brokers in the order listed:
   ```text
   failover:(amqp://replica-0.RELEASE-artemis.LOCATION_A.GVC.cpln.local:61616,amqp://replica-0.RELEASE-artemis.LOCATION_B.GVC.cpln.local:61616)?failover.maxReconnectAttempts=-1&failover.nested.amqp.idleTimeout=10000
   ```
-- **OpenWire** (ActiveMQ clients) — the same shape: `failover:(tcp://replica-0.…:61616,tcp://replica-0.…:61616)`.
+- **OpenWire** (ActiveMQ clients) — the same shape; add `randomize=false`, or the client picks a broker at random: `failover:(tcp://replica-0.…:61616,tcp://replica-0.…:61616)?randomize=false`.
 - **Core clients** — a `(tcp://a,tcp://b)` connection list does not move a live connection to the other broker; reconnect in your application.
-- **Failover is manual for now** — `RELEASE-artemis.GVC.cpln.local` reaches the broker in the client's own location and does not move to the other location while that broker is down. For clients that must keep working through a location outage, use a failover URL as above, or point them at the other location's broker yourself.
+- **Failover is manual for now** — `RELEASE-artemis.GVC.cpln.local` reaches the broker in the client's own location and does not move to the other location while that broker is down or, in active-passive mode, standing by. For clients that must keep working through a location outage, use a failover URL as above, or point them at the other location's broker yourself.
 - Delivery is at least once: consumers that move on failover must tolerate a redelivered message.
 
-## Active-active: what is and isn't supported
+## Choosing a mirror mode
 
-| Supported | Not supported |
-|---|---|
-| Writes in both locations | Consuming one shared queue in both locations at once (duplicates) |
-| Per-location queues (`orders.east` / `orders.west`) | More than two locations: mirroring more than two brokers duplicates messages |
-| One consuming location | Synchronous mirroring |
-| Consumers moving on failover | A retained log or replay (use the `kafka` template) |
+| | `active-passive` (default) | `active-active` |
+|---|---|---|
+| Serves clients | The primary; the other location only while the primary is down | Both locations |
+| Typical use | Disaster recovery: a standby copy in a second region | Producers writing near them in both regions |
+| Consuming a queue | One location at a time, enforced by the brokers | One location at a time, enforced by your clients: consuming one queue in both locations at once delivers messages twice |
+| Client setup | Failover URL, primary first | Failover URL, or per-location queues (`orders.east` / `orders.west`) |
+
+Neither mode offers more than two locations (mirroring more than two brokers duplicates messages), synchronous mirroring, or a retained log with replay (use the `kafka` template).
 
 The mirror is asynchronous: a broker that crashes can lose the messages it had not yet copied to its peer, and only if its volume is lost too.
 
@@ -133,6 +143,7 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 - **Create the credentials secret first.** Without it the deployment waits and `cpln logs` is empty; `cpln workload get-deployments RELEASE-artemis --gvc GVC -o yaml` shows the missing secret in `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
 - **An upgrade that changes the workload restarts the brokers in every location at the same time**, so clients are refused until they are back.
 - A restarted broker refuses clients until it has caught up from its peer, or until `mirror.catchUpTimeoutSeconds` has passed.
+- **Active-passive takeover and failback.** When the primary stops serving clients for `mirror.takeoverSeconds`, the other broker opens and failover clients move to it. When the primary returns, it catches up from the other broker, opens, and the other broker closes again, which moves clients back. Messages the primary had not yet copied when it went down are delivered after it returns, so consumers must tolerate a redelivered message. If the link between the locations breaks while both brokers are up, the other broker also opens after the takeover delay, and both serve clients until the link is back.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
 - Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored.
 - **Removing a location keeps its volume.** Adding that location back starts its broker on the old messages, which the mirror never reconciles: consumers there receive messages already consumed elsewhere and miss the ones sent while it was gone. Before adding it back, delete the old volume and wait until it is gone from `cpln volumeset volume get RELEASE-artemis-vs --gvc GVC`:

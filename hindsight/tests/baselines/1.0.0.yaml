@@ -1,0 +1,58 @@
+# hindsight 1.0.0 — the default production shape at the smallest size that runs: one API replica (in-process
+# worker) on the bundled single pgvector PostgreSQL, the web UI on, private, with the full image and its bundled
+# embedding and reranker models. The LLM is Hindsight's own `mock` provider, so retain runs the real pipeline
+# with no key and no external call. All credentials are prerequisite secrets CI creates (hex, so the database
+# ones are letters and digits as the connection URL needs).
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  apikey: hex
+  uikey: hex
+  dbpw: hex
+  probe: hex
+  marker: hex
+
+secrets:
+  apikey:
+    type: opaque
+    payload: "{gen.apikey}"
+  uikey:
+    type: opaque
+    payload: "{gen.uikey}"
+  db:
+    type: dictionary
+    entries:
+      username: hindsight
+      password: "{gen.dbpw}"
+      database: hindsight
+  extra:
+    type: dictionary
+    entries:
+      E2E_PROBE: "{gen.probe}"
+
+vars:
+  probe: "{gen.probe}"
+  marker: "ci-marker-{gen.marker}"
+
+values:
+  auth:
+    apiKeySecretName: "{secrets.apikey.name}"
+  ui:
+    accessKeySecretName: "{secrets.uikey.name}"
+  pgvector:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  llm:
+    provider: mock
+    model: mock
+    apiKeySecretName: ""
+  hindsight:
+    extraEnv:
+      - name: HINDSIGHT_API_MCP_INSTRUCTIONS
+        value: "ci-marker-{gen.marker}"
+    extraSecrets:
+      secretName: "{secrets.extra.name}"
+      keys: [E2E_PROBE]
+
+# New template: no earlier version to upgrade from.

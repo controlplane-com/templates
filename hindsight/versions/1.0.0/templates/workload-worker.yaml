@@ -1,0 +1,77 @@
+{{- if .Values.worker.enabled }}
+kind: workload
+name: {{ include "hindsight.worker.name" . }}
+description: Hindsight background task workers
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "hindsight.identity.name" . }}
+  containers:
+    - name: worker
+      image: {{ .Values.hindsight.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.worker.resources.minCpu | quote }}
+      minMemory: {{ .Values.worker.resources.minMemory | quote }}
+      cpu: {{ .Values.worker.resources.maxCpu | quote }}
+      memory: {{ .Values.worker.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{ include "hindsight.inlineScript" (include "hindsight.script.start" (dict "ctx" . "exec" "hindsight-worker --worker-id \"$(hostname)\"")) | toJson }}
+      env:
+        - name: HINDSIGHT_API_WORKER_HTTP_PORT
+          value: "8889"
+        {{- include "hindsight.env.common" . | nindent 8 }}
+      ports:
+        - number: 8889
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8889
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health/live
+          port: 8889
+          scheme: HTTP
+        initialDelaySeconds: 600
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.worker.replicas }}
+      metric: disabled
+      minScale: {{ .Values.worker.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  rolloutOptions:
+    # maxUnavailableReplicas is not set: the API drops it on a stateful workload.
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+{{- end }}

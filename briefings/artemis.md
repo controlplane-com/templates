@@ -36,6 +36,9 @@
 - A Core client `(tcp://a,tcp://b)` list is NOT failover; use qpid-jms (the AMQP 1.0 JMS client) `failover:` or reconnect in code.
 - A long outage of one region grows the survivor's disk (queued mirror events); suggest volume autoscaling.
 - Adding a second location later does not copy existing messages.
+- Removing a location and adding it back reuses its retained volume: stale, permanently diverged copy (re-delivers consumed messages, misses the gap). Fix: `cpln volumeset volume delete RELEASE-artemis-vs --location LOC --volume-index 0 --gvc GVC` before re-adding (measured; delete can take >5 min).
+- Runtime > Threads "Enable connection thread monitoring" returns 403 for the admin user (Hawtio/JMX ACL); accepted, not a broker feature.
+- Missing credentials secret: create it, then force-redeployment (it did not recover on its own in 6 min).
 - Readiness must stay on 61617: readiness on a client port deadlocks catch-up (measured).
 - Never test with `suspend` (ruling: parked); use min/max 0 or SIGKILL.
 - The image's default password is `artemis`; the chart always overrides it from the secret, which is re-applied on every start (rotate the secret, then force-redeployment).

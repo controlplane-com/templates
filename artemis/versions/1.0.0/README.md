@@ -130,11 +130,16 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 
 ## Important Notes
 
-- **Create the credentials secret first.** Without it the deployment waits and `cpln logs` is empty; `cpln workload get-deployments RELEASE-artemis --gvc GVC -o yaml` shows the missing secret in `status.versions[].message`. It recovers on its own once the secret exists, or run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
+- **Create the credentials secret first.** Without it the deployment waits and `cpln logs` is empty; `cpln workload get-deployments RELEASE-artemis --gvc GVC -o yaml` shows the missing secret in `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
 - **An upgrade that changes the workload restarts the brokers in every location at the same time**, so clients are refused until they are back.
 - A restarted broker refuses clients until it has caught up from its peer, or until `mirror.catchUpTimeoutSeconds` has passed.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
 - Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored.
+- **Removing a location keeps its volume.** Adding that location back starts its broker on the old messages, which the mirror never reconciles: consumers there receive messages already consumed elsewhere and miss the ones sent while it was gone. Before adding it back, delete the old volume and wait until it is gone from `cpln volumeset volume get RELEASE-artemis-vs --gvc GVC`:
+  ```bash
+  cpln volumeset volume delete RELEASE-artemis-vs --location LOCATION --volume-index 0 --gvc GVC
+  ```
+  The returning broker then starts empty and receives only messages sent after it is back.
 - The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`. Rotate the password and keep the username: a new username adds a second admin, and the old one keeps working.
 - Changes to `internalAccess` and `publicAccess` take a few minutes to apply.
 

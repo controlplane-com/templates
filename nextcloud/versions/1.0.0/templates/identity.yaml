@@ -1,0 +1,17 @@
+{{- /*
+  One identity for both workloads: the cron worker needs everything the web tier
+  needs except the admin secret, and it can already read the database that holds
+  the admin hash, so a second identity buys no isolation.
+*/ -}}
+kind: identity
+name: {{ include "nextcloud.identity.name" . }}
+description: Nextcloud identity
+tags: {{- include "nextcloud.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "nextcloud.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

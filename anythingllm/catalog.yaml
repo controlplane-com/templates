@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: AnythingLLM
+category: ai
+topology: single
+
+summary: >-
+  AnythingLLM, an app of document workspaces, each a set of files plus a chat that answers from them,
+  with built-in retrieval (a CPU embedding model and embedded LanceDB, no extra services), an
+  embeddable website chat widget, a developer API and agents with MCP tools. One workload on a
+  snapshotted volume, connecting to OpenAI, Anthropic and Ollama, vLLM or LiteLLM; the admin comes from
+  a secret. Pick it to chat with your own documents or put a document-grounded chat on a website.
+
+keywords:
+  - chat with documents
+  - document rag
+  - rag
+  - knowledge base
+  - workspaces
+  - embeddable chat widget
+  - website chatbot
+  - ai agents
+  - mcp client
+  - control plane mcp
+  - lancedb
+  - vector search api
+  - ollama ui
+  - openai-compatible
+  - developer api
+  - private chatgpt
+
+useCases:
+  - Ask questions over a team's PDFs and documents, grouped into workspaces, with cited answers
+  - Put a chat widget on a website that answers from one workspace's documents
+  - Give other services a document upload, vector search and chat API without running a vector database
+  - Use self-hosted Ollama, vLLM or LiteLLM models with document retrieval and agents
+  - Let AI agents call MCP tools, including the Control Plane MCP server
+
+alternativeTo:
+  - ChatGPT Team
+  - PrivateGPT
+  - Chatbase
+
+pickInsteadIf:
+  - need: one chat UI over many model providers with conversation search and 2-4 replicas
+    template: librechat
+  - need: Ollama model management in the UI and Control Plane MCP tools with each user's own sign-in
+    template: open-webui
+  - need: build LLM apps and visual workflows published as web apps
+    template: dify
+  - need: a visual builder for AI agent and RAG flows served as an API or MCP server
+    template: langflow
+
+related:
+  - template: ollama
+    relation: companion
+    note: Runs local chat and embedding models AnythingLLM connects to
+  - template: vllm
+    relation: companion
+    note: OpenAI-compatible model server AnythingLLM chats through as a generic OpenAI provider
+  - template: litellm
+    relation: companion
+    note: One OpenAI-compatible gateway for AnythingLLM in front of many providers
+  - template: searxng
+    relation: companion
+    note: Web search provider for AnythingLLM agents, set in the UI
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [JWT_SECRET, SIG_KEY, SIG_SALT, AUTH_TOKEN]
+    valuesPath: keys.secretName
+    required: true
+    description: Keys that sign sessions and encrypt stored data. Create before installing (a missing one leaves the deployment waiting with no logs); never change them.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: The admin account, created on first boot before anyone can sign in. Lowercase username starting with a letter, password of 8 or more characters.
+  - kind: secret
+    secretType: opaque
+    valuesPath: llm.apiKeySecretName
+    required: false
+    when: llm.provider is openai or anthropic (optional for ollama, generic-openai and litellm)
+    description: The chat model provider's API key. Empty leaves the provider to be chosen in the UI.
+  - kind: secret
+    secretType: opaque
+    valuesPath: embedding.apiKeySecretName
+    required: false
+    when: embedding.engine is generic-openai and the endpoint needs a key
+    description: API key of the OpenAI-compatible embedding endpoint, such as OpenAI.
+  - kind: other
+    valuesPath: mcp.servers
+    required: false
+    when: an HTTP MCP server needs a bearer token
+    description: An opaque secret per HTTP MCP server that needs one, named in that entry's bearerTokenSecretName.
+  - kind: secret
+    secretType: opaque
+    valuesPath: cplnMcp.keySecretName
+    required: false
+    when: agents should use the Control Plane MCP server
+    description: A Control Plane service-account key; every agent run that uses the server acts as that service account.

@@ -1,0 +1,1080 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Nextcloud
+
+# Nextcloud pins itself to the single `location` value, and the bundled PostgreSQL and Redis are
+# single-location stateful workloads with no location handling; the boot script refuses a fresh
+# install into a GVC with more than one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.2
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    # After the Advanced step, which holds the server, storage and network of the same database.
+    after: advanced
+    steps:
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Nextcloud step's prerequisite secrets, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Nextcloud connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+      # Bound in the Advanced step's database sections, so the defaults a first install keeps fill no step of
+      # their own (server, storage, network). The postgres chart's checks on them are restated there.
+      - image
+      - resources
+      - volumeset
+      - internalAccess
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    # After the Advanced step: the defaults of every database step fit a first install.
+    after: advanced
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Nextcloud stores its metadata in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Nextcloud connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        description: >-
+          Per member. A quarter of it caps the WAL that replication slots may hold back.
+      internal_access.type:
+        description: >-
+          Nextcloud connects through the HAProxy endpoint like any other workload: keep Same GVC, or add both
+          Nextcloud workloads under Allowed workloads.
+  - template: redis
+    version: 3.9.1
+    when: self.redis.enabled
+    title: Redis
+    # Its remaining steps only apply to production mode, which the chart refuses; in dev mode every setting
+    # Nextcloud needs sits in the Redis section of the Scaling and access step.
+    after: scaling
+    exclude:
+      # Nextcloud connects to one Redis endpoint and cannot follow Sentinel: the mode is fixed to dev (yamlOnly below).
+      - deploymentMode
+      # Redis always requires a password here, read from the secret chosen under Prerequisite secrets; a
+      # password in values is refused (nextcloud.validateRedis).
+      - redisAuth
+      - redis.auth.fromSecret
+      # Nextcloud reaches Redis on :6379 inside the GVC; public access moves it to other ports (nextcloud.validateRedis).
+      - redis.publicAccess
+      # Redis holds no data of record for Nextcloud (locks, cache, sessions): a restart signs browser sessions
+      # out and nothing else, so a persistent volume, backups, the metrics exporter, suspend and the engine
+      # choice stay at the redis chart's defaults (yamlOnly below).
+      - engine
+      - valkeyImage
+      - redis.persistence
+      - backup
+      - redis.exporter
+      - suspend
+      # Probe, timeout and workload tuning of a cache stays at the redis chart's defaults (yamlOnly below).
+      - redis.probes
+      - redis.timeoutSeconds
+      - redis.env
+      - redis.tags
+      - redis.requestRetryPolicy
+      # Nextcloud connects through the workload's own name and needs no outbound access from Redis.
+      - redis.replicaDirect
+      - redis.firewall.external_inboundAllowCIDR
+      - redis.firewall.external_outboundAllowCIDR
+      # Bound in the Redis section of the Scaling and access step, next to the switch that turns Redis on.
+      - redis.image
+      - redis.resources
+      - redis.firewall.internal_inboundAllowType
+      - redis.firewall.inboundAllowWorkload
+
+steps:
+  - id: nextcloud
+    title: Nextcloud
+    description: Nextcloud's database, the prerequisite secrets, and the location it runs in.
+    sections:
+      - title: Database
+        description: >-
+          Which PostgreSQL holds Nextcloud's users, shares and file index; the credentials secret below follows
+          this choice. Its settings and backups come in and after the Advanced step; their defaults fit a first
+          install.
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Switching the database type on a running release deploys a new, empty database: the users, shares
+              and file index in the current one are not moved.
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every user, share and the file index.
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              The dictionary secrets below must exist **before** you install or upgrade. If one is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+            textExpression: >-
+              (self.redis.enabled ? 'Three dictionary secrets' : 'Two dictionary secrets') + ' must exist **before** you ' +
+              (context.mode == 'upgrade' ? 'upgrade' : 'install') + ': the admin login' +
+              (self.redis.enabled ? ', the database credentials and the Redis password below.' : ' and the database credentials below.') +
+              ' If one is missing, the deployment waits and `cpln logs` shows nothing at all.'
+          - path: admin.secretName
+            type: ref
+            label: Admin secret
+            required: true
+            description: >-
+              A dictionary secret with `username` and `password` (10 or more characters) for the first Nextcloud
+              administrator.
+            help: >-
+              Read on the first boot only: change the password later in Nextcloud's personal settings, or with
+              `occ user:resetpassword`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-nextcloud-admin'"
+          - type: note
+            when: >-
+              self.postgres.enabled &&
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            when: self.postgres.enabled
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, for the single-instance
+              PostgreSQL chosen under Database above.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Nextcloud connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of both Nextcloud workloads.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-nextcloud-db-credentials'"
+          - type: note
+            when: >-
+              self.postgresHA.enabled &&
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            when: self.postgresHA.enabled
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, for the highly available
+              PostgreSQL chosen under Database above.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Nextcloud connects with
+              them. Changing it later is a database operation: follow the postgres-highly-available template's
+              password rotation steps, then update the secret and force a redeployment of both Nextcloud workloads.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-nextcloud-db-credentials'"
+          - path: redis.redis.auth.fromSecret.name
+            type: ref
+            label: Redis password secret
+            required: true
+            when: self.redis.enabled
+            description: >-
+              A dictionary secret for the bundled Redis (Scaling and access); its `password` key, or the key set
+              there, holds the password. Use a hex value, such as `openssl rand -hex 32`.
+            help: >-
+              To change the password later, update the value in this secret, then force a redeployment of Redis
+              first and of both Nextcloud workloads after it. Browser sessions sign out; sync clients carry on.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.redis.redis.auth.fromSecret.passwordKey]"
+              create:
+                suggestName: "context.releaseName + '-nextcloud-redis'"
+        rules:
+          - rule: self.admin.secretName != null && self.admin.secretName != ''
+            mirrors: nextcloud.validate
+            paths: [admin.secretName]
+            message: The admin secret is required.
+          - rule: "!self.redis.enabled || self.redis.redis.auth.fromSecret.name != ''"
+            mirrors: nextcloud.validateRedis
+            paths: [redis.redis.auth.fromSecret.name]
+            message: The Redis password secret is required.
+          # Restated from the redis descriptor's Authentication step, dropped with the excluded redis.auth.fromSecret.
+          - when: oldSelf != null && oldSelf.redis.enabled && self.redis.enabled
+            rule: >-
+              self.redis.redis.auth.fromSecret.name == oldSelf.redis.redis.auth.fromSecret.name &&
+              self.redis.redis.auth.fromSecret.passwordKey == oldSelf.redis.redis.auth.fromSecret.passwordKey
+            severity: warning
+            paths: [redis.redis.auth.fromSecret.name, redis.redis.auth.fromSecret.passwordKey]
+            message: >-
+              A different Redis password secret or key is a password change on a running release: the restarted
+              node cannot authenticate, so the rollout stops. Keep the installed secret and key unless the new one
+              holds the password Redis runs with today.
+          # Restated from the postgres and postgres-highly-available descriptors: excluding their credentials
+          # field dropped these checks, which the subcharts still perform.
+          - when: self.postgres.enabled
+            rule: "!has(self.postgres.config.username) && !has(self.postgres.config.password) && !has(self.postgres.config.database)"
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              postgres.config.username, postgres.config.password and postgres.config.database are not supported.
+              Put them in the database credentials secret and remove them from the values.
+          - when: self.postgresHA.enabled
+            rule: "!has(self.postgresHA.postgres)"
+            paths: [postgresHA.config.credentialsSecretName]
+            message: >-
+              The postgresHA.postgres block is not supported. Put the username, password and database in the
+              database credentials secret and remove the block from the values.
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC that Nextcloud runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: nextcloud.validateLocation
+            paths: [location]
+            message: >-
+              Nextcloud runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: nextcloud.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: >-
+          Switching the database type deploys a new, empty database; the users, shares and file index in the
+          current one are not moved.
+
+  - id: storage
+    title: File storage
+    description: Where users' files are stored, and the volume that holds Nextcloud's configuration and apps.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: File storage
+            widget: cards
+            required: true
+            immutable: Nextcloud cannot move files between storage types after install.
+            description: Cannot be changed after install; Nextcloud cannot move files between storage types.
+            docs: "#storage-setup"
+            options:
+              - value: local
+                label: Shared volume
+                description: Files on the volume below. Not snapshotted, and deleted on uninstall with every file.
+              - value: s3
+                label: S3 bucket
+                description: AWS S3 or an S3-compatible server such as MinIO; the files outlive the release.
+        rules:
+          - rule: self.storage.type in ['local', 's3']
+            mirrors: nextcloud.validate
+            paths: [storage.type]
+            message: Choose where files are stored.
+      - title: Volume
+        fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Capacity
+            unit: GiB
+            required: true
+            min: 10
+            suggestions: [10, 50, 100, 500]
+            description: >-
+              Shared by every replica and the cron worker: configuration and installed apps, and with Shared volume
+              storage every file. Can be expanded later, not shrunk.
+        rules:
+          - rule: self.volumeset.capacity >= 10
+            mirrors: nextcloud.validate
+            paths: [volumeset.capacity]
+            message: Use at least 10 GiB.
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: S3 bucket
+        when: self.storage.type == 's3'
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create the bucket **before** you install. For AWS S3 also create the Control Plane cloud account and
+              the bucket-scoped IAM policy (the policy JSON is under Storage setup); for an S3-compatible server,
+              the access keys secret.
+          - id: s3Flavour
+            virtual: true
+            type: enum
+            label: S3 provider
+            widget: segmented
+            required: true
+            init: "self.storage.s3.endpoint == null || self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a Control Plane cloud account. Choosing it clears the S3 endpoint and the static keys secret.
+                set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
+              - value: compatible
+                label: S3-compatible
+                description: MinIO or another S3 server, with static keys in a secret.
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            immutable: Nextcloud cannot move files to another bucket after install.
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            description: Any value for most S3-compatible servers.
+          - path: storage.s3.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            placeholder: http://my-minio.my-gvc.cpln.local:9000
+            description: The S3 API address with scheme and optional port, fully qualified, with no path.
+          - path: storage.s3.usePathStyle
+            type: boolean
+            label: Path-style requests
+            when: ui.s3Flavour == 'compatible'
+            description: On for most S3-compatible servers, such as MinIO.
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: Access keys secret
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            description: A dictionary secret with the keys `accessKeyId` and `secretAccessKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            when: ui.s3Flavour == 'aws'
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            when: ui.s3Flavour == 'aws'
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+        rules:
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket != ''
+            mirrors: nextcloud.validate
+            paths: [storage.s3.bucket]
+            message: The bucket is required.
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket == '' || self.storage.s3.bucket.matches('^[A-Za-z0-9._-]+$')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.bucket]
+            message: Use only letters, digits, '.', '-' and '_' in the bucket name.
+          - rule: self.storage.type != 's3' || self.storage.s3.region.matches('^[A-Za-z0-9_-]+$')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.region]
+            message: Use a region name such as us-east-1 (letters, digits, '-' and '_').
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.endpoint == '' ||
+              self.storage.s3.endpoint.matches('^https?://[^/:]+(:[0-9]+)?$')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.endpoint]
+            message: Use the scheme, host and optional port with no path, such as http://my-minio.my-gvc.cpln.local:9000.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName == '' ||
+              self.storage.s3.endpoint != ''
+            mirrors: nextcloud.validate
+            paths: [storage.s3.auth.secretName, storage.s3.bucket]
+            message: >-
+              Static keys are only for S3-compatible servers. For AWS S3, choose AWS S3 above and use a cloud
+              account.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName != '' ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: nextcloud.validate
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName]
+            message: AWS S3 needs a cloud account and an IAM policy name.
+
+  - id: scaling
+    title: Scaling and access
+    description: How many Nextcloud web replicas run, the Redis they share, and who can reach Nextcloud.
+    sections:
+      - title: Replicas
+        docs: "#configuration"
+        fields:
+          - path: nextcloud.replicas
+            type: integer
+            label: Web replicas
+            required: true
+            min: 1
+            max: 10
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas are interchangeable; one cron worker always runs the background jobs. 2 or more need Redis
+              below; 2 with highly available PostgreSQL keeps Nextcloud up through restarts and failover.
+        rules:
+          - rule: self.nextcloud.replicas >= 1 && self.nextcloud.replicas <= 10
+            mirrors: nextcloud.validate
+            paths: [nextcloud.replicas]
+            message: Use between 1 and 10 replicas.
+          - rule: self.nextcloud.replicas < 2 || self.redis.enabled
+            mirrors: nextcloud.validate
+            paths: [nextcloud.replicas]
+            message: >-
+              2 or more replicas need Redis: replicas share browser sessions and file locks through it. Turn on
+              Redis below, or use 1 replica.
+      - id: redis
+        title: Redis
+        toggle: redis.enabled
+        description: >-
+          One Redis node for file locks, the shared cache and browser sessions. It holds no data of record: a
+          Redis restart signs browser sessions out, and sync clients carry on. Off (1 replica only), locks use
+          the database and sessions stay on the replica.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Redis always requires a password here, read from the Redis password secret chosen under Prerequisite
+              secrets on the Nextcloud step.
+          - path: redis.redis.auth.fromSecret.passwordKey
+            type: string
+            label: Password key
+            required: true
+            advanced: true
+            pattern: '^[-._a-zA-Z0-9]+$'
+            patternMessage: Use letters, digits, -, . and _.
+          - path: redis.redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            advanced: true
+            maxRatio: 4
+          - path: redis.redis.firewall.internal_inboundAllowType
+            type: enum
+            label: Internal access to Redis
+            widget: cards
+            required: true
+            advanced: true
+            description: Both Nextcloud workloads connect to Redis like any other workload; keep Same GVC, or list them.
+            options:
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+          # The redis chart writes any non-empty list into inboundAllowWorkload, whatever the type.
+          - path: redis.redis.firewall.inboundAllowWorkload
+            type: list
+            absent: true
+            label: Workloads allowed to reach Redis
+            advanced: true
+            description: Extra workloads allowed to connect, for example from another GVC.
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.redis.redis.firewall.internal_inboundAllowType == 'same-gvc'
+        rules:
+          # Restated from the redis descriptor's Advanced and Network steps, dropped with the excluded paths.
+          - rule: >-
+              oldSelf == null || imageMajor(self.redis.redis.image) < 0 || imageMajor(oldSelf.redis.redis.image) < 0 ||
+              imageMajor(self.redis.redis.image) >= imageMajor(oldSelf.redis.redis.image)
+            severity: info
+            paths: [redis.redis.image]
+            message: An older Redis major version cannot load data written by the installed one.
+          - when: self.redis.redis.firewall.internal_inboundAllowType == 'same-gvc' && context.gvc != null
+            rule: "!self.redis.redis.firewall.inboundAllowWorkload.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [redis.redis.firewall.inboundAllowWorkload]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.redis.redis.firewall.inboundAllowWorkload.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the Redis list.
+          - when: self.redis.redis.firewall.internal_inboundAllowType == 'same-org'
+            rule: size(self.redis.redis.firewall.inboundAllowWorkload) == 0
+            severity: info
+            paths: [redis.redis.firewall.inboundAllowWorkload]
+            message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              The web UI, WebDAV and the sync clients on a public `*.cpln.app` URL. Off, reach Nextcloud only
+              inside the GVC or through `cpln port-forward`. Firewall changes take 30 seconds to a few minutes to
+              take effect.
+          - path: nextcloud.publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://cloud.example.com
+            description: >-
+              Only for a custom domain: the scheme and host, with no path or trailing slash. Empty uses the
+              canonical endpoint, or the internal address when the public endpoint is off.
+            help: Share links, notification emails and the desktop and mobile clients use this address.
+        rules:
+          - rule: self.nextcloud.publicUrl == '' || self.nextcloud.publicUrl.matches('^https?://[^/:]+(:[0-9]+)?$')
+            mirrors: nextcloud.validate
+            paths: [nextcloud.publicUrl]
+            message: Use the scheme and host only, with no path or trailing slash, such as https://cloud.example.com.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: nextcloud.validate
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+
+  - id: advanced
+    title: Advanced
+    description: The web tier's image, compute, PHP and upload limits, the cron worker, and with single-instance PostgreSQL its settings.
+    sections:
+      - title: Web tier
+        docs: "#configuration"
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              A new Nextcloud version takes Nextcloud offline for a few minutes while `occ upgrade` runs in
+              maintenance mode (HTTP 503). Upgrade one major version at a time and never downgrade. Copy
+              `config/config.php` somewhere safe first.
+            textExpression: >-
+              'A new Nextcloud version takes Nextcloud offline for a few minutes while `occ upgrade` runs in maintenance mode (HTTP 503). Upgrade one major version at a time and never downgrade. Copy `config/config.php` somewhere safe first.' +
+              (self.postgres.enabled ? ' The first upgrade of a release can also briefly restart the single-instance PostgreSQL, and Nextcloud with it.' : '')
+          - path: nextcloud.image
+            type: string
+            format: image
+            label: Nextcloud image
+            required: true
+            help: >-
+              Upgrade one major version at a time (for example 34 to 35), never downgrade. Upgrades run `occ upgrade`
+              in maintenance mode: Nextcloud answers 503 for a few minutes.
+          - path: nextcloud.resources
+            type: resources
+            label: Web resources
+            required: true
+            description: Per replica.
+            cpu: { min: 250m }
+            memory: { min: 1Gi }
+          - path: nextcloud.maxRequestWorkers
+            type: integer
+            label: Apache workers per replica
+            required: true
+            min: 5
+            max: 200
+            suggestions: [10, 20, 40]
+            description: Roughly 100 MiB each; raise it together with the maximum memory.
+          - path: nextcloud.php.memoryLimit
+            type: string
+            label: PHP memory limit
+            required: true
+            placeholder: 512M
+            pattern: '^[0-9]+[MG]$'
+            patternMessage: Use a size such as 512M or 1G.
+            description: At least 512M.
+          - path: nextcloud.uploads.maxSize
+            type: string
+            label: Largest single upload
+            required: true
+            placeholder: 16G
+            pattern: '^[1-9][0-9]*[MG]$'
+            patternMessage: Use a size such as 16G or 512M.
+            description: >-
+              The largest single request body. Browser and desktop uploads are chunked and not bound by it; single
+              WebDAV PUTs are, and must also finish within 600 seconds.
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.nextcloud.image) < 0 || imageMajor(oldSelf.nextcloud.image) < 0 ||
+              (imageMajor(self.nextcloud.image) >= imageMajor(oldSelf.nextcloud.image) &&
+              imageMajor(self.nextcloud.image) <= imageMajor(oldSelf.nextcloud.image) + 1)
+            severity: warning
+            paths: [nextcloud.image]
+            messageExpression: >-
+              imageMajor(self.nextcloud.image) < imageMajor(oldSelf.nextcloud.image) ?
+              'Nextcloud cannot downgrade: the installed data is on version ' + string(imageMajor(oldSelf.nextcloud.image)) + '. Keep that major version or a newer one.' :
+              'Nextcloud upgrades one major version at a time: go from ' + string(imageMajor(oldSelf.nextcloud.image)) + ' to ' + string(imageMajor(oldSelf.nextcloud.image) + 1) + ' first, then on.'
+            message: Upgrade Nextcloud one major version at a time, and never downgrade.
+          - rule: self.nextcloud.maxRequestWorkers >= 5 && self.nextcloud.maxRequestWorkers <= 200
+            mirrors: nextcloud.validate
+            paths: [nextcloud.maxRequestWorkers]
+            message: Use between 5 and 200 workers.
+          - rule: >-
+              !self.nextcloud.php.memoryLimit.matches('^[0-9]+[MG]$') ||
+              (self.nextcloud.php.memoryLimit.endsWith('G') ? int(self.nextcloud.php.memoryLimit.substring(0, size(self.nextcloud.php.memoryLimit) - 1)) * 1024 : int(self.nextcloud.php.memoryLimit.substring(0, size(self.nextcloud.php.memoryLimit) - 1))) >= 512
+            mirrors: nextcloud.validate
+            paths: [nextcloud.php.memoryLimit]
+            message: Use at least 512M, Nextcloud's minimum.
+          - rule: self.nextcloud.php.memoryLimit.matches('^[0-9]+[MG]$')
+            mirrors: nextcloud.validate
+            paths: [nextcloud.php.memoryLimit]
+            message: Use a size such as 512M or 1G.
+          - rule: self.nextcloud.uploads.maxSize.matches('^[1-9][0-9]*[MG]$')
+            mirrors: nextcloud.validate
+            paths: [nextcloud.uploads.maxSize]
+            message: Use a size such as 16G or 512M.
+      - title: Cron worker
+        fields:
+          - path: cron.resources
+            type: resources
+            label: Cron worker resources
+            required: true
+            description: One replica, always; it runs Nextcloud's background jobs every 5 minutes.
+            cpu: { min: 50m }
+            memory: { min: 256Mi }
+      - title: Database server
+        when: self.postgres.enabled
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
+              different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed Postgres major version; a different major version does
+              not start on it. Upgrade with a dump and restore instead.
+      - title: Database storage
+        when: self.postgres.enabled
+        docs: "/reference/volumeset#capacity-and-billing"
+        fields:
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Database capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            help: >-
+              Holds the users, shares, file index and activity. Uninstalling the release deletes the volume set, so
+              the data does not survive a reinstall.
+        rules:
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow database storage automatically
+        when: self.postgres.enabled
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Database network
+        when: self.postgres.enabled
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              Both Nextcloud workloads connect to the database like any other workload: keep Same GVC, or add them
+              under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.postgres.internalAccess.type == 'workload-list' && self.postgres.backup.enabled && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'The chart does not add its own workloads to the list. Add //gvc/' + context.gvc + '/workload/' +
+              context.releaseName + '-postgres-backup, or the backup job cannot connect.'
+            fix:
+              path: postgres.internalAccess.workloads
+              items: "['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup']"
+            message: The chart does not add its own workloads to the list; add the backup workload, or it cannot connect.
+
+# Rules over the imported values and YAML-only settings: their issues show on the fields' steps, or on Review
+# when they have no paths.
+rules:
+  # A `gvc` values key only arrives through YAML edits, so this root rule has no paths: it blocks Install
+  # and shows on Review.
+  - rule: "!has(self.gvc)"
+    mirrors: nextcloud.validate
+    message: >-
+      Remove the `gvc` key from the values: Nextcloud deploys into the GVC you install it into and never creates
+      one.
+  # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: nextcloud.validateDatabase
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: nextcloud.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Nextcloud's database endpoint.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    mirrors: nextcloud.validateDatabase
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Nextcloud, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud') in self.postgres.internalAccess.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud-cron') in self.postgres.internalAccess.workloads
+    mirrors: nextcloud.validateDatabase
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-nextcloud-cron, or Nextcloud cannot reach its database.'
+    message: Add both Nextcloud workloads to the list, or Nextcloud cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud') in self.postgresHA.internal_access.workloads &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud-cron') in self.postgresHA.internal_access.workloads
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-nextcloud-cron, or Nextcloud cannot reach its database.'
+    message: Add both Nextcloud workloads to the list, or Nextcloud cannot reach its database.
+  - when: self.redis.enabled
+    rule: self.redis.mode == 'dev'
+    mirrors: nextcloud.validateRedis
+    message: >-
+      Redis must run as a single node: set redis.mode to dev. Nextcloud connects to one Redis endpoint and cannot
+      follow a Sentinel failover.
+  - when: self.redis.enabled
+    rule: >-
+      !has(self.redis.redis.auth.password) ||
+      (!(has(self.redis.redis.auth.password.enabled) && dyn(self.redis.redis.auth.password)['enabled'] == true) &&
+      (!has(self.redis.redis.auth.password.value) || dyn(self.redis.redis.auth.password)['value'] == 'change-me-redis-password'))
+    mirrors: nextcloud.validateRedis
+    message: >-
+      redis.redis.auth.password is not supported: a plaintext Redis password would land in the release. Remove it
+      and name a Redis password secret instead.
+  - when: self.redis.enabled
+    rule: self.redis.redis.auth.fromSecret.enabled == true
+    mirrors: nextcloud.validateRedis
+    message: >-
+      redis.redis.auth.fromSecret.enabled must stay true: Redis holds Nextcloud's browser login sessions, so it
+      must require a password.
+  - when: self.redis.enabled
+    rule: "!has(self.redis.redis.publicAccess) || !has(self.redis.redis.publicAccess.enabled) || dyn(self.redis.redis.publicAccess)['enabled'] != true"
+    mirrors: nextcloud.validateRedis
+    message: >-
+      Redis public access is not supported: Nextcloud connects to Redis on port 6379 inside the GVC, and public
+      access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
+  - when: self.redis.enabled && self.redis.redis.firewall.internal_inboundAllowType == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud') in self.redis.redis.firewall.inboundAllowWorkload &&
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud-cron') in self.redis.redis.firewall.inboundAllowWorkload
+    severity: warning
+    paths: [redis.redis.firewall.inboundAllowWorkload]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-nextcloud and //gvc/' + context.gvc +
+      '/workload/' + context.releaseName + '-nextcloud-cron, or Nextcloud cannot reach Redis.'
+    message: Add both Nextcloud workloads to the list, or Nextcloud cannot reach Redis.
+  # Restated from the redis descriptor: the exclusions above dropped these checks, which the redis subchart still
+  # performs (redis.validateMode, redis.validateEngine, redis.validateBackupConfig). They only trip on YAML edits.
+  - when: self.redis.enabled
+    rule: >-
+      !self.redis.sentinel.publicAccess.enabled && !self.redis.sentinel.persistence.enabled &&
+      !self.redis.sentinel.auth.password.enabled && !self.redis.sentinel.auth.fromSecret.enabled
+    message: >-
+      Nextcloud runs Redis in dev mode, which has no Sentinel: set redis.sentinel.publicAccess.enabled,
+      redis.sentinel.persistence.enabled, redis.sentinel.auth.password.enabled and
+      redis.sentinel.auth.fromSecret.enabled to false.
+  - when: self.redis.enabled
+    rule: >-
+      self.redis.engine in ['redis', 'valkey'] &&
+      (self.redis.engine != 'valkey' || (self.redis.valkeyImage != null && self.redis.valkeyImage != ''))
+    message: redis.engine must be redis or valkey, and redis.valkeyImage must be set when it is valkey.
+  - when: self.redis.enabled && self.redis.backup.enabled
+    rule: self.redis.backup.provider in ['aws', 'gcp']
+    message: Redis backups need redis.backup.provider set to aws or gcp.
+
+yamlOnly:
+  - path: redis.mode
+    reason: Fixed to dev (one Redis node); the chart refuses production mode (nextcloud.validateRedis), since Nextcloud cannot follow Sentinel.
+  - path: redis.redis.auth.fromSecret.enabled
+    reason: Always on; the chart refuses an unauthenticated Redis (nextcloud.validateRedis), since Redis holds browser login sessions.
+  - path: postgres.pgbouncer
+    reason: Nextcloud connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Nextcloud connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+  - path: redis.redis.auth.password.enabled
+    reason: The chart refuses a plaintext Redis password (it would land in the release); name a Redis password secret instead.
+  - path: redis.redis.publicAccess
+    reason: The chart refuses Redis public access (nextcloud.validateRedis); Nextcloud connects to Redis on port 6379 inside the GVC.
+  - path: redis.engine
+    reason: Nextcloud's Redis holds no data of record, so the server stays the redis chart's default (Redis).
+  - path: redis.valkeyImage
+    reason: Read only with redis.engine valkey, which stays at the Redis default.
+  - path: redis.redis.persistence
+    reason: Nextcloud's Redis holds no data of record (locks, cache, sessions); a restart only signs browser sessions out, so it needs no volume.
+  - path: redis.backup
+    reason: Nextcloud's Redis holds no data of record, so there is nothing to back up; the database backups cover Nextcloud's metadata.
+  - path: redis.redis.exporter
+    reason: A metrics sidecar for a cache Nextcloud fills and empties itself; the platform's workload metrics cover the node.
+  - path: redis.suspend
+    reason: Suspending Redis stops Nextcloud's file locks and sessions while Nextcloud keeps running.
+  - path: redis.redis.probes
+    reason: The redis chart's health probes fit a node that starts empty, as Nextcloud's Redis does.
+  - path: redis.redis.timeoutSeconds
+    reason: Request timeout tuning for the Redis workload; the redis chart's default fits Nextcloud's short commands.
+  - path: redis.redis.env
+    reason: Extra Redis workload settings; Nextcloud needs none.
+  - path: redis.redis.tags
+    reason: Extra Redis workload settings; Nextcloud needs none.
+  - path: redis.redis.requestRetryPolicy
+    reason: Extra Redis workload settings; Nextcloud needs none.
+  - path: redis.redis.replicaDirect
+    reason: Per-replica DNS names; Nextcloud connects through the workload's own name, so it does not need one.
+
+# No Nextcloud version precedes 1.0.0, and every Nextcloud release bundles redis 3.9.1 or later. These claim the
+# redis keys this import excludes that the redis chart's own migrations touch (written for redis 3.7.0 and older
+# releases), so those migrations never run here.
+migrations:
+  - fromVersions: "<1.0.0"
+    assume: { redis.engine: redis, redis.backup.enabled: false, redis.redis.replicaDirect: false, redis.redis.image: "redis:8" }
+  - fromVersions: "<1.0.0"
+    from: redis.redis.resources.cpu
+    note: No Nextcloud release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.resources.memory
+    note: No Nextcloud release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.cpu
+    note: No Nextcloud release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.memory
+    note: No Nextcloud release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_inboundAllowCIDR
+    note: No Nextcloud release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_outboundAllowCIDR
+    note: No Nextcloud release carried this Redis key; it is dropped.

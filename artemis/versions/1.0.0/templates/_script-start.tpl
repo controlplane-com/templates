@@ -176,8 +176,11 @@ fi
 # --- Gate: open the client acceptors ----------------------------------------
 # One location: as soon as the broker has started. Two locations: once this
 # broker has caught up from its peer (the peer's mirror queue towards us has a
-# consumer and no messages), or after ARTEMIS_CATCHUP_TIMEOUT seconds when the
-# peer cannot be reached.
+# consumer and at most CATCHUP_MAX messages on two polls in a row), or after
+# ARTEMIS_CATCHUP_TIMEOUT seconds when the peer cannot be reached. A small
+# backlog rather than exactly 0: while the peer is taking writes its mirror
+# queue always holds a few events in flight, and waiting for 0 would hold the
+# client ports closed until the timeout.
 jx() {
   local b="$1" a
   a=$(printf '%s:%s' "${ARTEMIS_USER}" "${ARTEMIS_PASSWORD}" | base64 -w0)
@@ -193,14 +196,19 @@ gate() {
   local t0=${SECONDS} why="no peer"
   if [ -n "${PEERLOC}" ]; then
     log "broker started; client acceptors closed until caught up from ${PEERLOC}"
-    local MYQ='$ACTIVEMQ_ARTEMIS_MIRROR_to_'"${ME//-/_}" row
+    local MYQ='$ACTIVEMQ_ARTEMIS_MIRROR_to_'"${ME//-/_}" row CATCHUP_MAX=20 near=0
     why="timeout"
     while [ $((SECONDS - t0)) -lt "${ARTEMIS_CATCHUP_TIMEOUT:-180}" ]; do
       row=$(./bin/artemis queue stat --url "tcp://${PEER}:61617" --user "${ARTEMIS_USER}" --password "${ARTEMIS_PASSWORD}" \
               --queueName "${MYQ}" --maxColumnSize -1 2>/dev/null \
             | awk -F'|' -v q="${MYQ}" '{ n = $2; gsub(/ /, "", n) } n == q { gsub(/ /, ""); print $4 " " $5; exit }')
       set -- ${row}
-      if [ -n "${row}" ] && [ "$1" -ge 1 ] 2>/dev/null && [ "$2" -eq 0 ] 2>/dev/null; then why="caught-up"; break; fi
+      if [ -n "${row}" ] && [ "$1" -ge 1 ] 2>/dev/null && [ "$2" -le "${CATCHUP_MAX}" ] 2>/dev/null; then
+        near=$((near + 1))
+        if [ "${near}" -ge 2 ]; then why="caught-up (backlog $2)"; break; fi
+      else
+        near=0
+      fi
       sleep 3
     done
     why="${why} after $((SECONDS - t0))s"

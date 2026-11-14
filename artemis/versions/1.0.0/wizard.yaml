@@ -77,8 +77,9 @@ steps:
             help: >-
               Persistent messages are sent much more slowly than on a single broker, because every write
               is synced to a shared network filesystem. Clients must use AMQP failover URLs that list both
-              brokers; Core-protocol (JMS `tcp://`) clients do not follow a takeover. One location only:
-              it does not combine with the two-location mirror.
+              brokers (AMQP or OpenWire); Core-protocol (`tcp://`) clients do not follow a takeover. One
+              location only: it does not combine with the two-location mirror, and the web console stays
+              private.
       - id: mirror
         title: Mirror
         docs: "#mirror"
@@ -198,6 +199,13 @@ steps:
         message: >-
           A primary and backup broker run in one location and do not combine with the two-location mirror.
           List one location, or turn this off.
+      - rule: "!(self.ha.enabled && self.publicAccess.enabled)"
+        mirrors: artemis.validateHa
+        paths: [publicAccess.enabled]
+        message: >-
+          With a primary and backup broker the web console stays private: the public endpoint would spread
+          your requests over both brokers, which keep separate logins. Reach the console with
+          `cpln port-forward --replica`.
       - rule: oldSelf == null || self.ha.enabled == oldSelf.ha.enabled
         paths: [ha.enabled]
         message: >-
@@ -412,7 +420,8 @@ steps:
               ports always stay internal.
             help: >-
               With it off, reach the console with `cpln port-forward RELEASE_NAME-artemis 8161:8161 --gvc
-              GVC_NAME` and open `http://localhost:8161/console`.
+              GVC_NAME` and open `http://localhost:8161/console`. Not available with a primary and backup
+              broker.
         rules:
           - rule: self.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
             mirrors: artemis.validateAccess

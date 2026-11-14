@@ -170,6 +170,9 @@ with the two-location mirror.
 {{- if and .Values.ha.enabled (ne (len .Values.locations) 1) -}}
 {{- fail "artemis: ha.enabled runs a primary/backup pair in one location and does not combine with the two-location mirror. List exactly one location, or set ha.enabled: false." -}}
 {{- end -}}
+{{- if and .Values.ha.enabled .Values.publicAccess.enabled -}}
+{{- fail "artemis: ha.enabled does not combine with publicAccess.enabled: the public endpoint spreads console requests over both brokers, whose logins are separate. Reach each broker's console with cpln port-forward --replica (see the README), or set ha.enabled: false." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

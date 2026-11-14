@@ -1,0 +1,176 @@
+# Feature checks for the nextcloud template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_user, admin_password).
+#
+# The checks are bash, curl and PHP run in the Nextcloud web container against its own Apache on
+# 127.0.0.1:80 with `Host: localhost` (always a trusted domain); occ runs as www-data, the owner of
+# config.php. The runner reads any brace-wrapped word as a placeholder, so the scripts never use
+# shell parameter braces, curl write-out variables or PHP string interpolation: status codes are read
+# from the response headers instead.
+checks:
+  - id: status-installed
+    description: occ status reports Nextcloud installed, not in maintenance mode and with no upgrade pending.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        setpriv --reuid=33 --regid=33 --init-groups php /var/www/html/occ status --output=json 2>/dev/null \
+          | php -r '$s = json_decode(stream_get_contents(STDIN), true);
+                    $ok = ($s["installed"] ?? null) === true && ($s["maintenance"] ?? null) === false
+                          && ($s["needsDbUpgrade"] ?? null) === false;
+                    echo ($ok ? "STATUS_OK" : "STATUS_BAD " . json_encode($s)) . "\n";'
+    expect:
+      stdout: "^STATUS_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: admin-webdav
+    description: >-
+      The admin from the prerequisite secret signs in over WebDAV (PROPFIND 207), and a wrong password is
+      refused with 401.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        code() { curl -s -o /dev/null -D - "$@" | awk 'NR == 1 { print $2 }'; }
+        DAV="http://127.0.0.1/remote.php/dav/files/{admin_user}/"
+        OK="$(code -X PROPFIND -H 'Depth: 0' -H 'Host: localhost' -u '{admin_user}:{admin_password}' "$DAV")"
+        if [ "$OK" = "207" ]; then echo LOGIN_OK; else echo "LOGIN_BAD $OK"; fi
+        BAD="$(code -X PROPFIND -H 'Depth: 0' -H 'Host: localhost' -u '{admin_user}:wrong-password-e2e' "$DAV")"
+        if [ "$BAD" = "401" ]; then echo WRONG_REFUSED; else echo "WRONG_ACCEPTED $BAD"; fi
+    expect:
+      stdout: "(?s)^LOGIN_OK\nWRONG_REFUSED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: file-roundtrip
+    description: A 5 MiB file uploaded over WebDAV downloads byte for byte (sha256 match), tagged with the running version.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        yes 'nextcloud-e2e-{version}' | head -c 5242880 > /tmp/e2e-up.bin
+        URL="http://127.0.0.1/remote.php/dav/files/{admin_user}/e2e-{version}.bin"
+        curl -s -o /dev/null -X PUT -H 'Host: localhost' -u '{admin_user}:{admin_password}' -T /tmp/e2e-up.bin "$URL"
+        curl -s -o /tmp/e2e-down.bin -H 'Host: localhost' -u '{admin_user}:{admin_password}' "$URL"
+        A="$(sha256sum < /tmp/e2e-up.bin | cut -d' ' -f1)"
+        B="$(sha256sum < /tmp/e2e-down.bin | cut -d' ' -f1)"
+        if [ "$A" = "$B" ]; then echo ROUNDTRIP_OK; else echo "ROUNDTRIP_BAD $(stat -c %s /tmp/e2e-down.bin) bytes"; fi
+        rm -f /tmp/e2e-up.bin /tmp/e2e-down.bin
+    expect:
+      stdout: "^ROUNDTRIP_OK$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: file-survives
+    description: The file written by the version installed first still downloads byte for byte (after an upgrade too).
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        A="$(yes 'nextcloud-e2e-{installed_version}' | head -c 5242880 | sha256sum | cut -d' ' -f1)"
+        curl -s -o /tmp/e2e-old.bin -H 'Host: localhost' -u '{admin_user}:{admin_password}' \
+          "http://127.0.0.1/remote.php/dav/files/{admin_user}/e2e-{installed_version}.bin"
+        B="$(sha256sum < /tmp/e2e-old.bin | cut -d' ' -f1)"
+        if [ "$A" = "$B" ]; then echo SURVIVED; else echo "LOST $(stat -c %s /tmp/e2e-old.bin) bytes"; fi
+        rm -f /tmp/e2e-old.bin
+    expect:
+      stdout: "^SURVIVED$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: cron-runs
+    description: >-
+      Background jobs run as system cron from the cron worker: the mode is cron and the last run is less than
+      7 minutes old.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        occ() { setpriv --reuid=33 --regid=33 --init-groups php /var/www/html/occ "$@"; }
+        MODE="$(occ config:app:get core backgroundjobs_mode)"
+        LAST="$(occ config:app:get core lastcron || echo 0)"
+        AGE=$(( $(date +%s) - LAST ))
+        if [ "$MODE" = "cron" ]; then echo MODE_CRON; else echo "MODE_BAD $MODE"; fi
+        if [ "$LAST" -gt 0 ] && [ "$AGE" -lt 420 ]; then echo CRON_RECENT; else echo "CRON_STALE last=$LAST age=$AGE"; fi
+    expect:
+      stdout: "(?s)^MODE_CRON\nCRON_RECENT$"
+    retries: 12
+    retryDelaySeconds: 30
+
+  - id: trusted-domains
+    description: An untrusted Host header is refused with 400, while the internal hostname is served (200).
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        code() { curl -s -o /dev/null -D - "$@" | awk 'NR == 1 { print $2 }'; }
+        EVIL="$(code -H 'Host: evil.invalid' http://127.0.0.1/index.php/login)"
+        if [ "$EVIL" = "400" ]; then echo UNTRUSTED_REFUSED; else echo "UNTRUSTED_SERVED $EVIL"; fi
+        OWN="$(code -H 'Host: {release}-nextcloud.{gvc}.cpln.local' http://127.0.0.1/index.php/login)"
+        if [ "$OWN" = "200" ]; then echo INTERNAL_OK; else echo "INTERNAL_BAD $OWN"; fi
+    expect:
+      stdout: "(?s)^UNTRUSTED_REFUSED\nINTERNAL_OK$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: redis-in-use
+    description: >-
+      File locking uses Redis, Redis holds keys after requests (read with AUTH), and a connection without
+      the password is refused with NOAUTH.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        curl -s -o /dev/null -H 'Host: localhost' http://127.0.0.1/index.php/login
+        LOCKING="$(setpriv --reuid=33 --regid=33 --init-groups php /var/www/html/occ config:system:get memcache.locking)"
+        if [ "$LOCKING" = '\OC\Memcache\Redis' ]; then echo LOCKING_REDIS; else echo "LOCKING_BAD $LOCKING"; fi
+        php -r '
+          $h = "{release}-redis.{gvc}.cpln.local";
+          $r = new Redis(); $r->connect($h, 6379, 5); $r->auth(getenv("NEXTCLOUD_CPLN_REDIS_PASSWORD"));
+          echo ($r->dbSize() > 0 ? "REDIS_KEYS" : "REDIS_EMPTY") . "\n";
+          $n = new Redis(); $n->connect($h, 6379, 5);
+          try { $n->ping(); echo "NOAUTH_ACCEPTED\n"; }
+          catch (Throwable $e) { echo (stripos($e->getMessage(), "NOAUTH") !== false ? "NOAUTH_REFUSED" : "NOAUTH_OTHER " . $e->getMessage()) . "\n"; }
+        '
+    expect:
+      stdout: "(?s)^LOCKING_REDIS\nREDIS_KEYS\nNOAUTH_REFUSED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: no-db-password-on-disk
+    description: >-
+      The database password is not in config.php on the shared volume (it comes from the environment),
+      while signed-in WebDAV requests keep working.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        N="$(grep -c "'dbpassword'" /srv/nextcloud/config/config.php || true)"
+        if [ "$N" = "0" ]; then echo NO_DBPASSWORD; else echo "DBPASSWORD_ON_DISK $N"; fi
+        C="$(curl -s -o /dev/null -D - -X PROPFIND -H 'Depth: 0' -H 'Host: localhost' -u '{admin_user}:{admin_password}' \
+          "http://127.0.0.1/remote.php/dav/files/{admin_user}/" | awk 'NR == 1 { print $2 }')"
+        if [ "$C" = "207" ]; then echo DAV_OK; else echo "DAV_BAD $C"; fi
+    expect:
+      stdout: "(?s)^NO_DBPASSWORD\nDAV_OK$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: well-known
+    description: The CalDAV discovery URL redirects (301) to the DAV endpoint, so calendar clients find it.
+    exec:
+      workload: "{release}-nextcloud"
+      container: nextcloud
+      script: |
+        H="$(curl -s -o /dev/null -D - -H 'Host: localhost' http://127.0.0.1/.well-known/caldav | tr -d '\r')"
+        S="$(printf '%s\n' "$H" | awk 'NR == 1 { print $2 }')"
+        L="$(printf '%s\n' "$H" | grep -i '^location:' | cut -d' ' -f2)"
+        case "$S $L" in
+          "301 "*/remote.php/dav/) echo WELLKNOWN_OK ;;
+          *) echo "WELLKNOWN_BAD $S $L" ;;
+        esac
+    expect:
+      stdout: "^WELLKNOWN_OK$"
+    retries: 3
+    retryDelaySeconds: 15

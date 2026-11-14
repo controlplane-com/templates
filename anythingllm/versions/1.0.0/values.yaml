@@ -1,0 +1,88 @@
+# ─── Image & Resources ────────────────────────────────────────────────────────
+image: mintplexlabs/anythingllm:1.19.0
+
+resources:
+  minCpu: 500m
+  maxCpu: 2000m     # at most 4x minCpu (stateful workload)
+  minMemory: 1Gi
+  maxMemory: 3Gi    # the built-in embedder and document parsing run in this container
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+# One volume holds everything: database, vector store (LanceDB), documents, models, MCP config and UI settings.
+volumeset:
+  capacity: 10 # GiB (platform minimum 10); can be expanded later, never shrunk
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+# Platform snapshots of the whole volume (no cloud account needed).
+backup:
+  enabled: true
+  schedule: "0 3 * * *" # cron in UTC with a single fixed minute; at most hourly
+  retention: 7d         # how long each snapshot is kept, e.g. 7d, 30d
+
+# ─── Keys (REQUIRED prerequisite secret) ──────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+# A `dictionary` secret with keys JWT_SECRET, SIG_KEY, SIG_SALT and AUTH_TOKEN (see README Prerequisites).
+# Never change it: SIG_KEY and SIG_SALT encrypt stored data.
+keys:
+  secretName: my-anythingllm-keys
+
+# ─── Admin account (REQUIRED prerequisite secret) ─────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+# A `dictionary` secret with keys `username` (lowercase letters, digits, . _ @ -; starts with a letter) and
+# `password` (8+ characters). Created on FIRST boot only, before anyone can sign in; later changes do nothing.
+admin:
+  secretName: my-anythingllm-admin
+
+# ─── Chat model (optional) ────────────────────────────────────────────────────
+# "" = choose in Settings → AI Providers → LLM after sign-in (kept on the volume).
+# When set here, these win over the UI on every restart.
+llm:
+  provider: ""          # "" | openai | anthropic | ollama | generic-openai | litellm
+  model: ""             # required when provider is set, e.g. gpt-4.1-mini, llama3.2
+  baseUrl: ""           # ollama / generic-openai / litellm, e.g. http://my-ollama-ollama.GVC_NAME.cpln.local:11434
+  contextWindow: 8192   # the model's token limit (ollama / generic-openai / litellm)
+  apiKeySecretName: ""  # opaque secret with the API key; required for openai and anthropic
+
+# ─── Embedding model ──────────────────────────────────────────────────────────
+# Changing the engine or model after documents are embedded breaks their search; re-embed them.
+embedding:
+  engine: native        # native (built in, CPU, no key) | ollama | generic-openai
+  model: ""             # required unless native, e.g. nomic-embed-text, text-embedding-3-small
+  baseUrl: ""           # e.g. http://my-ollama-ollama.GVC_NAME.cpln.local:11434 or https://api.openai.com/v1
+  maxChunkLength: 8192  # characters per chunk sent to the embedder (ollama / generic-openai)
+  apiKeySecretName: ""  # opaque secret; generic-openai only, optional
+
+# ─── MCP tool servers for agents (optional) ───────────────────────────────────
+# {} = manage the MCP config file yourself. Non-empty (or cplnMcp set) = the chart REPLACES the file on every start.
+mcp:
+  servers: {}
+  # time:                                   # stdio: runs inside the container and sees its environment
+  #   command: uvx
+  #   args: [mcp-server-time]
+  # my-tools:                               # HTTP
+  #   type: streamable                      # streamable | sse
+  #   url: http://my-mcp.GVC_NAME.cpln.local:8000/mcp
+  #   bearerTokenSecretName: ""             # opaque secret sent as "Authorization: Bearer <value>"
+
+# ─── Control Plane MCP server (optional prerequisite) ────────────────────────
+# Adds the Control Plane MCP server to the MCP config as "cpln", so agents can work with your org.
+# AnythingLLM's MCP client has no OAuth, so it authenticates with a service-account key: an `opaque`
+# secret (encoding: plain) holding the key. Every agent run then acts as that service account, so grant
+# it only what agents need (README, Prerequisites). "" = no Control Plane MCP server.
+cplnMcp:
+  keySecretName: ""             # e.g. my-anythingllm-cpln-mcp-key
+  url: https://mcp.cpln.io/mcp?toolsets=readonly  # read-only tools (no create, update or delete); https://mcp.cpln.io/mcp = every tool
+
+# ─── Telemetry ────────────────────────────────────────────────────────────────
+telemetry:
+  enabled: false # true = send anonymous usage events to AnythingLLM (PostHog)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true # UI, embed widget and API on the canonical *.cpln.app URL; false = reach it with cpln port-forward
+
+internalAccess: # which workloads inside Control Plane may call AnythingLLM (developer API)
+  type: none # none | same-gvc | same-org | workload-list
+  workloads: []
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

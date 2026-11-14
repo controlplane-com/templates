@@ -1,0 +1,20 @@
+{{- /*
+  READ-WRITE-MANY on purpose: one volume, mounted by every web replica AND the
+  cron worker, holding config, installed apps and (storage.type local) every
+  user file. A block volumeset (ext4/xfs) cannot be mounted by a standard
+  workload.
+
+  `performanceClass: shared` is declared explicitly: omitting it makes the API
+  backfill exactly that value, which is permanent drift from creation.
+
+  No `snapshots` block: shared volumes take none (see Important Notes in the README).
+*/}}
+kind: volumeset
+name: {{ include "nextcloud.volume.name" . }}
+description: Nextcloud config, apps and files (/srv/nextcloud)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "nextcloud.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: shared

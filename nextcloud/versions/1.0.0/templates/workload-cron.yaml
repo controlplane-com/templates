@@ -1,0 +1,63 @@
+kind: workload
+name: {{ include "nextcloud.cron.name" . }}
+description: Nextcloud background jobs (cron.php every 5 minutes)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "nextcloud.tags" . | nindent 4 }}
+spec:
+  {{- /*
+    ALWAYS exactly one replica: a separate workload rather than a sidecar (which
+    would run once per web replica) or a `cron` workload (which cold-starts the
+    image every 5 minutes, in every GVC location). NO PROBES and no ports:
+    `ready: true` here means the loop is running, not that jobs succeed.
+  */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nextcloud.identity.name" . }}
+  containers:
+    - name: cron
+      image: {{ .Values.nextcloud.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.cron.resources.minCpu | quote }}
+      cpu: {{ .Values.cron.resources.maxCpu | quote }}
+      minMemory: {{ .Values.cron.resources.minMemory | quote }}
+      memory: {{ .Values.cron.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{- include "nextcloud.inlineScript" (include "nextcloud.script.cron" .) | nindent 10 }}
+      env:
+        {{- include "nextcloud.env" . | nindent 8 }}
+      volumes:
+        - path: /srv/nextcloud
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "nextcloud.volume.name" . }}
+  defaultOptions:
+    autoscaling:
+      {{- include "nextcloud.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  localOptions:
+    {{- include "nextcloud.localOptions" (dict "root" . "scale" 1) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      The old worker stops BEFORE the new one starts, so a rollout never runs
+      two cron loops. Retained on `standard`.
+    */}}
+    maxSurgeReplicas: 0%
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      {{- include "nextcloud.externalFirewall" (dict "public" false) | nindent 6 }}
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

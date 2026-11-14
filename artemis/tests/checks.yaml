@@ -1,0 +1,201 @@
+# Feature checks for the artemis template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (user, password). The runner substitutes every {word} in a script, so shell variables here are
+# written $VAR, never with braces.
+#
+# The image ships the Artemis CLI (producer, consumer, queue stat) and bash with /dev/tcp, but no
+# curl, so STOMP, MQTT and Jolokia are spoken over /dev/tcp.
+checks:
+  - id: core-produce-consume
+    description: Ten messages produced over Core on 61616 are consumed back with the secret's login.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        Q="e2e.core.$(date +%s%N)"
+        ./bin/artemis producer --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+          --destination "queue://$Q" --message-count 10 2>&1 | grep -o 'Produced: [0-9]* messages'
+        ./bin/artemis consumer --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+          --destination "queue://$Q" --message-count 10 --receive-timeout 10000 --break-on-null 2>&1 \
+          | grep -o 'Consumed: [0-9]* messages' | tail -1
+    expect:
+      stdout: "^Consumed: 10 messages$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: amqp-5672-to-core
+    description: A message sent over AMQP 1.0 on 5672 reaches a Core consumer on 61616 unchanged.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        Q="e2e.amqp.$(date +%s%N)"; B="e2e-amqp-$(date +%s%N)"
+        ./bin/artemis producer --protocol amqp --url amqp://127.0.0.1:5672 --user '{user}' --password '{password}' \
+          --destination "queue://$Q" --message-count 1 --message "$B" >/dev/null 2>&1
+        ./bin/artemis consumer --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+          --destination "queue://$Q" --message-count 1 --receive-timeout 10000 --break-on-null --verbose 2>&1 \
+          | grep -q -- "$B" && echo "RECEIVED $B"
+    expect:
+      stdout: "^RECEIVED e2e-amqp-"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: wrong-password-refused
+    description: A producer with a wrong password is refused and sends nothing (the control for the checks above).
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        ./bin/artemis producer --url tcp://127.0.0.1:61616 --user '{user}' --password wrong-password \
+          --destination queue://e2e.refused --message-count 1 2>&1 | grep -o 'SECURITY_EXCEPTION\|Produced: [0-9]* messages' | sort -u
+    expect:
+      stdout: "^SECURITY_EXCEPTION$"
+      notStdout: "Produced:"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: stomp-roundtrip
+    description: A STOMP client logs in on 61613 and its message reaches a Core consumer; a wrong password gets ERROR.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        stomp() {  # $1 password, $2 body: prints the first frame the broker answers CONNECT with
+          exec 3<>/dev/tcp/127.0.0.1/61613 || return 1
+          printf 'CONNECT\naccept-version:1.2\nhost:localhost\nlogin:%s\npasscode:%s\n\n\0' '{user}' "$1" >&3
+          IFS= read -r -t 10 first <&3; echo "$first"
+          if [ "$first" = CONNECTED ]; then
+            printf 'SEND\ndestination:%s\ndestination-type:ANYCAST\ncontent-type:text/plain\nreceipt:r1\n\n%s\0' "$Q" "$2" >&3
+            timeout 5 grep -a -m1 -q 'receipt-id:r1' <&3
+          fi
+          exec 3<&-
+        }
+        Q="e2e.stomp.$(date +%s%N)"; B="e2e-stomp-$(date +%s%N)"
+        echo "BAD $(stomp wrong-password x)"
+        echo "GOOD $(stomp '{password}' "$B")"
+        ./bin/artemis consumer --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+          --destination "queue://$Q" --message-count 1 --receive-timeout 10000 --break-on-null --verbose 2>&1 \
+          | grep -q -- "$B" && echo "RECEIVED $B"
+    expect:
+      stdout: "^BAD ERROR\\s+GOOD CONNECTED\\s+RECEIVED e2e-stomp-"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: mqtt-connack
+    description: An MQTT 3.1.1 CONNECT on 1883 is accepted with the secret's login (CONNACK 0) and refused with a wrong password.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        export LC_ALL=C
+        hx() { printf "\\x$(printf %02x "$1")"; }
+        mq() {  # $1 user, $2 password: prints the 4 CONNACK bytes in hex
+          local u="$1" p="$2" cid="e2e$RANDOM"
+          exec 3<>/dev/tcp/127.0.0.1/1883 || return 1
+          { printf '\x10'; hx $(( 10 + 2 + ${#cid} + 2 + ${#u} + 2 + ${#p} ))
+            printf '\x00\x04MQTT\x04\xc2\x00\x3c'
+            printf '\x00'; hx ${#cid}; printf '%s' "$cid"
+            printf '\x00'; hx ${#u}; printf '%s' "$u"
+            printf '\x00'; hx ${#p}; printf '%s' "$p"; } >&3
+          timeout 5 head -c 4 <&3 | od -An -tx1 | tr -s ' ' | sed 's/^ //;s/ $//'
+          exec 3<&-
+        }
+        good=$(mq '{user}' '{password}'); bad=$(mq '{user}' wrong-password)
+        echo "GOOD $good"; echo "BAD $bad"
+        [ "$good" = "20 02 00 00" ] && case "$bad" in "20 02 00 04"|"20 02 00 05") echo "MQTT BOTH ARMS OK" ;; esac
+    expect:
+      stdout: "^MQTT BOTH ARMS OK$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 60
+
+  - id: heap-from-memory
+    description: The broker JVM's maximum heap is half the baseline's 1Gi memory.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        pid=$(pgrep -f org.apache.activemq.artemis.boot.Artemis | head -1)
+        tr '\0' '\n' < /proc/$pid/cmdline | grep -- '^-Xmx'
+    expect:
+      stdout: "^-Xmx512M$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 60
+
+  - id: single-no-mirror
+    description: >-
+      One location: the client acceptors start closed and the gate opened them (Jolokia reports the
+      61616 acceptor started), and no mirror connection is configured.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        P=/tmp/artemis/broker.properties
+        echo "CLOSED_AT_START $(grep -c 'params.autoStart=false' $P)"
+        echo "MIRROR_LINES $(grep -c '^AMQPConnections' $P)"
+        loc=$(sed -n 's/^name=//p' $P)
+        b='{"type":"read","mbean":"org.apache.activemq.artemis:broker=\"'$loc'\",component=acceptors,name=\"artemis\"","attribute":"Started"}'
+        a=$(printf '%s:%s' '{user}' '{password}' | base64 -w0)
+        exec 3<>/dev/tcp/127.0.0.1/8161
+        printf 'POST /console/jolokia/ HTTP/1.0\r\nHost: localhost\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' "$a" "${#b}" "$b" >&3
+        timeout 5 cat <&3 | grep -q '"value":true' && echo "ACCEPTOR_STARTED"
+    expect:
+      stdout: "^CLOSED_AT_START 5\\s+MIRROR_LINES 0\\s+ACCEPTOR_STARTED$"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 60
+
+  - id: persist-across-versions
+    description: >-
+      Five persistent messages left on a queue named after the version this scenario installed first
+      are still there. On a fresh install that is the same version; after an upgrade it proves the
+      journal on the volume carried over.
+    since: 1.0.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        Q='e2e.persist.{installed_version}'
+        count() {
+          ./bin/artemis queue stat --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+            --queueName "$Q" --maxColumnSize -1 2>/dev/null \
+            | awk -F'|' -v q="$Q" '{ n = $2; gsub(/ /, "", n) } n == q { m = $5; gsub(/ /, "", m); print m; exit }'
+        }
+        n=$(count)
+        if [ -z "$n" ] && [ '{version}' = '{installed_version}' ]; then
+          ./bin/artemis producer --url tcp://127.0.0.1:61616 --user '{user}' --password '{password}' \
+            --destination "queue://$Q" --message-count 5 >/dev/null 2>&1
+          n=$(count)
+        fi
+        [ "$n" -ge 5 ] 2>/dev/null && echo PERSISTED || echo "MISSING (messages on $Q: $n)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 120

@@ -1,0 +1,21 @@
+# artemis 1.0.0 — one broker in the CI GVC's location, the admin login in a prerequisite secret,
+# at the 1Gi floor (heap 512M). The two-location mirror needs two regions, so it is tested live,
+# not here.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [password]
+    entries: {username: admin}
+
+vars:
+  user: admin
+  password: "{secrets.creds.password}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  locations:
+    - name: aws-us-east-1               # the CI GVC's location (set explicitly, not left to the default)
+  resources: {cpu: 500m, memory: 1Gi}   # the smallest supported size

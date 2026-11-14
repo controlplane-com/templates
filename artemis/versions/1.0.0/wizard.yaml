@@ -1,0 +1,454 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Apache Artemis
+# The chart lists its locations and runs nothing in the GVC's other locations (defaultOptions scale 0).
+# No maxLocations: two listed locations may sit in a larger GVC.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: brokers
+    title: Brokers and locations
+    description: Where the brokers run, how a restarted broker catches up, and their image and compute.
+    sections:
+      - fields:
+          - type: note
+            when: context.mode == 'upgrade' && !self.ha.enabled
+            text: >-
+              An upgrade restarts every broker at once; clients are refused until the brokers are back.
+          - type: note
+            when: context.mode == 'upgrade' && self.ha.enabled
+            text: >-
+              An upgrade restarts the two brokers one at a time. Each restart of the active broker hands
+              its clients to the other one, which takes a couple of seconds.
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.locations.map(l, l.name)))
+            text: GVC locations that are not listed here run nothing.
+            textExpression: >-
+              'GVC locations not listed here run nothing: ' +
+              context.gvcLocations.filter(g, !(g in self.locations.map(l, l.name))).join(', ') + '.'
+          - path: locations
+            type: list
+            label: Locations
+            docs: "#locations"
+            required: true
+            minItems: 1
+            maxItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "" }
+            itemLabel: item.name
+            description: >-
+              One location runs one broker; two run one broker each, mirrored. A location not in this
+              GVC runs nothing.
+            help: >-
+              With two locations, the brokers copy every message, acknowledgement and queue change to each
+              other. Choose below whether one location serves clients (active-passive) or both do
+              (active-active).
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              rules:
+                - rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not on the target GVC, so no broker would run there. Add it to the
+                    GVC or pick one of its locations.
+      - id: ha
+        title: High availability
+        docs: "#high-availability"
+        when: size(self.locations) == 1 || self.ha.enabled
+        fields:
+          - path: ha.enabled
+            type: boolean
+            label: Primary and backup broker
+            description: >-
+              Runs a primary and a backup broker in your one location on a shared volume. When the active
+              broker stops, the other takes over in about two seconds. Choose at install: it cannot be
+              changed later.
+            help: >-
+              Persistent messages are sent much more slowly than on a single broker, because every write
+              is synced to a shared network filesystem. Clients must use AMQP failover URLs that list both
+              brokers (AMQP or OpenWire); Core-protocol (`tcp://`) clients do not follow a takeover. One
+              location only: it does not combine with the two-location mirror, and the web console stays
+              private.
+      - id: mirror
+        title: Mirror
+        docs: "#mirror"
+        when: size(self.locations) == 2
+        fields:
+          - path: mirror.mode
+            type: enum
+            label: Mode
+            widget: cards
+            required: true
+            options:
+              - value: active-passive
+                label: Active-passive
+                description: >-
+                  The primary location serves clients; the other keeps a copy and takes over when the
+                  primary stops serving.
+              - value: active-active
+                label: Active-active
+                description: >-
+                  Both locations serve clients. Consume each queue in one location at a time, or messages
+                  are delivered twice.
+          - path: mirror.primary
+            type: enum
+            label: Primary location
+            when: self.mirror.mode == 'active-passive'
+            optionsFrom: >-
+              [{'value': '', 'label': 'First location in the list'}] +
+              self.locations.filter(l, l.name != null && l.name != '').map(l, {'value': l.name, 'label': l.name})
+            description: The location that serves clients while it is up.
+          - path: mirror.takeoverSeconds
+            type: integer
+            label: Takeover delay
+            unit: seconds
+            when: self.mirror.mode == 'active-passive'
+            required: true
+            min: 30
+            max: 1800
+            suggestions: [60, 120, 300]
+            description: >-
+              How long the primary broker must be unreachable before the other location opens to clients. A shorter primary restart is waited out.
+          - type: note
+            when: self.mirror.mode == 'active-active'
+            text: >-
+              Each queue is consumed in one location at a time; two locations consuming one queue at once
+              get duplicates.
+          - path: mirror.catchUpTimeoutSeconds
+            type: integer
+            label: Catch-up timeout
+            unit: seconds
+            required: true
+            min: 30
+            max: 1800
+            suggestions: [120, 180, 300]
+            description: >-
+              A restarted broker refuses clients until it has caught up from the other location, or until
+              this much time has passed when the other location cannot be reached.
+      - id: image
+        title: Image and resources
+        docs: "#image-and-resources"
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Artemis image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources per broker
+            required: true
+            description: The JVM heap is half of the memory.
+            cpu: { min: 25m }
+            memory: { min: 1Gi }
+    rules:
+      - rule: size(self.locations) >= 1
+        mirrors: artemis.validateLocations
+        paths: [locations]
+        message: List the GVC location the broker runs in.
+      - rule: size(self.locations) <= 2
+        mirrors: artemis.validateLocations
+        paths: [locations]
+        message: Mirroring more than two brokers duplicates messages; list one or two locations.
+      - rule: isUnique(self.locations.filter(l, l.name != null && l.name != '').map(l, l.name))
+        mirrors: artemis.validateLocations
+        paths: [locations]
+        message: List each location once.
+      - rule: self.locations.all(l, l.name != null && l.name.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'))
+        mirrors: artemis.validateLocations
+        paths: [locations]
+        message: Every location needs a valid location name, such as `aws-us-east-1`.
+      - rule: self.mirror.catchUpTimeoutSeconds >= 30 && self.mirror.catchUpTimeoutSeconds <= 1800
+        mirrors: artemis.validateMirror
+        paths: [mirror.catchUpTimeoutSeconds]
+        message: Set the catch-up timeout from 30 to 1800 seconds.
+      - rule: self.mirror.mode == 'active-passive' || self.mirror.mode == 'active-active'
+        mirrors: artemis.validateMirror
+        paths: [mirror.mode]
+        message: Choose active-passive or active-active.
+      - rule: self.mirror.takeoverSeconds >= 30 && self.mirror.takeoverSeconds <= 1800
+        mirrors: artemis.validateMirror
+        paths: [mirror.takeoverSeconds]
+        message: Set the takeover delay from 30 to 1800 seconds.
+      - rule: >-
+          self.mirror.primary == null || self.mirror.primary == '' ||
+          self.locations.exists(l, l.name == self.mirror.primary)
+        mirrors: artemis.validateMirror
+        paths: [mirror.primary]
+        message: The primary location must be one of the listed locations.
+      - rule: >-
+          self.resources.memory.matches('^[0-9]+(Mi|Gi)$') &&
+          memoryBytes(self.resources.memory) >= memoryBytes('1Gi')
+        mirrors: artemis.validateResources
+        paths: [resources]
+        message: Give each broker its memory as a whole number of `Mi` or `Gi`, at least `1Gi`.
+      - rule: "!self.ha.enabled || size(self.locations) == 1"
+        mirrors: artemis.validateHa
+        paths: [ha.enabled]
+        message: >-
+          A primary and backup broker run in one location and do not combine with the two-location mirror.
+          List one location, or turn this off.
+      - rule: "!(self.ha.enabled && self.publicAccess.enabled)"
+        mirrors: artemis.validateHa
+        paths: [publicAccess.enabled]
+        message: >-
+          With a primary and backup broker the web console stays private: the public endpoint would spread
+          your requests over both brokers, which keep separate logins. Reach the console with
+          `cpln port-forward --replica`.
+      - rule: oldSelf == null || self.ha.enabled == oldSelf.ha.enabled
+        paths: [ha.enabled]
+        message: >-
+          Keep this as installed. It changes the broker's volume type, which an existing volume cannot be
+          changed to, and messages do not carry over. To switch, install a new release.
+      - rule: size(self.locations) != 1
+        severity: info
+        paths: [locations]
+        message: >-
+          With one location, losing that location stops the broker. Surviving a location loss needs two
+          locations, with failover clients or your application in both.
+      - rule: >-
+          oldSelf == null || self.locations.all(l, l.name == null || l.name == '' ||
+          oldSelf.locations.exists(o, o.name == l.name))
+        severity: info
+        paths: [locations]
+        message: >-
+          Messages already on the existing broker are not copied to the new one; only messages sent after
+          the upgrade are mirrored. The existing broker restarts.
+      - rule: >-
+          oldSelf == null || size(oldSelf.locations) == 0 ||
+          self.locations.exists(l, oldSelf.locations.exists(o, o.name == l.name))
+        severity: warning
+        paths: [locations]
+        message: >-
+          The broker moves to a new, empty volume; messages on the old location's broker are left behind.
+          Keep at least one of the installed locations.
+      - rule: oldSelf == null || !(size(oldSelf.locations) == 2 && size(self.locations) == 1)
+        severity: info
+        paths: [locations]
+        message: >-
+          The broker in the removed location stops, with any messages on it. The other broker keeps
+          serving.
+
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the broker's admin username and password.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all.
+      - path: credentialsSecretName
+        type: ref
+        label: Credentials secret
+        required: true
+        docs: "#credentials"
+        description: >-
+          A dictionary secret with the keys `username` and `password`: the broker admin, the web console
+          login, the login your clients use and, with two locations, the mirror's login.
+        help: >-
+          Use a hex password, for example from `openssl rand -hex 24`: no spaces, quotes or backslashes.
+          The brokers apply the secret on every start, so after you change it, force a redeployment of
+          the workload. Rotate the password and keep the username: a new username adds a second admin,
+          and the old one keeps working.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            suggestName: "context.releaseName + '-artemis-credentials'"
+    rules:
+      - rule: self.credentialsSecretName != ''
+        mirrors: artemis.validateCredentials
+        paths: [credentialsSecretName]
+        message: The credentials secret is required.
+
+  - id: storage
+    title: Storage
+    description: The broker volumes, their snapshots and their growth.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per broker
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            docs: "/reference/volumeset#capacity-and-billing"
+            description: >-
+              While one location is down, the other broker keeps the messages to copy to it, so its volume
+              grows with traffic for as long as the outage lasts. With a primary and backup broker, one
+              shared volume holds the data of both.
+      - id: snapshots
+        title: Volume snapshots
+        description: >-
+          Snapshots of every broker's volume. A final snapshot is taken when the volume set is deleted,
+          with or without a schedule.
+        docs: "/reference/volumeset#snapshots"
+        when: "!self.ha.enabled"
+        fields:
+          - path: volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.volumeset.snapshots.schedule != null &&
+              (self.volumeset.snapshots.schedule == '' ||
+              self.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: artemis.validateSnapshots
+            paths: [volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        description: Useful when a location can be down for long, since the other broker's volume grows meanwhile.
+        fields:
+          - path: volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.volumeset.autoscaling.maxCapacity >= self.volumeset.capacity
+            paths: [volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+    rules:
+      - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+        paths: [volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: network
+    title: Network
+    description: Which workloads can connect to the brokers, and whether the web console is public.
+    sections:
+      - id: access
+        title: Network access
+        docs: "#network-access"
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: Applies to every message port and to the web console inside Control Plane.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, plus this release's brokers.
+          # workload.yaml writes any non-empty list into inboundAllowWorkload under Same GVC and Same org too.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: >-
+              Your client workloads, for example from another GVC. This release's brokers always have
+              access to each other, so list only clients.
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+          - path: publicAccess.enabled
+            type: boolean
+            label: Publish the web console
+            description: >-
+              Publishes only the web console, over HTTPS on the workload's public endpoint. The message
+              ports always stay internal.
+            help: >-
+              With it off, reach the console with `cpln port-forward RELEASE_NAME-artemis 8161:8161 --gvc
+              GVC_NAME` and open `http://localhost:8161/console`. Not available with a primary and backup
+              broker.
+        rules:
+          - rule: self.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
+            mirrors: artemis.validateAccess
+            paths: [internalAccess.type]
+            message: Choose who can connect.
+          - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [internalAccess.workloads]
+            message: >-
+              Same GVC already allows every workload in this GVC, so those entries can be removed from the
+              list.
+          - when: self.internalAccess.type == 'same-org'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: Same org already lets every workload of the org connect, so these entries add nothing.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: info
+            paths: [internalAccess.workloads]
+            message: With "Specific workloads" and an empty list, no client can connect.
+
+rules:
+  - rule: "!has(self.gvc)"
+    mirrors: artemis.validateNoGvcKey
+    paths: [locations]
+    message: >-
+      The `gvc` key is not supported: this chart deploys into the GVC you install into. List its
+      location(s) under `locations` and remove `gvc` from the values.

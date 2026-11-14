@@ -50,6 +50,8 @@ pickInsteadIf:
     template: nats
   - need: an HTTP push queue that calls your endpoints with retries and rate limits
     template: cpln-task-runner
+  - need: JMS or AMQP 1.0 queues mirrored across two regions
+    template: artemis
 
 prerequisites:
   - kind: secret

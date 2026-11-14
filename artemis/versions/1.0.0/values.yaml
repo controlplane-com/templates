@@ -1,0 +1,60 @@
+# ─── Image ────────────────────────────────────────────────────────────────────
+image: apache/artemis:2.57.0  # official image; runs as uid 1001
+
+# ─── Credentials ──────────────────────────────────────────────────────────────
+# REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
+# A `dictionary` secret with exactly two keys: `username` and `password`
+# (use a hex password: no spaces, quotes or backslashes). This is the broker
+# admin, the web console login, the login your clients use, and the login the
+# mirror uses between locations. Re-applied on every broker start.
+# If the secret does not exist the deployment WEDGES silently — `cpln logs` is
+# empty. See Prerequisites in the README for the `cpln secret create-dictionary` command.
+credentialsSecretName: my-artemis-credentials
+
+# ─── Locations ────────────────────────────────────────────────────────────────
+# REQUIRED — list the location(s) of the GVC you install into (this chart never creates a GVC).
+# One entry: one broker. Two entries: one broker per location, kept in sync by a two-way
+# AMQP mirror. More than two is refused: mirroring more than two brokers duplicates messages.
+# The GVC's other locations run nothing.
+# A listed location the GVC does not have runs nothing — replace the example below.
+locations:
+  - name: aws-us-east-1
+#  - name: aws-us-west-2   # add a second location for a broker that survives a region loss
+
+# Two locations only (ignored with one):
+mirror:
+  mode: active-passive        # active-passive: the primary serves clients, the other location takes over when it is down
+                              # active-active: both locations serve clients (consume each queue in one location only)
+  primary: ""                 # active-passive: the location that serves clients; "" = the first entry in `locations`
+  takeoverSeconds: 60         # active-passive: how long the primary broker must be unreachable before the other location opens
+  catchUpTimeoutSeconds: 180  # a restarted broker opens client ports once caught up from its peer, or after this long
+
+# ─── High availability (one location) ─────────────────────────────────────────
+ha:
+  enabled: false  # true: a primary and a backup broker in your ONE location share a volume; the backup takes over in seconds
+                  # choose at install: changing it later is not supported, and messages do not carry over to a new release
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+resources:
+  cpu: 1000m
+  memory: 2Gi  # Mi or Gi, at least 1Gi; the JVM heap is half of this
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
+volumeset:
+  capacity: 10  # GiB per broker (minimum 10); with ha.enabled one shared volume holds both brokers' data
+  snapshots:                # not taken with ha.enabled (shared volumes have no snapshots)
+    schedule: "0 3 * * *"   # daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d   # how long each snapshot is kept
+  autoscaling:
+    enabled: false          # grows the volume — useful if a location can be down for long
+    maxCapacity: 100        # GiB
+    minFreePercentage: 10
+    scalingFactor: 1.2
+
+# ─── Network ──────────────────────────────────────────────────────────────────
+internalAccess:
+  type: same-gvc  # options: same-gvc, same-org, workload-list
+  workloads: []   # for workload-list: //gvc/GVC_NAME/workload/NAME — this release's broker is added automatically
+
+publicAccess:
+  enabled: false  # true publishes the web console (8161) over HTTPS; message ports always stay internal

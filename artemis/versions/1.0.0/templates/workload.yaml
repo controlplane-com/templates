@@ -1,3 +1,5 @@
+{{- /* Validate first: this file uses the locations before identity.yaml runs the validation. */}}
+{{- include "artemis.validate" . }}
 ---
 kind: workload
 name: {{ include "artemis.name" . }}

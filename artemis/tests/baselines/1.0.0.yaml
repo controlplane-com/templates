@@ -1,7 +1,7 @@
-# artemis 1.0.0 — one broker in the CI GVC's location, the admin login in a prerequisite secret,
-# at the 1Gi floor (heap 512M). The two-location mirror needs two regions, so it is tested live,
-# not here.
-locations: [aws-us-east-1]
+# artemis 1.0.0 — the default two-location shape: one broker in each of two nearby regions,
+# active-passive (the first location is the primary), the admin login in a prerequisite secret,
+# at the 1Gi floor (heap 512M). Cross-region checks move a handful of small messages only.
+locations: [aws-us-east-1, aws-us-east-2]
 timeoutSeconds: 900
 
 secrets:
@@ -17,5 +17,6 @@ vars:
 values:
   credentialsSecretName: "{secrets.creds.name}"
   locations:
-    - name: aws-us-east-1               # the CI GVC's location (set explicitly, not left to the default)
+    - name: aws-us-east-1               # primary (mirror.primary "" = the first entry)
+    - name: aws-us-east-2               # standby
   resources: {cpu: 500m, memory: 1Gi}   # the smallest supported size

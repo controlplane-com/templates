@@ -160,6 +160,7 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 - **`ha.enabled` trades send speed for availability:** every persistent write is synced to a shared network filesystem, so a single producer sends persistent messages about ten times more slowly than to a single broker, and ten producers in parallel about five times more slowly.
 - A restarted broker refuses clients until it has caught up from its peer, or until `mirror.catchUpTimeoutSeconds` has passed.
 - **Active-passive takeover and failback.** When the primary broker has been unreachable for `mirror.takeoverSeconds`, the other broker opens and failover clients move to it. A primary that restarts within that time (a crash restart usually does) is not taken over: clients wait for it to come back, and a primary that is up but still catching up is not taken over either. When the primary returns, it catches up from the other broker, opens, and the other broker closes again, which moves clients back. Messages the primary had not yet copied when it went down are delivered after it returns, so consumers must tolerate a redelivered message. If the link between the locations breaks while both brokers are up, the other broker also opens after the takeover delay, and both serve clients until the link is back.
+- **Changing `volumeset.capacity` does not resize an existing volume**; it only sizes new ones. Grow a live volume with `cpln volumeset expand RELEASE-artemis-vs --gvc GVC --location LOCATION --volume-index 0 --new-size 20`.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
 - Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored.
 - **Removing a location keeps its volume.** Adding that location back starts its broker on the old messages, which the mirror never reconciles: consumers there receive messages already consumed elsewhere and miss the ones sent while it was gone. Before adding it back, delete the old volume and wait until it is gone from `cpln volumeset volume get RELEASE-artemis-vs --gvc GVC`:
@@ -168,6 +169,7 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
   ```
   The returning broker then starts empty and receives only messages sent after it is back.
 - The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`. Rotate the password and keep the username: a new username adds a second admin, and the old one keeps working.
+- **A message sent to an address with no queue is dropped.** Clients that send to a queue name create it automatically; when you create an address in the web console, also create its queue (Create queue) before sending to it.
 - Changes to `internalAccess` and `publicAccess` take a few minutes to apply.
 
 ## Links

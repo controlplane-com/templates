@@ -112,6 +112,9 @@ More than two is refused: mirroring more than two brokers duplicates messages
 routes).
 */}}
 {{- define "artemis.validateLocations" -}}
+{{- if and .Values.locations (not (kindIs "slice" .Values.locations)) -}}
+{{- fail (printf "artemis: `locations` must be a list of objects with a `name`, e.g. `locations: [{name: aws-us-east-1}]` (got %v)." .Values.locations) -}}
+{{- end -}}
 {{- $locs := .Values.locations | default list -}}
 {{- if lt (len $locs) 1 -}}
 {{- fail "artemis: `locations` must list at least one location of the GVC you install into, e.g. `locations: [{name: aws-us-east-1}]`." -}}

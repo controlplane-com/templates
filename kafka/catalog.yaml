@@ -61,6 +61,8 @@ pickInsteadIf:
     template: cdc-pipeline
   - need: an HTTP task queue that delivers jobs to URLs with retries and rate limits
     template: cpln-task-runner
+  - need: JMS or AMQP 1.0 queues mirrored across two regions
+    template: artemis
 
 related:
   - template: redpanda

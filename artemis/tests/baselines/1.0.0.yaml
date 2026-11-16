@@ -1,0 +1,22 @@
+# artemis 1.0.0 — the default two-location shape: one broker in each of two nearby regions,
+# active-passive (the first location is the primary), the admin login in a prerequisite secret,
+# at the 1Gi floor (heap 512M). Cross-region checks move a handful of small messages only.
+locations: [aws-us-east-1, aws-us-east-2]
+timeoutSeconds: 900
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [password]
+    entries: {username: admin}
+
+vars:
+  user: admin
+  password: "{secrets.creds.password}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  locations:
+    - name: aws-us-east-1               # primary (mirror.primary "" = the first entry)
+    - name: aws-us-east-2               # standby
+  resources: {cpu: 500m, memory: 1Gi}   # the smallest supported size

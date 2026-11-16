@@ -1,0 +1,7 @@
+---
+{{- include "artemis.validate" . }}
+kind: identity
+gvc: {{ .Values.global.cpln.gvc }}
+name: {{ include "artemis.identity.name" . }}
+description: Apache Artemis identity
+tags: {{- include "artemis.tags" . | nindent 2 }}

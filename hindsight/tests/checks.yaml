@@ -1,0 +1,271 @@
+# Feature checks for the hindsight template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (probe, marker).
+#
+# The API checks are Python (standard library only) run in the API container against its own port on
+# 127.0.0.1:8888, with the API key read from the container's env (the image has no curl). The baseline
+# uses Hindsight's own `mock` LLM provider and the models bundled in the full image, so retain and recall
+# run the real pipeline with no external call. The runner reads any {word} as a placeholder, so the
+# scripts use % formatting and concatenation, never f-strings or dict literals with braces in strings.
+checks:
+  - id: auth
+    description: >-
+      The REST API refuses a request with no key or a wrong key (401) and answers with the API key, while
+      the probe paths /health and /health/live answer without one.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import os, urllib.request, urllib.error
+        B = 'http://127.0.0.1:8888'
+        K = os.environ['HINDSIGHT_API_TENANT_API_KEY']
+        def status(path, tok=None):
+            h = dict() if tok is None else dict(Authorization='Bearer ' + tok)
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + path, headers=h), timeout=30) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+        got = (status('/v1/default/banks'), status('/v1/default/banks', 'wrong-key'), status('/v1/default/banks', K),
+               status('/health'), status('/health/live'))
+        print('AUTH_OK' if got == (401, 401, 200, 200, 200) else 'AUTH_BAD %s' % (got,))
+        PY
+    expect:
+      stdout: "^AUTH_OK$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: db-extension
+    description: The bundled database runs pgvector 0.8 or later and holds Hindsight's tables, created by its migrations.
+    exec:
+      workload: "{release}-pgvector"
+      container: pgvector
+      script: |
+        export PGPASSWORD="$POSTGRES_PASSWORD"
+        v=$(psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'")
+        t=$(psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('banks','memory_units','alembic_version')")
+        echo "VECTOR $v TABLES $t"
+    expect:
+      stdout: "^VECTOR 0\\.(8|9)\\.[0-9]+ TABLES 3$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: retain-recall
+    description: >-
+      A sentence retained into one bank (fact extraction, local embeddings, storage) comes back from a
+      semantic recall in that bank and not from a recall in a different bank.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import json, os, uuid, urllib.request
+        B = 'http://127.0.0.1:8888'
+        H = dict(Authorization='Bearer ' + os.environ['HINDSIGHT_API_TENANT_API_KEY'])
+        H['content-type'] = 'application/json'
+        def post(path, body):
+            req = urllib.request.Request(B + path, data=json.dumps(body).encode(), method='POST', headers=H)
+            with urllib.request.urlopen(req, timeout=240) as r:
+                return json.loads(r.read())
+        a = 'ci-a-' + uuid.uuid4().hex[:10]
+        b = 'ci-b-' + uuid.uuid4().hex[:10]
+        out = post('/v1/default/banks/' + a + '/memories', dict(items=[dict(content='Zorblat Quenwick drinks oolong tea every morning before work.')]))
+        if not out.get('success'):
+            print('RETAIN_BAD %s' % json.dumps(out)[:300])
+        post('/v1/default/banks/' + b + '/memories', dict(items=[dict(content='The weather in the harbour town was mild all week.')]))
+        hits = [r.get('text', '') for r in post('/v1/default/banks/' + a + '/memories/recall', dict(query='What does Zorblat drink?')).get('results', [])]
+        other = [r.get('text', '') for r in post('/v1/default/banks/' + b + '/memories/recall', dict(query='What does Zorblat drink?')).get('results', [])]
+        print('RECALLED oolong' if any('oolong' in t for t in hits) else 'NOT_RECALLED %s' % hits[:3])
+        print('LEAKED %s' % other[:3] if any('Zorblat' in t for t in other) else 'ISOLATED')
+        PY
+    expect:
+      stdout: "(?s)^RECALLED oolong\nISOLATED$"
+      notStdout: "LEAKED|RETAIN_BAD"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 600
+
+  - id: reranker-local
+    description: Recall ranks the matching fact with the bundled local cross-encoder reranker (a relevance probability near 1).
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import json, os, uuid, urllib.request
+        B = 'http://127.0.0.1:8888'
+        H = dict(Authorization='Bearer ' + os.environ['HINDSIGHT_API_TENANT_API_KEY'])
+        H['content-type'] = 'application/json'
+        def post(path, body):
+            req = urllib.request.Request(B + path, data=json.dumps(body).encode(), method='POST', headers=H)
+            with urllib.request.urlopen(req, timeout=240) as r:
+                return json.loads(r.read())
+        bank = 'ci-r-' + uuid.uuid4().hex[:10]
+        post('/v1/default/banks/' + bank + '/memories', dict(items=[dict(content='Pelvaro Smint repairs violins in a small workshop.')]))
+        res = post('/v1/default/banks/' + bank + '/memories/recall', dict(query='Who repairs violins?')).get('results', [])
+        scores = [r.get('scores') or dict() for r in res]
+        # The cross-encoder scores relevance as a probability: the matching fact near 1, unrelated ones near 0.
+        # Without the model (rrf) there is no such score, so the top value stays far below 0.5.
+        top = max([s.get('reranker') or 0 for s in scores] or [0])
+        ok = top > 0.5
+        print('RERANKED' if ok else 'NOT_RERANKED %s' % json.dumps(scores)[:300])
+        PY
+    expect:
+      stdout: "^RERANKED$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 600
+
+  - id: mcp
+    description: >-
+      The MCP endpoint (stateless streamable HTTP) refuses a request without the API key, lists the
+      retain/recall/reflect tools with the instructions set through extraEnv, and recalls a retained fact.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import json, os, uuid, urllib.request, urllib.error
+        B = 'http://127.0.0.1:8888'
+        K = os.environ['HINDSIGHT_API_TENANT_API_KEY']
+        bank = 'ci-m-' + uuid.uuid4().hex[:10]
+        def rpc(method, params, n, tok=K):
+            h = dict(Accept='application/json, text/event-stream')
+            h['content-type'] = 'application/json'
+            if tok:
+                h['Authorization'] = 'Bearer ' + tok
+            body = dict(jsonrpc='2.0', id=n, method=method, params=params)
+            req = urllib.request.Request(B + '/mcp/' + bank + '/', data=json.dumps(body).encode(), method='POST', headers=h)
+            try:
+                with urllib.request.urlopen(req, timeout=240) as r:
+                    text = r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, None
+            data = [l[5:].strip() for l in text.splitlines() if l.startswith('data:')]
+            return 200, json.loads(data[-1] if data else text)
+        print('MCP noauth %s' % rpc('tools/list', dict(), 1, tok=None)[0])
+        rpc('initialize', dict(protocolVersion='2025-03-26', capabilities=dict(), clientInfo=dict(name='ci', version='1')), 2)
+        tools = rpc('tools/list', dict(), 3)[1]['result']['tools']
+        names = set(t['name'] for t in tools)
+        print('MCP tools ok' if set(['retain', 'recall', 'reflect']) <= names else 'MCP tools missing %s' % sorted(names))
+        print('MCP marker ok' if any('{marker}' in (t.get('description') or '') for t in tools) else 'MCP marker missing')
+        rpc('tools/call', dict(name='sync_retain' if 'sync_retain' in names else 'retain', arguments=dict(content='Zorblat Quenwick drinks oolong tea every morning before work.')), 4)
+        res = rpc('tools/call', dict(name='recall', arguments=dict(query='What does Zorblat drink?')), 5)[1]
+        text = json.dumps(res)
+        print('MCP recall oolong' if 'oolong' in text else 'MCP recall empty %s' % text[:300])
+        PY
+    expect:
+      stdout: "(?s)^MCP noauth 401\nMCP tools ok\nMCP marker ok\nMCP recall oolong$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 600
+
+  - id: extra-secret
+    description: Each key listed in hindsight.extraSecrets.keys reaches the API as an env var holding the secret's value.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import os
+        v = os.environ.get('E2E_PROBE', '')
+        print('SECRET_OK' if v == '{probe}' and 'cpln://' not in v else 'SECRET_BAD len=%d' % len(v))
+        PY
+    expect:
+      stdout: "^SECRET_OK$"
+
+  - id: db-pool
+    description: The API's PostgreSQL pool is capped at hindsight.dbPoolMaxSize (20), not upstream's 100 per process.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import urllib.request
+        lines = urllib.request.urlopen('http://127.0.0.1:8888/metrics', timeout=30).read().decode().splitlines()
+        mx = [l.split()[-1] for l in lines if l.startswith('hindsight_db_pool_max')]
+        print('POOL_MAX %s' % (mx[0] if mx else 'missing'))
+        PY
+    expect:
+      stdout: "^POOL_MAX 20(\\.0)?$"
+    retries: 3
+    retryDelaySeconds: 15
+
+  - id: ui-access-key
+    description: >-
+      The web UI answers its health check, refuses its API routes without a session, refuses a wrong
+      access key, and with the right key lists the memory banks through the API (proving its API key).
+    exec:
+      workload: "{release}-hindsight-ui"
+      container: ui
+      script: |
+        cat > /tmp/ci-ui.mjs <<'JS'
+        const B = 'http://127.0.0.1:9999';
+        const health = (await fetch(B + '/api/health')).status;
+        const anon = (await fetch(B + '/api/banks')).status;
+        const post = (key) => fetch(B + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) });
+        const wrong = (await post('wrong-key')).status;
+        const good = await post(process.env.HINDSIGHT_CP_ACCESS_KEY);
+        const cookie = good.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+        const banks = await fetch(B + '/api/banks', { headers: { cookie } });
+        const body = await banks.text();
+        const ok = health === 200 && anon === 401 && wrong === 401 && good.status === 200 && banks.status === 200 && body.includes('ci-');
+        console.log(ok ? 'UI_OK' : 'UI_BAD ' + [health, anon, wrong, good.status, banks.status].join(' ') + ' ' + body.slice(0, 200));
+        JS
+        node /tmp/ci-ui.mjs
+    expect:
+      stdout: "^UI_OK$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: memory-written
+    description: A memory tagged with the running version is retained into a fixed bank and recalled by its tag.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import json, os, urllib.request
+        B = 'http://127.0.0.1:8888'
+        H = dict(Authorization='Bearer ' + os.environ['HINDSIGHT_API_TENANT_API_KEY'])
+        H['content-type'] = 'application/json'
+        def post(path, body):
+            req = urllib.request.Request(B + path, data=json.dumps(body).encode(), method='POST', headers=H)
+            with urllib.request.urlopen(req, timeout=240) as r:
+                return json.loads(r.read())
+        tag = 'persist-{version}'
+        post('/v1/default/banks/ci-persist/memories', dict(items=[dict(content='Persistence marker Vantoril was written by version {version}.', tags=[tag])]))
+        res = post('/v1/default/banks/ci-persist/memories/recall', dict(query='Persistence marker Vantoril', tags=[tag], tags_match='all_strict')).get('results', [])
+        print('WRITTEN' if any('Vantoril' in r.get('text', '') for r in res) else 'WRITE_BAD %s' % json.dumps(res)[:300])
+        PY
+    expect:
+      stdout: "^WRITTEN$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 600
+
+  - id: memory-persists
+    description: >-
+      The memory written on the version this scenario installed first is still recalled. On a fresh install
+      that is the same version; after an upgrade it proves the database and migrations carried it over. Never writes.
+    exec:
+      workload: "{release}-hindsight"
+      container: hindsight
+      script: |
+        python - <<'PY'
+        import json, os, urllib.request
+        B = 'http://127.0.0.1:8888'
+        H = dict(Authorization='Bearer ' + os.environ['HINDSIGHT_API_TENANT_API_KEY'])
+        H['content-type'] = 'application/json'
+        req = urllib.request.Request(B + '/v1/default/banks/ci-persist/memories/recall', method='POST', headers=H,
+                                     data=json.dumps(dict(query='Persistence marker Vantoril', tags=['persist-{installed_version}'], tags_match='all_strict')).encode())
+        with urllib.request.urlopen(req, timeout=240) as r:
+            res = json.loads(r.read()).get('results', [])
+        print('PERSISTED' if any('Vantoril' in x.get('text', '') for x in res) else 'MISSING (no memory tagged persist-{installed_version})')
+        PY
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+    timeoutSeconds: 300

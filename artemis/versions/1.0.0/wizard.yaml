@@ -8,6 +8,43 @@ gvc:
   minLocations: 1
 
 steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with the broker's admin username and password.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          The credentials secret must exist **before** you install. If it is missing, the deployment
+          waits and `cpln logs` shows nothing at all.
+      - path: credentialsSecretName
+        type: ref
+        label: Credentials secret
+        required: true
+        docs: "#credentials"
+        description: >-
+          A dictionary secret with the keys `username` and `password`: the broker admin, the web console
+          login, the login your clients use and, with two locations, the mirror's login.
+        help: >-
+          Use a hex password, for example from `openssl rand -hex 24`: no spaces, quotes or backslashes.
+          The brokers apply the secret on every start, so after you change it, force a redeployment of
+          the workload. Rotate the password and keep the username: a new username adds a second admin,
+          and the old one keeps working.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [username, password]
+          create:
+            suggestName: "context.releaseName + '-artemis-credentials'"
+    rules:
+      - rule: self.credentialsSecretName != ''
+        mirrors: artemis.validateCredentials
+        paths: [credentialsSecretName]
+        message: The credentials secret is required.
+
   - id: brokers
     title: Brokers and locations
     description: Where the brokers run, how a restarted broker catches up, and their image and compute.
@@ -120,11 +157,6 @@ steps:
             suggestions: [60, 120, 300]
             description: >-
               How long the primary broker must be unreachable before the other location opens to clients. A shorter primary restart is waited out.
-          - type: note
-            when: self.mirror.mode == 'active-active'
-            text: >-
-              Each queue is consumed in one location at a time; two locations consuming one queue at once
-              get duplicates.
           - path: mirror.catchUpTimeoutSeconds
             type: integer
             label: Catch-up timeout
@@ -238,44 +270,9 @@ steps:
         paths: [locations]
         message: >-
           The broker in the removed location stops, with any messages on it. The other broker keeps
-          serving.
-
-  - id: credentials
-    title: Credentials
-    description: The prerequisite secret with the broker's admin username and password.
-    fields:
-      - type: note
-        severity: warning
-        text: >-
-          The credentials secret must exist **before** you install. If it is missing, the deployment
-          waits and `cpln logs` shows nothing at all.
-      - path: credentialsSecretName
-        type: ref
-        label: Credentials secret
-        required: true
-        docs: "#credentials"
-        description: >-
-          A dictionary secret with the keys `username` and `password`: the broker admin, the web console
-          login, the login your clients use and, with two locations, the mirror's login.
-        help: >-
-          Use a hex password, for example from `openssl rand -hex 24`: no spaces, quotes or backslashes.
-          The brokers apply the secret on every start, so after you change it, force a redeployment of
-          the workload. Rotate the password and keep the username: a new username adds a second admin,
-          and the old one keeps working.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [dictionary] }
-          mustExist: error
-          allowCreate: true
-          requiredKeys: [username, password]
-          create:
-            suggestName: "context.releaseName + '-artemis-credentials'"
-    rules:
-      - rule: self.credentialsSecretName != ''
-        mirrors: artemis.validateCredentials
-        paths: [credentialsSecretName]
-        message: The credentials secret is required.
+          serving. The removed location's volume is kept: before you add that location back, delete it
+          with `cpln volumeset volume delete RELEASE_NAME-artemis-vs --location LOCATION --volume-index 0
+          --gvc GVC_NAME`, or the returning broker starts on its old, out-of-date messages.
 
   - id: storage
     title: Storage
@@ -292,9 +289,15 @@ steps:
             suggestions: [10, 20, 50, 100, 250, 500]
             docs: "/reference/volumeset#capacity-and-billing"
             description: >-
-              While one location is down, the other broker keeps the messages to copy to it, so its volume
-              grows with traffic for as long as the outage lasts. With a primary and backup broker, one
-              shared volume holds the data of both.
+              The size of each new broker volume. With two locations, a broker keeps the messages to copy
+              while the other location is down, so its volume grows for as long as the outage lasts. With a
+              primary and backup broker, one shared volume holds the data of both.
+          - type: note
+            when: context.mode == 'upgrade'
+            text: >-
+              Changing this does not resize existing volumes; it only sizes new ones. Grow a live volume
+              with `cpln volumeset expand RELEASE_NAME-artemis-vs --gvc GVC_NAME --location LOCATION
+              --volume-index 0 --new-size SIZE`.
       - id: snapshots
         title: Volume snapshots
         description: >-
@@ -333,7 +336,7 @@ steps:
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled
         docs: "/reference/volumeset#autoscaling"
-        description: Useful when a location can be down for long, since the other broker's volume grows meanwhile.
+        description: Grows a volume as it fills; with two locations, useful when a location can be down for long.
         fields:
           - path: volumeset.autoscaling.maxCapacity
             type: integer

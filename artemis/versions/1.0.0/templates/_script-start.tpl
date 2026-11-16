@@ -295,6 +295,13 @@ peer_state() {
     *) echo down ;;
   esac
 }
+# qtotal URL: the messages held in a broker's queues (internal $ queues excluded).
+qtotal() {
+  ./bin/artemis queue stat --url "$1" --user "${ARTEMIS_USER}" --password "${ARTEMIS_PASSWORD}" \
+      --maxColumnSize -1 --maxRows 100000 2>/dev/null \
+    | awk -F'|' 'NF > 9 && $5 ~ /[0-9]/ { n = $2; gsub(/ /, "", n); m = $5; gsub(/ /, "", m)
+                   if (n !~ /^\$/ && n != "NAME") { t += m; f = 1 } } END { if (f) print t + 0 }'
+}
 started() {
   until jx "{\"type\":\"read\",\"mbean\":\"${MB}\",\"attribute\":\"Started\"}" 2>/dev/null | grep -q '"value":true'; do sleep 2; done
 }
@@ -319,6 +326,30 @@ gate() {
       sleep 3
     done
     why="${why} after $((SECONDS - t0))s"
+    # active-passive primary: never open on a copy that is missing messages the
+    # other broker holds -- a primary location added back after a region loss
+    # (or added later) starts empty, because the mirror copies only new events.
+    # Hold closed while the peer holds more than this broker plus what is still
+    # in flight; the other broker then takes over (primary up but not serving),
+    # and this broker opens by itself once the difference is gone.
+    if [ "${ARTEMIS_MIRROR_MODE}" = "active-passive" ]; then
+      local mine peers inflight h0=${SECONDS} said=-1 PQ='$ACTIVEMQ_ARTEMIS_MIRROR_to_'"${ME//-/_}"
+      while true; do
+        peers=$(qtotal "tcp://${PEER}:61617")
+        [ -z "${peers}" ] && break   # peer unreachable: nothing to compare against
+        mine=$(qtotal "tcp://127.0.0.1:61617"); mine=${mine:-0}
+        inflight=$(./bin/artemis queue stat --url "tcp://${PEER}:61617" --user "${ARTEMIS_USER}" --password "${ARTEMIS_PASSWORD}" \
+                     --queueName "${PQ}" --maxColumnSize -1 2>/dev/null \
+                   | awk -F'|' -v q="${PQ}" '{ n = $2; gsub(/ /, "", n) } n == q { m = $5; gsub(/ /, "", m); print m; exit }')
+        [ "${peers}" -le $((mine + ${inflight:-0})) ] && break
+        if [ "${said}" -lt 0 ] || [ $((SECONDS - said)) -ge 300 ]; then
+          said=${SECONDS}
+          log "HOLDING: ${PEERLOC} holds ${peers} messages and this broker ${mine} (${inflight:-0} in flight). This broker's copy lacks messages that only ${PEERLOC} holds -- the mirror copies only messages sent after a broker joins -- so the client acceptors stay CLOSED and ${PEERLOC} serves clients. To make ${PEERLOC} the primary, set mirror.primary: ${PEERLOC}. This broker opens by itself once ${PEERLOC} holds no message it lacks."
+        fi
+        sleep 5
+      done
+      [ "${said}" -ge 0 ] && why="${why}; held $((SECONDS - h0))s for messages only on ${PEERLOC}"
+    fi
   fi
   acceptors start
   log "client acceptors OPEN (${why})"

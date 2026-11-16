@@ -150,6 +150,19 @@ Neither mode offers more than two locations (mirroring more than two brokers dup
 
 The mirror is asynchronous: a broker that crashes can lose the messages it had not yet copied to its peer, and only if its volume is lost too.
 
+### Losing a location for good
+
+During an outage there is nothing to do: the other broker takes over, and failback is automatic when the location returns. If the location will not return:
+
+1. Run on the surviving location alone: `helm upgrade` with only that location in `locations`. Its broker restarts as a single broker with every mirrored message.
+2. Before adding a location back, delete its old volume, or the returning broker starts on out-of-date messages that the mirror never reconciles. Wait until `cpln volumeset get RELEASE-artemis-vs --gvc GVC -o yaml` shows no `storageDeviceId` for that location:
+   ```bash
+   cpln volumeset volume delete RELEASE-artemis-vs --location LOCATION --volume-index 0 --gvc GVC
+   ```
+3. Add the location back with **`mirror.primary` set to the surviving location**. The returning broker starts empty as the standby and receives every message sent from then on; messages already on the surviving broker stay only there until they are consumed.
+
+A returning location made the primary instead also starts empty: it keeps its client ports closed (`HOLDING` in its log) while the other broker holds messages it lacks, the other broker serves clients after `takeoverSeconds` plus `catchUpTimeoutSeconds`, and the primary opens by itself once those messages are consumed.
+
 ## Important Notes
 
 - **Create the credentials secret first.** Without it the deployment waits and `cpln logs` is empty; `cpln workload get-deployments RELEASE-artemis --gvc GVC -o yaml` shows the missing secret in `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`.
@@ -162,15 +175,10 @@ The mirror is asynchronous: a broker that crashes can lose the messages it had n
 - **Active-passive takeover and failback.** When the primary broker has been unreachable for `mirror.takeoverSeconds`, the other broker opens and failover clients move to it. A primary that restarts within that time (a crash restart usually does) is not taken over: clients wait for it to come back, and a primary that is up but still catching up is not taken over either. When the primary returns, it catches up from the other broker, opens, and the other broker closes again, which moves clients back. Messages the primary had not yet copied when it went down are delivered after it returns, so consumers must tolerate a redelivered message. If the link between the locations breaks while both brokers are up, the other broker also opens after the takeover delay, and both serve clients until the link is back.
 - **Changing `volumeset.capacity` does not resize an existing volume**; it only sizes new ones. Grow a live volume with `cpln volumeset expand RELEASE-artemis-vs --gvc GVC --location LOCATION --volume-index 0 --new-size 20`.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
-- Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored.
-- **Removing a location keeps its volume.** Adding that location back starts its broker on the old messages, which the mirror never reconciles: consumers there receive messages already consumed elsewhere and miss the ones sent while it was gone. Before adding it back, delete the old volume and wait until it is gone from `cpln volumeset volume get RELEASE-artemis-vs --gvc GVC`:
-  ```bash
-  cpln volumeset volume delete RELEASE-artemis-vs --location LOCATION --volume-index 0 --gvc GVC
-  ```
-  The returning broker then starts empty and receives only messages sent after it is back.
+- Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored. In active-passive mode, make the installed location the primary (see [Losing a location for good](#losing-a-location-for-good)).
 - The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`. Rotate the password and keep the username: a new username adds a second admin, and the old one keeps working.
 - **A message sent to an address with no queue is dropped.** Clients that send to a queue name create it automatically; when you create an address in the web console, also create its queue (Create queue) before sending to it.
-- Changes to `internalAccess` and `publicAccess` take a few minutes to apply.
+- Changes to `internalAccess` and `publicAccess` take a few minutes to apply and restart the brokers.
 
 ## Links
 

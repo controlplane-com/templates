@@ -138,6 +138,15 @@ steps:
                 description: >-
                   Both locations serve clients. Consume each queue in one location at a time, or messages
                   are delivered twice.
+          - type: note
+            severity: warning
+            when: self.mirror.mode == 'active-active'
+            text: >-
+              **Active-active delivers some messages more than once.** The mirror copies asynchronously, so
+              a message consumed in one location can be delivered again in the other: when one queue is
+              consumed in both locations at once, and after a location outage or a broken link between them.
+              Consumers must be idempotent (processing the same message twice is harmless), and each queue
+              should be consumed in one location at a time.
           - path: mirror.primary
             type: enum
             label: Primary location
@@ -257,6 +266,18 @@ steps:
         message: >-
           Messages already on the existing broker are not copied to the new one; only messages sent after
           the upgrade are mirrored. The existing broker restarts.
+      - rule: >-
+          oldSelf == null || size(oldSelf.locations) != 1 || size(self.locations) != 2 ||
+          self.mirror.mode != 'active-passive' ||
+          oldSelf.locations.exists(o, o.name == ((self.mirror.primary == null || self.mirror.primary == '')
+            ? self.locations[0].name : self.mirror.primary))
+        severity: warning
+        paths: [mirror.primary]
+        message: >-
+          Set the primary location to the installed location, which holds the messages. The added location
+          starts empty: as the primary it stays closed to clients while the other broker holds messages it
+          lacks, so clients wait the takeover delay plus the catch-up timeout before the installed broker
+          serves them.
       - rule: >-
           oldSelf == null || size(oldSelf.locations) == 0 ||
           self.locations.exists(l, oldSelf.locations.exists(o, o.name == l.name))

@@ -72,3 +72,7 @@ prerequisites:
     required: false
     when: backup.enabled with backup.provider aws
     description: AWS IAM policy scoped to the snapshot bucket (bucket and bucket/* ARNs), referenced by name from the identity.
+related:
+  - template: wazuh
+    relation: companion
+    note: "Endpoint half of the SIEM: agents, file integrity, vulnerability detection and compliance"

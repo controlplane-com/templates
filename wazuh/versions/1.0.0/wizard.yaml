@@ -302,7 +302,7 @@ steps:
           - path: manager.publicAccess.api
             type: boolean
             label: Also expose the server API
-            description: The Wazuh server API (HTTPS, port 55000) on the same load balancer, from the same source ranges.
+            description: The Wazuh server API (HTTPS) on the same load balancer as port 8443, from the same source ranges.
       - title: Internal access
         docs: /reference/workload/firewall
         fields:

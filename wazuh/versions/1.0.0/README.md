@@ -55,7 +55,7 @@ manager:
     enabled: true # TCP 1514 (events) and 1515 (enrollment) on a public load balancer
     allowedCidrs:
       - 0.0.0.0/0 # narrow to the networks your agents connect from
-    api: false # also expose the server API (port 55000)
+    api: false # also expose the server API, as port 8443 on the load balancer
   internalAccess:
     type: same-gvc # same-gvc, same-org or workload-list (this release's workloads are always allowed)
   volumeset:
@@ -127,7 +127,7 @@ demoAgent:
 | Dashboard | `status.canonicalEndpoint` of `RELEASE-wazuh-dashboard` (public), or `http://localhost:5601` through port-forward | `admin` / `indexerAdminPassword` |
 | Agents (outside Control Plane) | the manager's load balancer host, ports 1514 and 1515 (the worker's when workers are on) | `enrollmentPassword` |
 | Agents (inside the GVC) | `RELEASE-wazuh-manager.GVC.cpln.local`, ports 1514 and 1515 | `enrollmentPassword` |
-| Server API | `https://RELEASE-wazuh-manager.GVC.cpln.local:55000` (also on the load balancer with `manager.publicAccess.api: true`) | `wazuh-wui` / `apiPassword` |
+| Server API | `https://RELEASE-wazuh-manager.GVC.cpln.local:55000` (the load balancer host on port 8443 with `manager.publicAccess.api: true`) | `wazuh-wui` / `apiPassword` |
 | Indexer | `https://RELEASE-wazuh-indexer.GVC.cpln.local:9200` (this release's workloads and `indexer.internalAccess.workloads` only) | `admin` / `indexerAdminPassword` |
 
 With `dashboard.publicAccess.enabled: false`, forward the dashboard and open `http://localhost:5601`:
@@ -155,6 +155,9 @@ The dashboard's **Deploy new agent** page builds the same command for every oper
 
 ## Important Notes
 
+- **Agent ports are open to the whole GVC while the load balancer is on.** `manager.internalAccess` does not restrict 1514 and 1515 when `manager.publicAccess.enabled` is true; the enrollment password is the gate. It restricts them (and the API) once the load balancer is off.
+- **Custom rules in `extraConfig`.** A `<ruleset>` block replaces the default one, so restate the default `decoder_dir`, `rule_dir` and `list` entries in it, or the default rules stop loading. Workers load rules synced from the master after a restart (`PUT /cluster/restart`).
+- **Restarts can repeat alerts.** Agents resend events the manager had not acknowledged, so an alert can appear twice after a restart; the **Statistics** page returns errors for about an hour after a manager start.
 - **Single location.** The template runs in one location; install it in a GVC with exactly one location.
 - **Access changes take time.** After changing `manager.publicAccess.*` or `dashboard.publicAccess.enabled`, allow 30 seconds to about 10 minutes for the firewall and load balancer to apply.
 - **Changing a password.** The secret is the source of truth on every start. Edit the key (`cpln secret edit my-wazuh-credentials`), then force a redeployment of the indexer, then the manager (and workers), then the dashboard, for example `cpln workload force-redeployment RELEASE-wazuh-indexer --gvc GVC`. A password changed only in the dashboard reverts on the next restart.

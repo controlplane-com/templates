@@ -129,8 +129,9 @@ direct:
       protocol: TCP
       scheme: tcp
     {{- if .Values.manager.publicAccess.api }}
+    {{- /* The direct load balancer accepts external ports up to 32768 only, so 55000 is published as 8443. */}}
     - containerPort: 55000
-      externalPort: 55000
+      externalPort: 8443
       protocol: TCP
       scheme: tcp
     {{- end }}

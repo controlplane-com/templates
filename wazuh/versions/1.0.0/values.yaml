@@ -36,7 +36,7 @@ manager:
     enabled: true # agents connect from anywhere: TCP 1514 (events) and 1515 (enrollment) on a direct load balancer
     allowedCidrs: # source ranges allowed to reach the public ports
       - 0.0.0.0/0
-    api: false # also expose the Wazuh server API (HTTPS, port 55000) on the same load balancer
+    api: false # also expose the Wazuh server API (HTTPS, container port 55000) on the same load balancer, as port 8443
   internalAccess:
     type: same-gvc # options: same-gvc, same-org, workload-list (this release's own workloads are always allowed)
     workloads: # only used when type is same-gvc or workload-list

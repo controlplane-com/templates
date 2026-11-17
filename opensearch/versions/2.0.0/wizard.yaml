@@ -18,7 +18,7 @@ steps:
       - type: note
         severity: warning
         text: >-
-          Both secrets must exist before you install. If one is missing, the nodes wait and never start, and
+          Both secrets must exist before you install or upgrade. If one is missing, the nodes wait and never start, and
           `cpln logs` shows nothing; the reason is in the workload's status. See [Prerequisites](#prerequisites).
       - type: note
         severity: warning
@@ -28,8 +28,9 @@ steps:
         text: >-
           2.0.0 turns the security plugin on. Every client must switch to `https://` and log in. The nodes restart
           one at a time (about 11 minutes on three nodes) and the API is unavailable for a few minutes while
-          the first nodes come up on TLS; indices are kept. Saved objects from 1.0.x appear in the **Global**
-          tenant of Dashboards. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
+          the first nodes come up on TLS; indices are kept. Clients must trust `ca.crt`. If a node stalls on the
+          new grants, wait about 5 minutes, then force a redeployment. Saved objects from 1.0.x appear in the
+          **Global** tenant of Dashboards. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
       - path: security.credentialsSecretName
         type: ref
         label: Credentials secret
@@ -40,7 +41,7 @@ steps:
         help: >-
           Generate each password with `openssl rand -hex 16` and the cookie key with `openssl rand -hex 32`. Both
           passwords are applied again at every node start, so a password changed in Dashboards reverts; to
-          rotate, update the secret and force a redeployment of the nodes and Dashboards.
+          rotate, update the secret and force a redeployment of the nodes, Dashboards and (with the demo on) the demo log generator.
         docs: "#prerequisites"
         ref:
           kind: secret

@@ -43,22 +43,25 @@ Two prerequisite dictionary secrets: credentials (`password`, `dashboardsPasswor
   in Dashboards reverts. The PATCH `add` replaces the whole user, so it must resend `reserved: true` (measured:
   without it the user loses its reserved flag). Rotation = update secret + `force-redeployment` nodes and Dashboards.
 - **Changing the CA is a full-cluster restart**: old and new nodes do not trust each other.
-- **1.0.x → 2.0.0** breaks every client (https + login); mixed old/new nodes cannot talk, so the cluster is
-  red mid-roll. Old saved objects are in the **Global** tenant. Stall on new grants: wait ~5 min, then
+- **1.0.x → 2.0.0** breaks every client (https + login); mixed old/new nodes cannot talk. Measured: never red,
+  API out ~2-5 min, roll ~11-12 min on 3 nodes, data kept. Old saved objects are in the **Global** tenant. Stall on new grants: wait ~5 min, then
   `force-redeployment`.
 - **Restores must exclude `.opendistro_security`**, and never `_all/_close` (it closes the security index).
 - **The template's own clients do not verify the server cert** (maintainer ruling Q2); users pin `ca.crt`.
 - `_plugins/_security/api/ssl/certs` needs the admin CERT (basic-auth admin gets `FORBIDDEN`); the admin cert
   is deleted after reconcile, so checks read the transport cert with `keytool -printcert -sslserver :9300`.
+- `internal_access.type: workload-list` always adds the chart's own workloads (nodes need it for 9300);
+  the user list names extra clients only.
+- Upstream 3.8.0 Dashboards bugs: **Create correlation rule** and **Add threat intel source** (local file)
+  do nothing; the API works (README note).
 - Audit and finding indices have no retention policy; add ISM if volume is high.
 - Still from 1.0.x: enabling backups on a running cluster retries for a few minutes; switching
   `backup.provider` leaves the old cloud binding; the S3 policy needs both ARNs; use FQDN hostnames.
 
-## Test status (2.0.0 builder probes, `test-gvc`, 2026-11-16)
+## Test status (2.0.0, `test-gvc`, 2026-11-17)
 
-Proven on a 3-node install with a CI-style CA: cluster green, `.opendistro_security` initialised, reconcile
-log line, anonymous/wrong/`admin:admin`/demo users `401`, plain HTTP refused, chain verifies against the CA,
-transport cert issued by the CA, CA key and env gone after boot, Dashboards login `200` + cookie at 250m/1Gi,
-Security Analytics custom rule → detector → finding (and none for a non-matching doc), FAILED_LOGIN audited,
-demo setup creates the detector idempotently. Pending for the test-runner: 1.0.2 → 2.0.0 upgrade (red
-window), rotation, public endpoint, availability counts, snapshots with security on, browser UI coverage.
+Rounds 1-3b: E2E 34/34 incl. 1.0.2 upgrade; drift clean; rotation, availability (rolling 2194/2194, master
+kill 923/925), snapshots and restore, auth/TLS, CA not retained; demo pipeline parses and finds; browser:
+Discover, Visualize/Dashboards, saved-object round trip, Query Workbench, Index Management, Advanced settings,
+SA rules/detectors, Alerting → webhook, ISM, Reporting, PPL, Anomaly detection, tenants. Generic bundled
+plugins (Maps, Search Relevance, Query Insights, Flow Framework, ML, Notebooks, Traces) skipped by ruling.

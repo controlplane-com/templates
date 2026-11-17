@@ -1,0 +1,112 @@
+{{- include "wazuh.validate" . -}}
+{{- range $role := list "master" "worker" }}
+{{- $isWorker := eq $role "worker" }}
+{{- if or (not $isWorker) (gt (int $.Values.manager.workers.replicas) 0) }}
+{{- $res := ternary $.Values.manager.workers.resources $.Values.manager.resources $isWorker }}
+{{- $n := ternary (int $.Values.manager.workers.replicas) 1 $isWorker }}
+---
+kind: workload
+name: {{ ternary (include "wazuh.worker.name" $) (include "wazuh.manager.name" $) $isWorker }}
+gvc: {{ $.Values.global.cpln.gvc }}
+description: {{ ternary "Wazuh server worker nodes (agent traffic)" "Wazuh server master (agents, enrollment, API, analysis)" $isWorker }}
+tags: {{- include "wazuh.tags" $ | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "wazuh.identity.name" $ }}
+  containers:
+    - name: manager
+      image: {{ $.Values.manager.image }}
+      inheritEnv: false
+      minCpu: {{ $res.minCpu | quote }}
+      minMemory: {{ $res.minMemory | quote }}
+      cpu: {{ $res.maxCpu | quote }}
+      memory: {{ $res.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{ include "wazuh.inlineScript" (include "wazuh.script.manager" (dict "ctx" $ "role" $role)) | toJson }}
+      env:
+        - name: API_PASSWORD
+          value: cpln://secret/{{ $.Values.credentialsSecretName }}.apiPassword
+        - name: API_USERNAME
+          value: wazuh-wui
+        - name: ENROLLMENT_PASSWORD
+          value: cpln://secret/{{ $.Values.credentialsSecretName }}.enrollmentPassword
+        - name: FILEBEAT_SSL_VERIFICATION_MODE
+          value: full
+        - name: INDEXER_PASSWORD
+          value: cpln://secret/{{ $.Values.credentialsSecretName }}.indexerAdminPassword
+        - name: INDEXER_URL
+          value: https://{{ include "wazuh.indexer.host" $ }}:9200
+        - name: INDEXER_USERNAME
+          value: admin
+        - name: SSL_CERTIFICATE
+          value: /etc/ssl/filebeat.pem
+        - name: SSL_CERTIFICATE_AUTHORITIES
+          value: /etc/ssl/root-ca.pem
+        - name: SSL_KEY
+          value: /etc/ssl/filebeat.key
+        - name: WAZUH_CLUSTER_KEY
+          value: cpln://secret/{{ $.Values.credentialsSecretName }}.clusterKey
+      ports:
+        - number: 1514
+          protocol: tcp
+        - number: 1515
+          protocol: tcp
+        - number: 1516
+          protocol: tcp
+        - number: 55000
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - /var/ossec/bin/wazuh-control status | grep -q "wazuh-remoted is running" && exec 3<>/dev/tcp/127.0.0.1/55000
+        initialDelaySeconds: 30
+        periodSeconds: 20
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 10
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - exec 3<>/dev/tcp/127.0.0.1/1514
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 10
+      volumes:
+        - path: /var/ossec/queue
+          uri: cpln://volumeset/{{ ternary (include "wazuh.volume.worker.name" $) (include "wazuh.volume.manager.name" $) $isWorker }}
+        - path: /pki
+          uri: cpln://volumeset/{{ include "wazuh.volume.pki.name" $ }}
+        - path: /wazuh-src/ossec.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "wazuh.secret.config.name" $ }}.payload
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: {{ $n }}
+      maxScale: {{ $n }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external: {{- include "wazuh.manager.externalFirewall" $ | nindent 6 }}
+    internal: {{- include "wazuh.manager.internalFirewall" $ | nindent 6 }}
+  loadBalancer: {{- include "wazuh.manager.loadBalancer" $ | nindent 4 }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+{{- end }}
+{{- end }}

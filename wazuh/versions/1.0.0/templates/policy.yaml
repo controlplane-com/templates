@@ -1,0 +1,13 @@
+kind: policy
+name: {{ include "wazuh.policy.name" . }}
+description: Lets the Wazuh workloads reveal the credentials secret and the manager configuration
+tags: {{- include "wazuh.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "wazuh.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.credentialsSecretName }}
+  - //secret/{{ include "wazuh.secret.config.name" . }}

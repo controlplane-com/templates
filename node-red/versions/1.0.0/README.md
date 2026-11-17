@@ -73,7 +73,7 @@ internalAccess:
   workloads: []                  # workload-list only
 ```
 
-**Extra nodes.** `palette.packages` is installed into `/data` with npm when the list changes, adding up to a few minutes to that start; an unchanged list skips npm, so a registry outage does not block a restart. A package that fails to install stops the start with a `cpln-node-red: FATAL:` log line. Nodes installed from the editor's palette manager are kept on the volume too. With `palette.allowInstall: false` neither the palette manager nor function nodes can install modules.
+**Extra nodes.** `palette.packages` is installed into `/data` with npm when the list changes, adding up to a few minutes to that start; an unchanged list skips npm, so a registry outage does not block a restart. A package that fails to install stops the start with a `cpln-node-red: FATAL:` log line. Nodes installed from the editor's palette manager are kept on the volume too. With `palette.allowInstall: false` neither the palette manager nor function nodes can install modules. A function node that names a module it cannot install stops every flow from starting, so remove the module from the node (or allow installs) before deploying.
 
 **Dashboard.** Add `@flowfuse/node-red-dashboard@1.36.1` to `palette.packages` (or install it from the palette manager); it serves `/dashboard` on the same port. With `httpNodeAuth` set, the Dashboard pages and its live-data socket (`/dashboard/socket.io`) both require the HTTP endpoint login. Without it, anyone who can reach the endpoint can read the Dashboard and press its buttons, so set `httpNodeAuth` or turn `publicAccess.enabled` off for a Dashboard with controls.
 

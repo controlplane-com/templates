@@ -32,7 +32,7 @@ cpln secret create-dictionary --name my-anythingllm-admin \
 
 Secret names are org-wide, so give each release its own secrets.
 
-**If a secret the release names does not exist at install time, the deployment waits silently**: `cpln logs` returns nothing. The only signal is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-anythingllm --gvc GVC_NAME -o yaml`. Create the secret and the deployment recovers by itself within about 10 minutes. To recover at once, or after changing any secret the release uses, run `cpln workload force-redeployment RELEASE_NAME-anythingllm --gvc GVC_NAME`.
+**If a secret the release names does not exist at install time, the deployment waits silently**: `cpln logs` returns nothing. The only signal is `status.versions[].message` in `cpln workload get-deployments RELEASE_NAME-anythingllm --gvc GVC_NAME -o yaml`. Create the secret and the deployment recovers by itself within about 12 minutes. To recover at once, or after changing any secret the release uses, run `cpln workload force-redeployment RELEASE_NAME-anythingllm --gvc GVC_NAME`.
 
 **Optional prerequisites**, each an opaque secret: a chat model API key (`llm.apiKeySecretName`, required for `openai` and `anthropic`), an embedding API key (`embedding.apiKeySecretName`) and a bearer token per HTTP MCP server (`bearerTokenSecretName`). Create them like this:
 
@@ -99,7 +99,7 @@ mcp:
   #   bearerTokenSecretName: "" # opaque secret sent as "Authorization: Bearer <value>"
 ```
 
-AnythingLLM has no screen for adding an MCP server; Settings → Agent Skills only turns servers on or off and removes them. With the default `servers: {}`, add servers by editing `/app/server/storage/plugins/anythingllm_mcp_servers.json` through `cpln workload exec`; the chart leaves that file alone. With any server listed here, or `cplnMcp.keySecretName` set, the chart writes the whole file on every start.
+AnythingLLM has no screen for adding an MCP server; Settings → Agent Skills only turns servers on or off and removes them. With the default `servers: {}`, add servers by editing `/app/server/storage/plugins/anythingllm_mcp_servers.json` through `cpln workload exec`; the chart leaves that file alone. With any server listed here, or `cplnMcp.keySecretName` set, the chart writes the whole file on every start. With any MCP server configured, a workspace in the default Automatic chat mode can route ordinary chats through the agent; with a small model that does not call tools reliably, set the workspace to Chat or Query mode so answers come from its documents.
 
 ### Control Plane MCP server
 

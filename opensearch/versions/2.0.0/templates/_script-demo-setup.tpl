@@ -152,10 +152,16 @@ done
 echo "Dashboards is ready"
 
 # --- Step 5: index pattern in the Global tenant (409 = already there) ---
+# Store the full field list (what "Refresh fields" saves), so Visualize offers every field, not only @timestamp.
+FIELDS=$(osd_curl -s "${OSD}/api/index_patterns/_fields_for_wildcard?pattern=demo-logs*&meta_fields=_source&meta_fields=_id&meta_fields=_type&meta_fields=_index&meta_fields=_score" \
+  | sed -n 's/^{"fields":\(\[.*\]\)}$/\1/p' | sed 's/"/\\"/g')
+if [ -z "${FIELDS}" ]; then
+  FIELDS='[{\"name\":\"@timestamp\",\"type\":\"date\",\"esTypes\":[\"date\"],\"searchable\":true,\"aggregatable\":true,\"readFromDocValues\":true}]'
+fi
 RESPONSE=$(osd_curl -w "%{http_code}" -o /tmp/pattern_response.json -s -X POST \
   "${OSD}/api/saved_objects/index-pattern/demo-logs" \
   -H 'Content-Type: application/json' \
-  -d '{"attributes": {"title": "demo-logs*", "timeFieldName": "@timestamp", "fields": "[{\"name\":\"@timestamp\",\"type\":\"date\",\"esTypes\":[\"date\"],\"searchable\":true,\"aggregatable\":true,\"readFromDocValues\":true}]"}}')
+  -d "{\"attributes\": {\"title\": \"demo-logs*\", \"timeFieldName\": \"@timestamp\", \"fields\": \"${FIELDS}\"}}")
 if [ "${RESPONSE}" -eq 200 ] || [ "${RESPONSE}" -eq 409 ]; then
   echo "Index pattern demo-logs* ready"
 else

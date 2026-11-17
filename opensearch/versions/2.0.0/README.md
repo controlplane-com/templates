@@ -288,6 +288,7 @@ If a node or Dashboards still waits about 5 minutes after the upgrade, run `cpln
 - **`replicas` must be odd.** An even count cannot form a quorum and is rejected at render.
 - **Turn backups on at install time where you can.** The repository plugin is installed at node startup, so on a running cluster the setup job retries until every node has restarted with it.
 - **Switching `backup.provider` on an existing release leaves the old cloud binding attached.** The identity keeps both provider blocks; uninstall and reinstall if you need the old binding gone.
+- **Two Security Analytics forms do nothing in OpenSearch 3.8.0 Dashboards:** **Create correlation rule** and **Add threat intel source** with a local file. Create them through the API instead: `POST _plugins/_security_analytics/correlation/rules`, and `POST _plugins/_security_analytics/threat_intel/sources` with `"type": "IOC_UPLOAD"` and `"enabled": false` (an uploaded list is not refreshed on a schedule). Both then appear in Dashboards.
 - **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets. Enable snapshots if the data matters.
 
 ## Links

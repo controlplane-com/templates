@@ -92,8 +92,32 @@ spec:
       outboundBlockedCIDR: []
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}
-      {{- if .Values.internal_access.workloads }}
-      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- $allow := list }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /* The chart's own callers are always allowed: the nodes (transport on 9300), Dashboards, and the
+             demo and backup workloads. The user's list names additional clients only. */}}
+      {{- $wl := printf "//gvc/%s/workload/" .Values.global.cpln.gvc }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.name" .)) }}
+      {{- if .Values.dashboard.enabled }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.dashboard.name" .)) }}
+      {{- end }}
+      {{- if .Values.demoLogs.enabled }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.demoLogs.name" .)) }}
+      {{- if not .Values.demoLogs.remove_setup_workload }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.demoLogsSetup.name" .)) }}
+      {{- end }}
+      {{- end }}
+      {{- if and .Values.backup.enabled (not .Values.backup.remove_setup_workload) }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.backupSetup.name" .)) }}
+      {{- end }}
+      {{- end }}
+      {{- range (.Values.internal_access.workloads | default list) }}
+      {{- if not (has . $allow) }}
+      {{- $allow = append $allow . }}
+      {{- end }}
+      {{- end }}
+      {{- if $allow }}
+      inboundAllowWorkload: {{ $allow | toYaml | nindent 8 }}
       {{- end }}
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
   loadBalancer:

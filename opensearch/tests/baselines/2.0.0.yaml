@@ -1,4 +1,7 @@
-# Default install: 3 nodes with the security plugin on, Dashboards private, no demo, no backups.
+# 3 nodes with the security plugin on, Dashboards private, no backups. Two non-defaults, each proven by
+# a check: the demo pipeline on (demo-pipeline-finding), and internal_access workload-list with an empty
+# user list, so the cluster forming (cluster-formed) and Dashboards and Fluent Bit connecting prove the
+# chart always allows its own workloads.
 locations: [aws-us-east-1]
 timeoutSeconds: 1200
 
@@ -24,6 +27,11 @@ values:
   security:
     credentialsSecretName: "{secrets.creds.name}"
     caSecretName: "{secrets.ca.name}"
+  internal_access:
+    type: workload-list
+    workloads: []
+  demoLogs:
+    enabled: true
 
 upgradeFrom:
   - version: 1.0.2

@@ -20,7 +20,9 @@ checks:
         curl -sk {curl_auth} "{os_url}/_cluster/health" ; echo
     expect:
       stdout: '"status":"green".*"number_of_nodes":3,'
-    retries: 10
+    # The 1.0.2 -> 2.0.0 roll (plain HTTP to TLS) takes about 11 minutes and the API can be silent for
+    # ~7 minutes of it after the runner sees every replica ready, so the budget is 15 minutes.
+    retries: 30
     retryDelaySeconds: 30
 
   - id: data-survives-upgrade
@@ -35,10 +37,14 @@ checks:
         U="{os_url}"
         curl -sk {curl_auth} -X PUT "$U/e2e-data/_doc/v-{version}?refresh=true" \
           -H 'Content-Type: application/json' -d '{"tag":"written-by-{version}"}' > /dev/null
-        echo "NOW $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{version}" | grep -o 'written-by-[0-9.]*')"
-        echo "FIRST $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{installed_version}" | grep -o 'written-by-[0-9.]*')"
+        # The runner fills placeholders only in exec, so the comparison happens here.
+        echo "NOW $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{version}" | grep -c '"tag":"written-by-{version}"')"
+        echo "FIRST $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{installed_version}" | grep -c '"tag":"written-by-{installed_version}"')"
     expect:
-      stdout: '^NOW written-by-{version}\nFIRST written-by-{installed_version}$'
+      stdout: '^NOW 1\nFIRST 1$'
+    # Same budget as cluster-formed: right after the 1.0.2 -> 2.0.0 upgrade the API is not answering yet.
+    retries: 30
+    retryDelaySeconds: 30
 
   - id: auth-required
     description: Anonymous and wrong-password requests get 401; admin with the secret's password gets the cluster.
@@ -97,9 +103,11 @@ checks:
       container: opensearch
       shell: bash
       script: |
-        keytool -printcert -sslserver 127.0.0.1:9300 2>&1 | grep -E '^(Owner|Issuer):' | head -n 2
+        C=$(keytool -printcert -sslserver 127.0.0.1:9300 2>&1)
+        echo "OWNER $(echo "$C" | grep -cE '^Owner: CN=node-[0-9]+, OU=node, O={release}-opensearch$')"
+        echo "$C" | grep -E '^Issuer:' | head -n 1
     expect:
-      stdout: '^Owner: CN=node-[0-9]+, OU=node, O={release}-opensearch\nIssuer: CN=templates-ci$'
+      stdout: '^OWNER 1\nIssuer: CN=templates-ci$'
 
   - id: ca-not-retained
     description: >-
@@ -196,9 +204,10 @@ checks:
           if echo "$F" | grep -q '"match-{version}"'; then break; fi
           sleep 10
         done
+        echo "MATCH $(echo "$F" | grep -c '"match-{version}"')"
         echo "$F" | grep -o '"related_doc_ids":\["[^]]*\]' | sort -u
     expect:
-      stdout: 'match-{version}'
+      stdout: '^MATCH 1$'
       notStdout: 'nomatch-'
     retries: 2
     timeoutSeconds: 420
@@ -223,3 +232,29 @@ checks:
     expect:
       stdout: '^AUDITED e2e-nobody-'
     timeoutSeconds: 180
+
+  - id: demo-pipeline-finding
+    description: >-
+      The demo generator's logs reach demo-logs through Fluent Bit parsed (message populated, so the
+      json parser is registered), and the demo detector records a finding for a generated document.
+      With internal_access workload-list in the baseline, it also proves the chart allowed its own
+      demo workload.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"
+        c() { curl -sk {curl_auth} -H 'Content-Type: application/json' "$@"; }
+        P=$(c "$U/demo-logs/_count" -d '{"query":{"bool":{"filter":[{"exists":{"field":"message"}},{"exists":{"field":"service"}}]}}}' | grep -o '"count":[0-9]*' | cut -d: -f2)
+        RAW=$(c "$U/demo-logs/_count" -d '{"query":{"exists":{"field":"log"}}}' | grep -o '"count":[0-9]*' | cut -d: -f2)
+        F=$(c "$U/_plugins/_security_analytics/findings/_search?detectorType=demo_app_logs&size=1" | grep -o '"total_findings":[0-9]*' | cut -d: -f2)
+        echo "PARSED $([ "$P" -gt 0 ] 2>/dev/null && echo yes || echo no) RAW $RAW"
+        echo "FINDINGS $([ "$F" -gt 0 ] 2>/dev/null && echo yes || echo no)"
+    expect:
+      stdout: '^PARSED yes RAW 0\nFINDINGS yes$'
+    # Setup job, first generated match and the 1-minute detector: a few minutes after install.
+    retries: 20
+    retryDelaySeconds: 30
+

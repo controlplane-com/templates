@@ -26,9 +26,10 @@ steps:
           context.mode == 'upgrade' && context.fromVersion != null &&
           semverCompare(context.fromVersion, '2.0.0') < 0
         text: >-
-          2.0.0 turns the security plugin on. Every client must switch to `https://` and log in, the nodes restart
-          one at a time and the cluster is red until the last one has restarted, and saved objects from 1.0.x
-          appear in the **Global** tenant of Dashboards. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
+          2.0.0 turns the security plugin on. Every client must switch to `https://` and log in. The nodes restart
+          one at a time (about 11 minutes on three nodes) and the API is unavailable for a few minutes while
+          the first nodes come up on TLS; indices are kept. Saved objects from 1.0.x appear in the **Global**
+          tenant of Dashboards. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
       - path: security.credentialsSecretName
         type: ref
         label: Credentials secret
@@ -621,8 +622,9 @@ steps:
               - value: workload-list
                 label: Specific workloads
                 description: Only the workloads listed below.
-          # Shown for every type that uses it: workload-opensearch.yaml writes any non-empty list into
-          # inboundAllowWorkload, and the platform applies the links only with same-gvc and workload-list.
+          # Shown for every type that uses it: workload-opensearch.yaml writes the list into inboundAllowWorkload
+          # (with workload-list it first adds the chart's own workloads, which the nodes' transport on 9300
+          # needs), and the platform applies the links only with same-gvc and workload-list.
           - path: internal_access.workloads
             when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
             type: list
@@ -630,8 +632,9 @@ steps:
             widget: tags
             unique: true
             description: >-
-              With Specific workloads this is the whole allow-list, including this release's own workloads. With
-              Same GVC, add workloads from other GVCs here.
+              With Specific workloads, list the additional clients: this release's own workloads (the nodes,
+              Dashboards, the demo and backup jobs) are always allowed. With Same GVC, add workloads from other
+              GVCs here.
             item:
               type: ref
               ref:
@@ -657,41 +660,3 @@ steps:
         message: >-
           Same org already lets every workload of the org connect to OpenSearch, so the workloads listed add
           nothing.
-      # The internal firewall also governs the nodes' transport traffic on 9300 (replicaDirect, per-replica
-      # names): etcd-multi-location measured quorum loss when the list omitted the workload itself. The chart
-      # adds none of its own workloads (workload-opensearch.yaml); Dashboards (OPENSEARCH_HOSTS), the
-      # backup setup job, the demo generator's Fluent Bit sidecar and the demo setup job all call :9200.
-      - when: self.internal_access.type == 'workload-list' && context.gvc != null
-        rule: >-
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch') in self.internal_access.workloads &&
-          (!self.dashboard.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch-dashboard') in self.internal_access.workloads) &&
-          (!self.backup.enabled || self.backup.remove_setup_workload ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup') in self.internal_access.workloads) &&
-          (!self.demoLogs.enabled ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-generator') in self.internal_access.workloads) &&
-          (!self.demoLogs.enabled || self.demoLogs.remove_setup_workload ||
-          ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-setup') in self.internal_access.workloads)
-        severity: warning
-        paths: [internal_access.workloads]
-        messageExpression: >-
-          'The chart does not add its own workloads to the list, and the nodes reach each other through it too. Add ' +
-          (['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch'] +
-          (self.dashboard.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch-dashboard'] : []) +
-          (self.backup.enabled && !self.backup.remove_setup_workload ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup'] : []) +
-          (self.demoLogs.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-generator'] : []) +
-          (self.demoLogs.enabled && !self.demoLogs.remove_setup_workload ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-setup'] : []))
-          .filter(w, !(w in self.internal_access.workloads)).join(', ') +
-          ', or the cluster cannot form and these workloads cannot connect.'
-        message: >-
-          The chart does not add its own workloads to the list, and the nodes reach each other through it too.
-          Add the OpenSearch workload itself and the enabled Dashboards, backup setup and demo workloads.
-        fix:
-          path: internal_access.workloads
-          items: >-
-            (['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch'] +
-            (self.dashboard.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-opensearch-dashboard'] : []) +
-            (self.backup.enabled && !self.backup.remove_setup_workload ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-backup-setup'] : []) +
-            (self.demoLogs.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-generator'] : []) +
-            (self.demoLogs.enabled && !self.demoLogs.remove_setup_workload ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-demo-log-setup'] : []))
-            .filter(w, !(w in self.internal_access.workloads))

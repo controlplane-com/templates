@@ -96,6 +96,8 @@ internal_access:
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
+With `workload-list`, list the additional clients only: the chart always allows its own workloads (the nodes, Dashboards, the demo and backup jobs).
+
 **Dashboards:**
 
 ```yaml
@@ -272,7 +274,7 @@ Monitor with `curl --cacert ca.crt -u "$AUTH" "$OS/_cat/recovery?v&active_only=t
 2.0.0 turns the security plugin on, so every client changes:
 
 1. Create both [prerequisite secrets](#prerequisites) and set `security.credentialsSecretName` and `security.caSecretName`.
-2. Upgrade. The nodes restart one at a time; while old and new nodes are mixed they cannot talk to each other, so expect the cluster to be red until the last node has restarted. Your indices are kept.
+2. Upgrade. The nodes restart one at a time, about 11 minutes on three nodes. Old and new nodes cannot talk to each other, so the API is unavailable for 2-5 minutes while the first nodes come up on TLS, and plain-HTTP clients fail from the first restart. Your indices are kept.
 3. Point every client at `https://` with the `admin` user (or a user you create), and trust `ca.crt`.
 4. Saved objects from 1.0.x are in the **Global** tenant of Dashboards.
 

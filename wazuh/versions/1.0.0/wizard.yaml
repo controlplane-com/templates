@@ -110,7 +110,7 @@ steps:
                 mirrors: wazuh.validate
                 message: Wrap the extra configuration in <ossec_config> … </ossec_config>.
       - title: Manager storage
-        docs: "#storage"
+        docs: "#manager"
         fields:
           - path: manager.volumeset.capacity
             type: integer
@@ -122,6 +122,31 @@ steps:
             suggestions: [20, 50, 100, 200, 500]
             description: Agent keys, server state, alert log files and about 7 GiB of vulnerability content.
             help: Uninstalling the release deletes the volume set, and every agent must enroll again.
+          - path: manager.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.manager.volumeset.snapshots.schedule == null || self.manager.volumeset.snapshots.schedule == '' ||
+                  self.manager.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: manager.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.manager.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
       - id: manager-autoscaling
         title: Grow manager storage automatically
         toggle: manager.volumeset.autoscaling.enabled
@@ -183,6 +208,33 @@ steps:
             max: 65536
             required: true
             when: self.manager.workers.replicas > 0
+          - path: manager.workers.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Worker snapshot schedule (UTC)
+            when: self.manager.workers.replicas > 0
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.manager.workers.volumeset.snapshots.schedule == null || self.manager.workers.volumeset.snapshots.schedule == '' ||
+                  self.manager.workers.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: manager.workers.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            when: self.manager.workers.replicas > 0
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.manager.workers.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
           - path: manager.workers.volumeset.autoscaling.enabled
             type: boolean
             label: Grow worker storage automatically
@@ -348,7 +400,7 @@ steps:
                 mirrors: wazuh.validate
                 message: The alert retention must be 0 or more days.
       - title: Indexer storage
-        docs: "#storage"
+        docs: "#indexer"
         fields:
           - path: indexer.volumeset.capacity
             type: integer
@@ -360,6 +412,31 @@ steps:
             suggestions: [20, 50, 100, 200, 500, 1000]
             description: About 50 GiB holds 90 days of alerts for 25 agents.
             help: Uninstalling the release deletes the volume set with every stored alert.
+          - path: indexer.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.indexer.volumeset.snapshots.schedule == null || self.indexer.volumeset.snapshots.schedule == '' ||
+                  self.indexer.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: indexer.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.indexer.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
       - id: indexer-autoscaling
         title: Grow indexer storage automatically
         toggle: indexer.volumeset.autoscaling.enabled

@@ -22,6 +22,9 @@ manager:
     maxMemory: 3Gi
   volumeset:
     capacity: 50 # initial capacity in GiB (minimum is 10); holds agent keys, state, logs and vulnerability content
+    snapshots:
+      schedule: "0 3 * * *" # daily (agent keys and the CA key live only here) at 3am UTC; at most hourly; "" turns scheduled snapshots off
+      retentionDuration: 7d # how long each snapshot is kept
     autoscaling:
       enabled: false # set to true to grow the volume automatically
       maxCapacity: 500 # maximum capacity in GiB when autoscaling is enabled
@@ -47,6 +50,9 @@ manager:
       maxMemory: 2Gi
     volumeset:
       capacity: 20 # initial capacity in GiB per worker (minimum is 10)
+      snapshots:
+        schedule: "0 3 * * *" # daily at 3am UTC; at most hourly; "" turns scheduled snapshots off
+        retentionDuration: 7d # how long each snapshot is kept
       autoscaling:
         enabled: false
         maxCapacity: 200
@@ -65,6 +71,9 @@ indexer:
     maxMemory: 4Gi
   volumeset:
     capacity: 50 # initial capacity in GiB per node (minimum is 10); ~50 GiB holds 90 days for ~25 agents
+    snapshots:
+      schedule: "0 3 * * *" # daily at 3am UTC; at most hourly; "" turns scheduled snapshots off
+      retentionDuration: 7d # how long each snapshot is kept
     autoscaling:
       enabled: false
       maxCapacity: 1000

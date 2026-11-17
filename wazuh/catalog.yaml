@@ -11,7 +11,8 @@ summary: >-
   Agents on Linux, Windows and macOS servers, laptops and containers enroll over a public TCP load balancer and
   send events for intrusion and malware detection, file integrity monitoring, vulnerability detection and
   compliance checks. Optional worker nodes, a 3-node indexer and a demo agent; one prerequisite secret holds
-  every password.
+  every password. The right pick when you need host-level security monitoring (agents on your machines) rather
+  than detection over logs you already ship somewhere.
 
 keywords:
   - siem

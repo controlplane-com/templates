@@ -21,6 +21,12 @@ spec:
     scalingFactor: {{ .vs.autoscaling.scalingFactor }}
   {{- end }}
   performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .vs.snapshots.retentionDuration | quote }}
+    {{- if .vs.snapshots.schedule }}
+    schedule: {{ .vs.snapshots.schedule | quote }}
+    {{- end }}
 {{- end }}
 ---
 # Shared between the manager, workers, indexer and dashboard: the root CA certificate and the

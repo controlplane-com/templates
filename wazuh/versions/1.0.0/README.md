@@ -4,9 +4,9 @@ Open-source endpoint security: Wazuh agents on your Linux, Windows and macOS hos
 
 ## Architecture
 
-- **Manager** (`RELEASE-wazuh-manager`, stateful, 1 replica) — the Wazuh server: receives agent events on TCP 1514, enrolls agents on 1515, serves the server API on 55000, runs analysis and vulnerability detection, and ships alerts to the indexer. Its volume set (`/var/ossec/queue`, 50 GiB) holds agent keys, server state, the alert log files, custom rules and about 7 GiB of vulnerability content.
-- **Workers** (`RELEASE-wazuh-worker`, stateful, optional) — extra Wazuh server nodes that take agent traffic, so agents stay connected while the manager restarts. Each has its own volume set.
-- **Indexer** (`RELEASE-wazuh-indexer`, stateful, 1 or 3+ nodes) — stores alerts and inventory with its security plugin on (TLS and passwords). Only this release's workloads, and any you list, can reach it.
+- **Manager** (`RELEASE-wazuh-manager`, stateful, 1 replica) — the Wazuh server: receives agent events on TCP 1514, enrolls agents on 1515, serves the server API on 55000, runs analysis and vulnerability detection, and ships alerts to the indexer. Its volume set (`/var/ossec/queue`, 50 GiB) holds agent keys, server state, the alert log files, custom rules and about 7 GiB of vulnerability content, with daily snapshots.
+- **Workers** (`RELEASE-wazuh-worker`, stateful, optional) — extra Wazuh server nodes that take agent traffic, so agents stay connected while the manager restarts. Each has its own volume set, with daily snapshots.
+- **Indexer** (`RELEASE-wazuh-indexer`, stateful, 1 or 3+ nodes) — stores alerts and inventory (one volume set per node, daily snapshots) with its security plugin on (TLS and passwords). Only this release's workloads, and any you list, can reach it.
 - **Dashboard** (`RELEASE-wazuh-dashboard`, standard) — the web UI on the workload's `*.cpln.app` HTTPS endpoint.
 - **Certificate volume** (`RELEASE-wazuh-pki`, shared) — the manager creates a private CA and the TLS certificates at first boot; the indexer and dashboard read them from here. The CA key never leaves the manager's own volume.
 - **Demo agent** (`RELEASE-wazuh-demo-agent`, optional) — a real agent inside the GVC that fills the dashboard right away.
@@ -43,9 +43,11 @@ Read the values back with `cpln secret reveal my-wazuh-credentials -o yaml`. If 
 
 ## Configuration
 
-```yaml
-credentialsSecretName: my-wazuh-credentials
+The default is one node of each component. A restart of the manager or indexer pauses event processing; agents and the indexer shipper buffer and resend, so nothing is lost. Set `indexer.replicas: 3`, `manager.workers.replicas: 2` and `dashboard.replicas: 2` for near-zero-downtime upgrades. Each component also has an `image` and a `resources` block; keep all images on the same Wazuh version.
 
+### Manager
+
+```yaml
 manager:
   logRetentionDays: 30 # delete dated alert/archive log files older than this; 0 = keep forever
   extraConfig: "" # raw <ossec_config>…</ossec_config> blocks appended to ossec.conf
@@ -55,40 +57,86 @@ manager:
       - 0.0.0.0/0 # narrow to the networks your agents connect from
     api: false # also expose the server API (port 55000)
   internalAccess:
-    type: same-gvc # same-gvc, same-org or workload-list
+    type: same-gvc # same-gvc, same-org or workload-list (this release's workloads are always allowed)
+  volumeset:
+    capacity: 50 # GiB; agent keys, server state, alert log files, vulnerability content
+    snapshots:
+      schedule: "0 3 * * *" # daily at 3am UTC; at most hourly; "" turns scheduled snapshots off
+      retentionDuration: 7d
+```
+
+Edits to `ossec.conf` made in the dashboard are reset on the next restart; put lasting changes in `extraConfig`. Custom rules, decoders and CDB lists made in the dashboard are kept. The manager volume holds every agent key and the CA key, so keep its snapshots on.
+
+### Worker nodes
+
+```yaml
+manager:
   workers:
     replicas: 0 # 1+ adds worker nodes that take agent traffic
+    volumeset:
+      capacity: 20 # GiB per worker
+      snapshots:
+        schedule: "0 3 * * *"
+        retentionDuration: 7d
+```
 
+Workers keep agents connected while the manager restarts. With workers on, point agents at the worker load balancer; workers pass enrollment on to the manager, and the server API stays on the manager.
+
+### Indexer
+
+```yaml
 indexer:
   replicas: 1 # 1, or an odd number of 3 or more
   javaHeap: 2g # about half of resources.maxMemory
   retentionDays: 90 # delete alert indices older than this; 0 = keep forever
   internalAccess:
     workloads: [] # extra workloads allowed to query the indexer
-
-dashboard:
-  replicas: 1
-  publicAccess:
-    enabled: true # HTTPS UI on the *.cpln.app endpoint
-
-demoAgent:
-  enabled: false # a sample agent in this GVC
+  volumeset:
+    capacity: 50 # GiB per node; roughly 2 GiB per agent per 90 days
+    snapshots:
+      schedule: "0 3 * * *"
+      retentionDuration: 7d
 ```
 
-- **Availability.** The default is one node of each. A restart of the manager or indexer pauses event processing; agents and the indexer shipper buffer and resend, so nothing is lost. Set `indexer.replicas: 3`, `manager.workers.replicas: 2` and `dashboard.replicas: 2` for near-zero-downtime upgrades. The manager itself is always one node (Wazuh has one master by design).
-- **Storage.** `manager.volumeset`, `manager.workers.volumeset` and `indexer.volumeset` set the capacity and optional autoscaling. The indexer needs roughly 2 GiB per agent per 90 days. Uninstalling the release deletes every volume set, with the stored alerts and every agent key.
-- **Server configuration.** Edits to `ossec.conf` made in the dashboard are reset on the next restart; put lasting changes in `manager.extraConfig`. Custom rules, decoders and CDB lists made in the dashboard are kept.
-- **Images and resources.** `manager.image`, `indexer.image`, `dashboard.image`, `demoAgent.image` and each `resources` block. Keep all images on the same Wazuh version.
+Every volume set also takes `autoscaling` (`enabled`, `maxCapacity`, `minFreePercentage`, `scalingFactor`). Uninstalling the release deletes every volume set, with the stored alerts and every agent key; a final snapshot of each is kept for `retentionDuration`.
+
+### Dashboard
+
+```yaml
+dashboard:
+  replicas: 1 # 2+ keeps the UI up through restarts
+  publicAccess:
+    enabled: true # HTTPS UI on the *.cpln.app endpoint; false = reach it with cpln port-forward
+  internalAccess:
+    type: same-gvc # none, same-gvc, same-org or workload-list
+    workloads: # used with workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+```
+
+### Demo agent
+
+```yaml
+demoAgent:
+  enabled: false # a real agent in this GVC that fills the dashboard right away
+```
 
 ## Connecting
 
-**Dashboard.** Open the dashboard workload's endpoint (`cpln workload get RELEASE-wazuh-dashboard --gvc GVC -o yaml`, `status.canonicalEndpoint`) and sign in as `admin` with `indexerAdminPassword`. With `dashboard.publicAccess.enabled: false`, forward it instead and open `http://localhost:5601`:
+| What | Address | Credentials |
+|---|---|---|
+| Dashboard | `status.canonicalEndpoint` of `RELEASE-wazuh-dashboard` (public), or `http://localhost:5601` through port-forward | `admin` / `indexerAdminPassword` |
+| Agents (outside Control Plane) | the manager's load balancer host, ports 1514 and 1515 (the worker's when workers are on) | `enrollmentPassword` |
+| Agents (inside the GVC) | `RELEASE-wazuh-manager.GVC.cpln.local`, ports 1514 and 1515 | `enrollmentPassword` |
+| Server API | `https://RELEASE-wazuh-manager.GVC.cpln.local:55000` (also on the load balancer with `manager.publicAccess.api: true`) | `wazuh-wui` / `apiPassword` |
+| Indexer | `https://RELEASE-wazuh-indexer.GVC.cpln.local:9200` (this release's workloads and `indexer.internalAccess.workloads` only) | `admin` / `indexerAdminPassword` |
+
+With `dashboard.publicAccess.enabled: false`, forward the dashboard and open `http://localhost:5601`:
 
 ```bash
 cpln port-forward RELEASE-wazuh-dashboard 5601:5601 --gvc GVC
 ```
 
-**Agents.** Find the agent host in the manager's load balancer list (or the worker's, when workers are on):
+Find the agents' load balancer host:
 
 ```bash
 cpln workload get RELEASE-wazuh-manager --gvc GVC -o json | jq -r '.status.loadBalancer[].url'
@@ -103,13 +151,12 @@ sudo WAZUH_MANAGER="RELEASE-wazuh-manager-xxxx.yyyy.cpln.app" \
 sudo systemctl enable --now wazuh-agent
 ```
 
-The dashboard's **Deploy new agent** page builds the same command for every operating system, with the host already filled in. The agent then appears under **Endpoints**. Workloads in the GVC reach the manager at `RELEASE-wazuh-manager.GVC.cpln.local` on the same ports.
-
-**Server API.** From inside the GVC, `https://RELEASE-wazuh-manager.GVC.cpln.local:55000` with user `wazuh-wui` and `apiPassword`; set `manager.publicAccess.api: true` to expose it on the load balancer too.
+The dashboard's **Deploy new agent** page builds the same command for every operating system, with the host already filled in. The agent then appears under **Endpoints**.
 
 ## Important Notes
 
 - **Single location.** The template runs in one location; install it in a GVC with exactly one location.
+- **Access changes take time.** After changing `manager.publicAccess.*` or `dashboard.publicAccess.enabled`, allow 30 seconds to about 10 minutes for the firewall and load balancer to apply.
 - **Changing a password.** The secret is the source of truth on every start. Edit the key (`cpln secret edit my-wazuh-credentials`), then force a redeployment of the indexer, then the manager (and workers), then the dashboard, for example `cpln workload force-redeployment RELEASE-wazuh-indexer --gvc GVC`. A password changed only in the dashboard reverts on the next restart.
 - **Certificates.** The manager creates the CA and certificates once (10-year life) and keeps the CA key on its own volume. If the manager's volume set is ever replaced, restart the indexer and dashboard afterwards so they pick up the new CA, and enroll the agents again.
 - **Demo agent.** It enrolls under a new name each time it restarts, leaving the old entry disconnected. Turn it off once your own agents connect, and remove stale entries under **Endpoints**.

@@ -30,7 +30,7 @@
 ## How it works (the non-obvious parts)
 - The manager volume mounts at `/var/ossec/queue` (Wazuh's cluster sync refuses paths that resolve outside it); the other persistent directories live under `queue/.cpln-persist` behind relative symlinks (the daemons chroot into `/var/ossec`).
 - `ossec.conf` is rendered into a chart secret and written by the start script on every boot; UI edits to it are reset, so lasting changes go in `manager.extraConfig`.
-- Keys on the PKI volume: indexer and admin keys `root:1001` 0640 (the indexer runs with fsGroup 1001); the dashboard (uid 1000, no fsGroup) can read only the CA certificate.
+- Keys on the PKI volume: indexer and admin keys `root:1001` 0640 (the indexer runs with fsGroup 1001); the dashboard (uid 1000, no fsGroup) can read the certificates (all 0644) but no private keys.
 
 ## Troubleshooting / considerations
 - Nothing starts and the logs are empty → the credentials secret is missing or misnamed; read `status.versions[].message` via `cpln workload get-deployments`.

@@ -210,6 +210,17 @@ validate_password() {
 {{- if lt (int .Values.dashboard.replicas) 1 -}}
   {{- fail "dashboard.replicas must be 1 or more" -}}
 {{- end -}}
+{{- /* The platform rejects snapshot schedules more frequent than hourly, at apply time only (a
+       half-installed release): a single fixed minute keeps a schedule at most hourly. */ -}}
+{{- range $key, $vs := dict "manager.volumeset" .Values.manager.volumeset "manager.workers.volumeset" .Values.manager.workers.volumeset "indexer.volumeset" .Values.indexer.volumeset -}}
+{{- $s := trim (toString $vs.snapshots.schedule) -}}
+{{- if and $s (not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" $s)) -}}
+  {{- fail (printf "%s.snapshots.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"; use \"\" to turn snapshots off" $key $s) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?[dhm]$" (toString $vs.snapshots.retentionDuration)) -}}
+  {{- fail (printf "%s.snapshots.retentionDuration must be a number followed by d, h or m, such as 7d" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/* ─── Labeling ───────────────────────────────────────────────────────── */}}

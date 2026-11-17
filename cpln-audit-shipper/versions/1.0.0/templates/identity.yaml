@@ -1,0 +1,21 @@
+{{- include "cas.validate" . -}}
+{{- if not .Values.identity.existingName }}
+kind: identity
+name: {{ include "cas.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Audit shipper identity
+tags:
+  {{- include "cas.tags" . | nindent 2 }}
+{{- if and (include "cas.needAWS" .) (eq .Values.aws.authMode "identity") }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.aws.identity.cloudAccountName }}
+  {{- if .Values.aws.identity.roleName }}
+  roleName: {{ .Values.aws.identity.roleName | quote }}
+  {{- else }}
+  policyRefs:
+    {{- range .Values.aws.identity.policyRefs }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

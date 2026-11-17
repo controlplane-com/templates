@@ -1,0 +1,35 @@
+# Both sources to an OpenTelemetry collector, authenticated with a header from a secret. Checkpoints go to a
+# small bucket of their own, so the GVC may have several locations.
+serviceAccount:
+  name: cpln-audit-shipper
+  keySecret: cpln-audit-shipper-key
+sources:
+  cplnAudit:
+    enabled: true
+    contexts:
+      - cpln
+  k8sAudit:
+    enabled: true
+    clusters:
+      - prod-cluster
+    pipeline: '| verb != "get"'
+sink:
+  type: otlp
+  otlp:
+    endpoint: https://otlp.example.com:4318
+    headers:
+      X-Scope-OrgID: my-org
+    authHeader:
+      name: Authorization
+      secret: cpln-audit-shipper-otlp-token
+state:
+  backend: s3
+  s3:
+    bucket: my-audit-state
+    region: us-east-1
+aws:
+  authMode: identity
+  identity:
+    cloudAccountName: my-aws-cloud-account
+    policyRefs:
+      - cpln-audit-shipper-state

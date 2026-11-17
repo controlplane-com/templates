@@ -1,0 +1,256 @@
+{{- include "cas.validate" . -}}
+{{- $v := .Values -}}
+{{- $c := $v.sources.cplnAudit -}}
+{{- $k := $v.sources.k8sAudit -}}
+{{- $s := $v.aws.secret -}}
+{{- $syslogCA := "/etc/cpln-audit-shipper/syslog-ca.pem" -}}
+{{- $otlpCA := "/etc/cpln-audit-shipper/otlp-ca.pem" -}}
+kind: workload
+name: {{ include "cas.name" . }}
+description: Ships audit logs to {{ $v.sink.type }}
+tags:
+  {{- include "cas.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: shipper
+      image: {{ $v.image }}
+      cpu: {{ $v.resources.cpu | quote }}
+      memory: {{ $v.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - name: SERVICE_ACCOUNT_KEY
+          value: cpln://secret/{{ $v.serviceAccount.keySecret }}.payload
+        - name: STREAM
+          value: {{ $v.stream | quote }}
+        - name: INTERVAL
+          value: {{ $v.interval | quote }}
+        - name: AUDIT_ENABLED
+          value: {{ $c.enabled | quote }}
+        {{- if $c.enabled }}
+        - name: AUDIT_CONTEXTS
+          value: {{ join "," $c.contexts | quote }}
+        {{- with $c.startTime }}
+        - name: AUDIT_START_TIME
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with $c.endTime }}
+        - name: AUDIT_END_TIME
+          value: {{ . | quote }}
+        {{- end }}
+        - name: AUDIT_INITIAL_LOOKBACK
+          value: {{ $c.initialLookback | quote }}
+        - name: AUDIT_SETTLE_DELAY
+          value: {{ $c.settleDelay | quote }}
+        - name: AUDIT_OVERLAP
+          value: {{ $c.overlap | quote }}
+        {{- end }}
+        - name: K8S_AUDIT_ENABLED
+          value: {{ $k.enabled | quote }}
+        {{- if $k.enabled }}
+        - name: K8S_AUDIT_CLUSTERS
+          value: {{ join "," $k.clusters | quote }}
+        {{- with $k.pipeline }}
+        - name: K8S_AUDIT_PIPELINE
+          value: {{ trim . | quote }}
+        {{- end }}
+        {{- with $k.startTime }}
+        - name: K8S_AUDIT_START_TIME
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with $k.endTime }}
+        - name: K8S_AUDIT_END_TIME
+          value: {{ . | quote }}
+        {{- end }}
+        - name: K8S_AUDIT_INITIAL_LOOKBACK
+          value: {{ $k.initialLookback | quote }}
+        - name: K8S_AUDIT_SETTLE_DELAY
+          value: {{ $k.settleDelay | quote }}
+        - name: K8S_AUDIT_OVERLAP
+          value: {{ $k.overlap | quote }}
+        {{- end }}
+        - name: SINK_TYPE
+          value: {{ $v.sink.type | quote }}
+        {{- if eq $v.sink.type "s3" }}
+        - name: S3_BUCKET
+          value: {{ $v.sink.s3.bucket | quote }}
+        - name: S3_REGION
+          value: {{ $v.sink.s3.region | quote }}
+        - name: S3_PREFIX
+          value: {{ $v.sink.s3.prefix | quote }}
+        - name: S3_GZIP
+          value: {{ $v.sink.s3.gzip | quote }}
+        {{- with $v.sink.s3.kmsKeyId }}
+        - name: S3_KMS_KEY_ID
+          value: {{ . | quote }}
+        {{- end }}
+        - name: MAX_OBJECT_EVENTS
+          value: {{ int $v.tuning.maxObjectEvents | quote }}
+        - name: MAX_OBJECT_BYTES
+          value: {{ int $v.tuning.maxObjectBytes | quote }}
+        {{- else if eq $v.sink.type "syslog" }}
+        {{- $y := $v.sink.syslog }}
+        - name: SYSLOG_HOST
+          value: {{ $y.host | quote }}
+        - name: SYSLOG_PORT
+          value: {{ int $y.port | quote }}
+        - name: SYSLOG_TLS
+          value: {{ $y.tls | quote }}
+        {{- if and $y.tls $y.caSecret }}
+        - name: SYSLOG_TLS_CA_FILE
+          value: {{ $syslogCA }}
+        {{- end }}
+        - name: SYSLOG_FRAMING
+          value: {{ $y.framing | quote }}
+        - name: SYSLOG_FACILITY
+          value: {{ int $y.facility | quote }}
+        - name: SYSLOG_SEVERITY
+          value: {{ int $y.severity | quote }}
+        - name: SYSLOG_MAX_MESSAGE_BYTES
+          value: {{ int $y.maxMessageBytes | quote }}
+        - name: SYSLOG_TIMEOUT
+          value: {{ $y.timeout | quote }}
+        {{- else }}
+        {{- $o := $v.sink.otlp }}
+        - name: OTLP_ENDPOINT
+          value: {{ $o.endpoint | quote }}
+        {{- if $o.headers }}
+        - name: OTLP_HEADERS
+          value: {{ $hs := list }}{{ range $h, $val := $o.headers }}{{ $hs = append $hs (printf "%s=%s" $h (toString $val)) }}{{ end }}{{ join "," $hs | quote }}
+        {{- end }}
+        {{- if $o.authHeader.name }}
+        - name: OTLP_AUTH_HEADER
+          value: {{ $o.authHeader.name | quote }}
+        - name: OTLP_AUTH_VALUE
+          value: cpln://secret/{{ $o.authHeader.secret }}.payload
+        {{- end }}
+        {{- if $o.caSecret }}
+        - name: OTLP_TLS_CA_FILE
+          value: {{ $otlpCA }}
+        {{- end }}
+        - name: OTLP_GZIP
+          value: {{ $o.gzip | quote }}
+        - name: OTLP_TIMEOUT
+          value: {{ $o.timeout | quote }}
+        {{- end }}
+        - name: STATE_BACKEND
+          value: {{ $v.state.backend | quote }}
+        {{- if eq $v.state.backend "s3" }}
+        {{- if $v.state.s3.bucket }}
+        - name: STATE_S3_BUCKET
+          value: {{ $v.state.s3.bucket | quote }}
+        - name: STATE_S3_REGION
+          value: {{ $v.state.s3.region | quote }}
+        - name: STATE_S3_PREFIX
+          value: {{ $v.state.s3.prefix | quote }}
+        {{- with $v.state.s3.kmsKeyId }}
+        - name: STATE_S3_KMS_KEY_ID
+          value: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- else }}
+        - name: STATE_DIR
+          value: /state
+        {{- end }}
+        {{- if include "cas.needAWS" . }}
+        - name: AWS_AUTH_MODE
+          value: {{ $v.aws.authMode | quote }}
+        {{- if eq $v.aws.authMode "secret" }}
+        - name: AWS_SOURCE_ACCESS_KEY_ID
+          value: cpln://secret/{{ $s.name }}.{{ $s.accessKeyIdKey }}
+        - name: AWS_SOURCE_SECRET_ACCESS_KEY
+          value: cpln://secret/{{ $s.name }}.{{ $s.secretAccessKeyKey }}
+        {{- with $s.sessionTokenKey }}
+        - name: AWS_SOURCE_SESSION_TOKEN
+          value: cpln://secret/{{ $s.name }}.{{ . }}
+        {{- end }}
+        {{- if $s.assumeRole.roleArn }}
+        - name: AWS_ASSUME_ROLE_ARN
+          value: {{ $s.assumeRole.roleArn | quote }}
+        {{- with $s.assumeRole.externalId }}
+        - name: AWS_ASSUME_ROLE_EXTERNAL_ID
+          value: {{ . | quote }}
+        {{- end }}
+        - name: AWS_ASSUME_ROLE_SESSION_NAME
+          value: {{ default "cpln-audit-shipper" $s.assumeRole.sessionName | quote }}
+        - name: AWS_ASSUME_ROLE_DURATION
+          value: {{ printf "%ds" (int $s.assumeRole.durationSeconds) | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        - name: LEASE_TTL
+          value: {{ $v.tuning.leaseTTL | quote }}
+        - name: CYCLE_BUDGET
+          value: {{ $v.tuning.cycleBudget | quote }}
+        - name: DRAIN_TIMEOUT
+          value: {{ $v.tuning.drainTimeout | quote }}
+        - name: MAX_BATCH_EVENTS
+          value: {{ int $v.tuning.maxBatchEvents | quote }}
+        - name: MAX_BATCH_BYTES
+          value: {{ int $v.tuning.maxBatchBytes | quote }}
+        - name: HEARTBEAT_MAX_AGE
+          value: {{ $v.tuning.heartbeatMaxAge | quote }}
+        - name: LOG_LEVEL
+          value: {{ $v.tuning.logLevel | quote }}
+      # Every cycle and every batch touches a heartbeat, failed ones too: this restarts a hung process only.
+      livenessProbe:
+        exec:
+          command:
+            - /cpln-audit-shipper
+            - healthcheck
+        initialDelaySeconds: 60
+        periodSeconds: 60
+        timeoutSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+      {{- $vols := list }}
+      {{- if eq $v.state.backend "volumeSet" }}{{ $vols = append $vols (dict "path" "/state" "uri" (printf "cpln://volumeset/%s" (include "cas.volumeset.name" .))) }}{{ end }}
+      {{- if and (eq $v.sink.type "syslog") $v.sink.syslog.tls $v.sink.syslog.caSecret }}{{ $vols = append $vols (dict "path" $syslogCA "uri" (printf "cpln://secret/%s" $v.sink.syslog.caSecret)) }}{{ end }}
+      {{- if and (eq $v.sink.type "otlp") $v.sink.otlp.caSecret }}{{ $vols = append $vols (dict "path" $otlpCA "uri" (printf "cpln://secret/%s" $v.sink.otlp.caSecret)) }}{{ end }}
+      {{- with $vols }}
+      volumes:
+        {{- range . }}
+        - path: {{ .path }}
+          recoveryPolicy: retain
+          uri: {{ .uri }}
+        {{- end }}
+      {{- end }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        {{- toYaml $v.firewall.outboundAllowCIDR | nindent 8 }}
+      outboundAllowHostname:
+        {{- toYaml $v.firewall.outboundAllowHostname | nindent 8 }}
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: none
+      inboundAllowWorkload: []
+  identityLink: {{ include "cas.identity.link" . }}
+  # One replica at a time: the old one stops before the new one starts.
+  rolloutOptions:
+    maxSurgeReplicas: "0"
+    maxUnavailableReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: {{ int $v.tuning.terminationGracePeriodSeconds }}
+  {{- if eq $v.state.backend "volumeSet" }}
+  # The image runs as uid/gid 65532 (distroless nonroot); the volume is group-writable for it.
+  securityOptions:
+    filesystemGroupId: 65532
+  {{- end }}
+  supportDynamicTags: false

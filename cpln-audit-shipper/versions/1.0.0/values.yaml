@@ -1,0 +1,158 @@
+image: ghcr.io/controlplane-com/cpln-build/cpln-audit-shipper:v1.0.0
+
+# The shipper runs as one long-running replica. Without Capacity AI the CPU and memory below are reserved.
+resources:
+  cpu: 250m
+  memory: 512Mi
+
+# Time between the starts of two cycles of each source (10s to 24h). A cycle that runs longer is followed at once.
+interval: 5m
+
+# Names this export. Checkpoints and S3 object names include it, so a second release on the same sources and
+# state store (for example a backfill, or a second syslog destination) needs its own stream name.
+stream: default
+
+# REQUIRED PREREQUISITES: a service account, and an opaque secret (encoding plain) holding one of its keys. The
+# audit and logs APIs do not accept a workload's own token. The chart grants the service account readAudit on the
+# audit contexts and, when the Kubernetes audit source is on, readLogs on the org.
+serviceAccount:
+  name: cpln-audit-shipper
+  keySecret: cpln-audit-shipper-key
+
+sources:
+  # The Control Plane audit trail: who did what to which resource, through the API, console or CLI.
+  cplnAudit:
+    enabled: true
+    # `cpln` holds every platform event in the org; add the custom audit contexts your workloads write to.
+    contexts:
+      - cpln
+    # First run only: an RFC 3339 time (2026-01-01T00:00:00Z) to start from. Empty starts initialLookback ago.
+    startTime: ""
+    initialLookback: 24h
+    # Optional: stop at this RFC 3339 time (for a one-off backfill stream).
+    endTime: ""
+    # Events newer than this are left for the next cycle.
+    settleDelay: 1m
+    # Each cycle re-reads this much before its checkpoint and skips what it already shipped. Late tolerance is
+    # overlap + settleDelay.
+    overlap: 15m
+
+  # Kubernetes audit logs of mk8s clusters, read from the org's logs ({cluster_name="<cluster>", job="audit"}).
+  # The cluster needs the logs add-on with audit logs enabled. readLogs cannot be narrowed: the service account
+  # key can read every log in the org.
+  k8sAudit:
+    enabled: false
+    clusters: []
+    # Optional LogQL filter appended to the selector, such as `| verb != "get"` (verb is a stream label). Avoid
+    # parser stages like `| json`: Loki adds every field they extract to each entry's labels, which then ship as
+    # syslog structured data or OTLP attributes.
+    pipeline: ""
+    startTime: ""
+    initialLookback: 1h
+    endTime: ""
+    # Watch requests are logged when they end, up to about an hour after their timestamp. 2m misses about 0.15%
+    # of entries (late watch ends); 1h catches them, and delays everything by an hour.
+    settleDelay: 2m
+    overlap: 2m
+
+sink:
+  # s3: JSON Lines objects in a bucket. syslog: RFC 5424 over TCP or TLS. otlp: OTLP/HTTP JSON logs.
+  type: s3
+  s3:
+    bucket: my-audit-bucket   # REQUIRED with type s3
+    region: us-east-1         # REQUIRED with type s3: the bucket's region
+    # Records go under <prefix>/data/; with S3 state in the same bucket, checkpoints go under <prefix>/state/.
+    prefix: cpln-audit
+    gzip: true
+    # Optional SSE-KMS key ID, ARN or alias. Empty uses the bucket's default encryption.
+    kmsKeyId: ""
+  syslog:
+    host: ""                  # REQUIRED with type syslog
+    port: 6514
+    tls: true
+    # Optional opaque secret holding a PEM CA bundle, for a listener with a private CA. Empty uses public CAs.
+    caSecret: ""
+    # newline (what fluent-bit sends) or octet-counting (RFC 6587).
+    framing: newline
+    facility: 1
+    severity: 7
+    # Messages are cut at this size; the receiver must accept it.
+    maxMessageBytes: 32768
+    timeout: 60s
+  otlp:
+    # REQUIRED with type otlp: the collector's base URL; /v1/logs is appended.
+    endpoint: ""
+    # Plain headers sent with every request.
+    headers: {}
+    # Optional header whose value comes from an opaque secret, for authentication.
+    authHeader:
+      name: ""                # e.g. Authorization
+      secret: ""              # opaque secret whose payload is the whole header value, e.g. "Bearer <token>"
+    caSecret: ""
+    gzip: true
+    timeout: 30s
+
+state:
+  # s3: checkpoints and leases in a bucket; works in a GVC with any number of locations.
+  # volumeSet: checkpoints on a shared volume set; a GVC with ONE location only. No bucket needed.
+  backend: s3
+  s3:
+    # Empty with sink.type s3: the sink's bucket, region, prefix and key are used.
+    bucket: ""
+    region: ""
+    prefix: cpln-audit
+    kmsKeyId: ""
+  volumeSet:
+    # Use an existing shared volume set instead of creating one.
+    existingName: ""
+    capacity: 10
+
+# AWS credentials, used when the sink or the state is S3.
+aws:
+  # identity: credentials from the workload identity's AWS cloud access (no keys stored).
+  # secret:   access keys from a Control Plane secret, used directly or to assume a role.
+  authMode: identity
+  identity:
+    cloudAccountName: my-aws-cloud-account
+    # Bucket-scoped IAM policy names (see AWS access in the README). Set this OR roleName.
+    policyRefs:
+      - cpln-audit-shipper
+    roleName: ""
+  secret:
+    # REQUIRED with authMode secret: an `aws` secret, or a `dictionary` secret holding these keys.
+    name: ""
+    accessKeyIdKey: accessKey
+    secretAccessKeyKey: secretKey
+    sessionTokenKey: ""
+    assumeRole:
+      roleArn: ""
+      externalId: ""
+      sessionName: ""   # empty: cpln-audit-shipper
+      durationSeconds: 3600
+
+identity:
+  # Use an existing identity in the GVC instead of creating one. With S3 and authMode identity it must already
+  # have AWS cloud access; the chart only grants it reveal on the secrets (and view on the GVC with volume set state).
+  existingName: ""
+
+# Outbound access. Hostname rules only open ports 80, 443 and 445, so a syslog listener on another port needs a
+# CIDR. The shipper needs api.cpln.io, audit.cpln.io and logs.cpln.io, plus its sink.
+firewall:
+  outboundAllowCIDR:
+    - 0.0.0.0/0
+  outboundAllowHostname: []
+
+tuning:
+  leaseTTL: 5m
+  # A cycle stops starting new batches after this long; the next cycle starts at once.
+  cycleBudget: 30m
+  # On shutdown, a delivery under way gets this long to finish.
+  drainTimeout: 60s
+  terminationGracePeriodSeconds: 90
+  maxBatchEvents: 10000
+  maxBatchBytes: 33554432
+  maxObjectEvents: 10000
+  maxObjectBytes: 33554432
+  # The liveness probe restarts the shipper when a pipeline makes no progress for this long.
+  heartbeatMaxAge: 30m
+  logLevel: info

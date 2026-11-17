@@ -37,7 +37,8 @@
 - A workload exits with `INVALID <key>` → a password breaks the rules (8-64 chars, starts with a letter, only `A-Z a-z 0-9 . * + ? -`, one of each kind).
 - The secret is applied on every start: after editing it, force-redeploy the indexer, then the manager (and workers), then the dashboard.
 - The indexer logs `RECONCILE FAILED` and retries every 60 s until passwords and the retention policy apply; `reconcile done` means it finished.
-- The demo agent re-enrolls under a new name on every restart; old copies show "disconnected".
+- The demo agent re-enrolls under a new name on every restart; an old copy can show "disconnected".
+- Vulnerability Detection is empty for 2 h or more after install (content download); findings appeared after one manager restart.
 - Disk: about 7 GiB of vulnerability content on the manager plus logs; the indexer needs about 2 GiB per agent per 90 days, and its disk watermarks are off upstream.
 - The platform logs harmless "Lifecycle Hook Failed" events for the manager and workers.
 

@@ -162,7 +162,8 @@ The dashboard's **Deploy new agent** page builds the same command for every oper
 - **Access changes take time.** After changing `manager.publicAccess.*` or `dashboard.publicAccess.enabled`, allow 30 seconds to about 10 minutes for the firewall and load balancer to apply.
 - **Changing a password.** The secret is the source of truth on every start. Edit the key (`cpln secret edit my-wazuh-credentials`), then force a redeployment of the indexer, then the manager (and workers), then the dashboard, for example `cpln workload force-redeployment RELEASE-wazuh-indexer --gvc GVC`. A password changed only in the dashboard reverts on the next restart.
 - **Certificates.** The manager creates the CA and certificates once (10-year life) and keeps the CA key on its own volume. If the manager's volume set is ever replaced, restart the indexer and dashboard afterwards so they pick up the new CA, and enroll the agents again.
-- **Demo agent.** It enrolls under a new name each time it restarts, leaving the old entry disconnected. Turn it off once your own agents connect, and remove stale entries under **Endpoints**.
+- **Demo agent.** It enrolls under a new name each time it restarts and can leave the old entry disconnected. Turn it off once your own agents connect, and remove stale entries under **Endpoints**.
+- **Vulnerability Detection starts empty.** The manager downloads and loads its vulnerability content (about 1.7 GB) after the first install, which takes two hours or more. If **Vulnerability Detection** is still empty after that, restart the manager once (**Server management → Status → Restart**).
 - **Removing indexer nodes** can lose the data they hold; scale the indexer up, not down.
 - **Disk.** The indexer's disk watermarks are off (as upstream ships it), so a full volume stops indexing. Keep the retention values set or turn on volume autoscaling.
 

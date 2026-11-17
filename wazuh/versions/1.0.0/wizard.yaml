@@ -104,7 +104,8 @@ steps:
             placeholder: "<ossec_config>\n  <vulnerability-detection>\n    <enabled>no</enabled>\n  </vulnerability-detection>\n</ossec_config>"
             description: >-
               Raw `<ossec_config>` blocks appended to the server configuration. Edits made to ossec.conf in the
-              dashboard are reset on restart; put lasting changes here.
+              dashboard are reset on restart; put lasting changes here. A `<ruleset>` block replaces the default
+              one, so restate the default `decoder_dir`, `rule_dir` and `list` entries in it.
             rules:
               - rule: self.manager.extraConfig == null || self.manager.extraConfig == '' || self.manager.extraConfig.contains('<ossec_config>')
                 mirrors: wazuh.validate
@@ -320,6 +321,13 @@ steps:
               - rule: self.manager.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
                 mirrors: wazuh.validate
                 message: The internal access must be same-gvc, same-org or workload-list.
+              - when: self.manager.publicAccess.enabled
+                rule: "false"
+                severity: info
+                message: >-
+                  While public agent access is on, agent ports 1514 and 1515 are reachable from every workload in
+                  the GVC whatever is chosen here; the enrollment password is the gate. This setting restricts them
+                  (and the server API) once public agent access is off.
           - path: manager.internalAccess.workloads
             type: list
             label: Allowed workloads
@@ -340,8 +348,8 @@ steps:
     rules:
       - rule: "!self.manager.publicAccess.api || self.manager.publicAccess.enabled"
         mirrors: wazuh.validate
-        paths: [manager.publicAccess.api]
-        message: The server API can only be exposed while public agent access is on.
+        paths: [manager.publicAccess.enabled]
+        message: The server API is still set to be exposed; turn public agent access back on, or turn the API off first.
 
   - id: indexer
     title: Indexer
@@ -542,6 +550,7 @@ steps:
                 mirrors: wazuh.validate
                 message: The internal access must be none, same-gvc, same-org or workload-list.
           - path: dashboard.internalAccess.workloads
+            when: self.dashboard.internalAccess.type in ['same-gvc', 'workload-list'] || (self.dashboard.internalAccess.workloads != null && size(self.dashboard.internalAccess.workloads) > 0)
             type: list
             label: Allowed workloads
             widget: tags

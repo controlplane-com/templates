@@ -155,7 +155,7 @@ echo "Dashboards is ready"
 RESPONSE=$(osd_curl -w "%{http_code}" -o /tmp/pattern_response.json -s -X POST \
   "${OSD}/api/saved_objects/index-pattern/demo-logs" \
   -H 'Content-Type: application/json' \
-  -d '{"attributes": {"title": "demo-logs*", "timeFieldName": "@timestamp"}}')
+  -d '{"attributes": {"title": "demo-logs*", "timeFieldName": "@timestamp", "fields": "[{\"name\":\"@timestamp\",\"type\":\"date\",\"esTypes\":[\"date\"],\"searchable\":true,\"aggregatable\":true,\"readFromDocValues\":true}]"}}')
 if [ "${RESPONSE}" -eq 200 ] || [ "${RESPONSE}" -eq 409 ]; then
   echo "Index pattern demo-logs* ready"
 else

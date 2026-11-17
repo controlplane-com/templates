@@ -535,7 +535,7 @@ steps:
         toggle: redis.enabled
         description: >-
           One Redis node for file locks, the shared cache and browser sessions. It holds no data of record: a
-          Redis restart signs browser sessions out, and sync clients carry on. Off (1 replica only), locks use
+          Redis restart can sign browser sessions out, and sync clients carry on. Off (1 replica only), locks use
           the database and sessions stay on the replica.
         fields:
           - type: note
@@ -1034,7 +1034,7 @@ yamlOnly:
   - path: redis.valkeyImage
     reason: Read only with redis.engine valkey, which stays at the Redis default.
   - path: redis.redis.persistence
-    reason: Nextcloud's Redis holds no data of record (locks, cache, sessions); a restart only signs browser sessions out, so it needs no volume.
+    reason: Nextcloud's Redis holds no data of record (locks, cache, sessions); a restart can at most sign browser sessions out, so it needs no volume.
   - path: redis.backup
     reason: Nextcloud's Redis holds no data of record, so there is nothing to back up; the database backups cover Nextcloud's metadata.
   - path: redis.redis.exporter

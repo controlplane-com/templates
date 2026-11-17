@@ -148,7 +148,7 @@ postgresHA:
       prefix: nextcloud/backups
 
 # ─── Redis: file locks, cache and sessions (recommended; required for 2+ replicas) ──
-# Holds no data of record: a Redis restart signs browser sessions out, nothing else.
+# Holds no data of record: file locks, cache and browser sessions only.
 redis:
   enabled: true
   mode: dev                        # required — Nextcloud connects to one Redis endpoint

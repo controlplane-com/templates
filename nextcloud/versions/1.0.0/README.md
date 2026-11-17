@@ -74,7 +74,7 @@ The full `backup` blocks in `values.yaml` pass straight through to the `postgres
 
 ## Storage setup
 
-Only for `storage.type: s3`, chosen at install. Nextcloud stores each file as an object named `urn:oid:<id>`, so the bucket is not browsable as a folder tree.
+Only for `storage.type: s3`, chosen at install. Nextcloud stores each file as an object named `urn:oid:<id>`, so the bucket is not browsable as a folder tree. If Nextcloud cannot write to the bucket (a policy without `s3:PutObject`, a wrong key), the first boot exits and restarts; the reason is in `cpln logs`.
 
 ```yaml
 storage:
@@ -125,7 +125,7 @@ cpln secret create-dictionary --name my-nextcloud-s3-keys \
 | Private | `cpln port-forward {release}-nextcloud 8080:80 --gvc {gvc}`, then `http://localhost:8080` | same |
 | Internal | `http://{release}-nextcloud.{gvc}.cpln.local` | a user or app password |
 | WebDAV files | `/remote.php/dav/files/USERNAME/` on any of the above | same |
-| Calendars and contacts | the server address; clients find `/.well-known/caldav` and `/.well-known/carddav` | same |
+| Calendars and contacts | the server address; clients find `/.well-known/caldav` and `/.well-known/carddav` (the web Calendar and Contacts apps are not installed by default: `occ app:install calendar contacts`) | same |
 | PostgreSQL | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode | the database credentials secret |
 
 Sign in with the admin login, then add users under **Accounts**. Desktop and mobile clients take the server address and sign in through the browser; for scripts and WebDAV mounts, create an app password under **Personal settings → Security**.
@@ -147,7 +147,7 @@ cpln workload exec {release}-nextcloud --gvc {gvc} --container nextcloud -- \
 - **Copy `config/config.php` somewhere safe after the first install.** It holds the instance `secret`, `passwordsalt` and `instanceid`, which are on the volume only: a database backup cannot fully restore Nextcloud without them. It also holds the Redis password (and S3 keys, if set), so store it as a secret: `cpln workload exec {release}-nextcloud --gvc {gvc} --container nextcloud -- cat /srv/nextcloud/config/config.php > config.php`. The database password is never written to it.
 - **The volume is not snapshotted and is deleted on uninstall,** with every file when `storage.type` is `local`. Use `storage.type: s3` for files that must outlive the release. `storage.type` and `storage.s3.bucket` are fixed at install: a changed value stops new replicas at boot while the old ones keep serving, since Nextcloud cannot move files between them.
 - **Nextcloud version upgrades take Nextcloud offline for a few minutes** while `occ upgrade` runs in maintenance mode (HTTP 503). Upgrade one major version at a time. If an upgrade is cut short and the 503 lingers after the next start, run `occ maintenance:mode --off` as shown above. The first `helm upgrade` can also briefly restart the single-instance PostgreSQL, and Nextcloud with it; use `postgresHA` when that matters.
-- **Each secret rotates differently.** Admin: the secret is read on the first boot only, so reset the password as shown above instead. Database: run `ALTER ROLE ... PASSWORD` first (in HA mode, follow the `postgres-highly-available` template's rotation steps), then update the secret. Redis: update the value in the same secret, then run `cpln workload force-redeployment` on `{release}-redis`; this signs browser sessions out, while sync clients and app passwords carry on. After a database or Redis change, force-redeploy `{release}-nextcloud` and `{release}-nextcloud-cron`.
+- **Each secret rotates differently.** Admin: the secret is read on the first boot only, so reset the password as shown above instead. Database: run `ALTER ROLE ... PASSWORD` first (in HA mode, follow the `postgres-highly-available` template's rotation steps), then update the secret. Redis: update the value with `cpln secret edit {secret}`, then run `cpln workload force-redeployment` on `{release}-redis`; the old password stops working, browser users may need to sign in again, and sync clients and app passwords carry on. After a database or Redis change, force-redeploy `{release}-nextcloud` and `{release}-nextcloud-cron`.
 - **Install into a GVC with one location** and set `location` to it: if the GVC lacks that location, Nextcloud runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL and Redis start in every GVC location.
 
 ## Links

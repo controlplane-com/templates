@@ -1,14 +1,14 @@
 apiVersion: v2
 name: opensearch
-description: OpenSearch search and analytics cluster with Dashboards and optional S3 or GCS snapshots
+description: OpenSearch cluster with Dashboards, login security, Security Analytics SIEM and optional snapshots
 
 type: application
-version: 1.0.2
-appVersion: "3.4.0"
+version: 2.0.0
+appVersion: "3.8.0"
 
 annotations:
   created: "2026-02-19"
-  lastModified: "2026-10-23"
+  lastModified: "2026-11-16"
   createsGvc: false
 
 dependencies:

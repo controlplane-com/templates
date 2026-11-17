@@ -16,15 +16,40 @@ spec:
       env:
         - name: DISABLE_INSTALL_DEMO_CONFIG
           value: 'true'
-        - name: DISABLE_SECURITY_PLUGIN
-          value: 'true'
+        - name: OS_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.password
+        - name: OS_DASHBOARDS_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.dashboardsPassword
+        - name: OS_CA_KEYSTORE
+          value: cpln://secret/{{ include "opensearch.secret.ca.name" . }}.keystore
+        - name: OS_CA_PASSPHRASE
+          value: cpln://secret/{{ include "opensearch.secret.ca.name" . }}.passphrase
       image: {{ .Values.image }}
       inheritEnv: false
+      {{- /*
+      9200 serves HTTPS, so it is a tcp port: the mesh's http handling cannot
+      carry a TLS stream, while tcp passes it through.
+      */}}
       ports:
         - number: 9200
-          protocol: http
+          protocol: tcp
         - number: 9300
           protocol: tcp
+      {{- /*
+      Readiness = the process listens on loopback. It must not need quorum: a
+      not-ready replica is unreachable, and replica-0 starts alone.
+      */}}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - exec 3<>/dev/tcp/127.0.0.1/9200
+        failureThreshold: 3
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        successThreshold: 1
+        timeoutSeconds: 3
       volumes:
         - path: /usr/share/opensearch/data
           recoveryPolicy: retain
@@ -36,12 +61,26 @@ spec:
     autoscaling:
       metric: disabled
       minScale: {{ .Values.replicas }}
+      maxScale: {{ .Values.replicas }}
+      {{- /* Backfilled by the API on a partial block; declared to avoid drift. */}}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     multiZone:
       enabled: false
     suspend: false
     timeoutSeconds: 5
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is not sent: the API drops it on a stateful
+    workload. terminationGracePeriodSeconds is declared because the API
+    backfills 90.
+    */}}
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   firewallConfig:
     external:
       inboundAllowCIDR: []

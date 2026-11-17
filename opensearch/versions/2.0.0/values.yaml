@@ -1,4 +1,4 @@
-image: opensearchproject/opensearch:3.4.0
+image: opensearchproject/opensearch:3.8.0
 
 replicas: 3 # Must be odd
 
@@ -18,6 +18,12 @@ volumeset:
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 
+# ─── Security ─────────────────────────────────────────────
+# Both secrets must exist BEFORE install: if one is missing the nodes wait silently (README Prerequisites).
+security:
+  credentialsSecretName: my-opensearch-credentials # dictionary: password (admin), dashboardsPassword (kibanaserver), cookieSecret (32+ chars)
+  caSecretName: my-opensearch-ca # dictionary: keystore (base64 PKCS#12 with the CA certificate and key), passphrase
+
 internal_access:
   type: same-gvc # options: same-gvc, same-org, workload-list
   workloads:  # Note: can only be used if type is same-gvc or workload-list
@@ -27,12 +33,14 @@ internal_access:
 # Dashboard Configuration (recommended)
 dashboard:
   enabled: true
-  image: opensearchproject/opensearch-dashboards:3.4.0
+  image: opensearchproject/opensearch-dashboards:3.8.0
   resources:
-    cpu: 100m
-    memory: 512Mi
+    cpu: 250m
+    memory: 1Gi
+  publicAccess:
+    enabled: false # true publishes the login page on an HTTPS *.cpln.app endpoint
 
-# Demo Logs Configuration (optional)
+# Demo Logs Configuration (optional): sample logs plus a sample Security Analytics detector
 demoLogs:
   enabled: false
   remove_setup_workload: false # Set to true after demo logs startup is no longer needed to reduce resource usage
@@ -41,18 +49,18 @@ demoLogs:
 backup:
   enabled: false      # Set to true to enable automated snapshots
   remove_setup_workload: false # Set to true after backup setup is no longer needed to reduce resource usage
-  
+
   # Cloud provider: aws or gcp
   provider: aws
-  
+
   # Backup schedule (cron format, UTC timezone)
   schedule: 0 2 * * *  # Daily at 2am UTC
-  
+
   # Snapshot retention
   retention:
     maxAge: 30d        # Delete snapshots older than 30 days
     maxCount: 30       # Keep maximum 30 snapshots
-  
+
   # AWS S3 Configuration
   aws:
     bucket: my-s3-bucket                 # S3 bucket name (required if provider=aws)
@@ -60,7 +68,7 @@ backup:
     prefix: opensearch-snapshots         # Path prefix in bucket
     cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
     policyName: my-backup-policy         # AWS IAM custom policy name (required)
-  
+
   # GCP GCS Configuration
   gcp:
     bucket: my-gcs-bucket                # GCS bucket name (required if provider=gcp)

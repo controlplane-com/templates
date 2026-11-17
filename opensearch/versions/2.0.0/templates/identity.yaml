@@ -22,6 +22,12 @@ gcp:
     - https://www.googleapis.com/auth/cloud-platform
 {{- end }}
 
+---
+kind: identity
+name: {{ include "opensearch.clientIdentity.name" . }}
+description: OpenSearch client identity (Dashboards and setup jobs)
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+
 {{- if .Values.demoLogs.enabled }}
 ---
 kind: identity

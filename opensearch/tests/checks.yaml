@@ -1,0 +1,208 @@
+# Feature checks for the opensearch template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, plus the baseline vars
+# {os_url} {curl_auth} {admin_password} (plain HTTP and no login on 1.0.x, HTTPS + admin from 2.0.0).
+#
+# Every check runs in a node container (bash, curl, keytool; no python, no ps). The runner reads any
+# {word} as a placeholder, so the scripts write shell variables as $VAR, never with braces.
+checks:
+  - id: cluster-formed
+    description: All three nodes joined one cluster and it is green.
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        curl -sk {curl_auth} "{os_url}/_cluster/health" ; echo
+    expect:
+      stdout: '"status":"green".*"number_of_nodes":3,'
+    retries: 10
+    retryDelaySeconds: 30
+
+  - id: data-survives-upgrade
+    description: >-
+      A document tagged with this version is written and read back, and the one written by the version
+      first installed is still there.
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"
+        curl -sk {curl_auth} -X PUT "$U/e2e-data/_doc/v-{version}?refresh=true" \
+          -H 'Content-Type: application/json' -d '{"tag":"written-by-{version}"}' > /dev/null
+        echo "NOW $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{version}" | grep -o 'written-by-[0-9.]*')"
+        echo "FIRST $(curl -sk {curl_auth} "$U/e2e-data/_doc/v-{installed_version}" | grep -o 'written-by-[0-9.]*')"
+    expect:
+      stdout: '^NOW written-by-{version}\nFIRST written-by-{installed_version}$'
+
+  - id: auth-required
+    description: Anonymous and wrong-password requests get 401; admin with the secret's password gets the cluster.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"
+        code() { curl -sk -o /dev/null -w '%{''http_code}' "$@"; }
+        echo "ANON $(code "$U/") WRONG $(code -u admin:wrong-password "$U/") DEFAULT $(code -u admin:admin "$U/") ADMIN $(code {curl_auth} "$U/")"
+        curl -sk {curl_auth} "$U/" | grep -o '"cluster_name" : "[^"]*"'
+    expect:
+      stdout: '^ANON 401 WRONG 401 DEFAULT 401 ADMIN 200\n"cluster_name" : "my-opensearch-cluster"'
+
+  - id: demo-users-refused
+    description: The image's demo users are gone; only admin and kibanaserver exist.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"
+        code() { curl -sk -o /dev/null -w '%{''http_code}' "$@"; }
+        echo "DEMO $(code -u logstash:logstash "$U/") $(code -u readall:readall "$U/") $(code -u snapshotrestore:snapshotrestore "$U/") $(code -u kibanaro:kibanaro "$U/") $(code -u anomalyadmin:anomalyadmin "$U/")"
+        echo "USERS $(curl -sk {curl_auth} "$U/_plugins/_security/api/internalusers" | grep -o '"[A-Za-z0-9_-]*":{"attributes"' | cut -d'"' -f2 | sort | tr '\n' ',')"
+    expect:
+      stdout: '^DEMO 401 401 401 401 401\nUSERS admin,kibanaserver,$'
+
+  - id: tls-layers
+    description: >-
+      Plain HTTP is refused; HTTPS through the service name verifies against the CA the node was issued
+      from (CN=templates-ci), and fails verification without it.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        SVC="https://{release}-opensearch.{gvc}.cpln.local:9200/"
+        CA=/usr/share/opensearch/config/certs/ca.pem
+        curl -s -o /dev/null http://127.0.0.1:9200/; echo "PLAIN rc=$?"
+        echo "PINNED $(curl -s --cacert $CA -o /dev/null -w '%{''http_code}' "$SVC") rc=$?"
+        curl -s -o /dev/null "$SVC"; echo "UNPINNED rc=$?"
+        echo "ISSUER $(curl -s --cacert $CA -v "$SVC" 2>&1 | grep -m1 -o 'issuer: .*')"
+    expect:
+      stdout: '^PLAIN rc=52\nPINNED 401 rc=0\nUNPINNED rc=60\nISSUER issuer: CN=templates-ci'
+
+  - id: transport-tls
+    description: The transport port 9300 presents the node's certificate signed by the supplied CA.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        keytool -printcert -sslserver 127.0.0.1:9300 2>&1 | grep -E '^(Owner|Issuer):' | head -n 2
+    expect:
+      stdout: '^Owner: CN=node-[0-9]+, OU=node, O={release}-opensearch\nIssuer: CN=templates-ci$'
+
+  - id: ca-not-retained
+    description: The CA private key and the admin client certificate are not left on disk or in the JVM's environment.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        C=/usr/share/opensearch/config/certs
+        echo "FILES $(ls $C | tr '\n' ' ')"
+        echo "ENV $(tr '\0' '\n' < /proc/1/environ | grep -c '^OS_')"
+    expect:
+      stdout: '^FILES ca.pem node.p12 truststore.p12 \nENV 0$'
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: dashboards-login
+    description: Dashboards logs admin in (a session cookie) and refuses a wrong password.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        D="http://{release}-opensearch-dashboard.{gvc}.cpln.local:5601"
+        login() { curl -s -o /dev/null -w '%{''http_code}' -c /tmp/e2e-ck -H 'osd-xsrf: true' -H 'Content-Type: application/json' -d "$1" "$D/auth/login"; }
+        echo "BAD $(login '{"username":"admin","password":"wrong-password"}')"
+        echo "GOOD $(login '{"username":"admin","password":"{admin_password}"}') COOKIE $(grep -c security_authentication /tmp/e2e-ck)"
+    expect:
+      stdout: '^BAD 401\nGOOD 200 COOKIE 1$'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: security-analytics-rules
+    description: Security Analytics ships its prepackaged Sigma rules (2000+), behind the login.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        Q='{"query":{"match_all":{}},"size":0}'
+        R="{os_url}/_plugins/_security_analytics/rules/_search?pre_packaged=true"
+        echo "ANON $(curl -sk -o /dev/null -w '%{''http_code}' -X POST "$R" -H 'Content-Type: application/json' -d "$Q")"
+        echo "RULES $(curl -sk {curl_auth} -X POST "$R" -H 'Content-Type: application/json' -d "$Q" | grep -o '"total":{"value":[0-9]*' | grep -o '[0-9]*$')"
+    expect:
+      stdout: '^ANON 401\nRULES [2-9][0-9][0-9][0-9]$'
+
+  - id: security-analytics-finding
+    description: >-
+      A custom Sigma rule and a 1-minute detector over an index produce a finding for the matching document
+      and none for the other.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"; SA="$U/_plugins/_security_analytics"
+        c() { curl -sk {curl_auth} -H 'Content-Type: application/json' "$@"; }
+        c -X PUT "$U/e2e-sa" -d '{"mappings":{"properties":{"message":{"type":"text"}}}}' > /dev/null
+        if ! c -X POST "$SA/logtype/_search" -d '{"query":{"match_phrase":{"name":"e2e_logs"}}}' | grep -q '"total":{"value":1'; then
+          c -X POST "$SA/logtype" -d '{"name":"e2e_logs","description":"e2e","source":"Custom","category":"Other"}' > /dev/null
+        fi
+        RID=$(c -X POST "$SA/rules/_search?pre_packaged=false" -d '{"query":{"nested":{"path":"rule","query":{"match_phrase":{"rule.title":"e2e invalid token"}}}}}' | grep -o '"_id":"[^"]*"' | head -n 1 | cut -d'"' -f4)
+        if [ -z "$RID" ]; then
+          printf "title: 'e2e invalid token'\nid: 0f6c1e2a-5b3d-4e7f-8a9b-1c2d3e4f5a6b\ndescription: e2e check rule\nstatus: experimental\nauthor: e2e\ndate: 2026/11/16\nlogsource:\n    product: e2e_logs\ndetection:\n    selection:\n        message: 'Invalid authentication token'\n    condition: selection\nlevel: medium\nfalsepositives:\n    - none\n" > /tmp/e2e-rule.yml
+          c -X POST "$SA/rules?category=e2e_logs" --data-binary @/tmp/e2e-rule.yml > /tmp/e2e-rule.out
+          RID=$(grep -o '"_id":"[^"]*"' /tmp/e2e-rule.out | head -n 1 | cut -d'"' -f4)
+        fi
+        if [ -z "$RID" ]; then echo "NO RULE: $(head -c 300 /tmp/e2e-rule.out)"; exit 1; fi
+        if ! c -X POST "$SA/detectors/_search" -d '{"query":{"nested":{"path":"detector","query":{"match_phrase":{"detector.name":"e2e-detector"}}}}}' | grep -q '"total":{"value":1'; then
+          c -X POST "$SA/detectors" -d '{"type":"detector","name":"e2e-detector","detector_type":"e2e_logs","enabled":true,"schedule":{"period":{"interval":1,"unit":"MINUTES"}},"inputs":[{"detector_input":{"description":"e2e","indices":["e2e-sa"],"custom_rules":[{"id":"'"$RID"'"}],"pre_packaged_rules":[]}}],"triggers":[{"id":"e2e-any","name":"any","severity":"1","types":["e2e_logs"],"ids":["'"$RID"'"],"sev_levels":[],"tags":[],"actions":[]}]}' > /dev/null
+          sleep 5
+        fi
+        c -X PUT "$U/e2e-sa/_doc/match-{version}?refresh=true" -d '{"message":"Invalid authentication token"}' > /dev/null
+        c -X PUT "$U/e2e-sa/_doc/nomatch-{version}?refresh=true" -d '{"message":"User login successful"}' > /dev/null
+        for i in $(seq 1 30); do
+          F=$(c "$SA/findings/_search?detectorType=e2e_logs&size=100")
+          if echo "$F" | grep -q '"match-{version}"'; then break; fi
+          sleep 10
+        done
+        echo "$F" | grep -o '"related_doc_ids":\["[^]]*\]' | sort -u
+    expect:
+      stdout: 'match-{version}'
+      notStdout: 'nomatch-'
+    retries: 2
+    timeoutSeconds: 420
+
+  - id: audit-failed-login
+    description: A failed login is recorded as a FAILED_LOGIN event in the security audit log.
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        U="{os_url}"; USER_NAME="e2e-nobody-$RANDOM"
+        curl -sk -o /dev/null -u "$USER_NAME:nope" "$U/"
+        for i in $(seq 1 12); do
+          if curl -sk {curl_auth} "$U/security-auditlog-*/_search?q=audit_category:FAILED_LOGIN&size=50&sort=@timestamp:desc" | grep -q "\"$USER_NAME\""; then
+            echo "AUDITED $USER_NAME"; exit 0
+          fi
+          sleep 10
+        done
+        echo "MISSING $USER_NAME"
+    expect:
+      stdout: '^AUDITED e2e-nobody-'
+    timeoutSeconds: 180

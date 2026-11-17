@@ -9,6 +9,85 @@ gvc:
   maxLocations: 1
 
 steps:
+  - id: security
+    title: Login and certificates
+    description: The two prerequisite secrets behind the cluster's login and its TLS certificates.
+    fields:
+      # D14: no render-time guard (a guard cannot see secrets); a missing secret leaves the nodes waiting on
+      # status.versions[].message with nothing in cpln logs.
+      - type: note
+        severity: warning
+        text: >-
+          Both secrets must exist before you install. If one is missing, the nodes wait and never start, and
+          `cpln logs` shows nothing; the reason is in the workload's status. See [Prerequisites](#prerequisites).
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.0.0') < 0
+        text: >-
+          2.0.0 turns the security plugin on. Every client must switch to `https://` and log in, the nodes restart
+          one at a time and the cluster is red until the last one has restarted, and saved objects from 1.0.x
+          appear in the **Global** tenant of Dashboards. See [Upgrading from 1.0.x](#upgrading-from-1-0-x).
+      - path: security.credentialsSecretName
+        type: ref
+        label: Credentials secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `password` (the `admin` user), `dashboardsPassword` (the user
+          Dashboards connects as) and `cookieSecret` (the Dashboards session key, 32 or more characters).
+        help: >-
+          Generate each password with `openssl rand -hex 16` and the cookie key with `openssl rand -hex 32`. Both
+          passwords are applied again at every node start, so a password changed in Dashboards reverts; to
+          rotate, update the secret and force a redeployment of the nodes and Dashboards.
+        docs: "#prerequisites"
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [password, dashboardsPassword, cookieSecret]
+          create:
+            suggestName: "context.releaseName + '-opensearch-credentials'"
+      - path: security.caSecretName
+        type: ref
+        label: Certificate authority secret
+        required: true
+        description: >-
+          A dictionary secret with the keys `keystore` (a base64 PKCS#12 holding the CA certificate and its
+          private key) and `passphrase`. Every node signs its own certificate from it at start.
+        help: >-
+          Create the CA with `openssl req -x509` and `openssl pkcs12 -export`, then store `base64 < ca.p12` as
+          `keystore`; the exact commands are under [Prerequisites](#prerequisites). Keep `ca.crt` so your
+          applications can verify the cluster.
+        ref:
+          kind: secret
+          format: name
+          filter: { secretType: [dictionary] }
+          mustExist: error
+          allowCreate: true
+          requiredKeys: [keystore, passphrase]
+          create:
+            suggestName: "context.releaseName + '-opensearch-ca'"
+    rules:
+      - rule: has(self.security.credentialsSecretName) && self.security.credentialsSecretName != ''
+        mirrors: opensearch.validate
+        paths: [security.credentialsSecretName]
+        message: The credentials secret is required.
+      - rule: has(self.security.caSecretName) && self.security.caSecretName != ''
+        mirrors: opensearch.validate
+        paths: [security.caSecretName]
+        message: The certificate authority secret is required.
+      - rule: >-
+          oldSelf == null || !has(oldSelf.security) || oldSelf.security.caSecretName == null ||
+          self.security.caSecretName == oldSelf.security.caSecretName
+        severity: info
+        paths: [security.caSecretName]
+        message: >-
+          A different CA restarts every node with certificates the running nodes do not trust, so the cluster
+          is unavailable until all of them have restarted.
+
   - id: cluster
     title: Cluster
     description: The number of OpenSearch nodes, the cluster name, and the image and compute of each node.
@@ -89,7 +168,6 @@ steps:
         format: image
         label: OpenSearch image
         required: true
-        docs: "#cluster"
         rules:
           - rule: oldSelf == null || oldSelf.image == null || self.image == oldSelf.image
             severity: info
@@ -203,6 +281,10 @@ steps:
               version renders only the one for the destination you choose, but the platform keeps a binding
               once it is set, so the other one stays on the identity. Only uninstalling and reinstalling the
               release removes it.
+          - type: note
+            text: >-
+              Restore with `.opendistro_security` left out: it holds the live users and roles, so users created in
+              Dashboards are not brought back by a restore. See [Restoring a Backup](#restoring-a-backup).
           - path: backup.provider
             type: enum
             label: Destination
@@ -393,7 +475,7 @@ steps:
             messageExpression: >-
               'The setup job creates the snapshot policy only when none exists, so the new schedule or retention
               does not reach this cluster. After the upgrade, delete the policy from a workload in the GVC with
-              curl -X DELETE http://' + context.releaseName + '-opensearch.' +
+              curl -k -u admin:ADMIN_PASSWORD -X DELETE https://' + context.releaseName + '-opensearch.' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') +
               '.cpln.local:9200/_plugins/_sm/policies/automated-snapshots, then run cpln workload force-redeployment ' +
               context.releaseName + '-backup-setup --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') +
@@ -427,18 +509,24 @@ steps:
         title: OpenSearch Dashboards
         toggle: dashboard.enabled
         description: >-
-          The web UI for searching and visualizing your indices. It is never published to the internet; you
-          reach it with cpln port-forward.
+          The web UI for searching, visualizing and Security Analytics, behind the `admin` login. Reach it with
+          cpln port-forward, or publish its login page.
         docs: "#dashboards"
         fields:
           - type: note
             text: >-
               Open it with `cpln port-forward RELEASE_NAME-opensearch-dashboard 5601:5601 --gvc GVC_NAME`, then
-              browse to `http://localhost:5601`. There is no login.
+              browse to `http://localhost:5601` and log in as `admin`.
             textExpression: >-
               'Open it with `cpln port-forward ' + context.releaseName + '-opensearch-dashboard 5601:5601 --gvc ' +
               (context.gvc != null ? context.gvc : 'GVC_NAME') +
-              '`, then browse to `http://localhost:5601`. There is no login.'
+              '`, then browse to `http://localhost:5601` and log in as `admin`.'
+          - path: dashboard.publicAccess.enabled
+            type: boolean
+            label: Publish the login page
+            description: >-
+              Serves Dashboards on an HTTPS `*.cpln.app` endpoint, read from the workload's
+              `status.canonicalEndpoint`.
           - path: dashboard.image
             type: string
             format: image
@@ -462,12 +550,19 @@ steps:
             message: >-
               OpenSearch Dashboards works only with an OpenSearch of the same version. Keep the Dashboards image
               on the same tag as the OpenSearch image.
+          - rule: "!self.dashboard.publicAccess.enabled"
+            severity: info
+            paths: [dashboard.publicAccess.enabled]
+            message: >-
+              Anyone on the internet can reach the login page, so keep the admin password strong. A firewall
+              change takes up to about 10 minutes to apply.
       - id: demo
         title: Demo log pipeline
         toggle: demoLogs.enabled
         description: >-
           A sample app writes logs that a Fluent Bit sidecar ships into a demo-logs index, and a setup job adds
-          a demo-logs* index pattern to Dashboards, to see the pipeline end to end. It runs a workload, a volume
+          a demo-logs* index pattern to Dashboards and a sample Security Analytics detector whose findings
+          appear within minutes, to see the pipeline end to end. It runs a workload, a volume
           set, an identity and a policy of its own; leave it off in production.
         docs: "#demo-logs"
         fields:
@@ -477,10 +572,10 @@ steps:
             when: >-
               (oldSelf != null && oldSelf.demoLogs.enabled == true) || self.demoLogs.remove_setup_workload == true
             description: >-
-              The index template and the index pattern stay in OpenSearch and Dashboards, so the pipeline keeps
-              running without the job. Remove it once the job has completed.
+              The index template, the index pattern and the detector stay in OpenSearch and Dashboards, so the
+              pipeline keeps running without the job. Remove it once the job has completed.
         rules:
-          # workload-demo-logs.yaml step 3 waits for the Dashboards workload, exits 1 after 60 attempts and
+          # _script-demo-setup.tpl step 4 waits for the Dashboards workload, exits 1 after 60 attempts and
           # restarts (docs Troubleshooting: 'Waiting for Dashboard...').
           - rule: self.dashboard.enabled
             severity: warning
@@ -505,10 +600,8 @@ steps:
         docs: "#internal-access"
         fields:
           - type: note
-            severity: warning
             text: >-
-              The security plugin is off, so there is **no authentication**: every workload admitted here has
-              full admin access to every index. This setting is the only access control the cluster has.
+              Every request needs credentials. This setting decides which workloads can reach port 9200 at all.
           - path: internal_access.type
             type: enum
             label: Who can connect

@@ -64,6 +64,48 @@ Opensearch Demo Logs Identity Name
 {{- end }}
 
 {{/*
+Client identity: Dashboards and the setup jobs. It reveals the credentials
+secret only, never the CA key.
+*/}}
+{{- define "opensearch.clientIdentity.name" -}}
+{{- printf "%s-opensearch-client-identity" .Release.Name }}
+{{- end }}
+
+{{- define "opensearch.clientPolicy.name" -}}
+{{- printf "%s-opensearch-client-policy" .Release.Name }}
+{{- end }}
+
+{{/*
+User-created prerequisite secrets (README Prerequisites).
+*/}}
+{{- define "opensearch.secret.credentials.name" -}}
+{{- .Values.security.credentialsSecretName }}
+{{- end }}
+
+{{- define "opensearch.secret.ca.name" -}}
+{{- .Values.security.caSecretName }}
+{{- end }}
+
+{{/*
+Organisation (O=) of the certificates the nodes issue themselves. It ties the
+node and admin distinguished names to this release. An X.509 O is at most 64
+characters.
+*/}}
+{{- define "opensearch.certOrg" -}}
+{{- include "opensearch.name" . | trunc 64 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Render a script for a container arg. The platform, like Kubernetes, expands
+$(VAR) and turns $$ into $ inside container args. Doubling every $ makes the
+shell receive the script byte for byte (copied from pgedge 3.0.0).
+*/}}
+{{- define "opensearch.inlineScript" -}}
+|-
+{{ . | replace "$" "$$" | indent 2 }}
+{{- end -}}
+
+{{/*
 Opensearch Policy Name
 */}}
 {{- define "opensearch.policy.name" -}}
@@ -141,6 +183,12 @@ when a backup silently never happened.
       {{- end -}}
     {{- end -}}
   {{- end -}}
+{{- end -}}
+{{- if not .Values.security.credentialsSecretName -}}
+{{- fail "opensearch: security.credentialsSecretName is required. It names the dictionary secret holding password, dashboardsPassword and cookieSecret; create it BEFORE installing (README Prerequisites)." -}}
+{{- end -}}
+{{- if not .Values.security.caSecretName -}}
+{{- fail "opensearch: security.caSecretName is required. It names the dictionary secret holding keystore (base64 PKCS#12 CA) and passphrase; create it BEFORE installing (README Prerequisites)." -}}
 {{- end -}}
 {{- if not (mod .Values.replicas 2) -}}
 {{- fail (printf "opensearch: replicas must be odd so the cluster can form a quorum, got %v." .Values.replicas) -}}

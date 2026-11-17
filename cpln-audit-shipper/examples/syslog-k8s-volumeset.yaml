@@ -1,9 +1,6 @@
 # One mk8s cluster's Kubernetes audit log to a syslog listener over TLS, with checkpoints on a volume set.
 # No bucket and no AWS access. Volume set state needs a GVC with exactly one location.
 interval: 1m
-serviceAccount:
-  name: cpln-audit-shipper
-  keySecret: cpln-audit-shipper-key
 sources:
   cplnAudit:
     enabled: false

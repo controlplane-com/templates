@@ -1,8 +1,5 @@
 # The Control Plane audit trail to S3, with AWS access from the identity's cloud access (no keys stored).
 # Checkpoints go to the same bucket, so the GVC may have any number of locations.
-serviceAccount:
-  name: cpln-audit-shipper
-  keySecret: cpln-audit-shipper-key
 sink:
   type: s3
   s3:

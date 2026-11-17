@@ -1,5 +1,6 @@
 {{- include "cas.validate" . -}}
-{{- $sa := printf "//serviceaccount/%s" .Values.serviceAccount.name -}}
+{{- $sa := printf "//serviceaccount/%s" (include "cas.serviceaccount.name" .) -}}
+{{- $secrets := include "cas.secrets" . | fromJsonArray -}}
 {{- if .Values.sources.cplnAudit.enabled }}
 kind: policy
 name: {{ include "cas.name" . }}-audit
@@ -33,6 +34,26 @@ bindings:
     principalLinks:
       - {{ $sa }}
 {{- end }}
+{{- if not .Values.serviceAccount.existingName }}
+---
+# Each replica adds a key of its own to the release's service account at startup and removes it when it stops.
+kind: policy
+name: {{ include "cas.name" . }}-key
+description: Lets the audit shipper's replicas add and remove their own keys of its service account
+tags:
+  {{- include "cas.tags" . | nindent 2 }}
+targetKind: serviceaccount
+targetLinks:
+  - {{ $sa }}
+bindings:
+  - permissions:
+      - addKey
+      - edit
+      - view
+    principalLinks:
+      - {{ include "cas.identity.link" . }}
+{{- end }}
+{{- if $secrets }}
 ---
 kind: policy
 name: {{ include "cas.name" . }}-secrets
@@ -41,7 +62,7 @@ tags:
   {{- include "cas.tags" . | nindent 2 }}
 targetKind: secret
 targetLinks:
-  {{- range (include "cas.secrets" . | fromJsonArray) }}
+  {{- range $secrets }}
   - //secret/{{ . }}
   {{- end }}
 bindings:
@@ -49,6 +70,7 @@ bindings:
       - reveal
     principalLinks:
       - {{ include "cas.identity.link" . }}
+{{- end }}
 {{- if eq .Values.state.backend "volumeSet" }}
 ---
 # The shipper reads its GVC at startup and refuses volume set state when the GVC has more than one location.

@@ -10,7 +10,8 @@ summary: >-
   Continuously ships your org's Control Plane audit trail, and the Kubernetes audit logs of your mk8s
   clusters, to Amazon S3, a syslog listener over TLS, or an OpenTelemetry collector. Each stream reads only
   what is new, keeps a checkpoint in S3 or on a volume set, and resumes after restarts, upgrades and outages.
-  Every record keeps its event ID, so duplicates can be dropped downstream.
+  It creates its own service account, whose keys live only in memory. Every record keeps its event ID, so
+  duplicates can be dropped downstream.
 
 keywords:
   - audit log export
@@ -34,14 +35,16 @@ useCases:
 
 prerequisites:
   - kind: other
-    valuesPath: serviceAccount.name
-    required: true
-    description: Service account the chart grants readAudit on the audit contexts and, with the Kubernetes source, readLogs on the org. Workload tokens are not accepted.
+    valuesPath: serviceAccount.existingName
+    required: false
+    when: you manage the service account yourself
+    description: An existing service account to use instead of the one the release creates; the release grants it readAudit (and readLogs with the Kubernetes source).
   - kind: secret
     secretType: opaque
-    valuesPath: serviceAccount.keySecret
-    required: true
-    description: Opaque secret (encoding plain) holding a key of that service account. The README shows how to create it without printing the key.
+    valuesPath: serviceAccount.existingKeySecret
+    required: false
+    when: serviceAccount.existingName is set
+    description: Opaque secret (encoding plain) holding a key of that service account.
   - kind: bucket
     valuesPath: sink.s3.bucket
     required: false

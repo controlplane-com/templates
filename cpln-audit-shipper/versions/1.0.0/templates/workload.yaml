@@ -19,8 +19,13 @@ spec:
       memory: {{ $v.resources.memory | quote }}
       inheritEnv: false
       env:
+        {{- if $v.serviceAccount.existingName }}
         - name: SERVICE_ACCOUNT_KEY
-          value: cpln://secret/{{ $v.serviceAccount.keySecret }}.payload
+          value: cpln://secret/{{ $v.serviceAccount.existingKeySecret }}.payload
+        {{- else }}
+        - name: SERVICE_ACCOUNT_NAME
+          value: {{ include "cas.serviceaccount.name" . | quote }}
+        {{- end }}
         - name: STREAM
           value: {{ $v.stream | quote }}
         - name: INTERVAL

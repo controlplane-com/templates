@@ -34,10 +34,13 @@ expect_fail() { # name base-values expected-message --set...
 }
 
 expect_render defaults /dev/null \
-  'cloudAccountLink: //cloudaccount/my-aws-cloud-account' '//auditctx/cpln' 'cpln://secret/cpln-audit-shipper-key.payload' \
+  'cloudAccountLink: //cloudaccount/my-aws-cloud-account' '//auditctx/cpln' '!cpln://secret/' \
+  'kind: serviceaccount' 'name: SERVICE_ACCOUNT_NAME' 'value: "t-audit-shipper"' '!SERVICE_ACCOUNT_KEY' \
+  'name: t-audit-shipper-key' 'targetKind: serviceaccount' '- addKey' '//serviceaccount/t-audit-shipper$' \
+  '!name: t-audit-shipper-secrets' \
   'type: standard' 'maxSurgeReplicas: "0"' '/cpln-audit-shipper' '!kind: volumeset' '!readLogs' '!name: CPLN_'
 expect_render s3-identity examples/s3-identity.yaml \
-  'value: "s3"' 'value: "my-audit-bucket"' 'value: "identity"' '//serviceaccount/cpln-audit-shipper' \
+  'value: "s3"' 'value: "my-audit-bucket"' 'value: "identity"' '//serviceaccount/t-audit-shipper' \
   '!STATE_S3_BUCKET' '!AWS_SOURCE_' '!securityOptions' '!targetKind: org'
 expect_render s3-secret-assume-role examples/s3-secret-assume-role.yaml \
   'cpln://secret/cpln-audit-shipper-aws-temp.accessKeyId' 'cpln://secret/cpln-audit-shipper-aws-temp.sessionToken' \
@@ -51,7 +54,7 @@ expect_render syslog-k8s-volumeset examples/syslog-k8s-volumeset.yaml \
 expect_render otlp-both-sources examples/otlp-both-sources.yaml \
   'value: "https://otlp.example.com:4318"' 'value: "X-Scope-OrgID=my-org"' 'value: "Authorization"' \
   'cpln://secret/cpln-audit-shipper-otlp-token.payload' '//secret/cpln-audit-shipper-otlp-token' \
-  'value: "my-audit-state"' 'value: "\| verb != \\"get\\""' 'readAudit' 'readLogs' \
+  'value: "my-audit-state"' 'value: "\| verb != \\"get\\""' 'readAudit' 'readLogs' 'name: t-audit-shipper-secrets' \
   'policyRefs:' '!kind: volumeset' '!name: S3_BUCKET$' '!name: CPLN_'
 
 cat >"$tmp/syslog-ca.yaml" <<'YAML'
@@ -69,6 +72,11 @@ expect_render syslog-ca-without-tls "$tmp/syslog-notls.yaml" '!syslog-ca.pem' '!
 printf 'tuning:\n  maxBatchEvents: 1000000\n  maxObjectEvents: 500000\n' >"$tmp/counts.yaml"
 expect_render large-counts "$tmp/counts.yaml" 'value: "1000000"' 'value: "500000"' '!e\+0'
 
+printf 'serviceAccount:\n  existingName: my-sa\n  existingKeySecret: my-sa-key\nsources:\n  k8sAudit:\n    enabled: true\n    clusters: [c1]\n' >"$tmp/existing-sa.yaml"
+expect_render existing-service-account "$tmp/existing-sa.yaml" \
+  '!kind: serviceaccount' '!name: t-audit-shipper-key$' '!SERVICE_ACCOUNT_NAME' 'name: SERVICE_ACCOUNT_KEY' \
+  'cpln://secret/my-sa-key.payload' '//secret/my-sa-key' '//serviceaccount/my-sa' 'readAudit' 'readLogs'
+
 expect_render existing-identity "$tmp/existing.yaml" 'identityLink: //gvc/g1/identity/shared-id' '!kind: identity'
 
 printf 'sources:\n  cplnAudit:\n    contexts: [cpln, orders-audit]\n' >"$tmp/multi.yaml"
@@ -77,8 +85,8 @@ expect_render several-contexts "$tmp/multi.yaml" '//auditctx/cpln' '//auditctx/o
 s3=examples/s3-identity.yaml
 sys=examples/syslog-k8s-volumeset.yaml
 otlp=examples/otlp-both-sources.yaml
-expect_fail no-sa $s3 "serviceAccount.name and serviceAccount.keySecret are required" --set serviceAccount.name=
-expect_fail no-sa-key $s3 "serviceAccount.name and serviceAccount.keySecret are required" --set serviceAccount.keySecret=
+expect_fail existing-sa-without-key $s3 "set serviceAccount.existingName and serviceAccount.existingKeySecret together" --set serviceAccount.existingName=my-sa
+expect_fail existing-key-without-sa $s3 "set serviceAccount.existingName and serviceAccount.existingKeySecret together" --set serviceAccount.existingKeySecret=my-key
 expect_fail no-source $s3 "enable at least one source" --set sources.cplnAudit.enabled=false
 expect_fail no-contexts $s3 "must list at least one audit context" --set sources.cplnAudit.contexts=null
 expect_fail bad-context $s3 "is not a valid audit context name" --set 'sources.cplnAudit.contexts={cpln,bad ctx}'
@@ -117,12 +125,20 @@ expect_fail short-interval $s3 "interval must be between 10s and 24h" --set inte
 expect_fail long-interval $s3 "interval must be between 10s and 24h" --set interval=25h
 expect_fail short-lease $s3 "tuning.leaseTTL must be at least 1m" --set tuning.leaseTTL=30s
 expect_fail zero-budget $s3 "tuning.cycleBudget and tuning.heartbeatMaxAge must be longer than 0" --set tuning.cycleBudget=0
-expect_fail drain-over-grace $s3 "tuning.drainTimeout must be shorter" --set tuning.drainTimeout=2m
+expect_fail drain-over-grace $s3 "tuning.drainTimeout plus 15s must fit in half" --set tuning.drainTimeout=31s
 expect_fail zero-lookback $s3 "sources.cplnAudit.initialLookback must be longer than 0" --set sources.cplnAudit.initialLookback=0
 expect_fail long-context $s3 "is not a valid audit context name" --set "sources.cplnAudit.contexts={$(printf 'c%.0s' {1..130})}"
 expect_fail external-id-format examples/s3-secret-assume-role.yaml "externalId must be 2 to 1224" --set aws.secret.assumeRole.externalId=x
 expect_fail otlp-header-name $otlp "authHeader.name must be an HTTP header name" --set 'sink.otlp.authHeader.name=Bad Header'
 expect_fail stream $s3 "stream must be lowercase" --set stream=Bad_Stream
-expect_fail grace $s3 "terminationGracePeriodSeconds must be" --set tuning.terminationGracePeriodSeconds=5 --set tuning.drainTimeout=1s
+expect_fail grace $s3 "terminationGracePeriodSeconds must be" --set tuning.terminationGracePeriodSeconds=1000
+
+# Every rendered policy must name its targets: a policy without targetLinks or target would not do what it says.
+for f in /dev/null examples/*.yaml "$tmp"/*.yaml; do
+  out=$(helm template t "$chart" "${gvc[@]}" -f "$f" 2>/dev/null) || continue
+  if awk '/^kind: policy/{p=1; t=0; next} p && /^(targetLinks|target):/{t=1} /^---/{if (p && !t) bad=1; p=0} END{if (p && !t) bad=1; exit !bad}' <<<"$out"; then
+    bad "policy without a target in $(basename "$f")"
+  fi
+done
 
 [ "$fails" -eq 0 ] && echo "all render checks passed" || { echo "$fails render check(s) failed"; exit 1; }

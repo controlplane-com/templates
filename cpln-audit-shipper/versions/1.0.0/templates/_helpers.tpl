@@ -12,6 +12,10 @@
 {{- printf "//gvc/%s/identity/%s" .Values.global.cpln.gvc (include "cas.identity.name" .) }}
 {{- end }}
 
+{{- define "cas.serviceaccount.name" -}}
+{{- default (include "cas.name" .) .Values.serviceAccount.existingName }}
+{{- end }}
+
 {{- define "cas.volumeset.name" -}}
 {{- default (printf "%s-state" (include "cas.name" .)) .Values.state.volumeSet.existingName }}
 {{- end }}
@@ -28,7 +32,8 @@
 {{/* Secrets the workload identity reveals, as a list of names. */}}
 {{- define "cas.secrets" -}}
 {{- $v := .Values -}}
-{{- $s := list $v.serviceAccount.keySecret -}}
+{{- $s := list -}}
+{{- with $v.serviceAccount.existingKeySecret }}{{- $s = append $s . }}{{- end -}}
 {{- if and (eq $v.sink.type "syslog") $v.sink.syslog.tls $v.sink.syslog.caSecret }}{{- $s = append $s $v.sink.syslog.caSecret }}{{- end -}}
 {{- if eq $v.sink.type "otlp" }}
 {{- with $v.sink.otlp.caSecret }}{{- $s = append $s . }}{{- end }}
@@ -106,8 +111,8 @@
 
 {{- define "cas.validate" -}}
 {{- $v := .Values -}}
-{{- if or (not $v.serviceAccount.name) (not $v.serviceAccount.keySecret) -}}
-{{- fail "serviceAccount.name and serviceAccount.keySecret are required: a service account and an opaque secret holding one of its keys (the audit and logs APIs do not accept a workload's own token)" -}}
+{{- if ne (empty $v.serviceAccount.existingName) (empty $v.serviceAccount.existingKeySecret) -}}
+{{- fail "set serviceAccount.existingName and serviceAccount.existingKeySecret together (an existing service account and an opaque secret holding one of its keys), or neither to let the release create its own service account" -}}
 {{- end -}}
 {{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" (toString $v.stream)) -}}
 {{- fail "stream must be lowercase letters, digits and dashes, up to 63 characters" -}}
@@ -128,8 +133,8 @@
 {{- if or (le (float64 (include "cas.seconds" $v.tuning.cycleBudget)) 0.0) (le (float64 (include "cas.seconds" $v.tuning.heartbeatMaxAge)) 0.0) -}}
 {{- fail "tuning.cycleBudget and tuning.heartbeatMaxAge must be longer than 0" -}}
 {{- end -}}
-{{- if ge (float64 (include "cas.seconds" $v.tuning.drainTimeout)) (float64 (int $v.tuning.terminationGracePeriodSeconds)) -}}
-{{- fail "tuning.drainTimeout must be shorter than tuning.terminationGracePeriodSeconds, or a delivery under way is cut off at shutdown" -}}
+{{- if gt (addf (float64 (include "cas.seconds" $v.tuning.drainTimeout)) 15.0) (float64 (div (int $v.tuning.terminationGracePeriodSeconds) 2)) -}}
+{{- fail "tuning.drainTimeout plus 15s must fit in half of tuning.terminationGracePeriodSeconds: the platform waits the other half before it signals the shipper, or a delivery under way is cut off at shutdown" -}}
 {{- end -}}
 {{- $c := $v.sources.cplnAudit -}}{{- $k := $v.sources.k8sAudit -}}
 {{- if not (or $c.enabled $k.enabled) -}}

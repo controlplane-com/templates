@@ -1,8 +1,5 @@
 # Both sources to an OpenTelemetry collector, authenticated with a header from a secret. Checkpoints go to a
 # small bucket of their own, so the GVC may have several locations.
-serviceAccount:
-  name: cpln-audit-shipper
-  keySecret: cpln-audit-shipper-key
 sources:
   cplnAudit:
     enabled: true

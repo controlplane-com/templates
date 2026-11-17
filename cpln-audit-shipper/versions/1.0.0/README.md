@@ -11,30 +11,38 @@ This template ships audit logs only. Workload logs go out through [org external 
 
 ```
 standard workload, 1 replica per location
+  ├─ at start / stop ──add / remove its own key──────────────────────▶ the release's service account (workload token)
   ├─ every interval, per audit context ──GET /audit/org/<org>────────▶ audit.cpln.io  (service account key, readAudit)
   ├─ every interval, per mk8s cluster ──GET …/loki/api/v1/query_range▶ logs.cpln.io   (service account key, readLogs)
   ├─ deliver ──▶ S3 objects │ syslog over TLS │ OTLP/HTTP
   └─ checkpoint + lease ──▶ S3 object (conditional writes)  or  file on a volume set (+ flock)
 ```
 
-What gets created: one standard workload, one identity (unless you reuse one), the policies the chosen sources and destination need, and with volume set state a shared volume set. Uninstalling removes them and leaves your bucket, data, secrets and service account untouched.
+What gets created: one standard workload, one identity (unless you reuse one), a service account for the release (unless you bring one), the policies the chosen sources and destination need, and with volume set state a shared volume set. Uninstalling removes them and leaves your bucket, data and secrets untouched.
 
 ## Prerequisites
 
-1. **A service account key.** The audit and logs APIs accept a user token or a service account key, and **not** a workload's own `CPLN_TOKEN`: that token is only valid on the workload's route to the Control Plane API, and the audit service rejects it with `403 token invalid`. Create a service account with no group memberships and store a key in an opaque secret without printing it:
+1. **Nothing for API access.** The audit and logs APIs accept a user token or a service account key, and **not** a workload's own `CPLN_TOKEN`: that token is only valid on the workload's route to the Control Plane API, and the audit service rejects it with `403 token invalid`. So the release creates its own service account, `RELEASE-audit-shipper`, with no group memberships, and grants it `readAudit` on the audit contexts and, with the Kubernetes source on, `readLogs` on the org. It also lets the workload identity add and remove that account's keys (`addKey`, `edit` and `view` on it, nothing else):
+
+   - Each replica adds a key of its own at startup, through the Control Plane API, and keeps it only in memory. No key is stored in a secret or shown anywhere.
+   - A replica removes its key as soon as it is told to stop. A location runs one replica, so a starting replica first removes any key its location's earlier replicas left (after a crash, or during a rollout); the account holds one key per location.
+   - A replica whose key disappears restarts on its own and adds a new one.
+   - A service account holds at most 10 keys, so with the release's own account a GVC can have up to 10 locations.
+   - Uninstalling deletes the service account, and with it any key left.
+
+   **To use a service account you manage instead**, set `serviceAccount.existingName` and `serviceAccount.existingKeySecret`, an opaque secret holding one of its keys. Create the key without printing it:
 
    ```bash
-   cpln serviceaccount create --name cpln-audit-shipper
-   cpln serviceaccount add-key cpln-audit-shipper --desc cpln-audit-shipper -o json \
+   cpln serviceaccount add-key my-service-account --desc cpln-audit-shipper -o json \
      | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["key"])' \
-     | cpln secret create-opaque --name cpln-audit-shipper-key --file - --encoding plain
+     | cpln secret create-opaque --name my-service-account-key --file - --encoding plain
    ```
 
-   These are the defaults of `serviceAccount.name` and `serviceAccount.keySecret`. The chart grants the service account `readAudit` on the audit contexts and, with the Kubernetes source on, `readLogs` on the org. Keep it out of groups such as `superusers`.
+   The release then grants that account the same `readAudit` and `readLogs`, and the identity `reveal` on the secret. Keep it out of groups such as `superusers`.
 
 2. **For the Kubernetes source:** each cluster needs the mk8s logs add-on with audit logs on (`spec.addOns.logs.auditEnabled: true`).
 
-   > **`readLogs` cannot be narrowed.** It exists only on the org, and a policy for it can only target `all`. The service account key can therefore read **every log in the org**, across all workloads and clusters, not just the audit logs. Treat the key secret accordingly; only this release's identity may reveal it.
+   > **`readLogs` cannot be narrowed.** It exists only on the org, and a policy for it can only target `all`. The service account's keys can therefore read **every log in the org**, across all workloads and clusters, not just the audit logs. Only this release's identity can add a key to it (or, with your own account, reveal the key secret).
 
 3. **A destination:** a bucket, a syslog listener or an OTLP endpoint (see [Destinations](#destinations)).
 4. **For S3, as destination or checkpoint store:** AWS access, see [AWS access](#aws-access).
@@ -115,7 +123,7 @@ Every destination gets **at-least-once** delivery of every record that becomes r
 | Syslog | The listener closing the connection after reading the batch. That shows it read the bytes, not that it stored them. **A listener that never closes** gets a warning and the batch counts as sent after `sink.syslog.timeout`, so records it did not read are lost. | When a batch fails part-way (a reset, a crash, or a stop past `tuning.drainTimeout`), its records are sent again, so up to one batch (`tuning.maxBatchEvents`) is duplicated. |
 | OTLP | A 2xx per request. **Records the endpoint rejects inside a 2xx** (`partialSuccess`) are logged with a warning and not sent again. | A failed request fails its batch, and the batch's earlier requests are sent again. A retried request whose first attempt landed also duplicates. |
 
-On a normal stop (an upgrade, a redeploy, scaling), a delivery under way gets `tuning.drainTimeout` (60s) to finish and be checkpointed, so a stop does not resend it. Keep `tuning.terminationGracePeriodSeconds` above it.
+On a normal stop (an upgrade, a redeploy, scaling), a delivery under way gets `tuning.drainTimeout` (30s) to finish and be checkpointed, so a stop does not resend it. The platform waits half of `tuning.terminationGracePeriodSeconds` (90) before it signals the shipper, so the drain plus 15 seconds to remove the replica's key must fit in the other half; the chart checks this.
 
 ## Checkpoints
 
@@ -187,7 +195,7 @@ An `aws` secret exposes `accessKey` and `secretKey`, the chart's defaults; its r
 |---|---|---|
 | `interval` | `5m` | Time between the starts of two cycles of each stream (10s to 24h; `1m` works well). |
 | `stream` | `default` | Names this export; part of every checkpoint and object name. |
-| `serviceAccount.name`, `.keySecret` | `cpln-audit-shipper`, `cpln-audit-shipper-key` | See [Prerequisites](#prerequisites). |
+| `serviceAccount.existingName`, `.existingKeySecret` | empty | Empty: the release creates its own service account and its replicas add their own keys. Set both to use your own account and key; see [Prerequisites](#prerequisites). |
 | `sources.cplnAudit.*` | on, `[cpln]` | `contexts`, `startTime`, `initialLookback`, `endTime`, `settleDelay`, `overlap`. |
 | `sources.k8sAudit.*` | off | `clusters`, `pipeline`, and the same time settings. |
 | `sink.type` | `s3` | `s3`, `syslog` or `otlp`, configured under `sink.s3`, `sink.syslog`, `sink.otlp`. |
@@ -200,7 +208,7 @@ An `aws` secret exposes `accessKey` and `secretKey`, the chart's defaults; its r
 | `tuning.maxObjectEvents` / `.maxObjectBytes` | `10000` / 32 MiB | S3 object limits, before compression. |
 | `tuning.leaseTTL` | `5m` | How long a replica that died holding a lease blocks the others. |
 | `tuning.cycleBudget` | `30m` | A backlog is worked off in cycles of about this length, each followed at once by the next. |
-| `tuning.drainTimeout` / `.terminationGracePeriodSeconds` | `60s` / `90` | See [Delivery guarantees](#delivery-guarantees). |
+| `tuning.drainTimeout` / `.terminationGracePeriodSeconds` | `30s` / `90` | See [Delivery guarantees](#delivery-guarantees). |
 | `tuning.heartbeatMaxAge` | `30m` | The liveness probe restarts the shipper when a stream made no progress for this long. |
 | `tuning.logLevel` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -241,7 +249,8 @@ Alert when `lag_seconds` grows beyond a few intervals plus `settleDelay`, or on 
 
 | Log message | Cause and fix |
 |---|---|
-| `audit API denied the request (HTTP 403)` | The key in `serviceAccount.keySecret` is wrong or revoked, or the service account lacks `readAudit` on the context. |
+| `audit API denied the request (HTTP 403)` | The service account lacks `readAudit` on the context, or its key was removed (restart the replica to add a new one) or, with your own account, is wrong or revoked. |
+| `cannot add a key to the service account` | The identity lacks `addKey`, `edit` or `view` on the release's service account (the `-key` policy), or the account holds 10 keys, one per location: keys are named `cpln-audit-shipper LOCATION …`, and those of locations no longer in the GVC can go (`cpln serviceaccount remove-key`). Right after install the replica retries for up to 5 minutes, since the service account can be created after the workload. |
 | `logs API denied the request` | The service account lacks `readLogs` on the org. |
 | `more than 5000 records in […)` | More Kubernetes audit entries share one nanosecond than a request returns; does not occur with real clusters. |
 | `logs API returned matrix, not log streams` | `sources.k8sAudit.pipeline` turned the query into a metric query. |
@@ -261,7 +270,7 @@ Alert when `lag_seconds` grows beyond a few intervals plus `settleDelay`, or on 
 
 ## Verify end to end
 
-1. Install. The first cycle starts right away and logs `cycle finished` with `events` for each stream.
+1. Install. The first cycle starts as soon as the replica has its key, usually within a minute (up to about 5 minutes, while the release's service account is being created), and logs `cycle finished` with `events` for each stream.
 2. Make a change you can recognise, such as `cpln secret create-opaque --name audit-probe --file <(echo probe) && cpln secret delete audit-probe`, and wait one `interval` plus `settleDelay`.
 3. Find it at the destination: `aws s3 cp s3://BUCKET/PREFIX/data/…/FILE.jsonl.gz - | gunzip | grep audit-probe`, or search the syslog receiver or collector for `audit-probe`.
 4. To confirm nothing is duplicated, count each ID over a range, for S3:
@@ -274,7 +283,7 @@ Alert when `lag_seconds` grows beyond a few intervals plus `settleDelay`, or on 
 
 ## Upgrading, migrating and uninstalling
 
-Checkpoints are keyed by org, source, context or cluster, destination type and stream, not by release or version, so upgrades and reinstalls continue where each stream stopped. Uninstalling removes the workload, identity, policies and (with volume set state) the created volume set, which deletes those checkpoints; S3 checkpoints and all shipped data stay.
+Checkpoints are keyed by org, source, context or cluster, destination type and stream, not by release or version, so upgrades and reinstalls continue where each stream stopped. Uninstalling removes the workload, identity, policies, the release's service account and (with volume set state) the created volume set, which deletes those checkpoints; S3 checkpoints and all shipped data stay.
 
 **Moving from another shipper** to this template: to avoid a gap or a resend, set the source's `startTime` to where the old shipper stopped, and stop the old one first. For a syslog receiver that already parses `mk8s-audit` messages nothing changes: `APP-NAME`, `HOSTNAME` and the structured data are the same.
 

@@ -2,42 +2,47 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: Audit Shipper
-# No upper location limit: with S3 state the replicas in every location take turns through a lease. Volume set
-# state is per location, so a root rule limits it to a single-location GVC.
+# No location limit here: with S3 state the replicas in every location take turns through a lease. Volume set
+# state is per location, so a root rule limits it to a single-location GVC. The release's own service account
+# holds at most 10 keys, one per location, which caps that mode at 10 locations.
 gvc:
   minLocations: 1
 
 steps:
   - id: access
     title: API access
-    description: The service account whose key reads the audit trail and the Kubernetes audit logs.
+    description: The service account whose keys read the audit trail and the Kubernetes audit logs.
     sections:
       - fields:
           - type: note
-            severity: warning
             text: >-
-              Create the service account and its key secret **before** installing. The audit and logs APIs do not
-              accept a workload's own token, so the shipper reads with a key of this service account. Keep the
-              service account out of groups: the release grants it only what the enabled sources need.
-          - type: note
-            text: >-
-              To create both without printing the key: `cpln serviceaccount create --name cpln-audit-shipper`, then
-              `cpln serviceaccount add-key cpln-audit-shipper --desc cpln-audit-shipper -o json | python3 -c
-              'import json,sys; sys.stdout.write(json.load(sys.stdin)["key"])' | cpln secret create-opaque
-              --name cpln-audit-shipper-key --file - --encoding plain`.
-          - path: serviceAccount.name
+              The audit and logs APIs do not accept a workload's own token. The release creates its own service
+              account, `RELEASE-audit-shipper`, and grants it only what the enabled sources need. Each replica adds a
+              key of its own to it at startup, keeps the key in memory and removes it when it stops, so nothing has to
+              be created before installing. Uninstalling deletes the service account.
+            textExpression: >-
+              'The audit and logs APIs do not accept a workload\'s own token. The release creates its own service
+              account, `' + context.releaseName + '-audit-shipper`, and grants it only what the enabled sources need.
+              Each replica adds a key of its own to it at startup, keeps the key in memory and removes it when it
+              stops, so nothing has to be created before installing. Uninstalling deletes the service account.'
+      - id: existing-service-account
+        title: Existing service account
+        advanced: true
+        description: >-
+          Use a service account you manage instead, with a key you stored in an opaque secret. The release still
+          grants it `readAudit` on the audit contexts and, with the Kubernetes source on, `readLogs` on the org.
+          Keep it out of groups.
+        fields:
+          - path: serviceAccount.existingName
             type: ref
             label: Service account
-            required: true
-            description: >-
-              Gets `readAudit` on the audit contexts and, with the Kubernetes source on, `readLogs` on the org,
-              through policies this release creates.
             ref: { kind: serviceaccount, format: name, mustExist: error }
-          - path: serviceAccount.keySecret
+          - path: serviceAccount.existingKeySecret
             type: ref
-            label: Service account key secret
-            required: true
-            description: An opaque secret (encoding plain) whose payload is a key of that service account.
+            label: Key secret
+            description: >-
+              An opaque secret (encoding plain) whose payload is a key of that service account, from
+              `cpln serviceaccount add-key`.
             ref:
               kind: secret
               format: name
@@ -49,6 +54,11 @@ steps:
                 encoding: plain
                 suggestName: "context.releaseName + '-key'"
                 hint: cpln serviceaccount add-key SERVICE_ACCOUNT --desc cpln-audit-shipper
+        rules:
+          - rule: (self.serviceAccount.existingName == '') == (self.serviceAccount.existingKeySecret == '')
+            mirrors: cas.validate
+            paths: [serviceAccount.existingName, serviceAccount.existingKeySecret]
+            message: Set the service account and its key secret together, or neither to let the release create one.
 
   - id: sources
     title: Sources
@@ -128,7 +138,7 @@ steps:
           - type: note
             severity: warning
             text: >-
-              This grants the service account `readLogs` on the org, which cannot be narrowed: its key can read
+              This grants the service account `readLogs` on the org, which cannot be narrowed: its keys can read
               every log in the org, across all workloads and clusters.
           - path: sources.k8sAudit.clusters
             type: list
@@ -629,8 +639,9 @@ steps:
             type: ref
             label: Identity
             description: >-
-              With S3 and cloud account identity it must already have AWS access to the buckets. The release only
-              grants it `reveal` on the secrets (and `view` on the GVC with volume set state).
+              With S3 and cloud account identity it must already have AWS access to the buckets. The release grants
+              it `reveal` on the secrets, `addKey`, `edit` and `view` on the release's service account, and `view` on
+              the GVC with volume set state.
             ref: { kind: identity, format: name, mustExist: error }
       - id: tuning
         title: Batching, lease and shutdown
@@ -681,7 +692,9 @@ steps:
             format: duration
             label: Drain on shutdown
             required: true
-            description: How long a delivery under way may finish after the replica is told to stop.
+            description: >-
+              How long a delivery under way may finish after the replica is told to stop. The platform waits half the
+              grace period before it signals the replica, so this plus 15s must fit in the other half.
           - path: tuning.terminationGracePeriodSeconds
             type: integer
             label: Termination grace period
@@ -711,10 +724,12 @@ steps:
             message: The lease expiry must be at least 1m.
           - rule: >-
               self.tuning.drainTimeout.endsWith('d') ||
-              duration(self.tuning.drainTimeout) < duration(string(self.tuning.terminationGracePeriodSeconds) + 's')
+              duration(self.tuning.drainTimeout) + duration('15s') <= duration(string(int(self.tuning.terminationGracePeriodSeconds) / 2) + 's')
             mirrors: cas.validate
             paths: [tuning.drainTimeout]
-            message: Keep the drain time below the termination grace period, or a delivery under way is cut off at shutdown.
+            message: >-
+              Keep the drain time plus 15s within half the termination grace period: the platform waits the other
+              half before it signals the replica, or a delivery under way is cut off at shutdown.
       - id: firewall
         title: Outbound access
         advanced: true

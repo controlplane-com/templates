@@ -1,4 +1,4 @@
-image: ghcr.io/controlplane-com/cpln-build/cpln-audit-shipper:v1.0.0
+image: ghcr.io/controlplane-com/cpln-build/cpln-audit-shipper:v1.1.1
 
 # The shipper runs as one long-running replica. Without Capacity AI the CPU and memory below are reserved.
 resources:
@@ -12,12 +12,15 @@ interval: 5m
 # state store (for example a backfill, or a second syslog destination) needs its own stream name.
 stream: default
 
-# REQUIRED PREREQUISITES: a service account, and an opaque secret (encoding plain) holding one of its keys. The
-# audit and logs APIs do not accept a workload's own token. The chart grants the service account readAudit on the
-# audit contexts and, when the Kubernetes audit source is on, readLogs on the org.
+# The audit and logs APIs do not accept a workload's own token, so the shipper reads with a service account key.
+# By default the release creates its own service account (RELEASE-audit-shipper), grants it readAudit on the
+# audit contexts and, with the Kubernetes source, readLogs on the org, and lets the workload identity add and
+# remove its keys: each replica adds a key at startup, keeps it in memory, and removes it when it stops. Nothing
+# has to exist before installing. To use a service account you manage instead, set both values below.
 serviceAccount:
-  name: cpln-audit-shipper
-  keySecret: cpln-audit-shipper-key
+  existingName: ""
+  # An opaque secret (encoding plain) holding a key of existingName.
+  existingKeySecret: ""
 
 sources:
   # The Control Plane audit trail: who did what to which resource, through the API, console or CLI.
@@ -132,7 +135,8 @@ aws:
 
 identity:
   # Use an existing identity in the GVC instead of creating one. With S3 and authMode identity it must already
-  # have AWS cloud access; the chart only grants it reveal on the secrets (and view on the GVC with volume set state).
+  # have AWS cloud access. The chart grants it reveal on the secrets, addKey, edit and view on the release's service
+  # account (unless serviceAccount.existingName is set), and view on the GVC with volume set state.
   existingName: ""
 
 # Outbound access. Hostname rules only open ports 80, 443 and 445, so a syslog listener on another port needs a
@@ -146,8 +150,9 @@ tuning:
   leaseTTL: 5m
   # A cycle stops starting new batches after this long; the next cycle starts at once.
   cycleBudget: 30m
-  # On shutdown, a delivery under way gets this long to finish.
-  drainTimeout: 60s
+  # On shutdown, a delivery under way gets this long to finish. The platform waits half the grace period before it
+  # signals the shipper, so drainTimeout plus 15s (to remove the replica's key) must fit in the other half.
+  drainTimeout: 30s
   terminationGracePeriodSeconds: 90
   maxBatchEvents: 10000
   maxBatchBytes: 33554432

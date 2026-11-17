@@ -191,8 +191,14 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: same-gvc
+      inboundAllowWorkload: []
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
   supportDynamicTags: false
 {{- end }}

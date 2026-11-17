@@ -5,6 +5,10 @@
 #
 # Every check runs in a node container (bash, curl, keytool; no python, no ps). The runner reads any
 # {word} as a placeholder, so the scripts write shell variables as $VAR, never with braces.
+#
+# No drift left on 2.0.0 (drift-diff clean with demo and backup on, 2026-11-17): drift fails the run.
+driftBlocks: true
+
 checks:
   - id: cluster-formed
     description: All three nodes joined one cluster and it is green.
@@ -98,7 +102,10 @@ checks:
       stdout: '^Owner: CN=node-[0-9]+, OU=node, O={release}-opensearch\nIssuer: CN=templates-ci$'
 
   - id: ca-not-retained
-    description: The CA private key and the admin client certificate are not left on disk or in the JVM's environment.
+    description: >-
+      The CA private key and the admin client certificate are not left on disk, and no process the
+      opensearch user runs (the JVM, the reconcile subshell and its children) holds the secrets in its
+      environment.
     since: 2.0.0
     exec:
       workload: "{release}-opensearch"
@@ -107,9 +114,19 @@ checks:
       script: |
         C=/usr/share/opensearch/config/certs
         echo "FILES $(ls $C | tr '\n' ' ')"
-        echo "ENV $(tr '\0' '\n' < /proc/1/environ | grep -c '^OS_')"
+        # An exec session inherits the container env, so this check's own session is skipped (by session id).
+        MY_SID=$(cut -d' ' -f6 /proc/$$/stat)
+        N=0; L=0
+        for e in /proc/[0-9]*/environ; do
+          [ -r "$e" ] || continue
+          D=$(dirname "$e")
+          [ "$(cut -d' ' -f6 "$D/stat" 2>/dev/null)" = "$MY_SID" ] && continue
+          N=$((N + 1))
+          if tr '\0' '\n' < "$e" 2>/dev/null | grep -qE '^OS_(CA_KEYSTORE|CA_PASSPHRASE|ADMIN_PASSWORD|DASHBOARDS_PASSWORD)='; then L=$((L + 1)); fi
+        done
+        echo "ENV scanned=$N leaking=$L"
     expect:
-      stdout: '^FILES ca.pem node.p12 truststore.p12 \nENV 0$'
+      stdout: '^FILES ca.pem node.p12 truststore.p12 \nENV scanned=[1-9][0-9]* leaking=0$'
     retries: 6
     retryDelaySeconds: 20
 

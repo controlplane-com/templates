@@ -21,8 +21,12 @@ spec:
         - {{- include "opensearch.inlineScript" (include "opensearch.script.backupSetup" .) | nindent 10 }}
   defaultOptions:
     autoscaling:
-      minScale: 1
       metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
     capacityAI: false
     debug: false
     suspend: false
@@ -30,8 +34,14 @@ spec:
   firewallConfig:
     external:
       inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
     internal:
       inboundAllowType: same-gvc
+      inboundAllowWorkload: []
   identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
 {{- end }}
 {{- end }}

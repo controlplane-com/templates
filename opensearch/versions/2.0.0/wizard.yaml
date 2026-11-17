@@ -2,7 +2,7 @@
 apiVersion: template-wizard.controlplane.com/v1
 kind: TemplateWizard
 title: OpenSearch
-# Every node builds its seed and cluster-manager lists from its own location (secret-startup.yaml:39-62), so
+# Every node builds its seed and cluster-manager lists from its own location (secret-startup.yaml), so
 # each GVC location would form its own independent cluster on its own volumes.
 gvc:
   minLocations: 1
@@ -50,6 +50,7 @@ steps:
           requiredKeys: [password, dashboardsPassword, cookieSecret]
           create:
             suggestName: "context.releaseName + '-opensearch-credentials'"
+            hint: "openssl rand -hex 16 for each password, openssl rand -hex 32 for cookieSecret"
       - path: security.caSecretName
         type: ref
         label: Certificate authority secret
@@ -70,6 +71,7 @@ steps:
           requiredKeys: [keystore, passphrase]
           create:
             suggestName: "context.releaseName + '-opensearch-ca'"
+            hint: "keystore = base64 of a PKCS#12 holding the CA certificate and key (see Prerequisites); passphrase = its password"
     rules:
       - rule: has(self.security.credentialsSecretName) && self.security.credentialsSecretName != ''
         mirrors: opensearch.validate
@@ -143,7 +145,7 @@ steps:
         docs: "#cluster"
         rules:
           # secret-startup.yaml writes `cluster.name: <value>` unquoted into opensearch.yml through an unquoted
-          # heredoc (measured: `$HOME` expands, ` #x` is cut as a comment); OpenSearch 3.4.0 ClusterName.java
+          # heredoc (measured: `$HOME` expands, ` #x` is cut as a comment); OpenSearch ClusterName.java
           # refuses a name containing ':'.
           - rule: >-
               (oldSelf != null && oldSelf.clusterName == self.clusterName) ||
@@ -575,14 +577,13 @@ steps:
               The index template, the index pattern and the detector stay in OpenSearch and Dashboards, so the
               pipeline keeps running without the job. Remove it once the job has completed.
         rules:
-          # _script-demo-setup.tpl step 4 waits for the Dashboards workload, exits 1 after 60 attempts and
-          # restarts (docs Troubleshooting: 'Waiting for Dashboard...').
+          # _script-demo-setup.tpl creates the index pattern only when dashboard.enabled (steps 4-5).
           - rule: self.dashboard.enabled
-            severity: warning
+            severity: info
             paths: [demoLogs.enabled]
             message: >-
-              The demo setup job creates its index pattern in Dashboards and keeps failing without it. Turn on
-              OpenSearch Dashboards, or leave the demo pipeline off.
+              With Dashboards off, the demo pipeline still ships logs and creates its detector, but no index
+              pattern is added. Turn on OpenSearch Dashboards to browse the demo logs.
           - rule: >-
               !self.demoLogs.remove_setup_workload ||
               (oldSelf != null && oldSelf.demoLogs.enabled == true)
@@ -620,7 +621,7 @@ steps:
               - value: workload-list
                 label: Specific workloads
                 description: Only the workloads listed below.
-          # Shown for every type that uses it: workload-opensearch.yaml:57-59 writes any non-empty list into
+          # Shown for every type that uses it: workload-opensearch.yaml writes any non-empty list into
           # inboundAllowWorkload, and the platform applies the links only with same-gvc and workload-list.
           - path: internal_access.workloads
             when: self.internal_access.type in ['same-gvc', 'workload-list'] || size(self.internal_access.workloads) > 0
@@ -658,7 +659,7 @@ steps:
           nothing.
       # The internal firewall also governs the nodes' transport traffic on 9300 (replicaDirect, per-replica
       # names): etcd-multi-location measured quorum loss when the list omitted the workload itself. The chart
-      # adds none of its own workloads (workload-opensearch.yaml:55-59); Dashboards (OPENSEARCH_HOSTS), the
+      # adds none of its own workloads (workload-opensearch.yaml); Dashboards (OPENSEARCH_HOSTS), the
       # backup setup job, the demo generator's Fluent Bit sidecar and the demo setup job all call :9200.
       - when: self.internal_access.type == 'workload-list' && context.gvc != null
         rule: >-

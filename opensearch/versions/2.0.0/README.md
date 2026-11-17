@@ -16,7 +16,7 @@ This template does not create a GVC. Deploy it into an existing one.
 
 ## Prerequisites
 
-Two dictionary secrets must exist **before** you install. If one is missing, the nodes never start and `cpln logs` shows nothing; the reason is in the workload's `status.versions[].message`.
+Two dictionary secrets must exist **before** you install. If one is missing, the nodes never start and `cpln logs` shows nothing; read the reason with `cpln workload get-deployments RELEASE_NAME-opensearch --gvc GVC_NAME -o yaml` (`status.versions[].message`).
 
 **1. Credentials** — the `admin` password, the password Dashboards uses to reach OpenSearch, and the Dashboards session-cookie key (32+ characters):
 
@@ -46,15 +46,17 @@ Backups also need a bucket and a Control Plane Cloud Account, see [Storage setup
 
 ## Configuration
 
-**Cluster** — node count and identity. `replicas` must be odd so the cluster can form a quorum; an even value is rejected at render:
+**Cluster** — `replicas` must be odd (quorum):
 
 ```yaml
 image: opensearchproject/opensearch:3.8.0
+
 replicas: 3 # Must be odd
+
 clusterName: my-opensearch-cluster
 ```
 
-**Resources** — per node. OpenSearch is memory-sensitive; raise `maxMemory` before raising CPU:
+**Resources** — per node; raise `maxMemory` before CPU:
 
 ```yaml
 resources:
@@ -64,7 +66,7 @@ resources:
   maxMemory: 4Gi
 ```
 
-**Volume** — per node. Optionally autoscale as indices grow:
+**Volume** — per node:
 
 ```yaml
 volumeset:
@@ -76,7 +78,7 @@ volumeset:
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
 ```
 
-**Security** — the two prerequisite secrets. The security plugin is always on:
+**Security** — the two [prerequisite](#prerequisites) secrets:
 
 ```yaml
 security:
@@ -84,16 +86,17 @@ security:
   caSecretName: my-opensearch-ca # dictionary: keystore (base64 PKCS#12 with the CA certificate and key), passphrase
 ```
 
-**Internal access** — which workloads may reach OpenSearch on `9200`. Every request still needs credentials. External inbound is closed and not configurable:
+**Internal access** — which workloads may reach `9200` (every request still needs credentials):
 
 ```yaml
 internal_access:
   type: same-gvc # options: same-gvc, same-org, workload-list
   workloads:  # Note: can only be used if type is same-gvc or workload-list
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+    #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
 
-**Dashboards** — the web UI, reachable through `cpln port-forward`, or on a public HTTPS endpoint when `publicAccess.enabled: true`:
+**Dashboards:**
 
 ```yaml
 dashboard:
@@ -106,7 +109,7 @@ dashboard:
     enabled: false # true publishes the login page on an HTTPS *.cpln.app endpoint
 ```
 
-**Demo logs** — a sample app plus Fluent Bit that ships logs into a `demo-logs` index, with a sample Security Analytics detector:
+**Demo logs** — sample logs in a `demo-logs` index plus a sample detector:
 
 ```yaml
 demoLogs:
@@ -114,23 +117,33 @@ demoLogs:
   remove_setup_workload: false # Set to true after demo logs startup is no longer needed to reduce resource usage
 ```
 
-**Backups** — scheduled snapshots. See [Storage setup](#storage-setup) before enabling:
+**Backups** — see [Storage setup](#storage-setup) first:
 
 ```yaml
 backup:
   enabled: false      # Set to true to enable automated snapshots
   remove_setup_workload: false # Set to true after backup setup is no longer needed to reduce resource usage
-  provider: aws       # Cloud provider: aws or gcp
-  schedule: 0 2 * * * # Daily at 2am UTC
+
+  # Cloud provider: aws or gcp
+  provider: aws
+
+  # Backup schedule (cron format, UTC timezone)
+  schedule: 0 2 * * *  # Daily at 2am UTC
+
+  # Snapshot retention
   retention:
-    maxAge: 30d       # Delete snapshots older than 30 days
-    maxCount: 30      # Keep maximum 30 snapshots
+    maxAge: 30d        # Delete snapshots older than 30 days
+    maxCount: 30       # Keep maximum 30 snapshots
+
+  # AWS S3 Configuration
   aws:
     bucket: my-s3-bucket                 # S3 bucket name (required if provider=aws)
     region: us-east-1                    # S3 bucket region (required if provider=aws)
     prefix: opensearch-snapshots         # Path prefix in bucket
     cloudAccountName: my-cloud-account   # Control Plane Cloud Account name (required)
     policyName: my-backup-policy         # AWS IAM custom policy name (required)
+
+  # GCP GCS Configuration
   gcp:
     bucket: my-gcs-bucket                # GCS bucket name (required if provider=gcp)
     prefix: opensearch-snapshots         # Path prefix in bucket
@@ -199,7 +212,7 @@ Required only when `backup.enabled: true`.
 }
 ```
 
-Both ARNs are required: `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself, while the object actions authorize against `bucket/*`. A policy carrying only the `/*` ARN fails when OpenSearch enumerates the repository.
+Keep both ARNs: listing authorizes against the bucket, object actions against `bucket/*`.
 
 ### GCS
 
@@ -267,13 +280,12 @@ If a node or Dashboards still waits about 5 minutes after the upgrade, run `cpln
 
 ## Important Notes
 
-- **Both prerequisite secrets must exist before install.** A missing one leaves the nodes waiting with nothing in the logs.
-- **The `admin` and `kibanaserver` passwords come from the credentials secret at every node start.** A password changed in Dashboards reverts at the next restart. To rotate, update the secret, then run `cpln workload force-redeployment` on both `RELEASE_NAME-opensearch` and `RELEASE_NAME-opensearch-dashboard`. Use a strong, generated password (`openssl rand -hex 16`).
+- **Both prerequisite secrets must exist before install.** A missing one leaves the nodes waiting with nothing in the logs; `cpln workload get-deployments RELEASE_NAME-opensearch --gvc GVC_NAME -o yaml` names it.
+- **The `admin` and `kibanaserver` passwords come from the credentials secret at every node start.** A password changed in Dashboards reverts at the next restart. To rotate, update the secret, then run `cpln workload force-redeployment` on `RELEASE_NAME-opensearch`, `RELEASE_NAME-opensearch-dashboard` and, with the demo pipeline on, `RELEASE_NAME-demo-log-generator`. Use a strong, generated password (`openssl rand -hex 16`).
 - **Changing the CA restarts the whole cluster.** Old and new certificates do not trust each other, so the cluster is unavailable until every node has restarted with the new CA.
 - **`replicas` must be odd.** An even count cannot form a quorum and is rejected at render.
-- **Enabling backups on a running cluster fails for a few minutes before it succeeds.** The repository plugin is installed at node startup, so the nodes must roll before the repository can be registered; meanwhile the setup job reports `repository type [s3] does not exist` and restarts until every node carries the plugin. Enabling backups at install time avoids this.
+- **Turn backups on at install time where you can.** The repository plugin is installed at node startup, so on a running cluster the setup job retries until every node has restarted with it.
 - **Switching `backup.provider` on an existing release leaves the old cloud binding attached.** The identity keeps both provider blocks; uninstall and reinstall if you need the old binding gone.
-- **Always use the fully-qualified internal hostname** (`RELEASE_NAME-opensearch.GVC_NAME.cpln.local`). The bare workload name is not reliably resolvable.
 - **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets. Enable snapshots if the data matters.
 
 ## Links

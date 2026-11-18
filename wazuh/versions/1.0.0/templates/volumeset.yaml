@@ -1,0 +1,42 @@
+{{- include "wazuh.validate" . -}}
+{{- $sets := list (dict "name" (include "wazuh.volume.manager.name" .) "desc" "Wazuh manager state, agent keys, logs and CA key" "vs" .Values.manager.volumeset) }}
+{{- $sets = append $sets (dict "name" (include "wazuh.volume.indexer.name" .) "desc" "Wazuh indexer data" "vs" .Values.indexer.volumeset) }}
+{{- if gt (int .Values.manager.workers.replicas) 0 }}
+{{- $sets = append $sets (dict "name" (include "wazuh.volume.worker.name" .) "desc" "Wazuh worker node state" "vs" .Values.manager.workers.volumeset) }}
+{{- end }}
+{{- range $sets }}
+---
+kind: volumeset
+name: {{ .name }}
+gvc: {{ $.Values.global.cpln.gvc }}
+description: {{ .desc }}
+tags: {{- include "wazuh.tags" $ | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .vs.capacity }}
+  {{- if .vs.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .vs.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .vs.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .vs.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .vs.snapshots.retentionDuration | quote }}
+    {{- if .vs.snapshots.schedule }}
+    schedule: {{ .vs.snapshots.schedule | quote }}
+    {{- end }}
+{{- end }}
+---
+# Shared between the manager, workers, indexer and dashboard: the root CA certificate and the
+# leaf certificates the manager issues (the CA key stays on the manager's own volume).
+kind: volumeset
+name: {{ include "wazuh.volume.pki.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Wazuh TLS certificates shared by this release's workloads
+tags: {{- include "wazuh.tags" . | nindent 4 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: 10
+  performanceClass: shared

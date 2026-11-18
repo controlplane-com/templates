@@ -1,0 +1,85 @@
+{{- include "wazuh.validate" . -}}
+kind: workload
+name: {{ include "wazuh.dashboard.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Wazuh dashboard (web UI)
+tags: {{- include "wazuh.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "wazuh.identity.name" . }}
+  containers:
+    - name: dashboard
+      image: {{ .Values.dashboard.image }}
+      inheritEnv: false
+      cpu: {{ .Values.dashboard.resources.cpu | quote }}
+      memory: {{ .Values.dashboard.resources.memory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{ include "wazuh.inlineScript" (include "wazuh.script.dashboard" .) | toJson }}
+      env:
+        - name: WZ_API_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.apiPassword
+        - name: WZ_COOKIE_SECRET
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.dashboardCookieSecret
+        - name: WZ_KIBANASERVER_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.dashboardServerPassword
+      ports:
+        - number: 5601
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /app/login
+          port: 5601
+          scheme: HTTP
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        failureThreshold: 4
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 5601
+        initialDelaySeconds: 60
+        periodSeconds: 20
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /pki
+          uri: cpln://volumeset/{{ include "wazuh.volume.pki.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.dashboard.replicas }}
+      metric: disabled
+      minScale: {{ .Values.dashboard.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 60
+  firewallConfig:
+    external:
+      {{- if .Values.dashboard.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.dashboard.internalAccess.type }}
+      {{- $allow := .Values.dashboard.internalAccess.workloads | default list }}
+      inboundAllowWorkload: {{- if $allow }}{{ $allow | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

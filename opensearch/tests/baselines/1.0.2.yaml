@@ -1,0 +1,8 @@
+# Default install: 3 nodes, security plugin disabled (plain HTTP, no login), Dashboards on.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+vars:
+  os_url: "http://127.0.0.1:9200"
+  curl_auth: ""
+  admin_password: ""

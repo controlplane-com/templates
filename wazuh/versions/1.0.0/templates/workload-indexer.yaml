@@ -1,0 +1,101 @@
+{{- include "wazuh.validate" . -}}
+kind: workload
+name: {{ include "wazuh.indexer.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Wazuh indexer (stores alerts; security plugin on)
+tags: {{- include "wazuh.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "wazuh.identity.name" . }}
+  containers:
+    - name: indexer
+      image: {{ .Values.indexer.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.indexer.resources.minCpu | quote }}
+      minMemory: {{ .Values.indexer.resources.minMemory | quote }}
+      cpu: {{ .Values.indexer.resources.maxCpu | quote }}
+      memory: {{ .Values.indexer.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{ include "wazuh.inlineScript" (include "wazuh.script.indexer" .) | toJson }}
+      env:
+        - name: OPENSEARCH_JAVA_OPTS
+          value: -Xms{{ .Values.indexer.javaHeap }} -Xmx{{ .Values.indexer.javaHeap }}
+        - name: WZ_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.indexerAdminPassword
+        - name: WZ_KIBANASERVER_PASSWORD
+          value: cpln://secret/{{ .Values.credentialsSecretName }}.dashboardServerPassword
+      ports:
+        - number: 9200
+          protocol: tcp
+        - number: 9300
+          protocol: tcp
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - exec 3<>/dev/tcp/127.0.0.1/9200
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        failureThreshold: 4
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - exec 3<>/dev/tcp/127.0.0.1/9200
+        initialDelaySeconds: 120
+        periodSeconds: 20
+        failureThreshold: 6
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /var/lib/wazuh-indexer
+          uri: cpln://volumeset/{{ include "wazuh.volume.indexer.name" . }}
+        - path: /pki
+          uri: cpln://volumeset/{{ include "wazuh.volume.pki.name" . }}
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: {{ .Values.indexer.replicas }}
+      maxScale: {{ .Values.indexer.replicas }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: workload-list
+      {{- $own := list (include "wazuh.manager.name" .) (include "wazuh.dashboard.name" .) (include "wazuh.indexer.name" .) }}
+      {{- if gt (int .Values.manager.workers.replicas) 0 }}
+      {{- $own = append $own (include "wazuh.worker.name" .) }}
+      {{- end }}
+      {{- $allow := list }}
+      {{- range $own }}
+      {{- $allow = append $allow (include "wazuh.workloadLink" (dict "ctx" $ "name" .)) }}
+      {{- end }}
+      {{- $allow = concat $allow (.Values.indexer.internalAccess.workloads | default list) | uniq | sortAlpha }}
+      inboundAllowWorkload: {{- $allow | toYaml | nindent 8 }}
+  loadBalancer:
+    replicaDirect: true
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  securityOptions:
+    filesystemGroupId: 1001 # also the group of the indexer/admin keys on the shared PKI volume

@@ -7,7 +7,7 @@ appVersion: "4.16.2-ce"
 
 annotations:
   created: "2026-08-05"
-  lastModified: "2026-11-06"
+  lastModified: "2026-11-18"
   createsGvc: false
 
 dependencies:

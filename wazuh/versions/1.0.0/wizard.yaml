@@ -1,0 +1,589 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Wazuh
+
+# Stateful volumes and one shared certificate volume per location: every GVC location would run its own copy.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secret with every password the stack uses.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              The credentials secret must exist **before** you install. If it is missing, every workload waits
+              and `cpln logs` shows nothing at all.
+          - path: credentialsSecretName
+            type: ref
+            label: Credentials secret
+            required: true
+            description: >-
+              A dictionary secret with `indexerAdminPassword` (your dashboard login as `admin`),
+              `dashboardServerPassword`, `apiPassword`, `enrollmentPassword` (agents present it to enroll),
+              `clusterKey` and `dashboardCookieSecret`.
+            help: >-
+              Passwords: 8 to 64 characters, starting with a letter, using only A-Z a-z 0-9 . * + ? - with at
+              least one upper-case letter, lower-case letter, digit and symbol. `clusterKey` is exactly 32
+              letters, digits or underscores; `dashboardCookieSecret` is at least 32 of the password
+              characters. The secret is applied on every start: to change a password, edit the secret and
+              force a redeployment of the workloads.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys:
+                - indexerAdminPassword
+                - dashboardServerPassword
+                - apiPassword
+                - enrollmentPassword
+                - clusterKey
+                - dashboardCookieSecret
+              create:
+                secretType: dictionary
+                suggestName: "context.releaseName + '-wazuh-credentials'"
+                hint: >-
+                  Passwords: for example Wz1. followed by the output of openssl rand -hex 16.
+                  clusterKey: openssl rand -hex 16. dashboardCookieSecret: openssl rand -hex 24.
+    rules:
+      - rule: self.credentialsSecretName != null && self.credentialsSecretName != ''
+        mirrors: wazuh.validate
+        paths: [credentialsSecretName]
+        message: Name the prerequisite credentials secret; the chart does not render without it.
+      - rule: self.credentialsSecretName != context.releaseName + '-wazuh-manager-config'
+        severity: warning
+        paths: [credentialsSecretName]
+        messageExpression: >-
+          context.releaseName + '-wazuh-manager-config is created by this chart for the server configuration. Use a different name.'
+        message: That secret is created by this chart for the server configuration. Use a different name.
+
+  - id: server
+    title: Wazuh server
+    description: The manager that agents connect to, its storage and optional worker nodes.
+    sections:
+      - title: Manager
+        fields:
+          - path: manager.image
+            type: string
+            format: image
+            label: Manager image
+            required: true
+            advanced: true
+          - path: manager.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 250m }
+            memory: { min: 512Mi }
+            description: The master node; it also runs the analysis engine and vulnerability detection.
+          - path: manager.logRetentionDays
+            type: integer
+            label: Keep alert log files for
+            unit: days
+            min: 0
+            required: true
+            suggestions: [7, 30, 90, 365]
+            description: The dated alert and archive files on the manager volume; 0 keeps them forever.
+            rules:
+              - rule: self.manager.logRetentionDays >= 0
+                mirrors: wazuh.validate
+                message: The log retention must be 0 or more days.
+          - path: manager.extraConfig
+            type: string
+            multiline: true
+            label: Extra ossec.conf blocks
+            advanced: true
+            placeholder: "<ossec_config>\n  <vulnerability-detection>\n    <enabled>no</enabled>\n  </vulnerability-detection>\n</ossec_config>"
+            description: >-
+              Raw `<ossec_config>` blocks appended to the server configuration. Edits made to ossec.conf in the
+              dashboard are reset on restart; put lasting changes here. A `<ruleset>` block replaces the default
+              one, so restate the default `decoder_dir`, `rule_dir` and `list` entries in it.
+            rules:
+              - rule: self.manager.extraConfig == null || self.manager.extraConfig == '' || self.manager.extraConfig.contains('<ossec_config>')
+                mirrors: wazuh.validate
+                message: Wrap the extra configuration in <ossec_config> … </ossec_config>.
+      - title: Manager storage
+        docs: "#manager"
+        fields:
+          - path: manager.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [20, 50, 100, 200, 500]
+            description: Agent keys, server state, alert log files and about 7 GiB of vulnerability content.
+            help: Uninstalling the release deletes the volume set, and every agent must enroll again.
+          - path: manager.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.manager.volumeset.snapshots.schedule == null || self.manager.volumeset.snapshots.schedule == '' ||
+                  self.manager.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: manager.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.manager.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
+      - id: manager-autoscaling
+        title: Grow manager storage automatically
+        toggle: manager.volumeset.autoscaling.enabled
+        docs: /reference/volumeset#autoscaling
+        fields:
+          - path: manager.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+          - path: manager.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+          - path: manager.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+        rules:
+          - rule: self.manager.volumeset.autoscaling.maxCapacity >= self.manager.volumeset.capacity
+            paths: [manager.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Worker nodes
+        docs: "#worker-nodes"
+        description: >-
+          Workers take agent traffic so agents stay connected while the master restarts. With workers, point
+          agents at the worker endpoint (workers pass enrollment on to the master); the API stays on the master.
+        fields:
+          - path: manager.workers.replicas
+            type: integer
+            label: Worker nodes
+            widget: stepper
+            min: 0
+            required: true
+            rules:
+              - rule: self.manager.workers.replicas >= 0
+                mirrors: wazuh.validate
+                message: The number of worker nodes must be 0 or more.
+          - path: manager.workers.resources
+            type: resources
+            label: Resources per worker
+            required: true
+            maxRatio: 4
+            cpu: { min: 250m }
+            memory: { min: 512Mi }
+            when: self.manager.workers.replicas > 0
+          - path: manager.workers.volumeset.capacity
+            type: integer
+            label: Storage per worker
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            when: self.manager.workers.replicas > 0
+          - path: manager.workers.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Worker snapshot schedule (UTC)
+            when: self.manager.workers.replicas > 0
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.manager.workers.volumeset.snapshots.schedule == null || self.manager.workers.volumeset.snapshots.schedule == '' ||
+                  self.manager.workers.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: manager.workers.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            when: self.manager.workers.replicas > 0
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.manager.workers.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
+          - path: manager.workers.volumeset.autoscaling.enabled
+            type: boolean
+            label: Grow worker storage automatically
+            when: self.manager.workers.replicas > 0
+            advanced: true
+          - path: manager.workers.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity per worker
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            when: self.manager.workers.replicas > 0 && self.manager.workers.volumeset.autoscaling.enabled
+            advanced: true
+          - path: manager.workers.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            when: self.manager.workers.replicas > 0 && self.manager.workers.volumeset.autoscaling.enabled
+            advanced: true
+          - path: manager.workers.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            when: self.manager.workers.replicas > 0 && self.manager.workers.volumeset.autoscaling.enabled
+            advanced: true
+    rules:
+      - rule: oldSelf == null || self.manager.volumeset.capacity >= oldSelf.manager.volumeset.capacity
+        paths: [manager.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: agents
+    title: Agent access
+    description: Where agents connect from, and who inside Control Plane reaches the server.
+    sections:
+      - id: public-agents
+        title: Agents outside Control Plane
+        toggle: manager.publicAccess.enabled
+        description: >-
+          Opens TCP 1514 (events) and 1515 (enrollment, needs the enrollment password) on a public load
+          balancer, which takes over the server's public endpoint. Off, only workloads inside Control Plane
+          can run agents.
+        fields:
+          - path: manager.publicAccess.allowedCidrs
+            type: list
+            label: Allowed source ranges
+            widget: tags
+            required: true
+            item: { type: string, format: cidr }
+            description: >-
+              The networks your agents connect from. `0.0.0.0/0` allows agents from anywhere; narrow it to
+              your offices, VPNs or cloud ranges where you can.
+            rules:
+              - rule: size(self.manager.publicAccess.allowedCidrs) > 0
+                mirrors: wazuh.validate
+                message: Add at least one source range, or turn public agent access off.
+              - rule: "!('0.0.0.0/0' in self.manager.publicAccess.allowedCidrs)"
+                severity: info
+                message: Agents from any address can reach the enrollment port; they still need the enrollment password.
+          - path: manager.publicAccess.api
+            type: boolean
+            label: Also expose the server API
+            description: The Wazuh server API (HTTPS) on the same load balancer as port 8443, from the same source ranges.
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: manager.internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            description: This release's dashboard, workers and demo agent are always allowed.
+            options:
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: This release's workloads and the workloads listed below. }
+            rules:
+              - rule: self.manager.internalAccess.type in ['same-gvc', 'same-org', 'workload-list']
+                mirrors: wazuh.validate
+                message: The internal access must be same-gvc, same-org or workload-list.
+              - when: self.manager.publicAccess.enabled
+                rule: "false"
+                severity: info
+                message: >-
+                  While public agent access is on, agent ports 1514 and 1515 are reachable from every workload in
+                  the GVC whatever is chosen here; the enrollment password is the gate. This setting restricts them
+                  (and the server API) once public agent access is off.
+          - path: manager.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.manager.internalAccess.type == 'same-gvc'
+            rules:
+              - when: self.manager.internalAccess.type == 'same-org'
+                rule: self.manager.internalAccess.workloads == null || size(self.manager.internalAccess.workloads) == 0
+                severity: info
+                message: Same org already lets every workload of the org connect, so these entries add nothing.
+    rules:
+      - rule: "!self.manager.publicAccess.api || self.manager.publicAccess.enabled"
+        mirrors: wazuh.validate
+        paths: [manager.publicAccess.enabled]
+        message: The server API is still set to be exposed; turn public agent access back on, or turn the API off first.
+
+  - id: indexer
+    title: Indexer
+    description: The Wazuh indexer that stores alerts and inventory.
+    sections:
+      - title: Nodes
+        fields:
+          - path: indexer.replicas
+            type: enum
+            label: Indexer nodes
+            widget: segmented
+            required: true
+            options:
+              - { value: 1, label: "1", description: One node; a restart pauses indexing and search. }
+              - { value: 3, label: "3", description: Keeps serving with one node down; three times the cost. }
+              - { value: 5, label: "5", description: Keeps serving with two nodes down. }
+            rules:
+              - rule: self.indexer.replicas == 1 || (self.indexer.replicas >= 3 && self.indexer.replicas % 2 == 1)
+                mirrors: wazuh.validate
+                message: The indexer runs 1 node or an odd number of 3 or more.
+          - path: indexer.image
+            type: string
+            format: image
+            label: Indexer image
+            required: true
+            advanced: true
+          - path: indexer.resources
+            type: resources
+            label: Resources per node
+            required: true
+            maxRatio: 4
+            cpu: { min: 250m }
+            memory: { min: 1Gi }
+          - path: indexer.javaHeap
+            type: string
+            label: Java heap
+            required: true
+            pattern: '^[0-9]+[mg]$'
+            patternMessage: Write a size such as 2g or 1536m.
+            suggestions: [1g, 2g, 4g, 8g]
+            description: About half of the node's maximum memory.
+            rules:
+              - rule: self.indexer.javaHeap.matches('^[0-9]+[mg]$')
+                mirrors: wazuh.validate
+                message: Write the heap as a size such as 2g or 1536m.
+          - path: indexer.retentionDays
+            type: integer
+            label: Keep alerts for
+            unit: days
+            min: 0
+            required: true
+            suggestions: [30, 90, 180, 365]
+            description: Alert and archive indices older than this are deleted; 0 keeps them forever.
+            rules:
+              - rule: self.indexer.retentionDays >= 0
+                mirrors: wazuh.validate
+                message: The alert retention must be 0 or more days.
+      - title: Indexer storage
+        docs: "#indexer"
+        fields:
+          - path: indexer.volumeset.capacity
+            type: integer
+            label: Initial capacity per node
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [20, 50, 100, 200, 500, 1000]
+            description: About 50 GiB holds 90 days of alerts for 25 agents.
+            help: Uninstalling the release deletes the volume set with every stored alert.
+          - path: indexer.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Daily at 3am UTC by default. Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; snapshots cannot run more often than hourly.
+            rules:
+              - rule: >-
+                  self.indexer.volumeset.snapshots.schedule == null || self.indexer.volumeset.snapshots.schedule == '' ||
+                  self.indexer.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$')
+                mirrors: wazuh.validate
+                message: Snapshots run at most hourly; use a 5-field schedule with a single fixed minute, or leave it empty.
+          - path: indexer.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+            rules:
+              - rule: self.indexer.volumeset.snapshots.retentionDuration.matches('^[0-9]+([.][0-9]+)?[dhm]$')
+                mirrors: wazuh.validate
+                message: Use a number followed by d, h or m, such as 7d.
+      - id: indexer-autoscaling
+        title: Grow indexer storage automatically
+        toggle: indexer.volumeset.autoscaling.enabled
+        docs: /reference/volumeset#autoscaling
+        fields:
+          - path: indexer.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+          - path: indexer.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+          - path: indexer.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+        rules:
+          - rule: self.indexer.volumeset.autoscaling.maxCapacity >= self.indexer.volumeset.capacity
+            paths: [indexer.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Extra readers
+        fields:
+          - path: indexer.internalAccess.workloads
+            type: list
+            label: Workloads allowed to query the indexer
+            widget: tags
+            description: Only this release's workloads reach the indexer unless you add others here, such as Grafana.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+    rules:
+      - rule: oldSelf == null || self.indexer.volumeset.capacity >= oldSelf.indexer.volumeset.capacity
+        paths: [indexer.volumeset.capacity]
+        message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - rule: oldSelf == null || oldSelf.indexer.replicas == 1 || self.indexer.replicas >= oldSelf.indexer.replicas
+        paths: [indexer.replicas]
+        message: Removing indexer nodes can lose the shards they hold. Keep the installed number of nodes or more.
+
+  - id: dashboard
+    title: Dashboard
+    description: The Wazuh web UI.
+    sections:
+      - title: Dashboard
+        fields:
+          - path: dashboard.replicas
+            type: integer
+            label: Replicas
+            widget: stepper
+            min: 1
+            required: true
+            description: Two or more keep the UI up through restarts.
+            rules:
+              - rule: self.dashboard.replicas >= 1
+                mirrors: wazuh.validate
+                message: Run at least one dashboard replica.
+          - path: dashboard.image
+            type: string
+            format: image
+            label: Dashboard image
+            required: true
+            advanced: true
+          - path: dashboard.resources
+            type: resources
+            label: Resources per replica
+            required: true
+            cpu: { min: 250m }
+            memory: { min: 768Mi }
+      - id: dashboard-public
+        title: Public HTTPS endpoint
+        toggle: dashboard.publicAccess.enabled
+        description: >-
+          The UI on the workload's `*.cpln.app` endpoint; you sign in as `admin` with `indexerAdminPassword`.
+          Off, reach it with `cpln port-forward` to port 5601.
+        fields: []
+      - title: Internal access
+        docs: /reference/workload/firewall
+        fields:
+          - path: dashboard.internalAccess.type
+            type: enum
+            label: Who can connect
+            widget: cards
+            required: true
+            options:
+              - { value: none, label: None, description: No workload can reach the dashboard internally. }
+              - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+              - { value: same-org, label: Same org, description: Any workload in this org. }
+              - { value: workload-list, label: Specific workloads, description: Only the workloads listed below. }
+            rules:
+              - rule: self.dashboard.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+                mirrors: wazuh.validate
+                message: The internal access must be none, same-gvc, same-org or workload-list.
+          - path: dashboard.internalAccess.workloads
+            when: self.dashboard.internalAccess.type in ['same-gvc', 'workload-list'] || (self.dashboard.internalAccess.workloads != null && size(self.dashboard.internalAccess.workloads) > 0)
+            type: list
+            label: Allowed workloads
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.dashboard.internalAccess.type == 'same-gvc'
+
+  - id: demo
+    title: Demo agent
+    description: A Wazuh agent inside the GVC that fills the dashboard right away.
+    sections:
+      - id: demo-agent
+        title: Demo agent
+        toggle: demoAgent.enabled
+        description: >-
+          A real agent in this GVC that enrolls and sends events from its own container. Each restart enrolls
+          a new agent and leaves the old one disconnected, so turn it off once your own agents connect.
+        fields:
+          - path: demoAgent.image
+            type: string
+            format: image
+            label: Agent image
+            required: true
+            advanced: true
+          - path: demoAgent.resources
+            type: resources
+            label: Resources
+            required: true
+            advanced: true
+            cpu: { min: 100m }
+            memory: { min: 256Mi }

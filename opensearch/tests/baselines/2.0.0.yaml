@@ -1,0 +1,38 @@
+# 3 nodes with the security plugin on, Dashboards private, no backups. Two non-defaults, each proven by
+# a check: the demo pipeline on (demo-pipeline-finding), and internal_access workload-list with an empty
+# user list, so the cluster forming (cluster-formed) and Dashboards and Fluent Bit connecting prove the
+# chart always allows its own workloads.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  ca: pkcs12                        # throwaway self-signed CA (CN=templates-ci) → {gen.ca}, {gen.ca.passphrase}
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [password, dashboardsPassword, cookieSecret]
+  ca:
+    type: dictionary
+    entries:
+      keystore: "{gen.ca}"
+      passphrase: "{gen.ca.passphrase}"
+
+vars:
+  os_url: "https://127.0.0.1:9200"
+  curl_auth: "-u admin:{secrets.creds.password}"
+  admin_password: "{secrets.creds.password}"
+
+values:
+  security:
+    credentialsSecretName: "{secrets.creds.name}"
+    caSecretName: "{secrets.ca.name}"
+  internal_access:
+    type: workload-list
+    workloads: []
+  demoLogs:
+    enabled: true
+
+upgradeFrom:
+  - version: 1.0.2
+    values: new                     # 2.0.0 adds two required prerequisite secrets

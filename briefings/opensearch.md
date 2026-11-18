@@ -1,76 +1,69 @@
 # OpenSearch — maintainer briefing
 
-**What it is.** A multi-node OpenSearch cluster (search + log analytics, Apache-2.0) with an optional
-Dashboards UI, an optional demo log pipeline, and optional scheduled snapshots to S3 or GCS. Deploys into
-an existing GVC.
+**What it is.** A multi-node OpenSearch 3.8.0 cluster (search, log analytics and a self-hosted SIEM, Apache-2.0)
+with the security plugin always on: a login, TLS on the API and between nodes, and a security audit log.
+Security Analytics (Sigma-rule detectors, findings, alerts) ships in the image. Optional Dashboards UI (private
+by default, optional public login page), demo log pipeline with a sample detector, and scheduled snapshots to
+S3 or GCS. Deploys into an existing GVC.
 
-**Common use cases.** Self-hosted log search, application search, and analytics where the user wants to own
-the index and the retention policy rather than query the platform's built-in log aggregation.
+**Common use cases.** Self-hosted SIEM over CloudTrail/VPC/DNS/Windows logs; log search with per-user roles;
+application search and analytics where the user wants to own the index and the retention policy.
 
 ## Architecture
 
 | Resource | Notes |
 |---|---|
-| workload `-opensearch` (stateful) | `replicas` nodes, HTTP `9200` + transport `9300`, `replicaDirect: true` for peer discovery |
+| workload `-opensearch` (stateful) | `replicas` nodes, HTTPS `9200` + TLS transport `9300` (both `tcp` ports: TLS passes through the mesh), `replicaDirect`, OrderedReady, `minReadySeconds: 60` |
 | volumeset `-opensearch-vs` | per-node data directory, optional autoscaling |
-| secret `-opensearch-startup` (opaque, plain) | node startup script; installs the snapshot repository plugin when backups are on |
-| identity + policy | `reveal` on exactly this release's secrets; cloud-account binding only when backups are on |
-| workload `-opensearch-dashboard` *(optional)* | UI on `5601`, reachable only via `cpln port-forward` |
-| workload `-backup-setup` *(optional)* | one-time job: registers `backup-repo` and the snapshot policy |
-| demo pipeline *(optional)* | log generator + Fluent Bit, with its own identity, policy and volumeset |
+| secret `-opensearch-startup` | startup script: issues certificates with `keytool` from the user's CA at every boot, writes the security config, reconciles `admin`/`kibanaserver` |
+| node identity + policy | reveals startup, credentials and CA secrets; cloud binding only with backups |
+| client identity + policy | Dashboards and both setup jobs; reveals the credentials secret only |
+| workload `-opensearch-dashboard` *(optional)* | UI on `5601` with login; `publicAccess.enabled` opens it on a `*.cpln.app` endpoint |
+| backup setup / demo pipeline *(optional)* | demo setup also creates log type `demo_app_logs`, a custom rule and detector `demo-auth-failures` |
 
-`securityOptions.filesystemGroupId: 1000` — the image runs as uid 1000 and cannot write a root-owned volume
-without it.
+Two prerequisite dictionary secrets: credentials (`password`, `dashboardsPassword`, `cookieSecret`) and the CA
+(`keystore` = base64 PKCS#12, `passphrase`). One GVC location only; `replicas` must be odd.
 
 ## Key knobs (shipped defaults)
 
 | Knob | Default | Notes |
 |---|---|---|
-| `replicas` | `3` | **must be odd** — rejected at render otherwise |
-| `resources` | `500m`/`2Gi` → `1`/`4Gi` | min/max; ratio stays under the 4:1 stateful cap |
-| `volumeset.capacity` | `10` | GiB per node |
-| `internal_access.type` | `same-gvc` | external inbound is closed and NOT configurable |
-| `dashboard.enabled` | `true` | |
-| `demoLogs.enabled` | `false` | |
-| `backup.enabled` / `.provider` | `false` / `aws` | `aws` or `gcp`; validated |
-
-**There are no credentials anywhere in this template.** `DISABLE_SECURITY_PLUGIN: true` is set on the nodes
-and `DISABLE_SECURITY_DASHBOARDS_PLUGIN: true` on the UI, so anything `internal_access` admits has full
-admin access to every index. That is why the credential audit never flagged this template — there is nothing
-to flag. `internal_access` is the *only* control, which is worth remembering before recommending `same-org`.
+| `security.credentialsSecretName` / `security.caSecretName` | `my-opensearch-credentials` / `my-opensearch-ca` | required; empty → render `fail` |
+| `replicas` | `3` | must be odd |
+| `resources` | `500m`/`2Gi` → `1`/`4Gi` | |
+| `dashboard.resources` | `250m` / `1Gi` | raised from 100m/512Mi for the security plugin |
+| `dashboard.publicAccess.enabled` | `false` | adds `cookie.secure=true` when on |
+| `demoLogs.enabled`, `backup.enabled` | `false` | |
 
 ## Troubleshooting traps
 
-- **1.0.0 and 1.0.1 are broken for everyone.** Both workloads' `identityLink` and both policies'
-  `principalLinks` were hardcoded to `//gvc/test-gvc/...`. Any install into a GVC not literally named
-  `test-gvc` created the identity in the target GVC while every reference pointed elsewhere. Fixed in 1.0.2.
-  **The bug is invisible when testing in `test-gvc`** — test this template in `test-gvc-2` or `-3`.
-- **1.0.0/1.0.1 with `demoLogs.enabled: true` granted `reveal` on EVERY secret in the org.** The demo-logs
-  policy carried `targetQuery: {match: all, terms: []}` beside its `targetLinks`; measured against the live
-  API, that query resolves to the entire org secret list (10/10 in the test org). Fixed in 1.0.2 by dropping
-  `targetQuery`, mirroring manticore 2.1.0. Anyone who ran the demo pipeline on an older version should be
-  told.
-- **Enabling backups on a RUNNING cluster fails for ~4-5 minutes first.** The repository plugin installs at
-  node startup, so nodes must roll before `backup-repo` can be registered. Meanwhile the setup job logs
-  `repository type [s3] does not exist` and restarts. It converges on its own. Enabling backups at install
-  time avoids it entirely.
-- **Switching `backup.provider` leaves the old cloud binding attached forever.** The API merges identity
-  updates and never removes a provider block — measured: even a direct `cpln apply` omitting `aws:` does not
-  clear it, while a freshly created identity from the same render has none. Only delete/recreate clears it.
-  This is a platform behaviour, not an opensearch bug, and it affects every backup-capable template.
-- **The S3 IAM policy needs BOTH ARNs.** `s3:ListBucket` and `s3:GetBucketLocation` authorize against
-  `arn:aws:s3:::BUCKET`, the object actions against `BUCKET/*`. The README through 1.0.1 listed only `/*`.
-- **Use the fully-qualified internal hostname.** `RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200`.
+- **Nodes stuck, no logs** → a prerequisite secret is missing; read `status.versions[].message`.
+- **The secret is the source of truth for `admin` and `kibanaserver`.** Every node start PATCHes both users
+  (with the admin client cert) and logs `security-reconcile: admin,kibanaserver updated`; a password changed
+  in Dashboards reverts. The PATCH `add` replaces the whole user, so it must resend `reserved: true` (measured:
+  without it the user loses its reserved flag). Rotation = update secret + `force-redeployment` nodes and Dashboards.
+- **Dashboards opens in the Global tenant.** The same reconcile step sets `default_tenant: Global` only while it is
+  unset (logs `default tenant set to Global`); a choice made under Security > Tenants > Configure is kept (measured).
+- **Changing the CA is a full-cluster restart**: old and new nodes do not trust each other.
+- **1.0.x → 2.0.0** breaks every client (https + login); mixed old/new nodes cannot talk. Measured: never red,
+  API out ~2-5 min, roll ~11-12 min on 3 nodes, data kept. Old saved objects are in the **Global** tenant. Stall on new grants: wait ~5 min, then
+  `force-redeployment`.
+- **Restores must exclude `.opendistro_security`**, and never `_all/_close` (it closes the security index).
+- **The template's own clients do not verify the server cert** (maintainer ruling Q2); users pin `ca.crt`.
+- `_plugins/_security/api/ssl/certs` needs the admin CERT (basic-auth admin gets `FORBIDDEN`); the admin cert
+  is deleted after reconcile, so checks read the transport cert with `keytool -printcert -sslserver :9300`.
+- `internal_access.type: workload-list` always adds the chart's own workloads (nodes need it for 9300);
+  the user list names extra clients only.
+- Upstream 3.8.0 Dashboards bugs: **Create correlation rule** and **Add threat intel source** (local file)
+  do nothing; the API works (README note).
+- Audit and finding indices have no retention policy; add ISM if volume is high.
+- Still from 1.0.x: enabling backups on a running cluster retries for a few minutes; switching
+  `backup.provider` leaves the old cloud binding; the S3 policy needs both ARNs; use FQDN hostnames.
 
-## Test status (1.0.2, `test-gvc-2`, 2026-08-21)
+## Test status (2.0.0, `test-gvc`, 2026-11-17)
 
-Proven: install into a non-`test-gvc` GVC; 3-node cluster forms green with the cluster manager elected;
-write + read-back of a document; FQDN reachable from a second workload; demo-logs pipeline ships into a
-`demo-logs` index; demo-logs policy resolves to exactly 1 secret; drift gate passes (upgrade #2 fully
-`Unchanged`, volumeset/identity/policy byte-identical, workload diffs only `readyCheckTimestamp`); identity
-renders `aws:` only for aws and `gcp:` only for gcp with `status.aws.usable: true` and no
-`aws::ReadOnlyAccess`; clean uninstall with no orphans.
-
-**Not proven: a snapshot actually landing in a bucket.** The test org has no S3 bucket for this, and the GCS
-attempt reached the bucket and authenticated but returned `403 — the billing account for the owning project
-is disabled`. Repository registration was exercised up to the storage call; the upload itself was not.
+Rounds 1-3b: E2E 34/34 incl. 1.0.2 upgrade; drift clean; rotation, availability (rolling 2194/2194, master
+kill 923/925), snapshots and restore, auth/TLS, CA not retained; demo pipeline parses and finds; browser:
+Discover, Visualize/Dashboards, saved-object round trip, Query Workbench, Index Management, Advanced settings,
+SA rules/detectors, Alerting → webhook, ISM, Reporting, PPL, Anomaly detection, tenants. Generic bundled
+plugins (Maps, Search Relevance, Query Insights, Flow Framework, ML, Notebooks, Traces) skipped by ruling.

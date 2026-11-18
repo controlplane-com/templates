@@ -8,39 +8,56 @@ topology: distributed
 
 summary: >-
   An OpenSearch cluster of an odd number of nodes, three by default, each on its own persistent
-  volume, with optional OpenSearch Dashboards (on by default). Options add scheduled snapshots to
-  S3 or GCS and a demo pipeline that ships sample logs into an index with Fluent Bit. The security
-  plugin is disabled, so it has no authentication and is reachable only from inside Control Plane.
-  Pick it for Apache-2.0 licensed full-text search and log analytics.
+  volume, with OpenSearch Dashboards. The security plugin is on, with a login, TLS between nodes and
+  on the API, and a security audit log. It includes Security Analytics: Sigma-rule detectors,
+  findings and alerts over your logs. Options add snapshots to S3 or GCS, a public Dashboards login
+  and a demo log pipeline with a sample detector. Pick it for Apache-2.0 search, log analytics and a
+  self-hosted SIEM.
 
 keywords:
+  - siem
+  - security analytics
+  - sigma rules
+  - threat detection
+  - security monitoring
+  - log analytics
+  - log search
   - full-text search
   - search engine
   - opensearch dashboards
   - lucene
   - query dsl
   - aggregations
-  - log analytics
-  - log search
+  - alerting
+  - audit log
+  - role-based access control
   - fluent bit
   - document search
   - search cluster
   - index snapshots
   - s3 snapshots
+  - tls
   - apache 2.0
 
 useCases:
+  - Detect threats in security logs with prepackaged Sigma rules, findings and alerts
+  - Run a self-hosted SIEM over CloudTrail, VPC flow, DNS or Windows event logs
+  - Keep a searchable, access-controlled audit trail of logs with per-user roles
   - Full-text search over product catalogs, documents or site content
   - Store, search and visualize application logs
   - Aggregations and analytics over large sets of JSON documents
   - Self-hosted replacement for a managed OpenSearch domain
-  - Search cluster that keeps serving when one node restarts
 
 alternativeTo:
   - Amazon OpenSearch Service
   - Elastic Cloud
   - Aiven for OpenSearch
   - Apache Solr
+  - Datadog Cloud SIEM
+  - Splunk Enterprise Security
+  - Elastic Security
+  - Microsoft Sentinel
+  - Sumo Logic Cloud SIEM
 
 compatibleWith: [elasticsearch-api]
 
@@ -55,8 +72,22 @@ pickInsteadIf:
     template: qdrant
   - need: fast SQL analytics over large event or log tables
     template: clickhouse
+  - need: metrics dashboards and alerting over Prometheus data rather than log search
+    template: grafana
 
 prerequisites:
+  - kind: secret
+    valuesPath: security.credentialsSecretName
+    secretType: dictionary
+    keys: [password, dashboardsPassword, cookieSecret]
+    required: true
+    description: Admin and Dashboards server passwords and the Dashboards cookie key (32+ characters). Without it the nodes wait and never start.
+  - kind: secret
+    valuesPath: security.caSecretName
+    secretType: dictionary
+    keys: [keystore, passphrase]
+    required: true
+    description: TLS certificate authority as a base64 PKCS#12 (keystore) and its passphrase; nodes sign their own certificates from it.
   - kind: bucket
     valuesPath: [backup.aws.bucket, backup.gcp.bucket]
     required: false
@@ -72,3 +103,7 @@ prerequisites:
     required: false
     when: backup.enabled with backup.provider aws
     description: AWS IAM policy scoped to the snapshot bucket (bucket and bucket/* ARNs), referenced by name from the identity.
+related:
+  - template: wazuh
+    relation: companion
+    note: "Endpoint half of the SIEM: agents, file integrity, vulnerability detection and compliance"

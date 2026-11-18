@@ -265,3 +265,16 @@ checks:
     expect:
       stdout: "^SURVIVED COMPLETED$"
     retries: 3
+
+  - id: v2-22-migrations-applied
+    description: The v2.22.0 schema migrations (envelope contents, lowercase emails) finished, on a fresh install and after the upgrade from 1.0.0.
+    since: 1.1.0
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'MIGRATED ' || count(*) FROM _prisma_migrations WHERE migration_name IN ('20260922002213_add_envelope_contents', '20261111000000_lowercase_user_emails', '20261111000001_lowercase_recipient_emails') AND finished_at IS NOT NULL AND rolled_back_at IS NULL"
+    expect:
+      stdout: "^MIGRATED 3$"
+    retries: 3
+

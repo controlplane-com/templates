@@ -3,7 +3,8 @@
 ## What it is
 - Documenso: open-source e-signature (a DocuSign alternative). Upload a PDF, place fields, send it to signers, get back a PDF signed with your own certificate plus an audit trail.
 - AGPL-3.0, whole repository, no `/ee` gate on anything this template uses. Free to self-host, no registration. The enterprise surface (CSC/HSM signing, billing, license-key features) is not shipped.
-- Image `documenso/documenso:v2.21.1` (Docker Hub, official). Tags carry the `v`; `appVersion` is `"2.21.1"`. Runs as `nodejs`, `start.sh` applies Prisma migrations and starts the server on :3000.
+- Image `documenso/documenso:v2.22.0` (Docker Hub, official). Tags carry the `v`; `appVersion` is `"2.22.0"`. Runs as `nodejs`, `start.sh` applies Prisma migrations and starts the server on :3000.
+- Versions: 1.0.0 = v2.21.1; 1.1.0 = v2.22.0 (image bump only; the upgrade applies three schema migrations at boot: envelope contents and lowercased user/recipient emails).
 
 ## Common use cases
 - Contracts, NDAs and offer letters signed in-house instead of through a per-seat SaaS.
@@ -30,10 +31,10 @@
 ## Troubleshooting / considerations
 - **No logs, deployment stuck:** a prerequisite secret is missing; read `status.versions[].message` via `cpln workload get-deployments`.
 - **First sign-in says "Unverified email":** email verification is mandatory and without SMTP no mail is sent. The README's first-run SQL sets `emailVerified` and the `ADMIN` role.
-- **Certificate:** generate it with the default `openssl pkcs12 -export` (AES-256), not `-legacy`. At v2.21.1 `/api/certificate-status` opens the `.p12` with the passphrase, so a wrong passphrase or unreadable file returns `{"isAvailable":false}`. The real proof is a sealed document (`BackgroundJob` "Seal Document" `COMPLETED`), which the e2e checks assert.
+- **Certificate:** generate it with the default `openssl pkcs12 -export` (AES-256), not `-legacy`. At v2.22.0 `/api/certificate-status` opens the `.p12` with the passphrase, so a wrong passphrase or unreadable file returns `{"isAvailable":false}`. The real proof is a sealed document (`BackgroundJob` "Seal Document" `COMPLETED`), which the e2e checks assert.
 - **Boot line `Certificate not found or not readable`:** `start.sh` looks for a certificate file; this chart passes the contents in an env var, so the line always appears and means nothing.
 - **Secret rotation** does not redeploy: `cpln workload force-redeployment`. `encryptionKey` must never change (2FA secrets and API tokens become unreadable).
 - **`storage.type: database`** grows the Postgres volume with every PDF; raise `volumeset.capacity` or use S3. With S3, a DB backup holds only object keys.
 - **First `helm upgrade`** can briefly restart the single-instance Postgres, and Documenso with it.
 - **Keyless S3 to static keys on an existing release** leaves the AWS binding on the identity; reinstall to clear it.
-- **Signing certificate:** a `-legacy` (RC2) `.p12` loads at v2.21.1. A wrong passphrase or unreadable `.p12` reports `isAvailable: false` and health `warning`, but the workload stays ready; check the certificate status after install.
+- **Signing certificate:** a `-legacy` (RC2) `.p12` loads at v2.22.0. A wrong passphrase or unreadable `.p12` reports `isAvailable: false` and health `warning`, but the workload stays ready; check the certificate status after install.

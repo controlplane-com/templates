@@ -1,0 +1,250 @@
+# Feature checks for the wazuh template. Each runs after install (and after each upgrade) on every version in
+# its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}. The runner reads any {word} as a
+# placeholder, so the scripts write $VAR (never the braced form) and never use curl's -w format strings.
+#
+# The baseline runs the default single shape with the demo agent on (the agents' public load balancer on,
+# the dashboard private), so the whole pipeline (enrollment, events, analysis, indexing) runs inside the CI
+# GVC. Passwords come from each container's own env (the credentials secret).
+driftBlocks: true
+checks:
+  - id: indexer-auth
+    description: The indexer answers the admin user with the secret's password and refuses a wrong one.
+    exec:
+      workload: "{release}-wazuh-indexer"
+      container: indexer
+      shell: bash
+      script: |
+        C=/usr/share/wazuh-indexer/config/certs/root-ca.pem
+        ok=$(curl -s -o /dev/null -D - --cacert $C -u "admin:$WZ_ADMIN_PASSWORD" https://127.0.0.1:9200/ | head -1)
+        bad=$(curl -s -o /dev/null -D - --cacert $C -u "admin:Wrong.Pass1" https://127.0.0.1:9200/ | head -1)
+        case "$ok" in *" 200"*) echo AUTH_OK;; *) echo "AUTH_BAD $ok";; esac
+        case "$bad" in *" 401"*) echo WRONG_401;; *) echo "WRONG_NOT_REFUSED $bad";; esac
+    expect:
+      stdout: "(?m)^AUTH_OK$[\\s\\S]*^WRONG_401$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: no-demo-users
+    description: The indexer's internal users are exactly admin and kibanaserver; the image's demo users are gone.
+    exec:
+      workload: "{release}-wazuh-indexer"
+      container: indexer
+      shell: bash
+      script: |
+        C=/usr/share/wazuh-indexer/config/certs/root-ca.pem
+        curl -s --cacert $C -u "admin:$WZ_ADMIN_PASSWORD" https://127.0.0.1:9200/_plugins/_security/api/internalusers \
+          | python3 -c 'import json,sys; print("USERS " + ",".join(sorted(json.load(sys.stdin))))' 2>/dev/null \
+          || echo NO_USER_LIST
+    expect:
+      stdout: "^USERS admin,kibanaserver$"
+
+  - id: pki-verified
+    description: >-
+      The manager reaches the indexer over TLS that verifies against the release's own CA (and fails against
+      the system bundle), and the CA private key is not on the shared certificate volume.
+    exec:
+      workload: "{release}-wazuh-manager"
+      container: manager
+      shell: bash
+      script: |
+        H={release}-wazuh-indexer.{gvc}.cpln.local
+        own=$(echo | openssl s_client -connect $H:9200 -servername $H -verify_hostname $H -CAfile /etc/ssl/root-ca.pem 2>/dev/null | grep "Verify return code")
+        sys=$(echo | openssl s_client -connect $H:9200 -servername $H -verify_hostname $H -CApath /etc/pki/tls/certs 2>/dev/null | grep "Verify return code")
+        echo "OWN $own"
+        echo "SYSTEM $sys"
+        ls /pki | grep -q -- "root-ca.key\|root-ca-key" && echo CA_KEY_EXPOSED || echo NO_CA_KEY
+    expect:
+      stdout: "(?m)^OWN\\s+Verify return code: 0 \\(ok\\)$[\\s\\S]*^SYSTEM\\s+Verify return code: [1-9][\\s\\S]*^NO_CA_KEY$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: api-auth
+    description: The Wazuh server API issues a token to wazuh-wui with the secret's password and refuses a wrong password and the image default wazuh:wazuh.
+    exec:
+      workload: "{release}-wazuh-manager"
+      container: manager
+      shell: bash
+      script: |
+        A="https://127.0.0.1:55000/security/user/authenticate?raw=true"
+        tok=$(curl -sk -u "wazuh-wui:$API_PASSWORD" -X POST "$A")
+        bad=$(curl -sk -o /dev/null -D - -u "wazuh-wui:Wrong.Pass1" -X POST "$A" | head -1)
+        dflt=$(curl -sk -o /dev/null -D - -u "wazuh:wazuh" -X POST "$A" | head -1)
+        case "$tok" in eyJ*) echo TOKEN_OK;; *) echo "TOKEN_BAD $tok";; esac
+        case "$bad" in *" 401"*) echo WRONG_401;; *) echo "WRONG_NOT_REFUSED $bad";; esac
+        case "$dflt" in *" 401"*) echo DEFAULT_401;; *) echo "DEFAULT_NOT_REFUSED $dflt";; esac
+    expect:
+      stdout: "(?m)^TOKEN_OK$[\\s\\S]*^WRONG_401$[\\s\\S]*^DEFAULT_401$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: dashboard-connected
+    description: >-
+      The dashboard serves its login page, reports overall state green to its server user (which reaches the
+      indexer), and refuses that user with a wrong password.
+    exec:
+      workload: "{release}-wazuh-dashboard"
+      container: dashboard
+      shell: bash
+      script: |
+        login=$(curl -s -o /dev/null -D - http://127.0.0.1:5601/app/login | head -1)
+        case "$login" in *" 200"*) echo LOGIN_PAGE;; *) echo "NO_LOGIN_PAGE $login";; esac
+        curl -s -u "kibanaserver:$WZ_KIBANASERVER_PASSWORD" http://127.0.0.1:5601/api/status \
+          | /usr/share/wazuh-dashboard/node/bin/node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log("OVERALL "+JSON.parse(d).status.overall.state)}catch(e){console.log("STATUS_UNPARSABLE "+d.slice(0,200))}})'
+        bad=$(curl -s -o /dev/null -D - -u "kibanaserver:Wrong.Pass1" http://127.0.0.1:5601/api/status | head -1)
+        case "$bad" in *" 401"*) echo WRONG_401;; *) echo "WRONG_NOT_REFUSED $bad";; esac
+    expect:
+      stdout: "(?m)^LOGIN_PAGE$[\\s\\S]*^OVERALL green$[\\s\\S]*^WRONG_401$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: dashboard-to-api
+    description: >-
+      From the dashboard container, the Wazuh server API on the manager issues a token to wazuh-wui with the
+      password the dashboard is configured with (the hop the dashboard's Wazuh pages use).
+    exec:
+      workload: "{release}-wazuh-dashboard"
+      container: dashboard
+      shell: bash
+      script: |
+        tok=$(curl -sk -u "wazuh-wui:$WZ_API_PASSWORD" -X POST "https://{release}-wazuh-manager.{gvc}.cpln.local:55000/security/user/authenticate?raw=true")
+        case "$tok" in eyJ*) echo API_TOKEN;; *) echo "API_BAD $(printf '%s' "$tok" | head -c 200)";; esac
+    expect:
+      stdout: "^API_TOKEN$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: agent-enrolled
+    description: The demo agent enrolled with the enrollment password and is active on the manager.
+    exec:
+      workload: "{release}-wazuh-manager"
+      container: manager
+      shell: bash
+      script: |
+        /var/ossec/bin/agent_control -l | grep -E "Name: wazuh-agent-{release}-wazuh-demo-agent-.*Active" >/dev/null \
+          && echo AGENT_ACTIVE || { echo NO_ACTIVE_AGENT; /var/ossec/bin/agent_control -l; }
+    expect:
+      stdout: "^AGENT_ACTIVE$"
+    retries: 20
+    retryDelaySeconds: 15
+
+  - id: register-marker-agent
+    description: The server API registers an agent named for this version (kept as the marker the upgrade check looks for).
+    exec:
+      workload: "{release}-wazuh-manager"
+      container: manager
+      shell: bash
+      script: |
+        if ! /var/ossec/bin/agent_control -l | grep -q "Name: e2e-keep-{version},"; then
+          tok=$(curl -sk -u "wazuh-wui:$API_PASSWORD" -X POST "https://127.0.0.1:55000/security/user/authenticate?raw=true")
+          curl -sk -X POST -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
+            https://127.0.0.1:55000/agents -d '{"name":"e2e-keep-{version}"}' >/dev/null
+        fi
+        /var/ossec/bin/agent_control -l | grep -q "Name: e2e-keep-{version}," && echo REGISTERED || echo NOT_REGISTERED
+    expect:
+      stdout: "^REGISTERED$"
+
+  - id: enroll-wrong-password
+    description: Enrollment with a wrong password is refused.
+    exec:
+      workload: "{release}-wazuh-demo-agent"
+      container: agent
+      shell: bash
+      script: |
+        cp /var/ossec/etc/client.keys /tmp/keys.bak
+        /var/ossec/bin/agent-auth -m {release}-wazuh-manager.{gvc}.cpln.local -P Wrong.Pass1 -A e2e-wrong-password 2>&1 | tail -3
+        cp /tmp/keys.bak /var/ossec/etc/client.keys
+    expect:
+      stdout: "Invalid password"
+      notStdout: "Valid key received"
+
+  - id: emit-marker
+    description: The demo agent writes an sshd failed-login line naming a marker user to its monitored log file.
+    exec:
+      workload: "{release}-wazuh-demo-agent"
+      container: agent
+      shell: bash
+      script: |
+        for i in 1 2 3; do
+          echo "$(date '+%b %e %H:%M:%S') e2e-host sshd[4242]: Failed password for invalid user e2e-{version} from 10.20.30.40 port 50022 ssh2" >> /var/log/demo.log
+          sleep 2
+        done
+        grep -c "invalid user e2e-{version} " /var/log/demo.log >/dev/null && echo EMITTED
+    expect:
+      stdout: "^EMITTED$"
+
+  - id: alert-indexed
+    description: The marker line became an sshd alert (rule 5710) in the wazuh-alerts index.
+    exec:
+      workload: "{release}-wazuh-indexer"
+      container: indexer
+      shell: bash
+      script: |
+        C=/usr/share/wazuh-indexer/config/certs/root-ca.pem
+        curl -s --cacert $C -u "admin:$WZ_ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+          "https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count" \
+          -d '{"query":{"bool":{"filter":[{"term":{"rule.id":"5710"}},{"term":{"data.srcuser":"e2e-{version}"}}]}}}' \
+          | python3 -c 'import json,sys; n=json.load(sys.stdin).get("count",0); print("ALERTS %d" % n)' 2>/dev/null || echo NO_COUNT
+    expect:
+      stdout: "^ALERTS [1-9][0-9]*$"
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: indexer-firewall
+    description: >-
+      A workload outside the release's own (the demo agent) gets no answer from the indexer, which only this
+      release's workloads may reach, while the same curl from the same container gets an answer from the manager.
+    exec:
+      workload: "{release}-wazuh-demo-agent"
+      container: agent
+      shell: bash
+      script: |
+        ctl=$(curl -sk -m 10 -o /dev/null -D - https://{release}-wazuh-manager.{gvc}.cpln.local:55000/ 2>/dev/null | head -1)
+        [ -n "$ctl" ] && echo "CONTROL_ANSWERED" || echo CONTROL_NO_RESPONSE
+        out=$(curl -sk -m 10 -o /dev/null -D - https://{release}-wazuh-indexer.{gvc}.cpln.local:9200/ 2>/dev/null | head -1)
+        [ -z "$out" ] && echo NO_RESPONSE || echo "GOT $out"
+    expect:
+      stdout: "(?m)^CONTROL_ANSWERED$[\\s\\S]*^NO_RESPONSE$"
+
+  - id: retention-policy
+    description: The indexer holds the wazuh-retention policy that deletes alert indices after the default 90 days.
+    exec:
+      workload: "{release}-wazuh-indexer"
+      container: indexer
+      shell: bash
+      script: |
+        C=/usr/share/wazuh-indexer/config/certs/root-ca.pem
+        curl -s --cacert $C -u "admin:$WZ_ADMIN_PASSWORD" https://127.0.0.1:9200/_plugins/_ism/policies/wazuh-retention \
+          | grep -o '"min_index_age":"[0-9]*d"' | head -1
+    expect:
+      stdout: '^"min_index_age":"90d"$'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: The marker alert written at install time is still searchable (after an upgrade, the installed version's marker).
+    exec:
+      workload: "{release}-wazuh-indexer"
+      container: indexer
+      shell: bash
+      script: |
+        C=/usr/share/wazuh-indexer/config/certs/root-ca.pem
+        curl -s --cacert $C -u "admin:$WZ_ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+          "https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count" \
+          -d '{"query":{"term":{"data.srcuser":"e2e-{installed_version}"}}}' \
+          | python3 -c 'import json,sys; n=json.load(sys.stdin).get("count",0); print("KEPT %d" % n)' 2>/dev/null || echo NO_COUNT
+    expect:
+      stdout: "^KEPT [1-9][0-9]*$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: agent-survives-upgrade
+    description: The marker agent registered at install time is still registered (after an upgrade, the installed version's marker).
+    exec:
+      workload: "{release}-wazuh-manager"
+      container: manager
+      shell: bash
+      script: |
+        /var/ossec/bin/agent_control -l | grep -q "Name: e2e-keep-{installed_version}," && echo AGENT_KEPT || echo AGENT_LOST
+    expect:
+      stdout: "^AGENT_KEPT$"

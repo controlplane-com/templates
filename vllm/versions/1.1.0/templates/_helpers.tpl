@@ -90,9 +90,11 @@ long a hung server stays in rotation (3 x periodSeconds).
 {{- if lt (int .Values.model.maxModelLen) 256 -}}
 {{- fail (printf "vllm: model.maxModelLen must be at least 256, got '%v'" .Values.model.maxModelLen) -}}
 {{- end -}}
+{{- if and (not (kindIs "invalid" .Values.model.gpuMemoryUtilization)) (ne (toString .Values.model.gpuMemoryUtilization) "") -}}
 {{- $util := float64 .Values.model.gpuMemoryUtilization -}}
 {{- if or (le $util 0.0) (gt $util 1.0) -}}
-{{- fail (printf "vllm: model.gpuMemoryUtilization must be above 0 and at most 1, got '%v'" .Values.model.gpuMemoryUtilization) -}}
+{{- fail (printf "vllm: model.gpuMemoryUtilization must be above 0 and at most 1 (or null for vLLM's own sizing), got '%v'" .Values.model.gpuMemoryUtilization) -}}
+{{- end -}}
 {{- end -}}
 {{- if not (has .Values.model.dtype (list "auto" "half" "bfloat16" "float32")) -}}
 {{- fail (printf "vllm: model.dtype must be 'auto', 'half', 'bfloat16' or 'float32', got '%v'" .Values.model.dtype) -}}

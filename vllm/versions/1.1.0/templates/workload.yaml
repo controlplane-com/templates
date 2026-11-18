@@ -24,8 +24,10 @@ spec:
         - "8000"
         - --max-model-len
         - {{ .Values.model.maxModelLen | int | quote }}
+        {{- if and (not (kindIs "invalid" .Values.model.gpuMemoryUtilization)) (ne (toString .Values.model.gpuMemoryUtilization) "") }}
         - --gpu-memory-utilization
         - {{ .Values.model.gpuMemoryUtilization | quote }}
+        {{- end }}
         - --dtype
         - {{ .Values.model.dtype | quote }}
         {{- if .Values.model.servedModelName }}

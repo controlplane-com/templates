@@ -32,7 +32,7 @@ This template deploys [vLLM](https://github.com/vllm-project/vllm), a high-throu
 ### Image
 
 ```yaml
-image: vllm/vllm-openai:v0.31.0 # CUDA 13 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
+image: vllm/vllm-openai:v0.34.0 # CUDA 13.0 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
 ```
 
 ### Model
@@ -42,7 +42,7 @@ model:
   name: Qwen/Qwen2.5-1.5B-Instruct # Hugging Face model id; downloaded into the volume on first start
   servedModelName: "" # name clients send as "model"; empty = the model id
   maxModelLen: 8192 # max tokens per request (prompt + output)
-  gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
+  gpuMemoryUtilization: null # share of GPU memory vLLM may use (above 0, at most 1); null = vLLM sizes the KV cache from memory free after warmup
   dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
   toolCallParser: hermes # tool calling, which Open WebUI and agents need; must match the model: hermes (Qwen), llama3_json (Llama 3), mistral; "" = off
   extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]
@@ -146,11 +146,11 @@ curl http://localhost:8000/v1/chat/completions \
   -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend; for a chat UI, install `open-webui` 1.3.0 or later in the same GVC with the values in its README's "Pairing with vLLM" section. Open WebUI offers tools on every chat, so keep `model.toolCallParser` set and matched to your model, or each message fails with `"auto" tool choice requires --enable-auto-tool-choice`. Open WebUI's Control Plane tools need a context of at least 64k tokens, more than the default `model.maxModelLen: 8192`; its README section "Connecting Control Plane tools (MCP)" gives `model` values that reach 64k on an A10G.
+Any OpenAI SDK works with `base_url` set to the `/v1` address and `api_key` set to the key. A browser page that calls the API directly from its own origin needs that origin allowed, since vLLM allows no cross-origin requests by default: `extraArgs: ["--allowed-origins", '["https://app.example.com"]']`. The `open-webui` and `litellm` templates can use it as an OpenAI-compatible backend; for a chat UI, install `open-webui` 1.3.0 or later in the same GVC with the values in its README's "Pairing with vLLM" section. Open WebUI offers tools on every chat, so keep `model.toolCallParser` set and matched to your model, or each message fails with `"auto" tool choice requires --enable-auto-tool-choice`. Open WebUI's Control Plane tools need a context of at least 64k tokens, more than the default `model.maxModelLen: 8192`; its README section "Connecting Control Plane tools (MCP)" gives `model` values that reach 64k on an A10G.
 
 ## Important Notes
 
-- **The API key protects only `/v1`.** vLLM leaves `/health`, `/metrics`, `/tokenize` and `/detokenize` unauthenticated, so with public access on anyone can read metrics and use the tokenizer.
+- **The API key protects only the API paths (`/v1`, `/v2`, `/inference`, `/cohere`).** vLLM leaves `/health`, `/metrics`, `/tokenize` and `/detokenize` unauthenticated, so with public access on anyone can read metrics and use the tokenizer.
 - **A missing secret stalls the install with no logs.** Run `cpln workload get-deployments {release}-vllm --gvc {gvc} -o yaml` and read `status.versions[].message`, which names the missing secret; once the secret exists the deployment recovers by itself, which can take up to ~10 minutes; keep polling.
 - **The first start is slow:** a ~12 GB image pull, then the model download and load (3-5 minutes for the default model). A replica not ready within `startupTimeoutSeconds` is restarted, so raise it (up to 1830) for large models and keep it for slow first downloads.
 - **With one replica the API is down while it restarts** (any upgrade or setting change); set `replicas: 2` for zero-downtime restarts and upgrades — each replica needs its own GPU.

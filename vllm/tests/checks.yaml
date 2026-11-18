@@ -1,0 +1,123 @@
+# Feature checks for the vllm template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (model).
+#
+# The checks are Python (standard library only) run in the vllm container against its own port on
+# 127.0.0.1:8000, with the API key read from the container's env (VLLM_API_KEY). The runner reads any
+# {word} as a placeholder, so the scripts build JSON with dict(...) and % formatting, never braces.
+# The baseline needs a built-in NVIDIA A10G in the CI location.
+checks:
+  - id: auth
+    description: >-
+      /v1 refuses a request with no key or a wrong key (401) and lists the served model with the key,
+      while /health answers without one.
+    exec:
+      workload: "{release}-vllm"
+      container: vllm
+      script: |
+        python3 - <<'PY'
+        import json, os, urllib.request, urllib.error
+        B = 'http://127.0.0.1:8000'
+        K = os.environ['VLLM_API_KEY']
+        def get(path, tok=None):
+            h = dict() if tok is None else dict(Authorization='Bearer ' + tok)
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + path, headers=h), timeout=30) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, ''
+        s1, _ = get('/v1/models')
+        s2, _ = get('/v1/models', 'wrong-key')
+        s3, body = get('/v1/models', K)
+        s4, _ = get('/health')
+        ids = [m['id'] for m in json.loads(body)['data']] if s3 == 200 else []
+        ok = (s1, s2, s3, s4) == (401, 401, 200, 200) and '{model}' in ids
+        print('AUTH_OK' if ok else 'AUTH_BAD %s %s' % ((s1, s2, s3, s4), ids))
+        PY
+    expect:
+      stdout: "^AUTH_OK$"
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: chat
+    description: A chat completion with the API key returns the model's answer (the word the prompt asks for).
+    exec:
+      workload: "{release}-vllm"
+      container: vllm
+      script: |
+        python3 - <<'PY'
+        import json, os, urllib.request
+        msg = dict(role='user', content='Reply with exactly one word, in capitals: PINEAPPLE')
+        body = dict(model='{model}', messages=[msg], max_tokens=10, temperature=0)
+        req = urllib.request.Request('http://127.0.0.1:8000/v1/chat/completions', data=json.dumps(body).encode(),
+            headers=dict([('Authorization', 'Bearer ' + os.environ['VLLM_API_KEY']), ('Content-Type', 'application/json')]))
+        with urllib.request.urlopen(req, timeout=120) as r:
+            out = json.loads(r.read())
+        text = out['choices'][0]['message']['content'] or ''
+        print('CHAT_OK' if 'PINEAPPLE' in text.upper() else 'CHAT_BAD %r' % text)
+        PY
+    expect:
+      stdout: "^CHAT_OK$"
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: tool-call
+    description: >-
+      With tool_choice auto (what Open WebUI and agents send), the model calls the offered tool and the
+      tool-call parser returns it as a structured tool_calls entry with JSON arguments.
+    exec:
+      workload: "{release}-vllm"
+      container: vllm
+      script: |
+        python3 - <<'PY'
+        import json, os, urllib.request
+        params = dict(type='object', properties=dict(city=dict(type='string')), required=['city'])
+        tool = dict(type='function', function=dict(name='get_weather', description='Current weather for a city', parameters=params))
+        msg = dict(role='user', content='What is the weather in Paris right now? Use the tool.')
+        body = dict(model='{model}', messages=[msg], tools=[tool], tool_choice='auto', max_tokens=100, temperature=0)
+        req = urllib.request.Request('http://127.0.0.1:8000/v1/chat/completions', data=json.dumps(body).encode(),
+            headers=dict([('Authorization', 'Bearer ' + os.environ['VLLM_API_KEY']), ('Content-Type', 'application/json')]))
+        with urllib.request.urlopen(req, timeout=120) as r:
+            out = json.loads(r.read())
+        calls = out['choices'][0]['message'].get('tool_calls') or []
+        ok = len(calls) > 0 and calls[0]['function']['name'] == 'get_weather' and 'paris' in json.loads(calls[0]['function']['arguments']).get('city', '').lower()
+        print('TOOL_OK' if ok else 'TOOL_BAD %s' % json.dumps(out['choices'][0]['message'])[:300])
+        PY
+    expect:
+      stdout: "^TOOL_OK$"
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: cache-volume
+    description: >-
+      The model weights are on the /models volume, and a marker written there by the first installed
+      version is still there after the upgrade (the cache survives, so nothing is downloaded again).
+    exec:
+      workload: "{release}-vllm"
+      container: vllm
+      script: |
+        set -e
+        touch /models/e2e-marker-{version}
+        n=$(find /models/hf/hub -name '*.safetensors' 2>/dev/null | wc -l)
+        if [ -f /models/e2e-marker-{installed_version} ] && [ "$n" -gt 0 ]; then echo "CACHE_OK $n"; else echo "CACHE_BAD marker=$(ls /models) weights=$n"; fi
+    expect:
+      stdout: "^CACHE_OK [0-9]+$"
+
+  - id: kv-cache-auto
+    description: >-
+      With model.gpuMemoryUtilization left null, the chart passes no --gpu-memory-utilization, and vLLM
+      sizes the KV cache itself (its cache config reports a utilization of 1.0, the extensible-cache default).
+    since: 1.1.0
+    exec:
+      workload: "{release}-vllm"
+      container: vllm
+      script: |
+        if tr '\0' ' ' < /proc/1/cmdline | grep -q -- '--gpu-memory-utilization'; then echo "KV_BAD flag passed"; exit 0; fi
+        python3 - <<'PY'
+        import re, urllib.request
+        m = urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=30).read().decode()
+        g = re.search(r'vllm:cache_config_info[^\n]*gpu_memory_utilization="([^"]+)"', m)
+        print('KV_OK' if g and float(g.group(1)) == 1.0 else 'KV_BAD %s' % (g.group(1) if g else 'no cache_config_info'))
+        PY
+    expect:
+      stdout: "^KV_OK$"

@@ -1,12 +1,12 @@
 # ─── Image ────────────────────────────────────────────────────────────────────
-image: vllm/vllm-openai:v0.31.0 # CUDA 13 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
+image: vllm/vllm-openai:v0.34.0 # CUDA 13.0 build; needs NVIDIA driver 580 or newer (Control Plane GPUs run 580)
 
 # ─── Model ────────────────────────────────────────────────────────────────────
 model:
   name: Qwen/Qwen2.5-1.5B-Instruct # Hugging Face model id; downloaded into the volume on first start
   servedModelName: "" # name clients send as "model"; empty = the model id
   maxModelLen: 8192 # max tokens per request (prompt + output)
-  gpuMemoryUtilization: 0.90 # share of GPU memory vLLM may use for weights and KV cache
+  gpuMemoryUtilization: null # share of GPU memory vLLM may use (above 0, at most 1); null = vLLM sizes the KV cache from memory free after warmup
   dtype: auto # options: auto, half, bfloat16, float32 (bfloat16 is not supported on t4)
   toolCallParser: hermes # tool calling, which Open WebUI and agents need; must match the model: hermes (Qwen), llama3_json (Llama 3), mistral; "" = off
   extraArgs: [] # extra `vllm serve` flags, e.g. ["--max-num-seqs", "32"]

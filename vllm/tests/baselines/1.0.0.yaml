@@ -1,0 +1,20 @@
+# vllm 1.0.0 — the default shape: one replica on one built-in NVIDIA A10G (6 CPU / 16 GiB), the default
+# Qwen2.5-1.5B-Instruct with the hermes tool-call parser, private, internal access same-gvc. The API key is
+# a prerequisite secret CI creates. The location must offer built-in A10G GPUs to the org.
+locations: [aws-us-east-1]
+timeoutSeconds: 1500                # GPU node, ~10 GB image pull, model download and load
+
+generated:
+  apikey: hex
+
+secrets:
+  apikey:
+    type: opaque
+    payload: "{gen.apikey}"
+
+vars:
+  model: Qwen/Qwen2.5-1.5B-Instruct
+
+values:
+  apiKey:
+    secretName: "{secrets.apikey.name}"

@@ -85,7 +85,7 @@ cplnMcp:
 ```yaml
 image:
   repository: ghcr.io/openclaw/openclaw
-  tag: "2026.9.8" # exact release; "-browser" is appended automatically when browser.enabled
+  tag: "2026.11.5" # exact release; "-browser" is appended automatically when browser.enabled
 resources:
   minCpu: 500m # keep maxCpu <= 4x minCpu (stateful workload)
   minMemory: 1Gi

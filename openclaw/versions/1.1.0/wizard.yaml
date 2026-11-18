@@ -322,7 +322,7 @@ steps:
             required: true
             advanced: true
             pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
-            patternMessage: Enter a tag such as 2026.9.8, without a colon or spaces.
+            patternMessage: Enter a tag such as 2026.11.5, without a colon or spaces.
             description: An exact OpenClaw release. `-browser` is appended while the browser tool is on.
         rules:
           - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity

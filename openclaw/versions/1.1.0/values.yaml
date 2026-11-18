@@ -1,7 +1,7 @@
 # ─── Image ────────────────────────────────────────────────────────────────────
 image:
   repository: ghcr.io/openclaw/openclaw
-  tag: "2026.9.8" # exact release; "-browser" is appended automatically when browser.enabled
+  tag: "2026.11.5" # exact release; "-browser" is appended automatically when browser.enabled
 
 # ─── Prerequisite secret (REQUIRED — create it BEFORE installing) ─────────────
 # Dictionary secret. Keys: gateway-token (>= 24 chars; your Control UI login and full-admin

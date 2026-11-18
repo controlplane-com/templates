@@ -1,0 +1,108 @@
+# ─── Credentials (REQUIRED PREREQUISITE SECRET) ──────────────────────────
+# CREATE IT BEFORE YOU INSTALL. If it does not exist every workload WEDGES silently
+# (the only signal is status.versions[].message from `cpln workload get-deployments`).
+# A `dictionary` secret holding exactly six keys:
+#   indexerAdminPassword    — indexer `admin` user: your dashboard login (and the manager's indexer connection)
+#   dashboardServerPassword — indexer `kibanaserver` user the dashboard server connects with
+#   apiPassword             — Wazuh server API user `wazuh-wui` the dashboard calls the manager with
+#   enrollmentPassword      — password agents present to enroll on port 1515
+#   clusterKey              — exactly 32 letters, digits or underscores; shared by manager cluster nodes
+#   dashboardCookieSecret   — 32+ characters; encrypts dashboard session cookies
+# Passwords: 8-64 chars, start with a letter, only A-Z a-z 0-9 . * + ? - and at least one of each kind.
+# The secret is applied on every start: to rotate, edit it and force-redeploy (see README).
+credentialsSecretName: my-wazuh-credentials
+
+# ─── Wazuh server (manager) ──────────────────────────────────────────────
+manager:
+  image: wazuh/wazuh-manager:4.14.10
+  resources:
+    minCpu: 500m
+    minMemory: 1Gi
+    maxCpu: 2000m
+    maxMemory: 3Gi
+  volumeset:
+    capacity: 50 # initial capacity in GiB (minimum is 10); holds agent keys, state, logs and vulnerability content
+    snapshots:
+      schedule: "0 3 * * *" # daily (agent keys and the CA key live only here) at 3am UTC; at most hourly; "" turns scheduled snapshots off
+      retentionDuration: 7d # how long each snapshot is kept
+    autoscaling:
+      enabled: false # set to true to grow the volume automatically
+      maxCapacity: 500 # maximum capacity in GiB when autoscaling is enabled
+      minFreePercentage: 10 # minimum free percentage that triggers scaling
+      scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+  logRetentionDays: 30 # delete dated alert/archive log files older than this many days; 0 = keep forever
+  extraConfig: "" # raw <ossec_config>…</ossec_config> blocks appended to ossec.conf (UI edits to ossec.conf are reset on restart)
+  publicAccess:
+    enabled: true # agents connect from anywhere: TCP 1514 (events) and 1515 (enrollment) on a direct load balancer
+    allowedCidrs: # source ranges allowed to reach the public ports
+      - 0.0.0.0/0
+    api: false # also expose the Wazuh server API (HTTPS, container port 55000) on the same load balancer, as port 8443
+  internalAccess:
+    type: same-gvc # options: same-gvc, same-org, workload-list (this release's own workloads are always allowed)
+    workloads: # only used when type is same-gvc or workload-list
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+  workers:
+    replicas: 0 # 0 = the master handles everything; 1+ adds worker nodes that take agent traffic (point agents at the worker endpoint)
+    resources:
+      minCpu: 500m
+      minMemory: 1Gi
+      maxCpu: 2000m
+      maxMemory: 2Gi
+    volumeset:
+      capacity: 20 # initial capacity in GiB per worker (minimum is 10)
+      snapshots:
+        schedule: "0 3 * * *" # daily at 3am UTC; at most hourly; "" turns scheduled snapshots off
+        retentionDuration: 7d # how long each snapshot is kept
+      autoscaling:
+        enabled: false
+        maxCapacity: 200
+        minFreePercentage: 10
+        scalingFactor: 1.2
+
+# ─── Wazuh indexer ───────────────────────────────────────────────────────
+indexer:
+  image: wazuh/wazuh-indexer:4.14.10
+  replicas: 1 # 1, or an odd number ≥ 3 for a cluster that keeps serving with a node down (3x the cost)
+  javaHeap: 2g # JVM heap; keep it at about half of resources.maxMemory
+  resources:
+    minCpu: 500m
+    minMemory: 2Gi
+    maxCpu: 2000m
+    maxMemory: 4Gi
+  volumeset:
+    capacity: 50 # initial capacity in GiB per node (minimum is 10); ~50 GiB holds 90 days for ~25 agents
+    snapshots:
+      schedule: "0 3 * * *" # daily at 3am UTC; at most hourly; "" turns scheduled snapshots off
+      retentionDuration: 7d # how long each snapshot is kept
+    autoscaling:
+      enabled: false
+      maxCapacity: 1000
+      minFreePercentage: 10
+      scalingFactor: 1.2
+  retentionDays: 90 # delete alert/archive indices older than this many days; 0 = keep forever
+  internalAccess:
+    workloads: [] # extra workloads allowed to query the indexer (this release's own workloads are always allowed)
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Wazuh dashboard ─────────────────────────────────────────────────────
+# set indexer.replicas: 3, manager.workers.replicas: 2 and dashboard.replicas: 2 for near-zero-downtime upgrades
+dashboard:
+  image: wazuh/wazuh-dashboard:4.14.10
+  replicas: 1 # 2+ keeps the UI up through restarts
+  resources:
+    cpu: 1000m
+    memory: 1536Mi
+  publicAccess:
+    enabled: true # HTTPS UI on the auto *.cpln.app endpoint; false = reach it with `cpln port-forward`
+  internalAccess:
+    type: same-gvc # options: none, same-gvc, same-org, workload-list
+    workloads:
+      #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Demo agent (optional) ───────────────────────────────────────────────
+demoAgent:
+  enabled: false # a Wazuh agent in this GVC that enrolls and sends sample events; turn off once real agents connect
+  image: wazuh/wazuh-agent:4.14.10
+  resources:
+    cpu: 250m
+    memory: 512Mi

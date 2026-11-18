@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "wazuh.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Identity shared by this release's Wazuh workloads
+tags: {{- include "wazuh.tags" . | nindent 4 }}

@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Wazuh
+category: security
+topology: single
+
+summary: >-
+  Wazuh open-source security platform: the Wazuh server (manager), the Wazuh indexer and the Wazuh dashboard.
+  Agents on Linux, Windows and macOS servers, laptops and containers enroll over a public TCP load balancer and
+  send events for intrusion and malware detection, file integrity monitoring, vulnerability detection and
+  compliance checks. Optional worker nodes, a 3-node indexer and a demo agent; one prerequisite secret holds
+  every password. The right pick when you need host-level security monitoring (agents on your machines) rather
+  than detection over logs you already ship somewhere.
+
+keywords:
+  - siem
+  - xdr
+  - hids
+  - host intrusion detection
+  - endpoint security
+  - edr
+  - file integrity monitoring
+  - vulnerability detection
+  - security configuration assessment
+  - cis benchmark
+  - compliance
+  - pci dss
+  - hipaa
+  - gdpr
+  - mitre att&ck
+  - threat hunting
+  - wazuh agent
+  - ossec
+  - log analysis
+  - security monitoring
+  - active response
+  - it hygiene
+
+useCases:
+  - Detect intrusions and malware on Linux, Windows and macOS hosts
+  - Monitor file integrity on servers
+  - Find vulnerable packages across endpoints
+  - Audit hosts against CIS benchmarks
+  - Produce PCI DSS, HIPAA and GDPR evidence
+  - Replace a commercial EDR or SIEM agent stack
+
+alternativeTo:
+  - Datadog Cloud SIEM
+  - Splunk Enterprise Security
+  - Elastic Security
+  - CrowdStrike Falcon
+  - Microsoft Defender for Endpoint
+  - Sumo Logic Cloud SIEM
+  - Rapid7 InsightIDR
+  - OSSEC
+
+compatibleWith: []
+
+pickInsteadIf:
+  - need: detection rules over application and cloud logs without installing agents
+    template: opensearch
+  - need: scan the container images of your Control Plane workloads for vulnerabilities
+    template: cpln-trivy
+  - need: block malicious HTTP requests in front of a web app
+    template: coraza
+
+related:
+  - template: opensearch
+    relation: companion
+    note: "Log-based half of the SIEM: Security Analytics detectors over your logs"
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    valuesPath: credentialsSecretName
+    required: true
+    keys: [indexerAdminPassword, dashboardServerPassword, apiPassword, enrollmentPassword, clusterKey, dashboardCookieSecret]
+    description: Passwords for the indexer admin and dashboard users, the API, agent enrollment, the cluster key and the cookie secret. Without it every workload waits with no logs.

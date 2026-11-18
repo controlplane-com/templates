@@ -240,12 +240,12 @@ curl --cacert ca.crt -u "$AUTH" "$OS/_snapshot/backup-repo/_all?pretty"
 
 OpenSearch snapshots are raw index segment files, not dumps. Restore through the API. Always leave out `.opendistro_security`: it holds the live users and roles.
 
-**Into an empty cluster** — nothing to conflict with:
+**Into a new cluster** — restore your own indices by name or pattern (`INDEX_PATTERN`, for example `logs-*`). Every cluster this template creates already has its `.`-prefixed system indices, `.kibana*` and `security-auditlog-*`, and an open index cannot be restored over, so never restore `*`:
 
 ```bash
 curl --cacert ca.crt -u "$AUTH" -X POST "$OS/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{"indices": "*,-.opendistro_security", "ignore_unavailable": true, "include_global_state": false}'
+  -d '{"indices": "INDEX_PATTERN", "ignore_unavailable": true, "include_global_state": false}'
 ```
 
 **Over existing indices** — an open index cannot be restored into, so close the indices you restore first (never `_all`, which would close the security index and lock everyone out):
@@ -263,7 +263,7 @@ curl --cacert ca.crt -u "$AUTH" -X POST "$OS/INDEX_NAME/_open"
 ```bash
 curl --cacert ca.crt -u "$AUTH" -X POST "$OS/_snapshot/backup-repo/SNAPSHOT_NAME/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{"indices": "*,-.opendistro_security", "rename_pattern": "(.+)", "rename_replacement": "restored-$1",
+  -d '{"indices": "INDEX_PATTERN", "rename_pattern": "(.+)", "rename_replacement": "restored-$1",
        "ignore_unavailable": true, "include_global_state": false}'
 ```
 

@@ -1,0 +1,106 @@
+# kafka 4.4.1 — the recommended install: every password in prerequisite secrets, plus one Kafka Connect worker.
+# Prod shape (three brokers, one location) at the smallest size that runs.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  kraft: kraft-cluster-id
+  restpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [inter-broker-password, controller-password, client-admin-password, client-user-password]
+  kafbat:
+    type: opaque
+    payload: |
+      kafka:
+        clusters:
+          - name: e2e
+            bootstrapServers: "{release}-cluster.{gvc}.cpln.local:9092"
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: PLAIN
+              sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{secrets.creds.client-admin-password}";'
+      management:
+        health:
+          ldap:
+            enabled: false
+      auth:
+        type: DISABLED
+      server:
+        port: 8080
+  restjaas:
+    type: opaque
+    payload: |
+      KafkaClient {
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="admin"
+        password="{secrets.creds.client-admin-password}";
+      };
+      KafkaRest {
+        org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+        debug="true"
+        file="/etc/kafka-rest/password.properties";
+      };
+  restusers:
+    type: opaque
+    payload: "e2e: {gen.restpw},user"
+
+vars:
+  admin_password: "{secrets.creds.client-admin-password}"
+  rest_password: "{gen.restpw}"
+
+values:
+  kafka:
+    credentialsSecretName: "{secrets.creds.name}"
+    secrets:
+      kraft_cluster_id: "{gen.kraft}"
+    cpu: 500m
+    minCpu: 250m
+  kafbat_ui:
+    configuration_secret: "{secrets.kafbat.name}"
+  kafka_rest_proxy:
+    jaas_conf_secret: "{secrets.restjaas.name}"
+    password_properties_secret: "{secrets.restusers.name}"
+    properties:
+      bootstrap.servers: "SASL_PLAINTEXT://{release}-cluster.{gvc}.cpln.local:9092"
+  kafka_connectors:
+    - name: e2e
+      image: apache/kafka:3.9.1
+      replicas: 1
+      cpu: 500m
+      memory: 1500Mi
+      minCpu: 250m
+      minMemory: 375Mi
+      timeoutSeconds: 15
+      listener: client
+      env:
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms700m -Xmx700m"
+        - name: CONNECT_ADMIN_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.client-admin-password"
+      firewall:
+        internal_inboundAllowType: same-gvc
+      connector_properties:
+        group.id: e2e-connect
+        config.providers: env
+        config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+        security.protocol: SASL_PLAINTEXT
+        sasl.mechanism: PLAIN
+        sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${env:CONNECT_ADMIN_PASSWORD}";'
+        key.converter: org.apache.kafka.connect.storage.StringConverter
+        value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+        offset.storage.topic: e2e-connect-offsets
+        offset.storage.replication.factor: "3"
+        config.storage.topic: e2e-connect-configs
+        config.storage.replication.factor: "3"
+        status.storage.topic: e2e-connect-status
+        status.storage.replication.factor: "3"
+        plugin.path: /opt/kafka/plugins
+
+# The versions customers run most (4.1.0, then 3.2.0). Each is installed with its own baseline and
+# upgraded with those same values, the way a user's `helm upgrade -f my-values.yaml` does.
+upgradeFrom:
+  - version: 4.1.0
+  - version: 3.2.0

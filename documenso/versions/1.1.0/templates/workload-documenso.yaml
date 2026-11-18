@@ -30,8 +30,8 @@ spec:
       memory: {{ .Values.documenso.resources.maxMemory | quote }}
       env:
         # ── Runtime mode ──
-        # The published v2.21.1 image sets NO NODE_ENV (verified with
-        # `docker buildx imagetools inspect documenso/documenso:v2.21.1`), and four behaviours key
+        # The published v2.22.0 image sets NO NODE_ENV (verified with
+        # `docker buildx imagetools inspect documenso/documenso:v2.22.0`), and four behaviours key
         # off it. Without this the session cookie loses its `__Secure-` prefix
         # on an HTTPS endpoint (packages/lib/constants/auth.ts: useSecureCookies
         # = NODE_ENV === 'production' && url starts https), the language cookie
@@ -44,7 +44,7 @@ spec:
         # it as a bind address then listens on the pod IP only and never on
         # loopback, which breaks `cpln port-forward` with `502 Unable to connect
         # to upstream workload` (measured on langfuse). The image's own
-        # docker/start.sh forces `HOSTNAME=0.0.0.0` at v2.21.1, so this is a
+        # docker/start.sh forces `HOSTNAME=0.0.0.0` at v2.22.0, so this is a
         # second layer that survives an entrypoint change — and loopback is also
         # the operator's only route in when publicAccess is turned off.
         - name: HOSTNAME
@@ -110,7 +110,7 @@ spec:
         - name: NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY
           value: cpln://secret/{{ .Values.secrets.name }}.encryptionSecondaryKey
         # ── Signing certificate ──
-        # Declared explicitly (v2.21.1 defaults an unset transport to `local`
+        # Declared explicitly (v2.22.0 defaults an unset transport to `local`
         # too). With `local`, /api/certificate-status opens the .p12 with the
         # passphrase and checks its validity period (cert-status.ts).
         - name: NEXT_PRIVATE_SIGNING_TRANSPORT

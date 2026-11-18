@@ -4,7 +4,7 @@ location: aws-us-east-1
 
 # ─── Documenso server ─────────────────────────────────────────────────────────
 documenso:
-  image: documenso/documenso:v2.21.1  # published tags carry the leading v
+  image: documenso/documenso:v2.22.0  # published tags carry the leading v
   replicas: 1                         # stateless; 2+ keeps the UI up through a rolling restart
   publicUrl: ""                       # empty = canonical endpoint (http://localhost:3000 when private); custom domain with scheme, e.g. https://sign.example.com
   resources:

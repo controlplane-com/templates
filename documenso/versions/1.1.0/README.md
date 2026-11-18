@@ -48,7 +48,7 @@ Optional: an S3 bucket for documents (**Storage setup**), a backup bucket, and a
 ```yaml
 location: aws-us-east-1        # the ONE location of your GVC that Documenso runs in
 documenso:
-  image: documenso/documenso:v2.21.1  # published tags carry the leading v
+  image: documenso/documenso:v2.22.0  # published tags carry the leading v
   replicas: 1                         # stateless; 2+ keeps the UI up through a rolling restart
   publicUrl: ""                       # empty = canonical endpoint (http://localhost:3000 when private); custom domain with scheme, e.g. https://sign.example.com
   resources: { minCpu: 500m, maxCpu: 2000m, minMemory: 1Gi, maxMemory: 2Gi }

@@ -1,0 +1,87 @@
+{{- if .Values.dashboard.enabled }}
+kind: workload
+name: {{ include "opensearch.dashboard.name" . }}
+description: OpenSearch Dashboard
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: opensearch-dashboard
+      {{- /*
+      The image entrypoint prepends opensearch-dashboards to args starting with
+      "-". The cookie key is not in the entrypoint's env list, so it is passed as
+      an arg built from a cpln://secret env var ($(VAR) expands in args).
+      */}}
+      args:
+        - --opensearch_security.cookie.password=$(OSD_COOKIE_SECRET)
+        {{- if .Values.dashboard.publicAccess.enabled }}
+        - --opensearch_security.cookie.secure=true
+        {{- end }}
+      cpu: {{ .Values.dashboard.resources.cpu | quote }}
+      env:
+        - name: OPENSEARCH_HOSTS
+          value: '["https://{{ include "opensearch.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:9200"]'
+        - name: OPENSEARCH_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.dashboardsPassword
+        {{- /* Server identity on this hop is the mesh's mTLS workload identity. */}}
+        - name: OPENSEARCH_SSL_VERIFICATIONMODE
+          value: none
+        - name: OPENSEARCH_USERNAME
+          value: kibanaserver
+        - name: OSD_COOKIE_SECRET
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.cookieSecret
+        - name: SERVER_HOST
+          value: 0.0.0.0
+        - name: SERVER_PORT
+          value: '5601'
+      image: {{ .Values.dashboard.image }}
+      inheritEnv: false
+      memory: {{ .Values.dashboard.resources.memory | quote }}
+      ports:
+        - number: 5601
+          protocol: http
+      readinessProbe:
+        tcpSocket:
+          port: 5601
+        failureThreshold: 3
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes: []
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 5
+  firewallConfig:
+    external:
+      {{- if .Values.dashboard.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
+  loadBalancer:
+    replicaDirect: false
+  localOptions: []
+  supportDynamicTags: false
+{{- end }}

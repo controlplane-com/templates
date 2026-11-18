@@ -1,0 +1,129 @@
+kind: workload
+name: {{ include "opensearch.name" . }}
+description: opensearch
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  containers:
+    - name: opensearch
+      command: /bin/bash
+      args:
+        - /usr/local/bin/opensearch-startup.sh
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      env:
+        - name: DISABLE_INSTALL_DEMO_CONFIG
+          value: 'true'
+        - name: OS_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.password
+        - name: OS_DASHBOARDS_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.dashboardsPassword
+        - name: OS_CA_KEYSTORE
+          value: cpln://secret/{{ include "opensearch.secret.ca.name" . }}.keystore
+        - name: OS_CA_PASSPHRASE
+          value: cpln://secret/{{ include "opensearch.secret.ca.name" . }}.passphrase
+      image: {{ .Values.image }}
+      inheritEnv: false
+      {{- /*
+      9200 serves HTTPS, so it is a tcp port: the mesh's http handling cannot
+      carry a TLS stream, while tcp passes it through.
+      */}}
+      ports:
+        - number: 9200
+          protocol: tcp
+        - number: 9300
+          protocol: tcp
+      {{- /*
+      Readiness = the process listens on loopback. It must not need quorum: a
+      not-ready replica is unreachable, and replica-0 starts alone.
+      */}}
+      readinessProbe:
+        exec:
+          command:
+            - /bin/bash
+            - -c
+            - exec 3<>/dev/tcp/127.0.0.1/9200
+        failureThreshold: 3
+        initialDelaySeconds: 20
+        periodSeconds: 15
+        successThreshold: 1
+        timeoutSeconds: 3
+      volumes:
+        - path: /usr/share/opensearch/data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.volume.name" . }}
+        - path: /usr/local/bin/opensearch-startup.sh
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "opensearch.secretStartup.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      maxScale: {{ .Values.replicas }}
+      {{- /* Backfilled by the API on a partial block; declared to avoid drift. */}}
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 5
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is not sent: the API drops it on a stateful
+    workload. terminationGracePeriodSeconds is declared because the API
+    backfills 90.
+    */}}
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type }}
+      {{- $allow := list }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /* The chart's own callers are always allowed: the nodes (transport on 9300), Dashboards, and the
+             demo and backup workloads. The user's list names additional clients only. */}}
+      {{- $wl := printf "//gvc/%s/workload/" .Values.global.cpln.gvc }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.name" .)) }}
+      {{- if .Values.dashboard.enabled }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.dashboard.name" .)) }}
+      {{- end }}
+      {{- if .Values.demoLogs.enabled }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.demoLogs.name" .)) }}
+      {{- if not .Values.demoLogs.remove_setup_workload }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.demoLogsSetup.name" .)) }}
+      {{- end }}
+      {{- end }}
+      {{- if and .Values.backup.enabled (not .Values.backup.remove_setup_workload) }}
+      {{- $allow = append $allow (printf "%s%s" $wl (include "opensearch.backupSetup.name" .)) }}
+      {{- end }}
+      {{- end }}
+      {{- range (.Values.internal_access.workloads | default list) }}
+      {{- if not (has . $allow) }}
+      {{- $allow = append $allow . }}
+      {{- end }}
+      {{- end }}
+      {{- if $allow }}
+      inboundAllowWorkload: {{ $allow | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions: []
+  securityOptions:
+    filesystemGroupId: 1000
+    runAsUser: 1000
+  supportDynamicTags: false

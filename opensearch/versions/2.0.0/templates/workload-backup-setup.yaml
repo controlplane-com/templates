@@ -1,0 +1,47 @@
+{{- if .Values.backup.enabled }}
+{{- if not .Values.backup.remove_setup_workload }}
+---
+kind: workload
+name: {{ include "opensearch.backupSetup.name" . }}
+description: One-time OpenSearch snapshot configuration
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: setup
+      image: curlimages/curl:8.22.0
+      cpu: 100m
+      memory: 128Mi
+      command: /bin/sh
+      env:
+        - name: OS_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.password
+      args:
+        - -c
+        - {{- include "opensearch.inlineScript" (include "opensearch.script.backupSetup" .) | nindent 10 }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
+{{- end }}
+{{- end }}

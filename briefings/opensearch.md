@@ -42,6 +42,8 @@ Two prerequisite dictionary secrets: credentials (`password`, `dashboardsPasswor
   (with the admin client cert) and logs `security-reconcile: admin,kibanaserver updated`; a password changed
   in Dashboards reverts. The PATCH `add` replaces the whole user, so it must resend `reserved: true` (measured:
   without it the user loses its reserved flag). Rotation = update secret + `force-redeployment` nodes and Dashboards.
+- **Dashboards opens in the Global tenant.** The same reconcile step sets `default_tenant: Global` only while it is
+  unset (logs `default tenant set to Global`); a choice made under Security > Tenants > Configure is kept (measured).
 - **Changing the CA is a full-cluster restart**: old and new nodes do not trust each other.
 - **1.0.x → 2.0.0** breaks every client (https + login); mixed old/new nodes cannot talk. Measured: never red,
   API out ~2-5 min, roll ~11-12 min on 3 nodes, data kept. Old saved objects are in the **Global** tenant. Stall on new grants: wait ~5 min, then

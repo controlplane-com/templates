@@ -167,7 +167,7 @@ Verify from any workload in the same GVC, with `ca.crt` from the prerequisite st
 curl --cacert ca.crt -u "admin:ADMIN_PASSWORD" "https://RELEASE_NAME-opensearch.GVC_NAME.cpln.local:9200/_cluster/health?pretty"
 ```
 
-Plain `http://` is refused. In Dashboards, log in as `admin` and pick the **Global** tenant to share saved objects with other users.
+Plain `http://` is refused. In Dashboards, log in as `admin`; it opens in the **Global** tenant, where saved objects are shared with other users (change the default under **Security > Tenants > Configure**).
 
 ## Security Analytics
 

@@ -186,7 +186,10 @@ echo "  Setup Complete!"
 echo "========================================="
 echo "Logs appear in the demo-logs index within about a minute; Security Analytics"
 echo "findings from detector demo-auth-failures within a few minutes."
-{{- if .Values.dashboard.enabled }}
+{{- if and .Values.dashboard.enabled .Values.dashboard.publicAccess.enabled }}
+{{- /* The Dashboards URL is this workload's own canonical endpoint with the workload name swapped. */}}
+echo "Dashboards: https://{{ include "opensearch.dashboard.name" . }}-${CPLN_GLOBAL_ENDPOINT#https://${CPLN_WORKLOAD##*/}-} (log in as admin)"
+{{- else if .Values.dashboard.enabled }}
 echo "Dashboards: cpln port-forward {{ include "opensearch.dashboard.name" . }} 5601:5601 --gvc {{ .Values.global.cpln.gvc }}, then http://localhost:5601 (log in as admin)"
 {{- end }}
 

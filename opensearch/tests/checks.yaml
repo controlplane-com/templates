@@ -76,6 +76,21 @@ checks:
     expect:
       stdout: '^DEMO 401 401 401 401 401\nUSERS admin,kibanaserver,$'
 
+  - id: default-tenant-global
+    description: Dashboards logins open in the Global tenant (the security default is Private).
+    since: 2.0.0
+    exec:
+      workload: "{release}-opensearch"
+      container: opensearch
+      shell: bash
+      script: |
+        curl -sk {curl_auth} "{os_url}/_plugins/_security/api/tenancy/config" | grep -o '"default_tenant":"[^"]*"'
+    expect:
+      stdout: '^"default_tenant":"Global"$'
+    # The default is set by the reconcile step a few minutes after the nodes start.
+    retries: 20
+    retryDelaySeconds: 30
+
   - id: tls-layers
     description: >-
       Plain HTTP is refused; HTTPS through the service name verifies against the CA the node was issued

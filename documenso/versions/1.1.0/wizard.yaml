@@ -1,0 +1,617 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Documenso
+
+# Documenso pins itself to the single `location` value, and both bundled databases are single-location
+# stateful workloads with no location handling: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: email
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database step, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Documenso connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        help: >-
+          With Document storage set to Database, every uploaded and signed PDF lives on this volume too: size
+          it for them. Uninstalling the release deletes the volume set, so the data does not survive a
+          reinstall.
+      internalAccess.type:
+        description: >-
+          Documenso connects to its database like any other workload: keep Same GVC, or add the Documenso
+          workload under Allowed workloads.
+      internalAccess.workloads:
+        label: Extra allowed workloads
+        description: >-
+          Optional with Same GVC: workloads in other GVCs that may also connect. Documenso itself needs no
+          entry here.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: email
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Documenso stores its data in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Documenso connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        description: >-
+          Per member. A quarter of it caps the WAL that replication slots may hold back.
+        help: >-
+          With Document storage set to Database, every uploaded and signed PDF lives on this volume too: size
+          it for them. Uninstalling the release deletes the volume set, so the data does not survive a
+          reinstall.
+      internal_access.type:
+        description: >-
+          Documenso connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
+          Documenso workload under Allowed workloads.
+      internal_access.workloads:
+        label: Extra allowed workloads
+        description: >-
+          Optional with Same GVC: workloads in other GVCs that may also connect. Documenso itself needs no
+          entry here.
+
+steps:
+  - id: documenso
+    title: Documenso
+    description: Where Documenso runs, its server, its database, and the three prerequisite secrets.
+    sections:
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC that Documenso runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: documenso.validateLocation
+            paths: [location]
+            message: >-
+              Documenso runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: Server
+        docs: "#documenso-server"
+        fields:
+          - path: documenso.image
+            type: string
+            format: image
+            label: Documenso image
+            required: true
+          - path: documenso.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: All state lives in the database, so replicas are interchangeable; 2 keeps the UI up through restarts.
+          - path: documenso.publicUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://sign.example.com
+            description: >-
+              Only for a custom domain, with the scheme. Empty uses the canonical endpoint, or
+              `http://localhost:3000` (for `cpln port-forward`) when the public endpoint is off.
+            help: Signing links in email and the session cookie are built from this address.
+          - path: documenso.resources
+            type: resources
+            label: Resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: telemetry.enabled
+            type: boolean
+            label: Send telemetry to Documenso
+            description: Upstream's PostHog startup event and hourly heartbeat with the app version and installation ID.
+        rules:
+          - rule: self.documenso.replicas >= 1 && !has(self.gvc)
+            mirrors: documenso.validate
+            paths: [documenso.replicas]
+            message: >-
+              Use at least one replica, and remove any `gvc` key from the values: Documenso deploys into the GVC
+              you install it into.
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Three secrets must exist **before** you install: the application keys and the signing
+              certificate below, and the database credentials under Database further down. If one is missing,
+              the deployment waits and `cpln logs` shows nothing at all.
+          - path: secrets.name
+            type: ref
+            label: Application keys secret
+            required: true
+            description: >-
+              A dictionary secret with `nextAuthSecret`, `encryptionKey`, `encryptionSecondaryKey` (random strings
+              of 32 or more characters) and `signingPassphrase` (the certificate's password).
+            help: >-
+              `encryptionKey` protects two-factor secrets and API tokens; replacing it makes them unreadable.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [nextAuthSecret, encryptionKey, encryptionSecondaryKey, signingPassphrase]
+              create:
+                suggestName: "context.releaseName + '-documenso-secrets'"
+          - path: signing.certificateSecretName
+            type: ref
+            label: Signing certificate secret
+            required: true
+            description: >-
+              An opaque secret (encoding plain) holding the base64 text of your PKCS#12 (`.p12`) certificate,
+              created with `openssl pkcs12 -export` (without `-legacy`).
+            help: >-
+              Documenso signs every completed document with it. Its password is the `signingPassphrase` key of
+              the application keys secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-documenso-signing-cert'"
+                encoding: plain
+        rules:
+          - rule: >-
+              self.secrets.name != null && self.secrets.name != '' &&
+              self.signing.certificateSecretName != null && self.signing.certificateSecretName != ''
+            mirrors: documenso.validate
+            paths: [secrets.name, signing.certificateSecretName]
+            message: Both prerequisite secrets are required.
+
+      - title: Database
+        docs: "#database"
+        description: >-
+          Which PostgreSQL holds Documenso's data. Its server, storage, network and backups follow in the
+          last steps; their defaults fit a first install.
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; restarts briefly on upgrades.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields. The chooser above writes them, so they show only
+          # when YAML mode left them in a state the chart refuses, to carry that rule's message.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            when: self.postgres.enabled == self.postgresHA.enabled
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            when: >-
+              self.postgres.enabled == self.postgresHA.enabled ||
+              (self.postgresHA.enabled && has(self.postgresHA.proxy) && has(self.postgresHA.proxy.enabled) &&
+              dyn(self.postgresHA)['proxy']['enabled'] != true)
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Documenso puts them in a URL,
+              so all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Documenso
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
+              the secret and force a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-documenso-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Documenso connects through.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Documenso puts them in a URL,
+              so all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Documenso connects with
+              them. Changing it later is a database operation: follow the postgres-highly-available template's
+              password rotation steps, then update the secret and force a redeployment of Documenso.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-documenso-db-credentials'"
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: documenso.validateDatabase
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: documenso.validateDatabase
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Documenso's database endpoint.
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: documenso.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: access
+    title: Sign-up and access
+    description: Who can register, the public endpoint signers use, and which workloads can reach Documenso.
+    sections:
+      - title: Sign-up
+        docs: "#sign-up"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Sign-up is open so you can create the first account. Register right after installing, then turn
+              sign-up off or limit it to your domains and upgrade the release.
+          - path: signup.disabled
+            type: boolean
+            label: Close sign-up
+            description: Nobody new can register. Recipients still sign without an account.
+          - path: signup.allowedDomains
+            type: string
+            label: Allowed email domains
+            placeholder: example.com,acme.org
+            when: "!self.signup.disabled"
+            description: Comma-separated; only addresses at these domains can register. Empty allows any.
+      - title: Public endpoint
+        docs: "#access"
+        fields:
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              Signers are external, so signing links need the public endpoint. Off, reach Documenso only
+              through `cpln port-forward`.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: documenso.validate
+            paths: [internalAccess.type]
+            message: Choose who can connect internally.
+
+  - id: documents
+    title: Documents
+    description: Where uploaded and signed PDFs are stored, and the largest upload allowed.
+    sections:
+      - fields:
+          - path: storage.type
+            type: enum
+            label: Document storage
+            widget: cards
+            required: true
+            docs: "#document-storage"
+            options:
+              - value: database
+                label: Database
+                description: PDFs are rows in PostgreSQL, so the database backup holds everything. Size Database storage for them.
+              - value: s3
+                label: S3 bucket
+                description: AWS S3 or an S3-compatible server; the database keeps only the object keys.
+          - path: storage.documentSizeLimitMb
+            type: integer
+            label: Upload size limit
+            unit: MB
+            min: 1
+            required: true
+            suggestions: [5, 10, 25, 50]
+        rules:
+          - rule: self.storage.type in ['database', 's3'] && self.storage.documentSizeLimitMb >= 1
+            mirrors: documenso.validate
+            paths: [storage.type]
+            message: Choose where documents are stored.
+      - title: S3 bucket
+        when: self.storage.type == 's3'
+        docs: "#storage-setup"
+        fields:
+          - id: s3Flavour
+            virtual: true
+            type: enum
+            label: S3 provider
+            widget: segmented
+            required: true
+            init: "self.storage.s3.endpoint == null || self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a Control Plane cloud account; static keys are not accepted.
+                set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
+              - value: compatible
+                label: S3-compatible
+                description: MinIO or another S3 server, with static keys in a secret.
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+            description: Any value for most S3-compatible servers.
+          - path: storage.s3.endpoint
+            type: string
+            format: url
+            label: S3 endpoint
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            placeholder: http://my-minio-workload:9000
+            description: The S3 API address, with scheme and port, fully qualified.
+          - path: storage.s3.forcePathStyle
+            type: boolean
+            label: Path-style requests
+            when: ui.s3Flavour == 'compatible'
+            description: On for most S3-compatible servers, such as MinIO.
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: Access keys secret
+            required: true
+            when: ui.s3Flavour == 'compatible'
+            description: A dictionary secret with the keys `accessKeyId` and `secretAccessKey`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKeyId, secretAccessKey]
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            required: true
+            when: ui.s3Flavour == 'aws'
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            required: true
+            example: true
+            when: ui.s3Flavour == 'aws'
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+        rules:
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket != ''
+            mirrors: documenso.validate
+            paths: [storage.s3.bucket]
+            message: The bucket is required.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName == '' ||
+              self.storage.s3.endpoint != ''
+            mirrors: documenso.validate
+            paths: [storage.s3.auth.secretName, storage.s3.bucket]
+            message: >-
+              Static keys are only for S3-compatible servers. For AWS S3, choose AWS S3 above and use a cloud
+              account.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName != '' ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: documenso.validate
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName]
+            message: AWS S3 needs a cloud account and an IAM policy name.
+
+  - id: email
+    title: Email
+    description: The SMTP relay and sender for verification and signature-request mail.
+    sections:
+      - title: SMTP relay
+        toggle: smtp.enabled
+        docs: "#email"
+        description: >-
+          Without it no mail is sent: new accounts cannot verify their address by email, and you copy each
+          signing link out of the UI and send it yourself.
+        fields:
+          - path: smtp.fromAddress
+            type: string
+            label: From address
+            required: true
+            example: true
+          - path: smtp.fromName
+            type: string
+            label: From name
+            required: true
+          - path: smtp.host
+            type: string
+            label: SMTP host
+            required: true
+            example: true
+          - path: smtp.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+          - path: smtp.secure
+            type: boolean
+            label: Implicit TLS
+            description: On for port 465; off uses STARTTLS or plain on 587 and 25.
+          - path: smtp.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: A dictionary secret with the keys `username` and `password`. Empty for an unauthenticated relay.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+        rules:
+          - rule: "!self.smtp.enabled || self.smtp.host != ''"
+            mirrors: documenso.validate
+            paths: [smtp.host]
+            message: The SMTP host is required.
+    rules:
+      # Documenso reads the sender even with the relay off, so the chart requires it either way; the
+      # toggle carries the issue while the fields are hidden.
+      - rule: self.smtp.fromAddress != '' && self.smtp.fromName != ''
+        mirrors: documenso.validate
+        paths: [smtp.fromAddress, smtp.fromName, smtp.enabled]
+        message: >-
+          The sender address and name (smtp.fromAddress, smtp.fromName) are required, even with the SMTP
+          relay off.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    mirrors: documenso.validateDatabase
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Documenso, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-documenso') in self.postgres.internalAccess.workloads
+    mirrors: documenso.validateDatabase
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-documenso, or Documenso cannot reach its database.'
+    message: Add the Documenso workload to the list, or Documenso cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-documenso') in self.postgresHA.internal_access.workloads
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-documenso, or Documenso cannot reach its database.'
+    message: Add the Documenso workload to the list, or Documenso cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Documenso connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Documenso connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.

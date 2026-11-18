@@ -1,0 +1,154 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# The ONE location of your GVC that Documenso runs in; it must already be a GVC location.
+location: aws-us-east-1
+
+# ─── Documenso server ─────────────────────────────────────────────────────────
+documenso:
+  image: documenso/documenso:v2.21.1  # published tags carry the leading v
+  replicas: 1                         # stateless; 2+ keeps the UI up through a rolling restart
+  publicUrl: ""                       # empty = canonical endpoint (http://localhost:3000 when private); custom domain with scheme, e.g. https://sign.example.com
+  resources:
+    minCpu: 500m
+    maxCpu: 2000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+
+# ─── Prerequisite secret: application keys ────────────────────────────────────
+# REQUIRED — MUST EXIST BEFORE INSTALL, or the deployment WEDGES silently. A `dictionary` with the keys
+# nextAuthSecret, encryptionKey, encryptionSecondaryKey and signingPassphrase (see README Prerequisites).
+secrets:
+  name: my-documenso-secrets
+
+# ─── Prerequisite secret: signing certificate ─────────────────────────────────
+# REQUIRED — MUST EXIST BEFORE INSTALL, or the deployment WEDGES silently. An `opaque` secret
+# (encoding: plain) holding the BASE64 TEXT of your .p12 (see README Prerequisites).
+signing:
+  certificateSecretName: my-documenso-signing-cert
+
+# ─── Sign-up ──────────────────────────────────────────────────────────────────
+signup:
+  disabled: false        # open so you can create your account; set true right after
+  allowedDomains: ""     # comma-separated, e.g. "example.com,acme.org"; empty = any
+
+# ─── Document storage ─────────────────────────────────────────────────────────
+storage:
+  type: database              # database (PDFs stored in PostgreSQL) | s3
+  documentSizeLimitMb: 5      # max single upload
+  s3:
+    bucket: my-documenso-bucket
+    region: us-east-1
+    endpoint: ""              # S3-compatible servers only, e.g. http://my-minio.GVC.cpln.local:9000
+    forcePathStyle: false     # true for most S3-compatible servers (MinIO)
+    cloudAccountName: my-documenso-cloud-account   # AWS keyless auth (used when auth.secretName is empty)
+    policyName: my-documenso-s3-policy             # your bucket-scoped IAM policy (README Storage setup)
+    auth:
+      secretName: ""          # S3-compatible servers only: dictionary with accessKeyId + secretAccessKey, e.g. my-documenso-s3-keys
+
+# ─── Email ────────────────────────────────────────────────────────────────────
+smtp:
+  enabled: false              # off = no verification or signature-request mail
+  host: smtp.example.com
+  port: 587
+  secure: false               # false = STARTTLS/plain (587); true = implicit TLS (465)
+  fromAddress: documenso@example.com
+  fromName: Documenso
+  auth:
+    secretName: ""            # optional dictionary with username + password, e.g. my-documenso-smtp
+
+# ─── Telemetry ────────────────────────────────────────────────────────────────
+telemetry:
+  enabled: false              # true = upstream's PostHog startup event and hourly heartbeat
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true               # signers are external, so signing links need the public endpoint
+internalAccess:
+  type: same-gvc              # none | same-gvc | same-org | workload-list
+  workloads: []               # workload-list only; this release's own workloads are always added
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: single-instance PostgreSQL (default) ───────────────────────────
+# set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
+postgres:
+  enabled: true
+  image: postgres:18
+  config:
+    # REQUIRED — MUST EXIST BEFORE INSTALL, or the deployment WEDGES silently. A `dictionary` with the
+    # URL-safe keys username, password, database (see README Prerequisites).
+    credentialsSecretName: my-documenso-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10              # GiB (minimum 10); raise it for `database` storage
+
+  backup:                     # pass-through to the postgres template's backup feature
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # tag must match the postgres major
+    schedule: "0 2 * * *"     # daily at 02:00 UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-documenso-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-documenso-backup-cloudaccount
+      policyName: my-documenso-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-documenso-backup-bucket
+      cloudAccountName: my-documenso-backup-cloudaccount
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-documenso-backup-bucket
+      credentialsSecretName: my-documenso-minio-credentials   # provider minio only: dictionary with accessKey + secretKey
+      prefix: postgres/backups
+
+# ─── Database: highly available PostgreSQL (opt-in) ───────────────────────────
+# 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint; enable exactly one of postgres / postgresHA.
+postgresHA:
+  enabled: false
+  config:
+    # REQUIRED in HA mode — MUST EXIST BEFORE INSTALL. Same `dictionary` shape as postgres.config above.
+    credentialsSecretName: my-documenso-db-credentials
+  replicas: 3
+  resources:
+    minCpu: 500m
+    maxCpu: 1000m
+    minMemory: 1Gi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10              # GiB per replica (minimum 10)
+
+  backup:                     # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical             # logical | wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi           # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"   # daily at 02:00 UTC
+    walg:
+      intervalSeconds: 21600  # every 6 hours
+    provider: aws             # aws | gcp | minio
+    aws:
+      bucket: my-documenso-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-documenso-backup-cloudaccount
+      policyName: my-documenso-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-documenso-backup-bucket
+      cloudAccountName: my-documenso-backup-cloudaccount
+      prefix: postgres/backups
+    minio:
+      endpoint: http://my-minio-workload:9000
+      bucket: my-documenso-backup-bucket
+      credentialsSecretName: my-documenso-minio-credentials   # provider minio only: dictionary with accessKey + secretKey
+      prefix: postgres/backups

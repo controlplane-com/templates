@@ -174,6 +174,36 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 1. Create your bucket. Set `backup.gcp.bucket` to its name.
 2. Create a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account) for the GCP project holding the bucket, granting its service account the **Storage Admin** role, and set `backup.gcp.cloudAccountName` to its name. The template binds `roles/storage.objectAdmin` on exactly that bucket.
 
+### Backup retention
+
+The backup job only uploads; it never deletes old backups. To keep a fixed window, add a lifecycle rule on the bucket that expires objects under the backup prefix. Each backup is a complete, standalone copy, so expiring old ones never affects restoring a newer one. Set the window to at least your retention plus one backup interval, and note that an age rule keeps no minimum: if backups stop running, the last ones expire too.
+
+The rules below use the default prefix `mysql/backups/`; change it if you changed `backup.<provider>.prefix`.
+
+**AWS S3.** `put-bucket-lifecycle-configuration` **replaces every existing rule on the bucket**, so check for existing rules first and add them to the file:
+
+```bash
+aws s3api get-bucket-lifecycle-configuration --bucket BUCKET_NAME
+cat > lifecycle.json <<'EOF'
+{"Rules":[{"ID":"expire-db-backups","Filter":{"Prefix":"mysql/backups/"},"Status":"Enabled",
+  "Expiration":{"Days":30},"NoncurrentVersionExpiration":{"NoncurrentDays":1}}]}
+EOF
+aws s3api put-bucket-lifecycle-configuration --bucket BUCKET_NAME --lifecycle-configuration file://lifecycle.json
+```
+
+**Google Cloud Storage.** `--lifecycle-file` also **replaces the bucket's existing rules**; check with `gcloud storage buckets describe gs://BUCKET_NAME --format='json(lifecycle_config)'` first:
+
+```bash
+cat > lifecycle.json <<'EOF'
+{"rule":[
+  {"action":{"type":"Delete"},"condition":{"age":30,"matchesPrefix":["mysql/backups/"]}},
+  {"action":{"type":"Delete"},"condition":{"daysSinceNoncurrentTime":1,"isLive":false,"matchesPrefix":["mysql/backups/"]}}]}
+EOF
+gcloud storage buckets update gs://BUCKET_NAME --lifecycle-file=lifecycle.json
+```
+
+Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
+
 ## Connecting
 
 | Path | Address | Notes |

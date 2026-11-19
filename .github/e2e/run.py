@@ -366,10 +366,16 @@ def release_workloads(t):
     return wls.get("items", [])
 
 
-def all_replicas_ready(t):
+def all_replicas_ready(t, lag_ok=False):
     """`--wait` reads the workload's server-side health, which can report ready while a stateful workload is
     still starting its later replicas one by one (elasticsearch, redis-cluster). Count them instead: every
-    location has its desired number of replicas, all of them ready."""
+    location has its desired number of replicas, all of them ready.
+
+    Right after an upgrade the deployment status can still list only the PREVIOUS version, all ready, for a
+    minute or more (measured: openclaw 1.0.0 -> 1.1.0, spec version 3 while every deployment still reported
+    version 2; the checks then ran on the old replica until it was replaced). So a deployment whose newest
+    version is older than the workload's spec version is not ready, unless lag_ok (an edit that never makes a
+    new deployment version, such as a tags-only change, must not wait forever)."""
     for w in release_workloads(t):
         if w.get("spec", {}).get("type") == "cron":
             continue
@@ -388,6 +394,8 @@ def all_replicas_ready(t):
             if not st.get("ready") or not vers:
                 return False
             newest = max(v.get("workload") or 0 for v in vers)
+            if not lag_ok and newest < (w.get("version") or 0):
+                return False
             cur = [v for v in vers if (v.get("workload") or 0) == newest]
             if not all(v.get("ready") and v.get("containers") for v in cur):
                 return False
@@ -398,11 +406,16 @@ def all_replicas_ready(t):
     return True
 
 
+VERSION_LAG_GRACE_S = 180
+
+
 def wait_all_replicas(t, timeout_s):
-    """True once all_replicas_ready holds on two polls in a row, so a ramp that briefly reads ready does not count."""
-    deadline, streak = time.time() + timeout_s, 0
+    """True once all_replicas_ready holds on two polls in a row, so a ramp that briefly reads ready does not count.
+    For the first VERSION_LAG_GRACE_S seconds the deployments must also report the workload's current version."""
+    start = time.time()
+    deadline, streak = start + timeout_s, 0
     while time.time() < deadline:
-        streak = streak + 1 if all_replicas_ready(t) else 0
+        streak = streak + 1 if all_replicas_ready(t, lag_ok=time.time() - start > VERSION_LAG_GRACE_S) else 0
         if streak >= 2:
             return True
         time.sleep(10)

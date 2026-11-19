@@ -4,7 +4,7 @@
 
 ## Architecture
 
-- **Gateway** — stateful workload, one replica, port `18789` (Control UI, WebSocket, health and the optional OpenAI-compatible API). Uses the `-browser` image (headless Chromium) when `browser.enabled`. One replica by design: upstream supports a single Gateway per state directory; for more isolation, install another release.
+- **Gateway** — stateful workload, one replica, port `18789` (Control UI, WebSocket, health and the optional OpenAI-compatible API). Uses the `-browser` image (headless Chromium) when `browser.enabled`. One replica by design: upstream supports a single Gateway per state directory; for more isolation, install another release. A small root `volume-permissions` container (`busybox`) makes the volume private to the Gateway's user on every start, which OpenClaw requires before it opens its state.
 - **Volumeset** — mounted at `/data`; all state lives in `/data/.openclaw`: config, SQLite, channel sessions, plugins, workspace and memory. Daily snapshots (optional).
 - **Seed secret** — the first-boot `openclaw.json`, copied only when none exists. Contains no credentials.
 - **Identity + policy** — `reveal` on exactly your prerequisite secret and the seed secret.

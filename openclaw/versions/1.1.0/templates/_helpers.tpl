@@ -31,6 +31,36 @@
 {{- end }}
 
 
+{{/* Root helper that makes the volume private to the node user (see workload.yaml). */}}
+{{- define "openclaw.permissionsImage" -}}
+busybox:1.37.0
+{{- end }}
+
+{{/*
+volume-permissions script (busybox sh, runs as root). /data is the volume root:
+root-owned on a fresh volume, group-writable on one that had a filesystemGroupId
+(1.0.0). Give it to uid 1000 and strip group/other bits from everything under it
+but lost+found (OpenClaw runs as that one user; nothing else reads the state).
+Idempotent; runs on every replica start.
+*/}}
+{{- define "openclaw.permissionsScript" -}}
+set -eu
+rm -f /cpln-perms/ready
+chown 1000:1000 /data
+chmod 0700 /data
+for e in /data/.[!.]* /data/*; do
+  [ -e "$e" ] || continue
+  [ "$e" = /data/lost+found ] && continue
+  chown -R 1000:1000 "$e"
+  chmod -R go-rwx "$e"
+done
+echo "volume-permissions: /data and its state are private to uid 1000"
+touch /cpln-perms/ready
+trap "exit 0" TERM
+while true; do sleep 3600 & wait; done
+{{- end }}
+
+
 {{/* Model / provider */}}
 
 {{/*
@@ -217,6 +247,14 @@ tok="${OPENCLAW_GATEWAY_TOKEN:-}"
 if [ "${#tok}" -lt 24 ]; then
   echo "FATAL: key gateway-token in secret {{ .Values.secret.name }} must be at least 24 characters (generate one with: openssl rand -hex 32)" >&2
   exit 64
+fi
+# OpenClaw refuses state that another user could read or replace. The
+# volume-permissions container makes /data and the state private to this user;
+# wait for it (a few seconds) before anything touches the state.
+for i in $(seq 1 60); do [ -f /cpln-perms/ready ] && break; sleep 2; done
+if [ ! -f /cpln-perms/ready ]; then
+  echo "FATAL: the volume-permissions container did not prepare /data within 120 s (check its logs)" >&2
+  exit 70
 fi
 mkdir -p "$D/.cpln"
 # Test the FILE, never directory emptiness (an ext4 volume has lost+found).

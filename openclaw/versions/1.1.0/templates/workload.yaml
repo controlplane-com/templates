@@ -74,6 +74,10 @@ spec:
         - path: /dev/shm
           recoveryPolicy: retain
           uri: scratch://dev-shm
+        # Handshake with the volume-permissions container (below).
+        - path: /cpln-perms
+          recoveryPolicy: retain
+          uri: scratch://cpln-perms
       # /startupz is 503 until the gateway has started (the real gate); /healthz is
       # 200 even while starting, so it is liveness only. Never probe another path —
       # the SPA answers 200 to any unknown path.
@@ -97,6 +101,34 @@ spec:
         failureThreshold: 5
         successThreshold: 1
         timeoutSeconds: 5
+    # OpenClaw 2026.11 refuses state that another user could read or replace: the
+    # state directory's ancestors must not be writable by others, and its private
+    # directories must have no group or other bits (measured: doctor stops with
+    # "SQLite staging ancestor must not allow another user to replace its child: /data"
+    # and "Client credential directory is unsafe"). A filesystemGroupId would make
+    # the platform re-add group bits on every mount, so the workload sets none and
+    # this root container instead gives /data to the node user (uid 1000) and strips
+    # group/other bits from the state, then tells the gateway via the shared scratch
+    # volume and idles.
+    - name: volume-permissions
+      image: {{ include "openclaw.permissionsImage" . }}
+      command: sh
+      args:
+        - -c
+        - |
+          {{- include "openclaw.permissionsScript" . | nindent 10 }}
+      inheritEnv: false
+      minCpu: 25m
+      minMemory: 32Mi
+      cpu: 25m
+      memory: 32Mi
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "openclaw.volume.name" . }}
+        - path: /cpln-perms
+          recoveryPolicy: retain
+          uri: scratch://cpln-perms
   defaultOptions:
     autoscaling:
       maxConcurrency: 0
@@ -109,8 +141,6 @@ spec:
     debug: false
     suspend: false
     timeoutSeconds: 30
-  securityOptions:
-    filesystemGroupId: 1000
   firewallConfig:
     external:
       outboundAllowCIDR:

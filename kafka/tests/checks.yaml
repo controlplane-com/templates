@@ -1,6 +1,8 @@
 # Feature checks for the kafka template. Each runs after install (and after each upgrade) on every
 # version in its since/until range. Add a check with `since: <new version>` for every change you ship.
-# Placeholders: {release} {gvc} {org}, and the vars each baseline defines (admin_password, rest_password).
+# Placeholders: {release} {gvc} {org}, and the vars each baseline defines (admin_password, rest_password,
+# connect_rest_password, connect_env_provider, and the 4.5.1 connect_alias_* / connect_secret_* names; an empty
+# var means the baseline does not configure that feature and the check prints SKIP).
 checks:
   - id: produce-consume
     description: A message produced over SASL reaches a consumer, on a topic replicated to all three brokers.
@@ -186,7 +188,9 @@ checks:
       script: |
         PW='{connect_rest_password}'
         if [ -z "$PW" ]; then echo "SKIP no auth"; exit 0; fi
-        S=$(wget -qO- --header="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')" 'http://127.0.0.1:8083/connectors?expand=status')
+        A="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"
+        # Only the two sink connectors: later baselines add more connectors to the group.
+        S="$(wget -qO- --header="$A" http://127.0.0.1:8083/connectors/e2e-sink-a/status)$(wget -qO- --header="$A" http://127.0.0.1:8083/connectors/e2e-sink-b/status)"
         echo "connectors: $(echo "$S" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
         echo "states: $(echo "$S" | grep -o '"state":"[A-Z]*"' | cut -d'"' -f4 | sort | uniq -c | awk '{printf "%s %s ", $1, $2}')"
         echo "workers: $(echo "$S" | grep -o '"worker_id":"[^"]*"' | sort -u | wc -l | tr -d ' ')"
@@ -232,5 +236,251 @@ checks:
         wget -qO- http://127.0.0.1:8080/api/clusters/e2e/connectors | grep -o '"name":"e2e-sink-[ab]"' | sort -u | tr '\n' ' '
     expect:
       stdout: '\A("name":"e2e-sink-a" "name":"e2e-sink-b" |SKIP no auth)\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+
+  # ─── 4.5.1: connector credentials from mounted Control Plane secrets (dir config provider) ─────────────────────
+  # The aliases are canaries that only appear in a topic name when the worker resolved the placeholder. The admin
+  # password ({admin_password}) is read by the connectors through ${dir:} and must never appear in any surface.
+  # No check prints a secret value.
+
+  - id: connect-secret-mounts
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      A dictionary secret listed in secrets is mounted as a directory with one file per key (plus the platform's own
+      ___cpln___ file), and an opaque secret as one file, under /opt/kafka/secrets.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      shell: bash
+      script: |
+        D='{connect_secret_dict}'; O='{connect_secret_opaque}'
+        if [ -z "$D" ]; then echo "SKIP no secrets"; exit 0; fi
+        if [ -d "/opt/kafka/secrets/$D" ]; then echo "DICT $(ls -1 "/opt/kafka/secrets/$D" | grep -v '^___cpln___' | tr '\n' ' ')"; else echo "DICT not a directory"; fi
+        if [ -f "/opt/kafka/secrets/$O" ] && [ ! -d "/opt/kafka/secrets/$O" ]; then echo "OPAQUE file"; else echo "OPAQUE not a file"; fi
+    expect:
+      stdout: '\A(DICT admin-password alias wrong-password \nOPAQUE file|SKIP no secrets)\s*\Z'
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: connect-secret-dir-used
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      A MirrorSource connector whose aliases and SASL passwords are ${dir:} placeholders runs: its offset-syncs topic is
+      named after the alias read from the dictionary secret, its remote topic after the alias read from the opaque
+      secret, and a freshly produced record is mirrored (which needs the passwords from the secret to log in).
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        A='{connect_alias_dict}'; O='{connect_alias_opaque}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        cd /opt/kafka/bin
+        printf '%s\n' 'security.protocol=SASL_PLAINTEXT' 'sasl.mechanism=PLAIN' \
+          'sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{admin_password}";' > /tmp/e2e.properties
+        B={release}-cluster.{gvc}.cpln.local:9092
+        T=$(./kafka-topics.sh --bootstrap-server $B --command-config /tmp/e2e.properties --list)
+        echo "$T" | grep -qxF "mm2-offset-syncs.$A.internal" && echo "DICT-ALIAS-TOPIC"
+        echo "$T" | grep -qxF "$O.e2e" && echo "OPAQUE-ALIAS-TOPIC"
+        MSG="e2e-mirror-$(date +%s%N)"
+        echo "$MSG" | ./kafka-console-producer.sh --bootstrap-server $B --producer.config /tmp/e2e.properties --topic e2e
+        ./kafka-console-consumer.sh --bootstrap-server $B --consumer.config /tmp/e2e.properties --topic "$O.e2e" \
+          --from-beginning --timeout-ms 60000 2>/dev/null | grep -qxF "$MSG" && echo "MIRRORED"
+        true
+    expect:
+      stdout: '\A(DICT-ALIAS-TOPIC\nOPAQUE-ALIAS-TOPIC\nMIRRORED|SKIP no secrets)\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+    timeoutSeconds: 180
+
+  - id: connect-secret-wrong-password-refused
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      The control for the check above: the same connector reading a wrong password from the secret never creates its
+      offset-syncs topic, while the one reading the right password has.
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        A='{connect_alias_dict}'; BAD='{connect_alias_bad}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        cd /opt/kafka/bin
+        printf '%s\n' 'security.protocol=SASL_PLAINTEXT' 'sasl.mechanism=PLAIN' \
+          'sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{admin_password}";' > /tmp/e2e.properties
+        T=$(./kafka-topics.sh --bootstrap-server {release}-cluster.{gvc}.cpln.local:9092 --command-config /tmp/e2e.properties --list)
+        if ! echo "$T" | grep -qxF "mm2-offset-syncs.$A.internal"; then echo "WAITING for the working connector's topic"; exit 0; fi
+        if echo "$T" | grep -qxF "mm2-offset-syncs.$BAD.internal"; then echo "BAD-TOPIC-PRESENT"; else echo "BAD-TOPIC-ABSENT"; fi
+    expect:
+      stdout: '\A(BAD-TOPIC-ABSENT|SKIP no secrets)\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+
+  - id: connect-secret-placeholders-rest
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      The REST API returns the connector's config, its info and its task configs with the ${dir:} placeholders, never
+      the values they resolve to.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      shell: bash
+      script: |
+        PW='{connect_rest_password}'; A='{connect_alias_dict}'; O='{connect_alias_opaque}'; ADM='{admin_password}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        H="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"
+        out=""
+        for p in config:connectors/e2e-mirror-dir/config 'info:connectors?expand=info' tasks:connectors/e2e-mirror-dir/tasks; do
+          R=$(wget -qO- --header="$H" "http://127.0.0.1:8083/${p#*:}")
+          ph=$(printf '%s' "$R" | grep -oF '${dir:/opt/kafka/secrets' | wc -l | tr -d ' ')
+          leaks=$(( $(printf '%s' "$R" | grep -oF -- "$ADM" | wc -l) + $(printf '%s' "$R" | grep -oF -- "$A" | wc -l) + $(printf '%s' "$R" | grep -oF -- "$O" | wc -l) ))
+          out="$out${p%%:*}=$ph/$leaks "
+        done
+        echo "$out"
+    expect:
+      stdout: '\A(config=[1-9][0-9]*/0 info=[1-9][0-9]*/0 tasks=[1-9][0-9]*/0 |SKIP no secrets)\s*\Z'
+    retries: 6
+    retryDelaySeconds: 30
+
+  - id: connect-secret-placeholders-files
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      The worker's setup script and properties (the chart's -init and -props secrets) hold placeholders only, and the
+      worker config merges the user's providers with dir, limits dir to /opt/kafka/secrets and limits env so that
+      CPLN_ variables never resolve.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      shell: bash
+      script: |
+        A='{connect_alias_dict}'; ADM='{admin_password}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        C=/opt/kafka/config
+        F="/opt/kafka/init.sh $C/connect-distributed.properties $C/connect-distributed-updated.properties"
+        echo "LEAKS $(cat $F | grep -oF -- "$ADM" | wc -l | tr -d ' ') PLACEHOLDERS $(cat $F | grep -oF '${dir:/opt/kafka/secrets' | wc -l | tr -d ' ')"
+        echo "PROVIDERS $(grep -cxF 'config.providers=env,dir' $C/connect-distributed-updated.properties)" \
+          "ALLOWED $(grep -cxF 'config.providers.dir.param.allowed.paths=/opt/kafka/secrets' $C/connect-distributed-updated.properties)" \
+          "ALLOWLIST $(grep -cxF 'config.providers.env.param.allowlist.pattern=(?!CPLN_).*' $C/connect-distributed-updated.properties)"
+    expect:
+      stdout: '\A(LEAKS 0 PLACEHOLDERS [1-9][0-9]*\nPROVIDERS 1 ALLOWED 1 ALLOWLIST 1|SKIP no secrets)\s*\Z'
+
+  - id: connect-secret-placeholders-topic
+    issue: "#5597"
+    since: 4.5.1
+    description: The connector configs Kafka Connect stores in its config topic hold the placeholders, not the values.
+    exec:
+      workload: "{release}-client"
+      container: kafka
+      shell: bash
+      script: |
+        A='{connect_alias_dict}'; ADM='{admin_password}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        cd /opt/kafka/bin
+        printf '%s\n' 'security.protocol=SASL_PLAINTEXT' 'sasl.mechanism=PLAIN' \
+          'sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{admin_password}";' > /tmp/e2e.properties
+        ./kafka-console-consumer.sh --bootstrap-server {release}-cluster.{gvc}.cpln.local:9092 --consumer.config /tmp/e2e.properties \
+          --topic e2e-connect-configs --from-beginning --timeout-ms 30000 > /tmp/e2e-configs.txt 2>/dev/null || true
+        echo "NAMED $(grep -cF 'e2e-mirror-dir' /tmp/e2e-configs.txt) PLACEHOLDERS $(grep -oF '${dir:/opt/kafka/secrets' /tmp/e2e-configs.txt | wc -l | tr -d ' ') LEAKS $(grep -oF -- "$ADM" /tmp/e2e-configs.txt | wc -l | tr -d ' ')"
+        rm -f /tmp/e2e-configs.txt
+    expect:
+      stdout: '\A(NAMED [1-9][0-9]* PLACEHOLDERS [1-9][0-9]* LEAKS 0|SKIP no secrets)\s*\Z'
+    retries: 4
+    retryDelaySeconds: 30
+    timeoutSeconds: 150
+
+  - id: connect-secret-placeholders-ui
+    issue: "#5597"
+    since: 4.5.1
+    description: The Kafka UI shows the connector's config with the placeholders, not the values.
+    exec:
+      workload: "{release}-kafbat-ui"
+      container: kafbat-ui
+      script: |
+        A='{connect_alias_dict}'; ADM='{admin_password}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        R=$(wget -qO- http://127.0.0.1:8080/api/clusters/e2e/connects/e2e/connectors/e2e-mirror-dir/config)
+        echo "PLACEHOLDERS $(printf '%s' "$R" | grep -oF '${dir:/opt/kafka/secrets' | wc -l | tr -d ' ') LEAKS $(printf '%s' "$R" | grep -oF -- "$ADM" | wc -l | tr -d ' ')"
+    expect:
+      stdout: '\A(PLACEHOLDERS [1-9][0-9]* LEAKS 0|SKIP no secrets)\s*\Z'
+    retries: 6
+    retryDelaySeconds: 30
+
+  - id: connect-secret-missing-key
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      A connector that reads a key its secret does not have is not created (Kafka would pass the placeholder text on
+      as the value), while the connectors around it are.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'; A='{connect_alias_dict}'
+        if [ -z "$A" ]; then echo "SKIP no secrets"; exit 0; fi
+        H="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"
+        code() { wget -q -S -O /dev/null --header="$H" "http://127.0.0.1:8083/connectors/$1" 2>&1 | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p' | tail -1; }
+        # e2e-mirror-bad comes after e2e-mirror-missing in the plugin list, so it existing means the setup got past it.
+        echo "dir=$(code e2e-mirror-dir) bad=$(code e2e-mirror-bad) missing=$(code e2e-mirror-missing)"
+    expect:
+      stdout: '\A(dir=200 bad=200 missing=404|SKIP no secrets)\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+
+  - id: connect-config-provider-limits
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      The worker's env config provider never resolves a CPLN_ variable (the workload's Control Plane token is one) but
+      still resolves other variables, and the dir provider resolves a mounted secret but not a file outside
+      /opt/kafka/secrets. Probed through the REST API's config validation, which returns resolved values.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      shell: bash
+      script: |
+        PW='{connect_rest_password}'; ENVP='{connect_env_provider}'; OS='{connect_secret_opaque}'; AO='{connect_alias_opaque}'
+        if [ -z "$ENVP" ]; then echo "SKIP no env provider"; exit 0; fi
+        H=""; [ -n "$PW" ] && H="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"$'\r\n'
+        BODY='{"connector.class":"org.apache.kafka.connect.mirror.MirrorSourceConnector","name":"e2e-validate","source.cluster.alias":"${'"$ENVP"':CPLN_GVC}","target.cluster.alias":"${'"$ENVP"':KAFKA_HEAP_OPTS}"'
+        [ -n "$OS" ] && BODY="$BODY"',"topics":"${dir:/opt/kafka/config:connect-log4j.properties}","topics.exclude":"${dir:/opt/kafka/secrets:'"$OS"'}"'
+        BODY="$BODY}"
+        R=$( { printf 'PUT /connector-plugins/org.apache.kafka.connect.mirror.MirrorSourceConnector/config/validate HTTP/1.1\r\nHost: localhost\r\n%sContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$H" "${#BODY}"; printf '%s' "$BODY"; } | nc 127.0.0.1 8083)
+        val() { printf '%s' "$R" | grep -o "\"value\":{\"name\":\"$1\",\"value\":\"[^\"]*\"" | sed 's/.*,"value":"//; s/"$//'; }
+        v=$(val source.cluster.alias); [ "$v" = "\${$ENVP:CPLN_GVC}" ] && e1=literal || e1="not-literal"
+        v=$(val target.cluster.alias); case "$v" in -Xms*) e2=resolved;; *) e2="not-resolved";; esac
+        out="ENV_CPLN=$e1 ENV_OTHER=$e2"
+        if [ -n "$OS" ]; then
+          v=$(val topics); [ "$v" = '${dir:/opt/kafka/config:connect-log4j.properties}' ] && d1=literal || d1="not-literal"
+          v=$(val topics.exclude); [ "$v" = "$AO" ] && d2=resolved || d2="not-resolved"
+          out="$out DIR_OUTSIDE=$d1 DIR_SECRET=$d2"
+        fi
+        echo "$out"
+    expect:
+      stdout: '\A(ENV_CPLN=literal ENV_OTHER=resolved( DIR_OUTSIDE=literal DIR_SECRET=resolved)?|SKIP no env provider)\s*\Z'
+    retries: 6
+    retryDelaySeconds: 30
+
+  - id: connect-env-provider
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      A worker that logs in to Kafka with ${env:} placeholders (the pattern from 4.4.0) still serves its connector list
+      once env is limited with allowlist.pattern.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'
+        if [ -z '{connect_env_provider}' ]; then echo "SKIP no env provider"; exit 0; fi
+        if [ -n "$PW" ]; then set -- --header="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"; fi
+        R=$(wget -qO- "$@" http://127.0.0.1:8083/connectors) && echo "LIST $R" | head -c 6
+    expect:
+      stdout: '\A(LIST \[|SKIP no env provider)\s*\Z'
     retries: 8
     retryDelaySeconds: 30

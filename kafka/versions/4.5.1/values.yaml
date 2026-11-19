@@ -271,29 +271,33 @@ kafbat_ui:
 #     env:
 #         - name: KAFKA_HEAP_OPTS 
 #           value: '-Xms900m -Xmx900m' # set to 50%-75% of the memory
-#     # To disable all traffic, comment out the corresponding rule. Docs: https://docs.controlplane.com/concepts/security#firewall
+#     # No firewall key admits no one. Allow only the clients that need the REST API (port 8083). Docs: https://docs.controlplane.com/concepts/security#firewall
 #     firewall:
-#       external_inboundAllowCIDR: 0.0.0.0/0 # Provide a comma-separated list
-#       internal_inboundAllowType: "same-gvc" # Options: same-org / same-gvc
-#       # You can specify additional workloads with either same-gvc or workload-list:
+#       internal_inboundAllowType: workload-list # Options: none / same-gvc / same-org / workload-list
 #       inboundAllowWorkload:
-#         - //gvc/main-kafka/workload/main-kafka-kafbat-ui
-#         - //gvc/client-gvc/workload/client
-#       external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
+#         - //gvc/GVC_NAME/workload/RELEASE_NAME-kafbat-ui
+#         - //gvc/GVC_NAME/workload/RELEASE_NAME-connect-cluster # the workers forward REST requests to each other
+#       external_outboundAllowCIDR: "0.0.0.0/0" # Connectors reach external systems; narrow it if you can
 #     listener: client # Provide the listener name to connect to
-#     rest_auth_secret: "" # Opaque secret with one "username: password" line per user; the REST API (port 8083) then requires basic auth. "" = no auth
+#     rest_auth_secret: "" # Opaque secret with one "username: password" line per user; the REST API (port 8083) then requires basic auth. "" = no auth. Required when secrets is set
+#     # Control Plane secrets (opaque or dictionary, e.g. synced by the ess template) mounted under /opt/kafka/secrets.
+#     # Use them in connector_properties or a plugin's config as ${dir:/opt/kafka/secrets/NAME:KEY} (dictionary)
+#     # or ${dir:/opt/kafka/secrets:NAME} (opaque); REST and the Kafka UI show only the placeholder. Must exist before install.
+#     # After a secret's value changes, force a redeployment of the workers (README: Connector credentials).
+#     secrets: []
+#     #   - name: my-connector-credentials
 #     connector_properties:
 #       # bootstrap.servers: "kafka-dev-cluster:9092" # Optional. If not set, the bootstrap address will be the cluster name or publicAddress
 #       group.id: "connect-cluster"
 #       security.protocol: "SASL_PLAINTEXT"
 #       sasl.mechanism: "PLAIN"
-#       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}\";"
 #       consumer.security.protocol: "SASL_PLAINTEXT"
 #       consumer.sasl.mechanism: "PLAIN"
-#       consumer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       consumer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}\";"
 #       producer.security.protocol: "SASL_PLAINTEXT"
 #       producer.sasl.mechanism: "PLAIN"
-#       producer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"your-admin-password\";"
+#       producer.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}\";"
 #       key.converter.schemas.enable: "false"
 #       value.converter.schemas.enable: "false"
 #       offset.storage.topic: "connect-offsets"
@@ -339,37 +343,37 @@ kafbat_ui:
 #           source.consumer.sasl.mechanism: PLAIN
 #           source.consumer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           source.producer.security.protocol: SASL_PLAINTEXT
 #           source.producer.sasl.mechanism: PLAIN
 #           source.producer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           target.producer.security.protocol: SASL_PLAINTEXT
 #           target.producer.sasl.mechanism: PLAIN
 #           target.producer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           target.consumer.security.protocol: SASL_PLAINTEXT
 #           target.consumer.sasl.mechanism: PLAIN
 #           target.consumer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           admin.security.protocol: SASL_PLAINTEXT
 #           admin.sasl.mechanism: PLAIN
 #           admin.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           consumer.security.protocol: SASL_PLAINTEXT
 #           consumer.sasl.mechanism: PLAIN
 #           consumer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #           producer.security.protocol: SASL_PLAINTEXT
 #           producer.sasl.mechanism: PLAIN
 #           producer.sasl.jaas.config: >-
 #             org.apache.kafka.common.security.plain.PlainLoginModule required
-#             username='admin' password='your-admin-password';
+#             username='admin' password='${dir:/opt/kafka/secrets/my-connector-credentials:kafka-admin-password}';
 #       - name: "camel-s3-sink"
 #         enabled: true
 #         artifacts:
@@ -384,8 +388,8 @@ kafbat_ui:
 #           "camel.kamelet.aws-s3-sink.keyName": "your-topic-sink-${exchangeId}.txt"
 #           "camel.kamelet.aws-s3-sink.region": "your-region"
 #           "camel.kamelet.aws-s3-sink.autoCreateBucket": "true"
-#           "camel.kamelet.aws-s3-sink.accessKey": "your-access-key"
-#           "camel.kamelet.aws-s3-sink.secretKey": "your-secret-key"
+#           "camel.kamelet.aws-s3-sink.accessKey": "${dir:/opt/kafka/secrets/my-connector-credentials:aws-access-key-id}"
+#           "camel.kamelet.aws-s3-sink.secretKey": "${dir:/opt/kafka/secrets/my-connector-credentials:aws-secret-access-key}"
 #       - name: "clickhouse-sink"
 #         enabled: true
 #         ssl_truststore:
@@ -406,7 +410,7 @@ kafbat_ui:
 #           "hostname": "your-hostname"
 #           "username": "your-username"
 #           "database": "your-database"
-#           "password": "your-password"
+#           "password": "${dir:/opt/kafka/secrets/my-connector-credentials:clickhouse-password}"
 #           "port": "8443"
 #           "value.converter.schemas.enable": "false"
 #           "ssl": "true" # Connect to ClickHouse using SSL protocol
@@ -440,8 +444,8 @@ kafbat_ui:
 #           "security.protocol": "SASL_PLAINTEXT" # Connect to Kafka cluster using SASL_PLAINTEXT protocol - Internal connection mTLS encrypted
 #           "snowflake.url.name": "your-snowflake-url"
 #           "snowflake.user.name": "your-snowflake-username"
-#           "snowflake.private.key": "your-snowflake-private-key"
-#           "snowflake.private.key.passphrase": "your-snowflake-private-key-passphrase"
+#           "snowflake.private.key": "${dir:/opt/kafka/secrets/my-connector-credentials:snowflake-private-key}"
+#           "snowflake.private.key.passphrase": "${dir:/opt/kafka/secrets/my-connector-credentials:snowflake-private-key-passphrase}"
 #           "snowflake.warehouse.name": "your-snowflake-warehouse-name"
 #           "snowflake.database.name": "your-snowflake-database-name"
 #           "snowflake.schema.name": "your-snowflake-schema-name"

@@ -3,7 +3,50 @@
 {{- include "kafka.validateImage" . -}}
 {{- include "kafka.validateConnectorDownloads" . -}}
 {{- include "kafka.validateConnectRestAuth" . -}}
+{{- include "kafka.validateConnectorSecrets" . -}}
+{{- include "kafka.validateConnectEnvProvider" . -}}
 {{- $restAuth := .rest_auth_secret | default "" | toString | trim }}
+{{- $secretNames := compact (splitList "," (include "kafka.connectSecretNames" .)) }}
+{{- $downloadScript := include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) }}
+{{- $runScript := include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) }}
+{{- $props := include "kafka.connectors.props" (dict "connector" . "root" $) | trimPrefix "\n" }}
+{{- $links := list (printf "//secret/%s-connect-%s-props" (include "kafka.name" $) .name) (printf "//secret/%s-connect-%s-init" (include "kafka.name" $) .name) (printf "//secret/%s-connect-%s-download" (include "kafka.name" $) .name) }}
+{{- if $restAuth }}
+{{- $links = append $links (printf "//secret/%s" $restAuth) }}
+{{- end }}
+{{- range (.extraVolumes | default list) }}
+{{- if contains "/secret/" .uri }}
+{{- $links = append $links (printf "//secret/%s" (regexReplaceAll ".*//secret/([^.]+).*" .uri "${1}")) }}
+{{- end }}
+{{- end }}
+{{- /* Check for secrets in ssl_truststore configuration values */ -}}
+{{- if hasKey . "ssl_truststore" }}
+{{- range $key, $value := .ssl_truststore }}
+{{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
+{{- $links = append $links (printf "//secret/%s" (regexReplaceAll ".*//secret/([^.]+).*" $value "${1}")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Check for secrets in env variables */ -}}
+{{- if hasKey . "env" }}
+{{- range .env }}
+{{- if and (hasKey . "value") (contains "//secret/" .value) }}
+{{- $links = append $links (printf "//secret/%s" (regexReplaceAll ".*//secret/([^.]+).*" .value "${1}")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Check for secrets in connector_properties */ -}}
+{{- if hasKey . "connector_properties" }}
+{{- range $key, $value := .connector_properties }}
+{{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
+{{- $links = append $links (printf "//secret/%s" (regexReplaceAll ".*//secret/([^.]+).*" $value "${1}")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* 4.5.1: the secrets mounted for the dir config provider */ -}}
+{{- range $secretNames }}
+{{- $links = append $links (printf "//secret/%s" .) }}
+{{- end }}
 kind: policy
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
@@ -15,46 +58,8 @@ bindings:
       - //gvc/{{ $.Values.global.cpln.gvc }}/identity/{{ include "kafka.name" $ }}-connect-{{ .name }}
 targetKind: secret
 targetLinks:
-  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-props
-  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
-  - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
-  {{- if $restAuth }}
-  - //secret/{{ $restAuth }}
-  {{- end }}
-  {{- if and .extraVolumes (ne (len .extraVolumes) 0) }}
-  {{- range .extraVolumes }}
-  {{- if contains "/secret/" .uri }}
-  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" .uri "${1}" }}
-  - //secret/{{ $secretName }}
-  {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- /* Check for secrets in ssl_truststore configuration values */ -}}
-  {{- if hasKey . "ssl_truststore" }}
-  {{- range $key, $value := .ssl_truststore }}
-  {{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
-  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" $value "${1}" }}
-  - //secret/{{ $secretName }}
-  {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- /* Check for secrets in env variables */ -}}
-  {{- if hasKey . "env" }}
-  {{- range .env }}
-  {{- if and (hasKey . "value") (contains "//secret/" .value) }}
-  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" .value "${1}" }}
-  - //secret/{{ $secretName }}
-  {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- /* Check for secrets in connector_properties */ -}}
-  {{- if hasKey . "connector_properties" }}
-  {{- range $key, $value := .connector_properties }}
-  {{- if and (kindIs "string" $value) (contains "//secret/" $value) }}
-  {{- $secretName := regexReplaceAll ".*//secret/([^.]+).*" $value "${1}" }}
-  - //secret/{{ $secretName }}
-  {{- end }}
-  {{- end }}
+  {{- range (uniq $links) }}
+  - {{ . }}
   {{- end }}
 ---
 kind: secret
@@ -64,7 +69,7 @@ type: opaque
 data:
   encoding: plain
   payload: |
-    {{- include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) | nindent 4 }}
+    {{- $downloadScript | nindent 4 }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-init
@@ -73,7 +78,7 @@ type: opaque
 data:
   encoding: plain
   payload: |
-    {{- include "kafka.connectors.run.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) | nindent 4 }}
+    {{- $runScript | nindent 4 }}
 ---
 kind: secret
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}-props
@@ -83,15 +88,7 @@ type: opaque
 data:
   encoding: plain
   payload: |-
-    {{- if not (hasKey .connector_properties "bootstrap.servers") }}
-    bootstrap.servers={{ include "kafka.clientBootstrapAddress" $ }}
-    {{- end }}
-    {{- range $key, $value := .connector_properties }}
-    {{ $key }}={{ $value }}
-    {{- end }}
-    {{- if $restAuth }}
-    rest.extension.classes=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
-    {{- end }}
+    {{- $props | nindent 4 }}
 ---
 kind: identity
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
@@ -140,6 +137,7 @@ tags:
   {{- end }}
   {{- end }}
   {{- include "kafka.tags" $ | nindent 2 }}
+  cpln/checksum: {{ sha256sum (print $downloadScript $runScript $props) | quote }}
 spec:
   type: stateful
   containers:
@@ -181,6 +179,11 @@ spec:
         - path: /opt/kafka/config/connect-rest-users.properties
           recoveryPolicy: retain
           uri: cpln://secret/{{ $restAuth }}
+        {{- end }}
+        {{- range $secretNames }}
+        - path: /opt/kafka/secrets/{{ . }}
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ . }}
         {{- end }}
         {{- if .extraVolumes }}
         {{- toYaml .extraVolumes | nindent 8 }}

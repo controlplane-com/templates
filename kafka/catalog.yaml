@@ -10,7 +10,8 @@ summary: >-
   An Apache Kafka cluster in KRaft mode with no ZooKeeper: three brokers by default, the first ones
   also acting as controllers, each with its own snapshotted volume, SASL authentication and ACLs.
   The Kafbat web UI and a Confluent REST Proxy are on by default; Kafka Connect workers with
-  connector plugins and public listeners with per-broker TLS hostnames are optional. The default
+  connector plugins, whose credentials can come from Control Plane secrets, and public listeners
+  with per-broker TLS hostnames are optional. The default
   pick for durable, replayable event streaming between services.
 
 keywords:
@@ -24,6 +25,8 @@ keywords:
   - event bus
   - kafka connect
   - connectors
+  - config provider
+  - secrets manager
   - kafbat ui
   - kafka ui
   - rest proxy
@@ -74,6 +77,9 @@ related:
   - template: clickhouse
     relation: companion
     note: Analytics database often fed from Kafka topics
+  - template: ess
+    relation: companion
+    note: Syncs AWS Secrets Manager, Vault and others into the secrets Kafka Connect reads
 
 prerequisites:
   - kind: secret
@@ -112,3 +118,11 @@ prerequisites:
     required: false
     when: kafka.volumes.logs.customEncryption.enabled
     description: An AWS KMS key for volume encryption; after install, finish the key setup from each volume's spec in the console.
+  - kind: other
+    required: false
+    when: a kafka_connectors entry sets secrets
+    description: The Control Plane secrets the connectors read (opaque or dictionary, for example synced by ess), created before installing; their keys are the ones your connector configs reference.
+  - kind: other
+    required: false
+    when: a kafka_connectors entry sets secrets (required then) or rest_auth_secret
+    description: "An opaque secret (encoding plain) with one `username: password` line per Kafka Connect REST API user, created before installing."

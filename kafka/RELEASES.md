@@ -1,3 +1,15 @@
+# Release Notes - Version 4.5.1
+
+## What's New
+
+- **Connector credentials from Control Plane secrets**: list secrets under `secrets` on a `kafka_connectors` entry (for example ones the ESS template syncs from AWS Secrets Manager). Each is mounted on the workers under `/opt/kafka/secrets`, and Kafka's `dir` config provider resolves `${dir:/opt/kafka/secrets/NAME:KEY}` (dictionary) or `${dir:/opt/kafka/secrets:NAME}` (opaque) in worker properties and plugin configs. The REST API, the Kafka UI and Connect's config topic show only the placeholder. The provider reads nothing outside `/opt/kafka/secrets`.
+- `rest_auth_secret` is required with `secrets`: every REST API user can read the mounted secrets through a connector.
+- At start the chart checks every reference: a connector reading a key its secret does not have is not created or updated, and the log names the key (never a value).
+- **The `env` config provider no longer resolves `${env:CPLN_…}`** (the workload's Control Plane token is one): the chart sets `allowlist.pattern=(?!CPLN_).*` on every `EnvVarConfigProvider` of a Connect worker, and refuses a `config.providers.*.param.allowlist.pattern` of your own. Other variables resolve as before.
+- **Worker config changes restart the workers by themselves**: a `cpln/checksum` tag on the Connect workload follows the worker properties, plugin configs and downloads. A changed secret value still needs `cpln workload force-redeployment`, also when ESS syncs it.
+- Off unless set: without `secrets` a worker is configured as in 4.5.0, apart from the `env` allowlist.
+- Upgrading restarts the Kafka Connect replicas (and, as with any chart version change, the brokers).
+
 # Release Notes - Version 4.5.0
 
 ## What's New

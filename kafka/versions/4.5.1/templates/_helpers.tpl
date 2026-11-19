@@ -269,6 +269,193 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 {{- end -}}
 {{- end -}}
 
+{{/*
+================================================================================
+Connector secrets (4.5.1)
+
+kafka_connectors[].secrets lists Control Plane secrets the chart mounts under
+/opt/kafka/secrets/<name> on the kafka-connect container. Kafka's built-in
+DirectoryConfigProvider (provider `dir`, locked to /opt/kafka/secrets with
+allowed.paths) then resolves placeholders in worker properties and plugin configs:
+  ${dir:/opt/kafka/secrets/<name>:<key>}   a dictionary secret (a directory, one file per key)
+  ${dir:/opt/kafka/secrets:<name>}         an opaque secret (one file)
+================================================================================
+*/}}
+
+{{/* The listed secret names of one Connect group, comma-separated ("" when none). */}}
+{{- define "kafka.connectSecretNames" -}}
+{{- $names := list -}}
+{{- if kindIs "slice" .secrets -}}
+{{- range .secrets -}}
+{{- if and (kindIs "map" .) (hasKey . "name") -}}
+{{- $names = append $names (toString .name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{/*
+The chart-owned references to listed secrets in one string, one per line as
+<secret>|<key> (dictionary form) or <secret>| (opaque form).
+*/}}
+{{- define "kafka.connectSecretRefs" -}}
+{{- range regexFindAll "\\$\\{dir:/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)\\}" (toString .) -1 }}
+{{- $body := trimSuffix "}" (trimPrefix "${dir:/opt/kafka/secrets" .) }}
+{{- if hasPrefix "/" $body }}
+{{- $rest := trimPrefix "/" $body }}
+{{- $parts := splitn ":" 2 $rest }}
+{{ $parts._0 }}|{{ $parts._1 }}
+{{- else }}
+{{ trimPrefix ":" $body }}|
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* A bash single-quoted word. */}}
+{{- define "kafka.shellQuote" -}}
+'{{ replace "'" "'\\''" (toString .) }}'
+{{- end -}}
+
+{{/*
+Every `${dir:` placeholder in one string value must name a listed secret in one of
+the two forms (F4), and, with secrets listed, none may point outside
+/opt/kafka/secrets (F5). Call with (dict "value" v "names" <list> "where" <text> "group" <name>).
+*/}}
+{{- define "kafka.validateDirPlaceholders" -}}
+{{- $names := .names -}}
+{{- $where := .where -}}
+{{- $group := .group -}}
+{{- if kindIs "string" .value -}}
+{{- range (rest (splitList "${dir:" .value)) -}}
+{{- $seg := . -}}
+{{- $ph := printf "${dir:%s}" (regexReplaceAll "}.*$" $seg "") -}}
+{{- $underRoot := or (hasPrefix "/opt/kafka/secrets/" $seg) (hasPrefix "/opt/kafka/secrets:" $seg) -}}
+{{- $listed := false -}}
+{{- range $names -}}
+{{- if or (hasPrefix (printf "/opt/kafka/secrets/%s:" .) $seg) (hasPrefix (printf "/opt/kafka/secrets:%s}" .) $seg) -}}
+{{- $listed = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and $underRoot (not $listed) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s reads %s, which names no secret listed in secrets. Use ${dir:/opt/kafka/secrets/NAME:KEY} for a dictionary secret or ${dir:/opt/kafka/secrets:NAME} for an opaque one, and list NAME in secrets." $group $where $ph) -}}
+{{- end -}}
+{{- if and (gt (len $names) 0) (not $underRoot) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s reads %s; with secrets set, the dir config provider can only read /opt/kafka/secrets/<secret>." $group $where $ph) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Render checks for kafka_connectors[].secrets (F1-F6). Called once per Connect group. */}}
+{{- define "kafka.validateConnectorSecrets" -}}
+{{- $g := . -}}
+{{- $group := toString $g.name -}}
+{{- $names := list -}}
+{{- if and (hasKey $g "secrets") (not (kindIs "invalid" $g.secrets)) -}}
+{{- if not (kindIs "slice" $g.secrets) -}}
+{{- fail (printf "Error: kafka_connectors '%s' secrets must be a list of {name: <secret>} entries." $group) -}}
+{{- end -}}
+{{- range $i, $s := $g.secrets -}}
+{{- if or (not (kindIs "map" $s)) (not (hasKey $s "name")) (not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" (toString $s.name))) -}}
+{{- fail (printf "Error: kafka_connectors '%s' secrets[%d].name must be a Control Plane secret name (lowercase letters, digits, hyphens)." $group $i) -}}
+{{- end -}}
+{{- if has (toString $s.name) $names -}}
+{{- fail (printf "Error: kafka_connectors '%s' lists secret '%s' twice in secrets." $group (toString $s.name)) -}}
+{{- end -}}
+{{- $names = append $names (toString $s.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $cp := $g.connector_properties | default dict -}}
+{{- if gt (len $names) 0 -}}
+{{- if eq (trim (toString ($g.rest_auth_secret | default ""))) "" -}}
+{{- fail (printf "Error: kafka_connectors '%s' mounts secrets but has no rest_auth_secret; every REST API client could read them through a connector. Set rest_auth_secret." $group) -}}
+{{- end -}}
+{{- range $k, $v := $cp -}}
+{{- if hasPrefix "config.providers.dir." $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; with secrets set the chart configures the dir config provider, remove config.providers.dir.* from connector_properties." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $k, $v := $cp -}}
+{{- include "kafka.validateDirPlaceholders" (dict "value" $v "names" $names "where" (printf "worker property '%s'" $k) "group" $group) -}}
+{{- end -}}
+{{- range ($g.plugins | default list) -}}
+{{- if and (kindIs "map" .) (kindIs "map" .config) -}}
+{{- $pname := toString .name -}}
+{{- range $k, $v := .config -}}
+{{- include "kafka.validateDirPlaceholders" (dict "value" $v "names" $names "where" (printf "plugin '%s'" $pname) "group" $group) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The env config provider (EnvVarConfigProvider) of a Connect worker is always limited
+with allowlist.pattern so that ${env:CPLN_...} never resolves: CPLN_TOKEN is the
+workload's Control Plane API token. The chart sets the pattern itself (4.5.1), so a
+user-supplied allowlist.pattern is refused: a pattern can always be written to
+reopen CPLN_ (for example an alternation), so it cannot be combined safely.
+*/}}
+{{- define "kafka.connectEnvAllowlistPattern" -}}(?!CPLN_).*{{- end -}}
+
+{{/* The names of the providers whose class is EnvVarConfigProvider, comma-separated. */}}
+{{- define "kafka.connectEnvProviders" -}}
+{{- $names := list -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if and (regexMatch "^config\\.providers\\..+\\.class$" $k) (eq (trim (toString $v)) "org.apache.kafka.common.config.provider.EnvVarConfigProvider") -}}
+{{- $names = append $names (trimSuffix ".class" (trimPrefix "config.providers." $k)) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{- define "kafka.validateConnectEnvProvider" -}}
+{{- $group := toString .name -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if regexMatch "^config\\.providers\\..+\\.param\\.allowlist\\.pattern$" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; the chart sets allowlist.pattern on every env config provider so that ${env:CPLN_...} variables (the workload's Control Plane token among them) never resolve. Remove the key." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The worker properties file of one Connect group (the -props secret). */}}
+{{- define "kafka.connectors.props" -}}
+{{- $g := .connector -}}
+{{- $root := .root -}}
+{{- $restAuth := $g.rest_auth_secret | default "" | toString | trim -}}
+{{- $secretNames := include "kafka.connectSecretNames" $g -}}
+{{- $cp := $g.connector_properties | default dict -}}
+{{- if not (hasKey $cp "bootstrap.servers") }}
+bootstrap.servers={{ include "kafka.clientBootstrapAddress" $root }}
+{{- end }}
+{{- range $key, $value := $cp }}
+{{- if not (and $secretNames (eq $key "config.providers")) }}
+{{ $key }}={{ $value }}
+{{- end }}
+{{- end }}
+{{- if $restAuth }}
+rest.extension.classes=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
+{{- end }}
+{{- if $secretNames }}
+{{- $providers := list }}
+{{- range splitList "," (toString (index $cp "config.providers" | default "")) }}
+{{- if and (trim .) (not (has (trim .) $providers)) }}
+{{- $providers = append $providers (trim .) }}
+{{- end }}
+{{- end }}
+{{- if not (has "dir" $providers) }}
+{{- $providers = append $providers "dir" }}
+{{- end }}
+config.providers={{ join "," $providers }}
+config.providers.dir.class=org.apache.kafka.common.config.provider.DirectoryConfigProvider
+config.providers.dir.param.allowed.paths=/opt/kafka/secrets
+{{- end }}
+{{- range (compact (splitList "," (include "kafka.connectEnvProviders" $g))) }}
+config.providers.{{ . }}.param.allowlist.pattern={{ include "kafka.connectEnvAllowlistPattern" $root }}
+{{- end }}
+{{- end -}}
+
 {{- define "kafka.validateConnectorDownloads" -}}
 {{- $c := . -}}
 {{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
@@ -885,6 +1072,21 @@ while :; do bg sleep 2147483647; done
 {{- $waitAction = toString $c.plugins_wait_timeout_action -}}
 {{- end -}}
 {{- $restAuth := $c.rest_auth_secret | default "" | toString | trim -}}
+{{- $secretNames := include "kafka.connectSecretNames" $c -}}
+{{- $workerRefs := list -}}
+{{- range $k, $v := ($c.connector_properties | default dict) -}}
+{{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) -}}{{- if . -}}{{- $workerRefs = append $workerRefs . -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- $workerRefs = uniq $workerRefs -}}
+{{- $allRefs := $workerRefs -}}
+{{- range ($c.plugins | default list) -}}
+{{- if and (kindIs "map" .) (kindIs "map" .config) (not (and (hasKey . "enabled") (not .enabled))) -}}
+{{- range $k, $v := .config -}}
+{{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) -}}{{- if . -}}{{- $allRefs = append $allRefs . -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $allRefs = uniq $allRefs -}}
 #!/bin/bash
 set -e
 
@@ -895,6 +1097,58 @@ REST_AUTH_HDR=""
 config_keys() {
   echo "$1" | sed -n 's/^[[:space:],{]*"\([^"]*\)":[[:space:]]*".*/\1/p' | grep -v '^name$' | tr '\n' ' '
 }
+{{- if $secretNames }}
+
+# Control Plane secrets mounted for the dir config provider. Only file names and sizes are read here, never values.
+SECRETS_ROOT=/opt/kafka/secrets
+secret_keys() {
+  ls -1 "$1" 2>/dev/null | grep -v '^___cpln___' | tr '\n' ' '
+}
+# What is wrong with one reference (<secret>|<key>, or <secret>| for an opaque secret); returns 1 when something is.
+secret_ref_problem() {
+  local s=${1%%|*} k=${1#*|}
+  local p="$SECRETS_ROOT/$s"
+  if [[ -n "$k" ]]; then
+    if [[ -f "$p" ]]; then
+      echo "$s is an opaque secret (one value): use \${dir:$SECRETS_ROOT:$s}"; return 1
+    elif [[ ! -d "$p" ]]; then
+      echo "secret '$s' is not mounted at $p"; return 1
+    elif [[ ! -f "$p/$k" ]]; then
+      echo "key '$k' of secret '$s' does not exist; its keys: $(secret_keys "$p")"; return 1
+    fi
+  else
+    if [[ -d "$p" ]]; then
+      echo "$s is a dictionary secret: use \${dir:$SECRETS_ROOT/$s:KEY}; its keys: $(secret_keys "$p")"; return 1
+    elif [[ ! -f "$p" ]]; then
+      echo "secret '$s' is not mounted at $p"; return 1
+    fi
+  fi
+  return 0
+}
+# Kafka passes a value on byte for byte, so warn about an empty one or one that ends with a newline.
+secret_ref_warn() {
+  local s=${1%%|*} k=${1#*|} f label
+  if [[ -n "$k" ]]; then f="$SECRETS_ROOT/$s/$k"; label="key '$k' of secret '$s'"; else f="$SECRETS_ROOT/$s"; label="secret '$s'"; fi
+  [[ -f "$f" ]] || return 0
+  if [[ ! -s "$f" ]]; then
+    echo "WARNING: $label is empty"
+  elif [[ "$(tail -c1 "$f" | wc -l)" -gt 0 ]]; then
+    echo "WARNING: $label ends with a newline, which Kafka passes on as part of the value"
+  fi
+}
+# A connector whose secret references do not resolve is not created or updated (Kafka would keep the placeholder text).
+connector_secrets_ok() {
+  local connector=$1 ref problem ok=0
+  shift
+  for ref in "$@"; do
+    if ! problem=$(secret_ref_problem "$ref"); then
+      echo "ERROR: connector $connector not created or updated: $problem"
+      ok=1
+    fi
+  done
+  return $ok
+}
+{{- end }}
 
 # Function to create or update a connector
 create_or_update_connector() {
@@ -1271,6 +1525,14 @@ setup_connectors() {
 
   # Create/update connectors
   {{- range .plugins }}
+  {{- $prefs := list }}
+  {{- if kindIs "map" .config }}
+  {{- range $k, $v := .config }}
+  {{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) }}{{- if . }}{{- $prefs = append $prefs . }}{{- end }}{{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $prefs = uniq $prefs }}
+  {{- $pname := .name }}
   echo "Processing connector: {{ .name }}"
   {{- if hasKey . "enabled" }}
   {{- if not .enabled }}
@@ -1337,6 +1599,9 @@ fi
   fi
   {{- end }}
   {{- end }}
+{{- if $prefs }}
+if connector_secrets_ok {{ include "kafka.shellQuote" $pname }}{{ range $prefs }} {{ include "kafka.shellQuote" . }}{{ end }}; then
+{{- end }}
 
 # Try to create connector with retry logic
 max_retries=5
@@ -1355,6 +1620,9 @@ while [ $retry_count -lt $max_retries ]; do
     fi
   fi
 done
+{{- if $prefs }}
+fi
+{{- end }}
 
 # Wait a bit between connectors to allow Kafka Connect API to stabilize
 sleep 3
@@ -1411,6 +1679,9 @@ else
 fi
 {{- end }}
 {{- end }}
+{{- if $prefs }}
+if connector_secrets_ok {{ include "kafka.shellQuote" $pname }}{{ range $prefs }} {{ include "kafka.shellQuote" . }}{{ end }}; then
+{{- end }}
 
   # Try to create connector with retry logic
 max_retries=5
@@ -1429,6 +1700,9 @@ while [ $retry_count -lt $max_retries ]; do
     fi
   fi
 done
+{{- if $prefs }}
+fi
+{{- end }}
 
 # Wait a bit between connectors to allow Kafka Connect API to stabilize
 sleep 3
@@ -1500,6 +1774,20 @@ if [[ -f "$PLUGIN_SYNC/downloads-done" ]]; then
     print_pending_plugins
   fi
 fi
+
+{{- if $secretNames }}
+
+# Mounted secrets: warn about values Kafka would pass on unchanged, and stop when a worker property cannot be read.
+for ref in{{ range $allRefs }} {{ include "kafka.shellQuote" . }}{{ end }}; do
+  secret_ref_warn "$ref"
+done
+for ref in{{ range $workerRefs }} {{ include "kafka.shellQuote" . }}{{ end }}; do
+  if ! problem=$(secret_ref_problem "$ref"); then
+    echo "FATAL: a worker property in connector_properties cannot be resolved: $problem"
+    exit 1
+  fi
+done
+{{- end }}
 
 echo "Starting Kafka Connect distributed worker..."
 

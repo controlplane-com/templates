@@ -71,6 +71,27 @@ non-working `your-…` placeholders.
   `apache/kafka:3.9.1`; this chart's own live rows (all-secret install, inline→secret switch, rotation, REST
   Proxy file secrets, Connect `${env:}`, kafka_ui `$(VAR)`) are pending.
 
+## Connector credentials from secrets (4.5.1)
+
+| Piece | What it does |
+|---|---|
+| `kafka_connectors[].secrets: [{name}]` | mounts each secret at `/opt/kafka/secrets/<name>` on `kafka-connect` only (dictionary = directory of key files, opaque = one file); policy `reveal` on each, deduplicated against env/extraVolumes |
+| `dir` config provider | Kafka's `DirectoryConfigProvider`, `allowed.paths=/opt/kafka/secrets`; `config.providers` = the user's list + `dir` |
+| Placeholders | `${dir:/opt/kafka/secrets/NAME:KEY}` / `${dir:/opt/kafka/secrets:NAME}`; REST, UI and config topic show only these |
+| `env` allowlist | `allowlist.pattern=(?!CPLN_).*` on every `EnvVarConfigProvider` (KIP-887, Kafka 3.9 full-match regex), with or without `secrets` |
+| `cpln/checksum` tag | sha256 of the download script + run script + props on the Connect workload (nginx precedent) |
+
+- **Render refusals** (`kafka.validateConnectorSecrets`, `kafka.validateDirPlaceholders`, `kafka.validateConnectEnvProvider`, each mirrored in the wizard): bad/duplicate names; `secrets` without `rest_auth_secret`; `config.providers.dir.*` in worker properties; a `${dir:}` naming an unlisted secret or (with `secrets`) any path outside the root; any `config.providers.*.param.allowlist.pattern`. A user pattern is refused rather than combined: `.*)|(.*` escapes any wrapper.
+- **Any REST user can read mounted secrets**: `config/validate` returns resolved values (AbstractHerder transforms before validating). Hence REST auth is forced.
+- **Kafka keeps an unresolvable placeholder as literal text, silently.** The run script checks every reference (file names and sizes only): a bad one skips that connector with `ERROR: connector … not created or updated`; in a worker property it exits `FATAL`. Empty or trailing-newline values log a WARNING.
+- **A missing secret wedges the replica with empty logs**: `get-deployments` → `secret-does-not-exist`.
+- **A dictionary mount also holds a platform file `___cpln___.secret`** beside the key files (measured 2026-11-19, test env); the preflight hides it from its key lists.
+- **Source connectors write with the worker's `producer.*` settings**: a worker without `producer.security.protocol`/`sasl.*` lets a MirrorSource create topics (admin client) but never write a record.
+- **Rotation = `force-redeployment`** (an ESS sync alone changes nothing in a running worker). Chart-side config changes roll the workers via the checksum tag.
+- **The 4.5.1 render with `secrets` unset differs from 4.5.0 only** by the allowlist line (when an env provider is configured), the checksum tag and the policy dedupe.
+- **Not covered:** the brokers' own `EnvVarConfigProvider` (credentials-secret mode) has no allowlist; a user's own `FileConfigProvider` has no `allowed.paths`. Follow-up candidates.
+- **ESS** (our template syncing AWS Secrets Manager, Vault and others into Control Plane secrets) is the intended source; `dictionaryFromJson` keys use dots for nested JSON and a non-JSON value lands in `__raw`.
+
 ## Kafka Connect plugins (4.3.0)
 
 | Piece | What it does |

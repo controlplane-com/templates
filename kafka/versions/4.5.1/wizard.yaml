@@ -1004,6 +1004,14 @@ steps:
             text: >-
               The Kafka Connect REST API of a group without a REST API users secret has no authentication: any client
               that reaches port 8083 can read connector configs, including their credentials, and change connectors.
+          - type: note
+            severity: warning
+            when: >-
+              self.kafka_connectors != null &&
+              self.kafka_connectors.exists(c, has(c.secrets) && c.secrets != null && type(c.secrets) == list && size(c.secrets) > 0)
+            text: >-
+              Every Kafka Connect REST API user can read the mounted secrets, for example by creating or validating a
+              connector that echoes a value. Give REST API credentials only to people who may see those secrets.
           - path: kafka_connectors
             type: list
             absent: true
@@ -1089,13 +1097,46 @@ steps:
                     create:
                       encoding: plain
                       suggestName: "context.releaseName + '-connect-rest-users'"
+                - path: secrets
+                  type: list
+                  label: Connector secrets
+                  description: >-
+                    Control Plane secrets (opaque or dictionary, for example synced by the ess template) mounted under
+                    `/opt/kafka/secrets`. In worker properties or a plugin's config use
+                    `${dir:/opt/kafka/secrets/NAME:KEY}` for a dictionary secret or `${dir:/opt/kafka/secrets:NAME}`
+                    for an opaque one. Needs a REST API users secret. After a secret's value changes, force a
+                    redeployment of the workers.
+                  docs: "#connector-credentials"
+                  uniqueBy: [name]
+                  itemLabel: item.name
+                  item:
+                    type: object
+                    label: Secret
+                    fields:
+                      - path: name
+                        type: ref
+                        label: Secret
+                        required: true
+                        ref:
+                          kind: secret
+                          format: name
+                          filter: { secretType: [opaque, dictionary] }
+                          mustExist: error
+                          allowCreate: true
+                          create:
+                            secretType: dictionary
+                            suggestName: "context.releaseName + '-connector-credentials'"
+                          # The keys the placeholders read from this secret, for Check keys and the create form.
+                          requiredKeysFrom: >-
+                            self.kafka_connectors == null || item.name == null || self.kafka_connectors.map(c, (!has(c.connector_properties) || c.connector_properties == null ? '' : c.connector_properties.map(k, type(c.connector_properties[k]) == string ? c.connector_properties[k] : '').join(' ')) + ' ' + (!has(c.plugins) || c.plugins == null || type(c.plugins) != list ? '' : c.plugins.map(p, type(p) != map || !('config' in p) || type(p.config) != map ? '' : p.config.map(k, type(p.config[k]) == string ? p.config[k] : '').join(' ')).join(' '))).join(' ').indexOf('${dir:/opt/kafka/secrets/' + item.name + ':') < 0 ? [] : self.kafka_connectors.map(c, (!has(c.connector_properties) || c.connector_properties == null ? '' : c.connector_properties.map(k, type(c.connector_properties[k]) == string ? c.connector_properties[k] : '').join(' ')) + ' ' + (!has(c.plugins) || c.plugins == null || type(c.plugins) != list ? '' : c.plugins.map(p, type(p) != map || !('config' in p) || type(p.config) != map ? '' : p.config.map(k, type(p.config[k]) == string ? p.config[k] : '').join(' ')).join(' '))).join(' ').substring(self.kafka_connectors.map(c, (!has(c.connector_properties) || c.connector_properties == null ? '' : c.connector_properties.map(k, type(c.connector_properties[k]) == string ? c.connector_properties[k] : '').join(' ')) + ' ' + (!has(c.plugins) || c.plugins == null || type(c.plugins) != list ? '' : c.plugins.map(p, type(p) != map || !('config' in p) || type(p.config) != map ? '' : p.config.map(k, type(p.config[k]) == string ? p.config[k] : '').join(' ')).join(' '))).join(' ').indexOf('${dir:/opt/kafka/secrets/' + item.name + ':') + size('${dir:/opt/kafka/secrets/' + item.name + ':')).split('${dir:/opt/kafka/secrets/' + item.name + ':').filter(seg, seg.indexOf('}') > 0).map(seg, seg.substring(0, seg.indexOf('}')))
                 - path: connector_properties
                   type: map
                   label: Worker properties
                   description: Written to `connect-distributed.properties`.
                   help: >-
-                    To keep passwords out of the values, read them with `${env:VAR}` from an env var set to a
-                    `cpln://secret/...` reference; see [Kafka Connect credentials](#kafka-connect-credentials).
+                    To keep passwords out of the values, list their secrets under Connector secrets and read them
+                    with `${dir:/opt/kafka/secrets/NAME:KEY}`, or read them with `${env:VAR}` from an env var set to a
+                    `cpln://secret/...` reference; see [Connector credentials](#connector-credentials).
                   values: { type: string }
                 - path: plugins
                   type: yaml
@@ -1229,6 +1270,59 @@ steps:
                 - rule: item.listener == null || item.listener == '' || item.listener in self.kafka.listeners
                   paths: [listener]
                   message: The broker listener must be one of the keys under Listeners.
+                - rule: >-
+                    item.secrets == null || (type(item.secrets) == list && item.secrets.all(s, type(s) == map &&
+                    'name' in s && string(s.name).matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')))
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [secrets]
+                  message: Every connector secret needs the name of a Control Plane secret (lowercase letters, digits, hyphens).
+                - rule: >-
+                    item.secrets == null || type(item.secrets) != list || isUnique((item.secrets == null || type(item.secrets) != list ? [] : item.secrets.filter(s, type(s) == map && 'name' in s).map(s, string(s.name))))
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [secrets]
+                  message: List each connector secret once.
+                - rule: >-
+                    item.secrets == null || type(item.secrets) != list || size(item.secrets) == 0 ||
+                    (item.rest_auth_secret != null && string(item.rest_auth_secret).trim() != '')
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [rest_auth_secret]
+                  message: >-
+                    Connector secrets need a REST API users secret: without REST API authentication any client that
+                    reaches port 8083 could read them through a connector.
+                - rule: >-
+                    item.secrets == null || type(item.secrets) != list || size(item.secrets) == 0 ||
+                    item.connector_properties == null ||
+                    item.connector_properties.all(k, !k.startsWith('config.providers.dir.'))
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [connector_properties]
+                  message: >-
+                    With connector secrets the chart configures the dir config provider; remove the
+                    `config.providers.dir.*` worker properties.
+                - rule: >-
+                    item.connector_properties == null || item.connector_properties.all(k, type(item.connector_properties[k]) != string || item.connector_properties[k].indexOf('${dir:') < 0 || item.connector_properties[k].substring(item.connector_properties[k].indexOf('${dir:') + 6).split('${dir:').all(seg, (!(seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:')) || (item.secrets == null || type(item.secrets) != list ? [] : item.secrets.filter(s, type(s) == map && 'name' in s).map(s, string(s.name))).exists(n, seg.startsWith('/opt/kafka/secrets/' + n + ':') || seg.startsWith('/opt/kafka/secrets:' + n + '}'))) && (size((item.secrets == null || type(item.secrets) != list ? [] : item.secrets.filter(s, type(s) == map && 'name' in s).map(s, string(s.name)))) == 0 || (seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:')))))
+                  mirrors: kafka.validateDirPlaceholders
+                  paths: [connector_properties]
+                  message: >-
+                    Every `${dir:...}` placeholder must read a listed connector secret, as
+                    `${dir:/opt/kafka/secrets/NAME:KEY}` (dictionary) or `${dir:/opt/kafka/secrets:NAME}` (opaque); with
+                    connector secrets set, no other path can be read.
+                - rule: >-
+                    item.plugins == null || type(item.plugins) != list || item.plugins.all(p, type(p) != map || !('config' in p) || type(p.config) != map || p.config.all(k, type(p.config[k]) != string || p.config[k].indexOf('${dir:') < 0 || p.config[k].substring(p.config[k].indexOf('${dir:') + 6).split('${dir:').all(seg, (!(seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:')) || (item.secrets == null || type(item.secrets) != list ? [] : item.secrets.filter(s, type(s) == map && 'name' in s).map(s, string(s.name))).exists(n, seg.startsWith('/opt/kafka/secrets/' + n + ':') || seg.startsWith('/opt/kafka/secrets:' + n + '}'))) && (size((item.secrets == null || type(item.secrets) != list ? [] : item.secrets.filter(s, type(s) == map && 'name' in s).map(s, string(s.name)))) == 0 || (seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:'))))))
+                  mirrors: kafka.validateDirPlaceholders
+                  paths: [plugins]
+                  message: >-
+                    Every `${dir:...}` placeholder in a plugin's config must read a listed connector secret, as
+                    `${dir:/opt/kafka/secrets/NAME:KEY}` (dictionary) or `${dir:/opt/kafka/secrets:NAME}` (opaque); with
+                    connector secrets set, no other path can be read.
+                - rule: >-
+                    item.connector_properties == null ||
+                    item.connector_properties.all(k, !k.matches('^config\\.providers\\..+\\.param\\.allowlist\\.pattern$'))
+                  mirrors: kafka.validateConnectEnvProvider
+                  paths: [connector_properties]
+                  message: >-
+                    Remove the `config.providers.*.param.allowlist.pattern` worker property: the chart limits every env
+                    config provider itself so that `${env:CPLN_...}` variables, the workload's Control Plane token among
+                    them, never resolve.
 
   - id: advanced
     title: Advanced

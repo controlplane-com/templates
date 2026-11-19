@@ -452,9 +452,11 @@ checks:
         BODY="$BODY}"
         R=$( { printf 'PUT /connector-plugins/org.apache.kafka.connect.mirror.MirrorSourceConnector/config/validate HTTP/1.1\r\nHost: localhost\r\n%sContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$H" "${#BODY}"; printf '%s' "$BODY"; } | nc 127.0.0.1 8083)
         val() { printf '%s' "$R" | grep -o "\"value\":{\"name\":\"$1\",\"value\":\"[^\"]*\"" | sed 's/.*,"value":"//; s/"$//'; }
+        # Precondition: CPLN_GVC is set in this container, so a literal below means the allowlist refused it.
+        [ -n "$CPLN_GVC" ] && pre=set || pre=unset
         v=$(val source.cluster.alias); [ "$v" = "\${$ENVP:CPLN_GVC}" ] && e1=literal || e1="not-literal"
         v=$(val target.cluster.alias); case "$v" in -Xms*) e2=resolved;; *) e2="not-resolved";; esac
-        out="ENV_CPLN=$e1 ENV_OTHER=$e2"
+        out="CPLN_GVC=$pre ENV_CPLN=$e1 ENV_OTHER=$e2"
         if [ -n "$OS" ]; then
           v=$(val topics); [ "$v" = '${dir:/opt/kafka/config:connect-log4j.properties}' ] && d1=literal || d1="not-literal"
           v=$(val topics.exclude); [ "$v" = "$AO" ] && d2=resolved || d2="not-resolved"
@@ -462,8 +464,33 @@ checks:
         fi
         echo "$out"
     expect:
-      stdout: '\A(ENV_CPLN=literal ENV_OTHER=resolved( DIR_OUTSIDE=literal DIR_SECRET=resolved)?|SKIP no env provider)\s*\Z'
+      stdout: '\A(CPLN_GVC=set ENV_CPLN=literal ENV_OTHER=resolved( DIR_OUTSIDE=literal DIR_SECRET=resolved)?|SKIP no env provider)\s*\Z'
     retries: 6
+    retryDelaySeconds: 30
+
+  - id: connect-automatic-providers-blocked
+    issue: "#5597"
+    since: 4.5.1
+    description: >-
+      A connector cannot declare config providers of its own for the clients it configures (here a MirrorSource
+      source.admin.* EnvVarConfigProvider reading CPLN_GVC): the worker runs with
+      org.apache.kafka.automatic.config.providers=none, so that connector fails with "is not allowed", while the
+      same connector shape without its own provider runs.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'
+        if [ -z '{connect_alias_dict}' ]; then echo "SKIP no secrets"; exit 0; fi
+        H="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"
+        st() { wget -qO- --header="$H" "http://127.0.0.1:8083/connectors/$1/status"; }
+        C=$(st e2e-mirror-dir); A=$(st e2e-mirror-autoprov)
+        printf '%s' "$C" | grep -q '"connector":{"state":"RUNNING"' && c=running || c=not-running
+        printf '%s' "$A" | grep -q 'EnvVarConfigProvider is not allowed' && a=blocked || a=not-blocked
+        echo "control=$c autoprov=$a"
+    expect:
+      stdout: '\A(control=running autoprov=blocked|SKIP no secrets)\s*\Z'
+    retries: 8
     retryDelaySeconds: 30
 
   - id: connect-env-provider

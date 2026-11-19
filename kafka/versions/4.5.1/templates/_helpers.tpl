@@ -337,6 +337,9 @@ the two forms (F4), and, with secrets listed, none may point outside
 {{- $listed = true -}}
 {{- end -}}
 {{- end -}}
+{{- if and $underRoot (not (regexMatch "^/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)}" $seg)) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s has the placeholder %s, which names no key or no secret. Use ${dir:/opt/kafka/secrets/NAME:KEY} for a dictionary secret or ${dir:/opt/kafka/secrets:NAME} for an opaque one." $group $where $ph) -}}
+{{- end -}}
 {{- if and $underRoot (not $listed) -}}
 {{- fail (printf "Error: kafka_connectors '%s' %s reads %s, which names no secret listed in secrets. Use ${dir:/opt/kafka/secrets/NAME:KEY} for a dictionary secret or ${dir:/opt/kafka/secrets:NAME} for an opaque one, and list NAME in secrets." $group $where $ph) -}}
 {{- end -}}
@@ -370,6 +373,16 @@ the two forms (F4), and, with secrets listed, none may point outside
 {{- if gt (len $names) 0 -}}
 {{- if eq (trim (toString ($g.rest_auth_secret | default ""))) "" -}}
 {{- fail (printf "Error: kafka_connectors '%s' mounts secrets but has no rest_auth_secret; every REST API client could read them through a connector. Set rest_auth_secret." $group) -}}
+{{- end -}}
+{{- if has (trim (toString $g.rest_auth_secret)) $names -}}
+{{- fail (printf "Error: kafka_connectors '%s' lists its rest_auth_secret '%s' in secrets; every REST API user could then read the other users' passwords. Remove it from secrets." $group (trim (toString $g.rest_auth_secret))) -}}
+{{- end -}}
+{{- $image := toString ($g.image | default "") -}}
+{{- if not (contains "@" $image) -}}
+{{- $tag := trimPrefix ":" (regexFind ":[^:/]+$" $image) -}}
+{{- if regexMatch "^v?([0-2]\\.[0-9]+|3\\.[0-7])([^0-9]|$)" $tag -}}
+{{- fail (printf "Error: kafka_connectors '%s' mounts secrets with image %s; Kafka before 3.8 ignores allowed.paths, so the dir config provider could read any file. Use apache/kafka:3.9.1 or later." $group $image) -}}
+{{- end -}}
 {{- end -}}
 {{- range $k, $v := $cp -}}
 {{- if hasPrefix "config.providers.dir." $k -}}
@@ -416,6 +429,56 @@ reopen CPLN_ (for example an alternation), so it cannot be combined safely.
 {{- if regexMatch "^config\\.providers\\..+\\.param\\.allowlist\\.pattern$" $k -}}
 {{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; the chart sets allowlist.pattern on every env config provider so that ${env:CPLN_...} variables (the workload's Control Plane token among them) never resolve. Remove the key." $group $k) -}}
 {{- end -}}
+{{- if regexMatch "^config\\.providers\\..+\\.param\\.allowed\\.paths$" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; the chart sets allowed.paths on every file and directory config provider (/opt/kafka/secrets and the extraVolumes paths), so that no provider reads the worker's own files. Remove the key." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The names of the providers whose class is FileConfigProvider or DirectoryConfigProvider, comma-separated. */}}
+{{- define "kafka.connectFileProviders" -}}
+{{- $names := list -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if and (regexMatch "^config\\.providers\\..+\\.class$" $k) (has (trim (toString $v)) (list "org.apache.kafka.common.config.provider.FileConfigProvider" "org.apache.kafka.common.config.provider.DirectoryConfigProvider")) -}}
+{{- $names = append $names (trimSuffix ".class" (trimPrefix "config.providers." $k)) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{/* allowed.paths for a user-declared file or directory config provider: the secrets root and every extraVolumes path. */}}
+{{- define "kafka.connectFileProviderPaths" -}}
+{{- $paths := list "/opt/kafka/secrets" -}}
+{{- range (.extraVolumes | default list) -}}
+{{- if and (kindIs "map" .) .path (not (has (toString .path) $paths)) -}}
+{{- $paths = append $paths (toString .path) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $paths -}}
+{{- end -}}
+
+{{/*
+Worker properties are written to a Java properties file, which reads whitespace, `=`
+and `:` in a key as the key's end and `\` as an escape (`\u0041`, a line continuation).
+So a key holding any of them, or a value holding a newline, `\u`, or a trailing `\`,
+would reach the worker as something other than what the chart checked (a key with a
+leading space reads as config.providers.*, a value can add or swallow a line).
+A config.providers.* value holds no `\` at all, so that its class is the one checked.
+Called once per Connect group, with or without rest_auth_secret or secrets.
+*/}}
+{{- define "kafka.validateConnectPropertySyntax" -}}
+{{- $group := toString .name -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if regexMatch "[\\s\\\\=:]" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties key %q holds whitespace, '\\', '=' or ':'; worker property names hold none of them. Remove them from the key." $group $k) -}}
+{{- end -}}
+{{- $sv := toString $v -}}
+{{- if or (contains "\n" $sv) (contains "\r" $sv) (contains "\\u" $sv) (hasSuffix "\\" $sv) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a line break, a '\\u' escape or a trailing '\\', which the worker's properties file reads as more than this value. Write the value on one line without them." $group $k) -}}
+{{- end -}}
+{{- if and (hasPrefix "config.providers" $k) (contains "\\" $sv) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a '\\'; config provider settings take plain class names and values. Remove it." $group $k) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -453,6 +516,10 @@ config.providers.dir.param.allowed.paths=/opt/kafka/secrets
 {{- end }}
 {{- range (compact (splitList "," (include "kafka.connectEnvProviders" $g))) }}
 config.providers.{{ . }}.param.allowlist.pattern={{ include "kafka.connectEnvAllowlistPattern" $root }}
+{{- end }}
+{{- $filePaths := include "kafka.connectFileProviderPaths" $g }}
+{{- range (compact (splitList "," (include "kafka.connectFileProviders" $g))) }}
+config.providers.{{ . }}.param.allowed.paths={{ $filePaths }}
 {{- end }}
 {{- end -}}
 
@@ -1820,6 +1887,11 @@ EOF
 export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Djava.security.auth.login.config=/opt/kafka/config/connect-rest-jaas.conf"
 echo "REST API basic auth is on; the connector setup logs in as '$rest_user'"
 {{- end }}
+
+# Clients a connector configures (producer/consumer/admin overrides, MirrorMaker source.*/target.*)
+# may not load config providers of their own: those would read any env variable or file. The
+# worker's own config.providers (dir, env with its allowlist) are not affected. Kept last so it wins.
+export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Dorg.apache.kafka.automatic.config.providers=none"
 
 # Start the connector setup process in the background
 setup_connectors &

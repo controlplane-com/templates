@@ -104,11 +104,9 @@ values:
       image: apache/kafka:3.9.1
       replicas: 2
       rest_auth_secret: "{secrets.connectrest.name}"
-      # creds is also referenced by an env var below: the policy lists it once.
       secrets:
         - name: "{secrets.connsecrets.name}"
         - name: "{secrets.connopaque.name}"
-        - name: "{secrets.creds.name}"
       cpu: 500m
       memory: 1500Mi
       minCpu: 250m
@@ -221,6 +219,31 @@ values:
             target.cluster.security.protocol: SASL_PLAINTEXT
             target.cluster.sasl.mechanism: PLAIN
             target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:wrong-password}';"
+            sync.topic.acls.enabled: "false"
+            sync.topic.configs.enabled: "false"
+            replication.factor: "3"
+            offset-syncs.topic.replication.factor: "3"
+            refresh.topics.interval.seconds: "30"
+        - name: e2e-mirror-autoprov
+          # Declares a config provider of its own for its source admin client: blocked by
+          # -Dorg.apache.kafka.automatic.config.providers=none, so the connector fails instead of reading CPLN_GVC.
+          config:
+            source.cluster.alias: srcauto
+            target.cluster.alias: tgtauto
+            connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+            tasks.max: "1"
+            topics: e2e
+            source.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            target.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            source.cluster.security.protocol: SASL_PLAINTEXT
+            source.cluster.sasl.mechanism: PLAIN
+            source.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            target.cluster.security.protocol: SASL_PLAINTEXT
+            target.cluster.sasl.mechanism: PLAIN
+            target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            source.admin.config.providers: x
+            source.admin.config.providers.x.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+            source.admin.client.id: "e2e-auto-${x:CPLN_GVC}"
             sync.topic.acls.enabled: "false"
             sync.topic.configs.enabled: "false"
             replication.factor: "3"

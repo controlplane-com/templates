@@ -5,6 +5,7 @@
 {{- include "kafka.validateConnectRestAuth" . -}}
 {{- include "kafka.validateConnectorSecrets" . -}}
 {{- include "kafka.validateConnectEnvProvider" . -}}
+{{- include "kafka.validateConnectPropertySyntax" . -}}
 {{- $restAuth := .rest_auth_secret | default "" | toString | trim }}
 {{- $secretNames := compact (splitList "," (include "kafka.connectSecretNames" .)) }}
 {{- $downloadScript := include "kafka.connectors.download.script" (dict "plugins" .plugins "plugins_folder" .plugins_folder "verbose" .verbose "connector" .) }}

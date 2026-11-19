@@ -84,7 +84,7 @@ After changing either secret, run `cpln workload force-redeployment RELEASE_NAME
 
 #### Connector credentials
 
-List Control Plane secrets under `secrets` and the chart mounts each one on the Kafka Connect workers under `/opt/kafka/secrets` and turns on Kafka's `dir` config provider (`DirectoryConfigProvider`). Worker properties and plugin configs then read a value with a placeholder, and the REST API, the Kafka UI and Connect's config topic show only the placeholder:
+List Control Plane secrets under `secrets` and the chart mounts each one on the Kafka Connect workers under `/opt/kafka/secrets` and turns on Kafka's `dir` config provider (`DirectoryConfigProvider`). Worker properties and plugin configs then read a value with a placeholder, and the connector configs in the REST API, the Kafka UI and Connect's config topic show only the placeholder (REST API users can still read the values, see **Security** below):
 
 | Secret type | Mounted as | Placeholder |
 |---|---|---|
@@ -132,13 +132,17 @@ printf '%s' 'THE_KEYSTORE_PASSWORD' | cpln secret create-opaque --name my-keysto
 **Changing a value:** update the secret (or let ESS sync it), then run `cpln workload force-redeployment RELEASE_NAME-connect-cluster --gvc GVC_NAME`. Running workers keep the value they read at start; the redeployment restarts them one at a time and they read the new one. A `helm upgrade` that changes the worker properties, the plugin configs or the plugin downloads restarts the workers by itself.
 
 **When something is wrong:**
-- **A secret that does not exist** keeps the new replica from starting, and `cpln logs` shows nothing. `cpln workload get-deployments RELEASE_NAME-connect-cluster --gvc GVC_NAME -o yaml` shows `secret-does-not-exist` in `status.versions[].message`.
+- **A secret that does not exist** keeps the new replica from starting, and `cpln logs` shows nothing. `cpln workload get-deployments RELEASE_NAME-connect-cluster --gvc GVC_NAME -o yaml` shows in `status.versions[].message` that the secret does not exist and that workload updates are paused until it is added.
 - **A key the secret does not have, or the wrong placeholder form** (a dictionary read as opaque, or the reverse): Kafka would pass the placeholder text on as the value, so the chart checks every reference at start. A connector with a bad reference is not created or updated, and the `kafka-connect` log names the secret, the key and the keys the secret has (never a value). In a worker property it stops the worker with `FATAL`.
-- **A placeholder naming a secret not in `secrets`, or a path outside `/opt/kafka/secrets`,** is refused when you install or upgrade.
+- **A placeholder naming a secret not in `secrets`, one without a key or secret name, or a path outside `/opt/kafka/secrets`,** is refused when you install or upgrade.
 
 **Security:**
-- `rest_auth_secret` is required with `secrets`. **Every REST API user can read the mounted secrets**, for example by creating a connector or by validating a config (`PUT /connector-plugins/…/config/validate` returns resolved values). Give REST credentials only to people who may see those secrets.
-- The `dir` provider reads only under `/opt/kafka/secrets` (`allowed.paths`); the chart sets it and refuses `config.providers.dir.*` in `connector_properties`.
+- `rest_auth_secret` is required with `secrets`, and must not itself be listed in `secrets`. **Every REST API user can read every mounted secret**, for example by creating a connector or by validating a config (`PUT /connector-plugins/…/config/validate` returns resolved values). Give REST credentials only to people who may see all of them.
+- **Kafka prints the resolved value of every setting that is not a password type in the worker log** (for example `client.id`, or a connector's own string settings such as `source.cluster.alias`), so anyone who can read the workload's logs sees it. Use placeholders only in password settings (`sasl.jaas.config`, `*.password`).
+- **Connectors cannot load config providers of their own.** The workers start with `-Dorg.apache.kafka.automatic.config.providers=none`, so a connector config that declares `config.providers` for the clients it configures (`producer.override.*`, `consumer.override.*`, `admin.override.*`, or MirrorMaker's `source.*` and `target.*`) fails with `… is not allowed`. The worker's own providers (`dir`, and any you list in `connector_properties`) keep working.
+- The `dir` provider reads only under `/opt/kafka/secrets` (`allowed.paths`); the chart sets it and refuses `config.providers.dir.*` in `connector_properties`. A `FileConfigProvider` or `DirectoryConfigProvider` you add yourself, with or without `secrets`, is limited to `/opt/kafka/secrets` and the `extraVolumes` paths, and `config.providers.*.param.allowed.paths` is refused.
+- `allowed.paths` needs Kafka 3.8 or later: `secrets` is refused with an image tag before 3.8. With a digest or a custom tag the chart cannot tell the version, so make sure the image is Kafka 3.8 or later (`apache/kafka:3.9.1` is).
+- Worker property names cannot hold spaces, `\`, `=` or `:`, and values cannot hold a line break, a `\u` escape or a trailing `\` (nor any `\` in a `config.providers*` value): the worker reads its properties file with Java's escape rules, so these would reach it as a different property. They are refused for every Kafka Connect group.
 - A connector that derives a value from a secret may store the derived value in its task config.
 
 **The `${env:VAR}` option** still works: add an `env` entry that references the secret (the chart grants the worker `reveal` on it) and use `${env:VAR}` in `connector_properties` or a plugin's `config`:
@@ -155,7 +159,7 @@ kafka_connectors:
       sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"${env:CONNECT_ADMIN_PASSWORD}\";"
 ```
 
-The chart limits every `env` config provider with `allowlist.pattern=(?!CPLN_).*`, so `${env:CPLN_…}` never resolves: `CPLN_TOKEN` is the workload's Control Plane API token. Every other variable still resolves. Setting `config.providers.*.param.allowlist.pattern` yourself is refused, because a pattern can always be written to reopen `CPLN_`.
+The chart limits every `env` config provider of the worker with `allowlist.pattern=(?!CPLN_).*`, so `${env:CPLN_…}` never resolves: `CPLN_TOKEN` is the workload's Control Plane API token. Every other variable still resolves. Setting `config.providers.*.param.allowlist.pattern` yourself is refused, because a pattern can always be written to reopen `CPLN_`.
 
 #### Kafka Connect REST API authentication
 
@@ -213,7 +217,7 @@ You can connect to Kafka from the same GVC in which it's deployed using the foll
 
 1. To activate the Kafka client, make sure `kafka_client` is uncommented in your values file, then upgrade the release with it:
    ```bash
-   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.5.0 --gvc GVC_NAME --dependency-update -f values.yaml
+   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.5.1 --gvc GVC_NAME --dependency-update -f values.yaml
    ```
 
 2. To connect to the `kafka-client` workload, navigate through the UI to the appropriate GVC and select the `kafka-client` workload. In the workload details, find and use the **Connect** feature to establish a connection, which can be done either via the UI or by utilizing the CLI command provided there.
@@ -486,12 +490,6 @@ Kafka Connect workers on `apache/kafka:3.x` images (4.4.1) drop `connectAppender
 ### Release Notes
 See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/RELEASES.md)
 
-### Links
-
-- [Apache Kafka documentation](https://kafka.apache.org/documentation/)
-- [KRaft mode](https://kafka.apache.org/documentation/#kraft)
-- [Kafbat UI](https://github.com/kafbat/kafka-ui)
-
 ### Important Notes
 
 - **Never turn `kafka.multiZone` or a connector's `multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
@@ -504,3 +502,10 @@ See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/
 - **A connector that is `FAILED` with "Failed to find any class" after its plugin arrived late needs a worker restart** (`cpln workload force-redeployment`). A REST restart does not rescan the plugins folder.
 - **After changing a secret a connector reads, run `cpln workload force-redeployment`** on its Connect workload; running workers keep the value they read at start.
 - **The Kafka Connect workload reports ready while it waits for plugins.** Read the `kafka-connect` container log for `Waiting for plugin downloads` or `WARNING: connector plugins not ready`.
+- **Connectors cannot declare config providers of their own (4.5.1).** The workers start with `-Dorg.apache.kafka.automatic.config.providers=none`; a connector whose config sets `config.providers` for its clients (`producer.override.*`, `consumer.override.*`, `admin.override.*`, MirrorMaker `source.*`/`target.*`) fails with `… is not allowed`. Declare providers in `connector_properties` instead.
+
+### Links
+
+- [Apache Kafka documentation](https://kafka.apache.org/documentation/)
+- [KRaft mode](https://kafka.apache.org/documentation/#kraft)
+- [Kafbat UI](https://github.com/kafbat/kafka-ui)

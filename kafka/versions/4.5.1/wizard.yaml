@@ -1323,6 +1323,68 @@ steps:
                     Remove the `config.providers.*.param.allowlist.pattern` worker property: the chart limits every env
                     config provider itself so that `${env:CPLN_...}` variables, the workload's Control Plane token among
                     them, never resolve.
+                - rule: >-
+                    item.connector_properties == null ||
+                    item.connector_properties.all(k, !k.matches('^config\\.providers\\..+\\.param\\.allowed\\.paths$'))
+                  mirrors: kafka.validateConnectEnvProvider
+                  paths: [connector_properties]
+                  message: >-
+                    Remove the `config.providers.*.param.allowed.paths` worker property: the chart limits every file and
+                    directory config provider itself to `/opt/kafka/secrets` and the extra volume paths.
+                - rule: >-
+                    item.connector_properties == null || item.connector_properties.all(k, !k.matches('[\\s\\\\=:]'))
+                  mirrors: kafka.validateConnectPropertySyntax
+                  paths: [connector_properties]
+                  message: >-
+                    A worker property name cannot hold spaces, `\`, `=` or `:`: the worker's properties file reads them
+                    as the end of the name, so the worker would see a different property.
+                - rule: >-
+                    item.connector_properties == null || item.connector_properties.all(k, type(item.connector_properties[k]) != string ||
+                    (!item.connector_properties[k].contains('\n') && !item.connector_properties[k].contains('\r') &&
+                    !item.connector_properties[k].contains('\\u') && !item.connector_properties[k].endsWith('\\')))
+                  mirrors: kafka.validateConnectPropertySyntax
+                  paths: [connector_properties]
+                  message: >-
+                    A worker property value must be one line, without a `\u` escape or a trailing `\`: the worker's
+                    properties file would read more into it than the value.
+                - rule: >-
+                    item.connector_properties == null || item.connector_properties.all(k, !k.startsWith('config.providers') ||
+                    type(item.connector_properties[k]) != string || !item.connector_properties[k].contains('\\'))
+                  mirrors: kafka.validateConnectPropertySyntax
+                  paths: [connector_properties]
+                  message: The `config.providers*` worker properties take plain class names and values, without `\`.
+                - rule: >-
+                    item.secrets == null || type(item.secrets) != list || item.rest_auth_secret == null ||
+                    !item.secrets.exists(s, type(s) == map && 'name' in s && string(s.name) == string(item.rest_auth_secret).trim())
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [secrets]
+                  message: >-
+                    Do not list the REST API users secret as a connector secret: every REST API user could then read the
+                    other users' passwords.
+                - rule: >-
+                    item.secrets == null || type(item.secrets) != list || size(item.secrets) == 0 || item.image == null ||
+                    string(item.image).contains('@') ||
+                    string(item.image).lastIndexOf(':') < string(item.image).lastIndexOf('/') ||
+                    !string(item.image).substring(string(item.image).lastIndexOf(':') + 1).matches('^v?([0-2]\\.[0-9]+|3\\.[0-7])([^0-9]|$)')
+                  mirrors: kafka.validateConnectorSecrets
+                  paths: [image]
+                  message: >-
+                    Connector secrets need Kafka 3.8 or later (apache/kafka:3.9.1): older versions ignore the limit that
+                    keeps the dir config provider inside /opt/kafka/secrets.
+                - rule: >-
+                    item.connector_properties == null || item.connector_properties.all(k, type(item.connector_properties[k]) != string || item.connector_properties[k].indexOf('${dir:') < 0 || item.connector_properties[k].substring(item.connector_properties[k].indexOf('${dir:') + 6).split('${dir:').all(seg, !(seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:')) || seg.matches('^/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)\\}')))
+                  mirrors: kafka.validateDirPlaceholders
+                  paths: [connector_properties]
+                  message: >-
+                    A `${dir:/opt/kafka/secrets...}` placeholder needs a secret and a key, as
+                    `${dir:/opt/kafka/secrets/NAME:KEY}` (dictionary) or `${dir:/opt/kafka/secrets:NAME}` (opaque).
+                - rule: >-
+                    item.plugins == null || type(item.plugins) != list || item.plugins.all(p, type(p) != map || !('config' in p) || type(p.config) != map || p.config.all(k, type(p.config[k]) != string || p.config[k].indexOf('${dir:') < 0 || p.config[k].substring(p.config[k].indexOf('${dir:') + 6).split('${dir:').all(seg, !(seg.startsWith('/opt/kafka/secrets/') || seg.startsWith('/opt/kafka/secrets:')) || seg.matches('^/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)\\}'))))
+                  mirrors: kafka.validateDirPlaceholders
+                  paths: [plugins]
+                  message: >-
+                    A `${dir:/opt/kafka/secrets...}` placeholder in a plugin's config needs a secret and a key, as
+                    `${dir:/opt/kafka/secrets/NAME:KEY}` (dictionary) or `${dir:/opt/kafka/secrets:NAME}` (opaque).
 
   - id: advanced
     title: Advanced

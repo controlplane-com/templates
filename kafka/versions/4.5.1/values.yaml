@@ -279,13 +279,13 @@ kafbat_ui:
 #         - //gvc/GVC_NAME/workload/RELEASE_NAME-connect-cluster # the workers forward REST requests to each other
 #       external_outboundAllowCIDR: "0.0.0.0/0" # Connectors reach external systems; narrow it if you can
 #     listener: client # Provide the listener name to connect to
-#     rest_auth_secret: "" # Opaque secret with one "username: password" line per user; the REST API (port 8083) then requires basic auth. "" = no auth. Required when secrets is set
+#     rest_auth_secret: my-connect-rest-users # Opaque secret with one "username: password" line per user; the REST API (port 8083) then requires basic auth. "" = no auth. Required when secrets is set
 #     # Control Plane secrets (opaque or dictionary, e.g. synced by the ess template) mounted under /opt/kafka/secrets.
 #     # Use them in connector_properties or a plugin's config as ${dir:/opt/kafka/secrets/NAME:KEY} (dictionary)
 #     # or ${dir:/opt/kafka/secrets:NAME} (opaque); REST and the Kafka UI show only the placeholder. Must exist before install.
 #     # After a secret's value changes, force a redeployment of the workers (README: Connector credentials).
-#     secrets: []
-#     #   - name: my-connector-credentials
+#     secrets: # [] = none
+#       - name: my-connector-credentials
 #     connector_properties:
 #       # bootstrap.servers: "kafka-dev-cluster:9092" # Optional. If not set, the bootstrap address will be the cluster name or publicAddress
 #       group.id: "connect-cluster"

@@ -1,0 +1,192 @@
+# Feature checks for the openclaw template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# The checks run in the gateway container against its own port on 127.0.0.1:18789 (a loopback caller
+# needs no X-Forwarded-For). The baselines point model.provider custom at 127.0.0.1:18999, where the
+# chat check starts a stub OpenAI-compatible server for the length of one request, so a real agent turn
+# runs end to end with no external model. The runner reads any {word} as a placeholder, so the scripts
+# keep a space inside every object literal and never use template literals.
+checks:
+  - id: gateway-up
+    description: >-
+      The gateway has started (/startupz 200, /healthz 200) and serves the Control UI, and the CLI reports
+      the release named by the workload's image tag.
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        cd /app
+        v=$(node openclaw.mjs --version 2>/dev/null)
+        node - "$v" <<'JS'
+        (async () => {
+          const B = 'http://127.0.0.1:18789';
+          const s = await fetch(B + '/startupz');
+          const h = await fetch(B + '/healthz');
+          const ui = await (await fetch(B + '/')).text();
+          const v = process.argv[2] || '';
+          const tag = String(process.env.CPLN_IMAGE || '').split(':').pop().replace(/-browser$/, '');
+          const ok = s.status === 200 && h.status === 200 && /<title>[^<]*OpenClaw/i.test(ui) && tag.length > 0 && v.startsWith('OpenClaw ' + tag + ' ');
+          console.log(ok ? 'GATEWAY_OK' : 'GATEWAY_BAD ' + s.status + ' ' + h.status + ' ' + JSON.stringify(v) + ' tag=' + tag + ' ' + ui.slice(0, 80));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^GATEWAY_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: token-required
+    description: >-
+      The OpenAI-compatible API refuses a request with no token and one with a wrong token, and answers
+      the model list with the gateway token from the prerequisite secret.
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        node - <<'JS'
+        (async () => {
+          const B = 'http://127.0.0.1:18789/v1/models';
+          const none = await fetch(B);
+          const wrong = await fetch(B, { headers: { authorization: 'Bearer ' + process.env.OPENCLAW_GATEWAY_TOKEN + 'x' } });
+          const good = await fetch(B, { headers: { authorization: 'Bearer ' + process.env.OPENCLAW_GATEWAY_TOKEN } });
+          const body = await good.text();
+          const ok = none.status === 401 && wrong.status === 401 && good.status === 200 && body.includes('"data"');
+          console.log(ok ? 'AUTH_OK' : 'AUTH_BAD ' + none.status + ' ' + wrong.status + ' ' + good.status + ' ' + body.slice(0, 120));
+        })().catch((e) => console.log('ERROR ' + e.message));
+        JS
+    expect:
+      stdout: "^AUTH_OK$"
+
+  - id: chat-roundtrip
+    description: >-
+      A chat completion through the gateway runs a real agent turn against the configured custom model:
+      the model endpoint receives the model ID and the key from the prerequisite secret, and its reply
+      comes back through the gateway. The session is named after this version (read back by
+      state-survives).
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        node - <<'JS'
+        const http = require('http');
+        const nonce = 'E2E-REPLY-' + Math.random().toString(36).slice(2, 10);
+        const seen = [];
+        const stub = http.createServer((req, res) => {
+          let raw = '';
+          req.on('data', (c) => { raw += c; });
+          req.on('end', () => {
+            let body = null;
+            try { body = JSON.parse(raw); } catch (e) { body = null; }
+            seen.push({ path: req.url, auth: req.headers.authorization || '', model: body && body.model });
+            if (req.url.endsWith('/models')) {
+              res.writeHead(200, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ object: 'list', data: [ { id: 'e2e-stub', object: 'model' } ] }));
+              return;
+            }
+            const created = Math.floor(Date.now() / 1000);
+            if (body && body.stream) {
+              res.writeHead(200, { 'content-type': 'text/event-stream' });
+              const chunk = (delta, finish) => 'data: ' + JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: created, model: 'e2e-stub', choices: [ { index: 0, delta: delta, finish_reason: finish } ] }) + '\n\n';
+              res.write(chunk({ role: 'assistant', content: nonce }, null));
+              res.write(chunk({ }, 'stop'));
+              res.write('data: ' + JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: created, model: 'e2e-stub', choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }) + '\n\n');
+              res.end('data: [DONE]\n\n');
+            } else {
+              res.writeHead(200, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ id: 'e2e', object: 'chat.completion', created: created, model: 'e2e-stub', choices: [ { index: 0, message: { role: 'assistant', content: nonce }, finish_reason: 'stop' } ], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }));
+            }
+          });
+        });
+        stub.listen(18999, '127.0.0.1', async () => {
+          try {
+            const r = await fetch('http://127.0.0.1:18789/v1/chat/completions', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.OPENCLAW_GATEWAY_TOKEN },
+              body: JSON.stringify({ model: 'openclaw', user: 'e2e-' + '{version}', messages: [ { role: 'user', content: 'Reply with the code word.' } ] }),
+              signal: AbortSignal.timeout(150000),
+            });
+            const j = await r.json().catch(() => null);
+            const text = j && j.choices && j.choices[0] && j.choices[0].message ? String(j.choices[0].message.content) : '';
+            const calls = seen.filter((s) => s.path.endsWith('/chat/completions'));
+            const keyed = calls.length > 0 && calls.every((s) => s.auth === 'Bearer ' + process.env.CUSTOM_LLM_API_KEY && s.model === 'e2e-stub');
+            const ok = r.status === 200 && text.includes(nonce) && keyed;
+            console.log(ok ? 'CHAT_OK' : 'CHAT_BAD ' + r.status + ' ' + JSON.stringify(text).slice(0, 120) + ' calls=' + calls.length + ' keyed=' + keyed);
+          } catch (e) {
+            console.log('ERROR ' + e.message);
+          }
+          stub.close();
+          process.exit(0);
+        });
+        JS
+    expect:
+      stdout: "^CHAT_OK$"
+    retries: 3
+    retryDelaySeconds: 20
+    timeoutSeconds: 200
+
+  - id: config-reconciled
+    description: >-
+      The values reached openclaw.json: the custom model is the default, both HTTP API endpoints are on,
+      the Control Plane MCP server is registered, and the seeded gateway trusts the platform sidecar.
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        cd /app
+        m=$(node openclaw.mjs config get agents.defaults.model.primary 2>/dev/null | tail -1)
+        c=$(node openclaw.mjs config get gateway.http.endpoints.chatCompletions.enabled 2>/dev/null | tail -1)
+        r=$(node openclaw.mjs config get gateway.http.endpoints.responses.enabled 2>/dev/null | tail -1)
+        u=$(node openclaw.mjs config get mcp.servers.cpln.url 2>/dev/null | tail -1)
+        p=$(node openclaw.mjs config get gateway.trustedProxies 2>/dev/null | tr -d ' \n')
+        if [ "$m" = "custom-openai/e2e-stub" ] && [ "$c" = "true" ] && [ "$r" = "true" ] && [ "$u" = "https://mcp.cpln.io/mcp" ] && echo "$p" | grep -q '127.0.0.6'; then
+          echo CONFIG_OK
+        else
+          echo "CONFIG_BAD model=$m chat=$c responses=$r mcp=$u proxies=$p"
+        fi
+    expect:
+      stdout: "^CONFIG_OK$"
+
+  - id: state-survives
+    description: >-
+      An automation saved by this version is listed, and the automation and chat session saved by the
+      version the scenario installed first are still there (the volume and the gateway's databases
+      survive upgrades and their migrations).
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        cd /app
+        name="e2e-{version}"
+        if ! node openclaw.mjs cron list --all --json 2>/dev/null | grep -q "\"name\": \"$name\""; then
+          node openclaw.mjs cron add --name "$name" --cron "0 4 1 1 *" --message "e2e marker" --disabled >/dev/null 2>&1
+        fi
+        jobs=$(node openclaw.mjs cron list --all --json 2>/dev/null)
+        sessions=$(node openclaw.mjs sessions --json 2>/dev/null)
+        now=no; first=no; sess=no
+        echo "$jobs" | grep -q "\"name\": \"$name\"" && now=yes
+        echo "$jobs" | grep -q "\"name\": \"e2e-{installed_version}\"" && first=yes
+        echo "$sessions" | grep -q "openai-user:e2e-{installed_version}\"" && sess=yes
+        if [ "$now$first$sess" = "yesyesyes" ]; then echo STATE_OK; else echo "STATE_BAD now=$now first=$first session=$sess"; fi
+    expect:
+      stdout: "^STATE_OK$"
+
+  - id: state-private
+    since: 1.1.0
+    description: >-
+      The volume root belongs to the gateway user with no group or other access, nothing on the volume is
+      writable by another user, and OpenClaw's credential and state directories are private, so its
+      doctor admits the state (2026.11 refuses it otherwise).
+    exec:
+      workload: "{release}-openclaw"
+      container: openclaw
+      script: |
+        root=$(stat -c '%U %a' /data)
+        open=$(find /data -mindepth 1 -path /data/lost+found -prune -o ! -type l -perm /022 -print 2>/dev/null | head -3 | tr '\n' ' ')
+        dirs=$(stat -c '%a' /data/.openclaw/client /data/.openclaw/state 2>&1 | sed 's/^.*\(...\)$/\1/' | tr '\n' ' ')
+        if [ "$root" = "node 700" ] && [ -z "$open" ] && [ "$dirs" = "700 700 " ] && [ -f /cpln-perms/ready ]; then
+          echo PRIVATE_OK
+        else
+          echo "PRIVATE_BAD root=$root writable=$open dirs=$dirs"
+        fi
+    expect:
+      stdout: "^PRIVATE_OK$"

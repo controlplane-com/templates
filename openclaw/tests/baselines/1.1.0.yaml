@@ -1,0 +1,33 @@
+# openclaw 1.1.0 — the default production shape: one gateway replica with the browser tool (the -browser
+# image, default resources), the Control Plane MCP server registered, private, daily snapshots. Two
+# differences from a typical install, both so CI needs no model account: model.provider is custom,
+# pointed at 127.0.0.1:18999 where the chat check runs a stub OpenAI-compatible server, and httpApi is on
+# so the checks can drive an agent turn. Both prerequisite-secret keys are generated per run.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  token1: hex
+  token2: hex
+  llmkey: hex
+
+secrets:
+  main:
+    type: dictionary
+    entries:
+      gateway-token: "{gen.token1}{gen.token2}"   # 64 hex characters (the chart requires at least 24)
+      llm-api-key: "sk-e2e-{gen.llmkey}"
+
+
+values:
+  secret:
+    name: "{secrets.main.name}"
+  model:
+    provider: custom
+    name: e2e-stub
+    baseUrl: http://127.0.0.1:18999/v1
+  httpApi:
+    enabled: true
+
+upgradeFrom:
+  - version: 1.0.0

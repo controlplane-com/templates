@@ -1305,12 +1305,15 @@ When: a map whose keys the user chooses, with uniform values.
 |---|---|
 | `keys.options` | The allowed keys (value or `{value, label}`); another key is `NOT_IN_OPTIONS` on the map. |
 | `keys.pattern` | A regex every key must match (`PATTERN`). |
-| `keys.label` | The key column's label. |
+| `keys.label` | The key field's label (default "Key"; the key column's header in a table). It names the key ("Name", "Header", "Provider"), not the entry. |
 | `values` | A schema without `path`: `string`, `integer`, `number`, `boolean`, `yaml`, or `{type: object, fields}`. |
 
 - Helm merges maps key by key, so a key the chart default has cannot be removed by deleting it: the wizard writes it as `null`, which Helm drops when it renders. `self`, field values and key checks skip `null` entries.
 - In CEL, iterate keys with `self.m.all(k, …)` and read values as `self.m[k]`. Test keys with `'k' in self.m`, never `has(self.m['k'])` (§7.6).
 - A plain string map (redis `redis.tags`, `values: { type: string }`) needs no `keys` block.
+- The console shows a map as a table (a key column plus a "Value" column, or one column per field) when `values` is a scalar schema or an object whose fields are all scalar (`string`, `integer`, `number`, `boolean`, `enum`, `quantity`, `ref`). When an object value has any other field (a list, an object, a map, `yaml`, `resources`), it shows a card per entry instead: titled with the entry's key, holding the key as a required field (labelled `keys.label`) and then the value fields with their own labels; fields hidden by `when` are not shown.
+- "Add" asks for the key first. In the card layout a new entry shows only its key field, and the value fields appear once the key is given (typed and the field left, or Enter); in the table layout the value cells of a new row stay disabled until then.
+- The console names the "Add" and "Remove" buttons and the empty text ("No servers yet.") after the map: from the singular of the map's `label`, else `keys.label` when the label is not a plural, else "entry". Give maps plural labels whose singular reads well ("Servers" gives "Add server", "Environment variables" gives "Add environment variable"); `keys.label` names the key, not the entry.
 
 ### 6.12 `yaml`
 
@@ -3179,7 +3182,7 @@ Use it for your own descriptor before committing, and for reviewing someone else
 34. Images use `format: image`, URLs `format: url`, host names `format: hostname`, schedules `format: cron`.
 35. Patterns are single-quoted and anchored; where the regex would be the only explanation, a `patternMessage` says what to do.
 36. Object lists have `uniqueBy`, a sensible `newItem` and an `itemLabel`; scalar lists that must be unique have `unique`.
-37. List labels are plural nouns whose singular reads well on the "Add" button.
+37. List and map labels are plural nouns whose singular reads well on the "Add" button.
 38. Optional blocks have a valid `newValue`, and rules guard them with `self.<block> == null ||`.
 39. Virtual fields: `init` returns an option for every document (including `null` values), each `set` patch round-trips through `init`, and rules check the real values.
 40. `absent: true` only on keys `values.yaml` lacks; `default` only with `absent`.

@@ -40,21 +40,21 @@ checks:
     retryDelaySeconds: 20
 
   - id: chat
-    description: A chat completion with the API key returns the model's answer (the word the prompt asks for).
+    description: A chat completion with the API key returns the model's answer to a factual question (Paris).
     exec:
       workload: "{release}-vllm"
       container: vllm
       script: |
         python3 - <<'PY'
         import json, os, urllib.request
-        msg = dict(role='user', content='Reply with exactly one word, in capitals: PINEAPPLE')
+        msg = dict(role='user', content='What is the capital of France? Answer with one word.')
         body = dict(model='{model}', messages=[msg], max_tokens=10, temperature=0)
         req = urllib.request.Request('http://127.0.0.1:8000/v1/chat/completions', data=json.dumps(body).encode(),
             headers=dict([('Authorization', 'Bearer ' + os.environ['VLLM_API_KEY']), ('Content-Type', 'application/json')]))
         with urllib.request.urlopen(req, timeout=120) as r:
             out = json.loads(r.read())
         text = out['choices'][0]['message']['content'] or ''
-        print('CHAT_OK' if 'PINEAPPLE' in text.upper() else 'CHAT_BAD %r' % text)
+        print('CHAT_OK' if 'paris' in text.lower() else 'CHAT_BAD %r' % text)
         PY
     expect:
       stdout: "^CHAT_OK$"
@@ -105,8 +105,8 @@ checks:
 
   - id: kv-cache-auto
     description: >-
-      With model.gpuMemoryUtilization left null, the chart passes no --gpu-memory-utilization, and vLLM
-      sizes the KV cache itself (its cache config reports a utilization of 1.0, the extensible-cache default).
+      With model.gpuMemoryUtilization left null, the chart passes no --gpu-memory-utilization and vLLM sizes
+      the KV cache itself: its cache config reports the extensible KV cache on and no utilization set.
     since: 1.1.0
     exec:
       workload: "{release}-vllm"
@@ -116,8 +116,10 @@ checks:
         python3 - <<'PY'
         import re, urllib.request
         m = urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=30).read().decode()
-        g = re.search(r'vllm:cache_config_info[^\n]*gpu_memory_utilization="([^"]+)"', m)
-        print('KV_OK' if g and float(g.group(1)) == 1.0 else 'KV_BAD %s' % (g.group(1) if g else 'no cache_config_info'))
+        line = re.search(r'^vllm:cache_config_info.*$', m, re.M)
+        line = line.group(0) if line else ''
+        ok = 'enable_extensible_kv_cache="True"' in line and 'gpu_memory_utilization="None"' in line
+        print('KV_OK' if ok else 'KV_BAD %s' % line[:300])
         PY
     expect:
       stdout: "^KV_OK$"

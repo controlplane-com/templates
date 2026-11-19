@@ -996,6 +996,14 @@ steps:
             text: >-
               Upgrading restarts the Kafka Connect replicas. On `apache/kafka:3.x` images the worker log then goes to stdout only (`cpln logs`),
               no longer to `/opt/kafka/logs/connect.log`, which filled the container's ephemeral storage.
+          - type: note
+            severity: info
+            when: >-
+              self.kafka_connectors != null &&
+              self.kafka_connectors.exists(c, !has(c.rest_auth_secret) || c.rest_auth_secret == null || c.rest_auth_secret == '')
+            text: >-
+              The Kafka Connect REST API of a group without a REST API users secret has no authentication: any client
+              that reaches port 8083 can read connector configs, including their credentials, and change connectors.
           - path: kafka_connectors
             type: list
             absent: true
@@ -1061,6 +1069,26 @@ steps:
                   type: string
                   label: Broker listener
                   description: The key of an entry under Listeners; it sets `bootstrap.servers` unless the worker properties do.
+                - path: rest_auth_secret
+                  type: ref
+                  label: REST API users secret
+                  description: >-
+                    An opaque secret (encoding plain) with one `username: password` line per user. The Kafka Connect
+                    REST API (port 8083) then requires basic auth; empty leaves it open. After you change the secret,
+                    force a redeployment of the workers.
+                  help: >-
+                    The chart's own connector setup logs in as the first user. Every other REST client, such as the
+                    Kafka UI, needs a username and password too.
+                  docs: "#kafka-connect-rest-api-authentication"
+                  ref:
+                    kind: secret
+                    format: name
+                    filter: { secretType: [opaque] }
+                    mustExist: error
+                    allowCreate: true
+                    create:
+                      encoding: plain
+                      suggestName: "context.releaseName + '-connect-rest-users'"
                 - path: connector_properties
                   type: map
                   label: Worker properties
@@ -1426,6 +1454,27 @@ rules:
     paths: [kafka.multiZone]
     message: >-
       Keep this on. The replicas' volumes are spread across zones, and with it off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it.
+  - rule: >-
+      self.kafka_connectors == null || self.kafka_connectors.all(c, !has(c.rest_auth_secret) || c.rest_auth_secret == null || c.rest_auth_secret == '' ||
+      !has(c.connector_properties) || c.connector_properties == null ||
+      (!('rest.extension.classes' in c.connector_properties) &&
+       (!('connect.protocol' in c.connector_properties) || c.connector_properties['connect.protocol'] == 'sessioned') &&
+       (!('admin.listeners' in c.connector_properties) || c.connector_properties['admin.listeners'] == '')))
+    mirrors: kafka.validateConnectRestAuth
+    paths: [kafka_connectors]
+    message: >-
+      A Kafka Connect group with a REST API users secret must not set `rest.extension.classes` (the secret sets it),
+      a `connect.protocol` other than `sessioned`, or a non-empty `admin.listeners` in its worker properties: the last
+      two leave part of the REST API without authentication.
+  - rule: >-
+      self.kafka_connectors == null || self.kafka_connectors.all(c, !has(c.rest_auth_secret) || c.rest_auth_secret == null || c.rest_auth_secret == '' ||
+      !has(c.env) || c.env == null ||
+      !c.env.exists(e, has(e.name) && e.name == 'KAFKA_OPTS' && has(e.value) && string(e.value).contains('java.security.auth.login.config')))
+    mirrors: kafka.validateConnectRestAuth
+    paths: [kafka_connectors]
+    message: >-
+      A Kafka Connect group with a REST API users secret must not pass `java.security.auth.login.config` in `KAFKA_OPTS`:
+      the REST API auth uses that JAAS file. Put the Kafka client login in `sasl.jaas.config` instead.
   - rule: oldSelf == null || self.kafka_connectors == null || oldSelf.kafka_connectors == null || self.kafka_connectors.all(c, !oldSelf.kafka_connectors.exists(o, o.name == c.name && has(o.multiZone) && o.multiZone == true) || (has(c.multiZone) && c.multiZone == true))
     paths: [kafka_connectors]
     message: >-

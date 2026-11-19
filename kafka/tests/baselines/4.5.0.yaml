@@ -1,0 +1,143 @@
+# kafka 4.5.0 — the recommended install: every password in prerequisite secrets, plus a two-worker Kafka Connect
+# group with REST API auth. Prod shape (three brokers, one location) at the smallest size that runs.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  kraft: kraft-cluster-id
+  restpw: hex
+  connectpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [inter-broker-password, controller-password, client-admin-password, client-user-password]
+  kafbatconnect:
+    type: opaque
+    payload: |
+      kafka:
+        clusters:
+          - name: e2e
+            bootstrapServers: "{release}-cluster.{gvc}.cpln.local:9092"
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: PLAIN
+              sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{secrets.creds.client-admin-password}";'
+            kafkaConnect:
+              - name: e2e
+                address: "http://{release}-connect-e2e.{gvc}.cpln.local:8083"
+                username: kafka-ui
+                password: "{gen.connectpw}"
+      management:
+        health:
+          ldap:
+            enabled: false
+      auth:
+        type: DISABLED
+      server:
+        port: 8080
+  restjaas:
+    type: opaque
+    payload: |
+      KafkaClient {
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="admin"
+        password="{secrets.creds.client-admin-password}";
+      };
+      KafkaRest {
+        org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+        debug="true"
+        file="/etc/kafka-rest/password.properties";
+      };
+  restusers:
+    type: opaque
+    payload: "e2e: {gen.restpw},user"
+  connectrest:
+    type: opaque
+    payload: |
+      # Kafka Connect REST API users
+      e2e: {gen.connectpw}
+      kafka-ui: {gen.connectpw}
+
+vars:
+  admin_password: "{secrets.creds.client-admin-password}"
+  rest_password: "{gen.restpw}"
+  connect_rest_password: "{gen.connectpw}"
+
+values:
+  kafka:
+    credentialsSecretName: "{secrets.creds.name}"
+    secrets:
+      kraft_cluster_id: "{gen.kraft}"
+    cpu: 500m
+    minCpu: 250m
+  kafbat_ui:
+    configuration_secret: "{secrets.kafbatconnect.name}"
+  kafka_rest_proxy:
+    jaas_conf_secret: "{secrets.restjaas.name}"
+    password_properties_secret: "{secrets.restusers.name}"
+    properties:
+      bootstrap.servers: "SASL_PLAINTEXT://{release}-cluster.{gvc}.cpln.local:9092"
+  kafka_connectors:
+    - name: e2e
+      image: apache/kafka:3.9.1
+      replicas: 2
+      rest_auth_secret: "{secrets.connectrest.name}"
+      cpu: 500m
+      memory: 1500Mi
+      minCpu: 250m
+      minMemory: 375Mi
+      timeoutSeconds: 15
+      listener: client
+      env:
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms700m -Xmx700m"
+        - name: CONNECT_ADMIN_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.client-admin-password"
+      firewall:
+        internal_inboundAllowType: same-gvc
+        external_outboundAllowCIDR: "0.0.0.0/0"
+      connector_properties:
+        group.id: e2e-connect
+        config.providers: env
+        config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+        security.protocol: SASL_PLAINTEXT
+        sasl.mechanism: PLAIN
+        sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${env:CONNECT_ADMIN_PASSWORD}";'
+        consumer.security.protocol: SASL_PLAINTEXT
+        consumer.sasl.mechanism: PLAIN
+        consumer.sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${env:CONNECT_ADMIN_PASSWORD}";'
+        key.converter: org.apache.kafka.connect.storage.StringConverter
+        value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+        offset.storage.topic: e2e-connect-offsets
+        offset.storage.replication.factor: "3"
+        config.storage.topic: e2e-connect-configs
+        config.storage.replication.factor: "3"
+        status.storage.topic: e2e-connect-status
+        status.storage.replication.factor: "3"
+        plugin.path: /opt/kafka/plugins
+      plugins:
+        - name: e2e-sink-a
+          enabled: true
+          artifacts:
+            - type: jar
+              url: https://repo1.maven.org/maven2/org/apache/kafka/connect-file/3.9.1/connect-file-3.9.1.jar
+              sha256: 971bf984d140a55440ec966d0feaaa260a20eb3de368f897cbed7a373fbfd66f
+          config:
+            connector.class: org.apache.kafka.connect.file.FileStreamSinkConnector
+            tasks.max: "2"
+            topics: e2e
+            file: /tmp/e2e-sink-a.txt
+        - name: e2e-sink-b
+          config:
+            connector.class: org.apache.kafka.connect.file.FileStreamSinkConnector
+            tasks.max: "2"
+            topics: e2e
+            file: /tmp/e2e-sink-b.txt
+
+# 4.4.1 → 4.5.0 with these values turns REST API auth on; 4.1.0 and 3.2.0 keep their own values (auth off).
+upgradeFrom:
+  - version: 4.4.1
+    values: new
+  - version: 4.1.0
+  - version: 3.2.0

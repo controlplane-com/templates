@@ -18,6 +18,7 @@ This template does not create a GVC.
 - **Recommended: a credentials secret** for the broker passwords (`kafka.credentialsSecretName`, see [Credentials](#credentials)). Without it the passwords are plain values in the release.
 - **Recommended while the REST Proxy is on (the default): a JAAS file secret** (`kafka_rest_proxy.jaas_conf_secret`, see [REST Proxy credentials](#rest-proxy-credentials)).
 - The Kafbat UI (on by default) waits for its configuration secret; see [Kafbat configuration example](#kafbat-configuration-example).
+- **Recommended for each Kafka Connect group: a REST API users secret** (`rest_auth_secret`, see [Kafka Connect REST API authentication](#kafka-connect-rest-api-authentication)). Without it the REST API has no authentication.
 
 Public listener access needs a domain you control and a dedicated load balancer on the GVC. Backups need a bucket and a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account).
 
@@ -98,6 +99,43 @@ kafka_connectors:
 
 In a plugin's `config`, write values with single quotes instead (`username='admin' password='${env:VAR}'`): plugin values are placed into the connector's JSON as they are, and a double quote breaks it.
 
+#### Kafka Connect REST API authentication
+
+Without it, any client that reaches a worker's port 8083 can read every connector's config, including the credentials in it, and create, change or delete connectors. To require basic auth, put one `username: password` line per user in an **opaque** secret and name it in `rest_auth_secret`:
+
+```bash
+cat > connect-rest-users.properties <<'EOF'
+admin: THE_ADMIN_PASSWORD
+kafka-ui: THE_KAFKA_UI_PASSWORD
+EOF
+cpln secret create-opaque --name my-connect-rest-users --encoding plain -f connect-rest-users.properties
+```
+
+```yaml
+kafka_connectors:
+  - name: cluster
+    rest_auth_secret: my-connect-rest-users # "" = no authentication
+```
+
+- The chart enables Kafka's `BasicAuthSecurityRestExtension`. Every request then needs basic auth, including `GET /`; a missing or wrong password gets `401`.
+- The chart's own connector setup logs in as the **first** user in the file. For every user: one line each, ASCII only (Kafka reads the file as ISO-8859-1), no spaces in the username, and no `\` (a trailing one joins the next line onto the password). Don't add roles: everything after `:` is the password. If the setup cannot log in, the worker log says so.
+- Other REST clients need credentials too. For the Kafka UI, add `username` and `password` to the `kafkaConnect` entry in its configuration secret:
+
+  ```yaml
+  kafka:
+    clusters:
+      - name: my-cluster
+        kafkaConnect:
+          - name: cluster
+            address: http://RELEASE_NAME-connect-cluster.GVC_NAME.cpln.local:8083
+            username: kafka-ui
+            password: THE_KAFKA_UI_PASSWORD
+  ```
+
+- Workers read the users file once at start. After you change the secret, run `cpln workload force-redeployment RELEASE_NAME-connect-cluster --gvc GVC_NAME`.
+- Requests between workers keep working: a request forwarded to the leader carries the caller's credentials, and Kafka signs its internal task requests itself.
+- With `rest_auth_secret` set, the chart refuses these worker properties: `rest.extension.classes` (the secret sets it), a `connect.protocol` other than `sessioned` (the default; the others leave the workers' internal endpoints open), and a non-empty `admin.listeners` (the admin listener has no authentication). It also refuses `java.security.auth.login.config` in a `KAFKA_OPTS` env var: put the Kafka client login in `sasl.jaas.config`.
+
 ### How to connect to the cluster
 
 You can connect to Kafka from the same GVC in which it's deployed using the following methods:
@@ -117,7 +155,7 @@ You can connect to Kafka from the same GVC in which it's deployed using the foll
 
 1. To activate the Kafka client, make sure `kafka_client` is uncommented in your values file, then upgrade the release with it:
    ```bash
-   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.4.1 --gvc GVC_NAME --dependency-update -f values.yaml
+   cpln helm upgrade RELEASE_NAME ./kafka/versions/4.5.0 --gvc GVC_NAME --dependency-update -f values.yaml
    ```
 
 2. To connect to the `kafka-client` workload, navigate through the UI to the appropriate GVC and select the `kafka-client` workload. In the workload details, find and use the **Connect** feature to establish a connection, which can be done either via the UI or by utilizing the CLI command provided there.

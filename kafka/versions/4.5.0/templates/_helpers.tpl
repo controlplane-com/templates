@@ -243,6 +243,32 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 {{- end -}}
 
 {{- /* Validates only the plugin-download keys added in 4.3.0; an entry using 4.2.0 keys renders unchanged. */ -}}
+{{/* With rest_auth_secret set, refuse settings that leave part of the Kafka Connect REST API without auth. */}}
+{{- define "kafka.validateConnectRestAuth" -}}
+{{- $secret := .rest_auth_secret | default "" | toString | trim -}}
+{{- if $secret -}}
+{{- $cp := .connector_properties | default dict -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $secret) -}}
+{{- fail (printf "Error: kafka_connectors '%s' rest_auth_secret must be a secret name, not a link or key reference: '%s'." .name $secret) -}}
+{{- end -}}
+{{- if hasKey $cp "rest.extension.classes" -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and connector_properties rest.extension.classes; rest_auth_secret sets that key, remove it from connector_properties." .name) -}}
+{{- end -}}
+{{- if and (hasKey $cp "connect.protocol") (ne (toString (index $cp "connect.protocol")) "sessioned") -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret with connect.protocol '%s'; only sessioned (the default) signs the workers' internal requests, which the REST API auth lets through. Remove connect.protocol." .name (toString (index $cp "connect.protocol"))) -}}
+{{- end -}}
+{{- if and (hasKey $cp "admin.listeners") (ne (toString (index $cp "admin.listeners")) "") -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and admin.listeners; the admin listener serves /admin/loggers without the REST API auth. Remove admin.listeners, or set it to \"\" to turn the admin endpoints off." .name) -}}
+{{- end -}}
+{{- $cname := .name -}}
+{{- range (.env | default list) -}}
+{{- if and (eq (toString .name) "KAFKA_OPTS") (contains "java.security.auth.login.config" (toString .value)) -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and java.security.auth.login.config in KAFKA_OPTS; the REST API auth uses that JAAS file. Move the Kafka client login to sasl.jaas.config in connector_properties." $cname) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kafka.validateConnectorDownloads" -}}
 {{- $c := . -}}
 {{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
@@ -858,8 +884,12 @@ while :; do bg sleep 2147483647; done
 {{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
 {{- $waitAction = toString $c.plugins_wait_timeout_action -}}
 {{- end -}}
+{{- $restAuth := $c.rest_auth_secret | default "" | toString | trim -}}
 #!/bin/bash
 set -e
+
+REST_AUTH_ARGS=()
+REST_AUTH_HDR=""
 
 # Names of the keys in a connector config. Values are never logged: they often hold credentials.
 config_keys() {
@@ -896,7 +926,7 @@ create_or_update_connector() {
     # Update the connector using PUT with nc (BusyBox wget doesn't support PUT)
     local content_length=$(echo -n "$update_config" | wc -c | xargs)
     local response
-    response=$(echo -e "PUT /connectors/$connector_name/config HTTP/1.1\r\nHost: localhost:8083\r\nContent-Type: application/json\r\nContent-Length: $content_length\r\nConnection: close\r\n\r\n$update_config" | nc localhost 8083 2>&1)
+    response=$(echo -e "PUT /connectors/$connector_name/config HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Content-Type: application/json\r\nContent-Length: $content_length\r\nConnection: close\r\n\r\n$update_config" | nc localhost 8083 2>&1)
     echo "HTTP response for $connector_name update: $(echo "$response" | head -1)"
     if ! echo "$response" | grep -q "HTTP/1\.. 2"; then
       echo "ERROR: Failed to update connector $connector_name. HTTP status: $(echo "$response" | head -1). The Kafka Connect log has the reason."
@@ -910,7 +940,7 @@ create_or_update_connector() {
     
     # Create the connector using POST; a failed request returns non-zero so the caller retries
     local post_err
-    if ! post_err=$(wget -q -O /dev/null "http://localhost:8083/connectors" \
+    if ! post_err=$(wget -q "${REST_AUTH_ARGS[@]}" -O /dev/null "http://localhost:8083/connectors" \
           --header="Content-Type: application/json" --post-data="$config" 2>&1); then
       echo "ERROR: Failed to create connector $connector_name: ${post_err}. The Kafka Connect log has the reason."
       return 1
@@ -1167,8 +1197,12 @@ setup_connectors() {
   
   # Wait for Kafka Connect to start
   echo "Waiting for Kafka Connect to start..."
-  until wget -q http://localhost:8083/ -O /dev/null; do
-    echo "Waiting for Kafka Connect REST API..."
+  until rest_err=$(wget -q "${REST_AUTH_ARGS[@]}" http://localhost:8083/ -O /dev/null 2>&1); do
+    if [[ "$rest_err" == *" 401 "* ]]; then
+      echo "ERROR: Kafka Connect refused the connector setup's login (401). The first line of the rest_auth_secret file must be 'username: password': ASCII, no spaces in the username, one line per user."
+    else
+      echo "Waiting for Kafka Connect REST API..."
+    fi
     sleep 5
   done
 
@@ -1176,7 +1210,7 @@ setup_connectors() {
   # Wait for connector plugins to be available (indicates full initialization)
   local retry_count=0
   local max_retries=12
-  until wget -q -O - http://localhost:8083/connector-plugins 2>/dev/null | grep -q "class" || [ $retry_count -ge $max_retries ]; do
+  until wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connector-plugins 2>/dev/null | grep -q "class" || [ $retry_count -ge $max_retries ]; do
     echo "Waiting for connector plugins to load... (attempt $((retry_count+1))/$max_retries)"
     sleep 5
     retry_count=$((retry_count+1))
@@ -1188,7 +1222,7 @@ setup_connectors() {
   local max_connector_wait=20
   local prev_count=-1
   while [ $connector_wait -lt $max_connector_wait ]; do
-    INSTALLED_CONNECTORS=$(wget -q -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
+    INSTALLED_CONNECTORS=$(wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
     local current_count=$(echo "$INSTALLED_CONNECTORS" | tr -d '[]"' | tr ',' '\n' | grep -v '^$' | wc -l | xargs)
     
     if [ "$current_count" != "$prev_count" ]; then
@@ -1207,7 +1241,7 @@ setup_connectors() {
 
   # Get final list of currently installed connectors
   echo "Fetching final list of installed connectors..."
-  INSTALLED_CONNECTORS=$(wget -q -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
+  INSTALLED_CONNECTORS=$(wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
   echo "Installed connectors: $INSTALLED_CONNECTORS"
 
   # Build list of desired connectors from values file
@@ -1229,7 +1263,7 @@ setup_connectors() {
         done
         if [[ "$found" == "false" ]]; then
           echo "Connector '$connector' is not enabled. Removing..."
-          (echo -e "DELETE /connectors/$connector HTTP/1.1\r\nHost: localhost:8083\r\nConnection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
+          (echo -e "DELETE /connectors/$connector HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Connection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
         fi
       fi
     done
@@ -1241,7 +1275,7 @@ setup_connectors() {
   {{- if hasKey . "enabled" }}
   {{- if not .enabled }}
   echo "Connector {{ .name }} is disabled. Removing if it exists..."
-  (echo -e "DELETE /connectors/{{ .name }} HTTP/1.1\r\nHost: localhost:8083\r\nConnection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
+  (echo -e "DELETE /connectors/{{ .name }} HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Connection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
   
   # Wait a bit between connectors to allow Kafka Connect API to stabilize
   sleep 3
@@ -1475,6 +1509,29 @@ WORKLOAD_NAME=$(echo $CPLN_WORKLOAD | sed 's|.*/workload/\([^/]*\)$|\1|')
 cp /opt/kafka/config/connect-distributed.properties /opt/kafka/config/connect-distributed-updated.properties
 echo "" >> /opt/kafka/config/connect-distributed-updated.properties
 echo "rest.advertised.host.name=${WORKLOAD_NAME}-${POD_ID}.${WORKLOAD_NAME}" >> /opt/kafka/config/connect-distributed-updated.properties
+{{- if $restAuth }}
+
+# REST API basic auth: the setup logs in as the first user, read as java.util.Properties reads it.
+REST_USERS_FILE=/opt/kafka/config/connect-rest-users.properties
+rest_line=$(tr -d '\r' < "$REST_USERS_FILE" | sed -n '/^[[:space:]]*[^#![:space:]]/{s/^[[:space:]]*//;p;q;}')
+rest_user=${rest_line%%[[:space:]:=]*}
+rest_password=$(printf '%s' "${rest_line#"$rest_user"}" | sed 's/^[[:space:]]*//;s/^[=:]//;s/^[[:space:]]*//')
+if [[ -z "$rest_user" || -z "$rest_password" ]]; then
+  echo "FATAL: the rest_auth_secret file has no 'username: password' line"
+  exit 1
+fi
+REST_AUTH="Authorization: Basic $(printf '%s:%s' "$rest_user" "$rest_password" | base64 | tr -d '\n')"
+REST_AUTH_ARGS=("--header=$REST_AUTH")
+REST_AUTH_HDR="$REST_AUTH\r\n"
+cat > /opt/kafka/config/connect-rest-jaas.conf <<'EOF'
+KafkaConnect {
+  org.apache.kafka.connect.rest.basic.auth.extension.PropertyFileLoginModule required
+  file="/opt/kafka/config/connect-rest-users.properties";
+};
+EOF
+export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Djava.security.auth.login.config=/opt/kafka/config/connect-rest-jaas.conf"
+echo "REST API basic auth is on; the connector setup logs in as '$rest_user'"
+{{- end }}
 
 # Start the connector setup process in the background
 setup_connectors &

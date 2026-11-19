@@ -2,6 +2,8 @@
 {{- range .Values.kafka_connectors }}
 {{- include "kafka.validateImage" . -}}
 {{- include "kafka.validateConnectorDownloads" . -}}
+{{- include "kafka.validateConnectRestAuth" . -}}
+{{- $restAuth := .rest_auth_secret | default "" | toString | trim }}
 kind: policy
 name: {{ include "kafka.name" $ }}-connect-{{ .name }}
 description: {{ include "kafka.name" $ }}-connect-{{ .name }}
@@ -16,6 +18,9 @@ targetLinks:
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-props
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
   - //secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-download
+  {{- if $restAuth }}
+  - //secret/{{ $restAuth }}
+  {{- end }}
   {{- if and .extraVolumes (ne (len .extraVolumes) 0) }}
   {{- range .extraVolumes }}
   {{- if contains "/secret/" .uri }}
@@ -83,6 +88,9 @@ data:
     {{- end }}
     {{- range $key, $value := .connector_properties }}
     {{ $key }}={{ $value }}
+    {{- end }}
+    {{- if $restAuth }}
+    rest.extension.classes=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
     {{- end }}
 ---
 kind: identity
@@ -169,6 +177,11 @@ spec:
           uri: cpln://secret/{{ include "kafka.name" $ }}-connect-{{ .name }}-init
         - path: /opt/kafka/sync
           uri: scratch://plugin-sync
+        {{- if $restAuth }}
+        - path: /opt/kafka/config/connect-rest-users.properties
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ $restAuth }}
+        {{- end }}
         {{- if .extraVolumes }}
         {{- toYaml .extraVolumes | nindent 8 }}
         {{- end }}

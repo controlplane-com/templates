@@ -281,6 +281,7 @@ kafbat_ui:
 #         - //gvc/client-gvc/workload/client
 #       external_outboundAllowCIDR: "0.0.0.0/0" # Provide a comma-separated list
 #     listener: client # Provide the listener name to connect to
+#     rest_auth_secret: "" # Opaque secret with one "username: password" line per user; the REST API (port 8083) then requires basic auth. "" = no auth
 #     connector_properties:
 #       # bootstrap.servers: "kafka-dev-cluster:9092" # Optional. If not set, the bootstrap address will be the cluster name or publicAddress
 #       group.id: "connect-cluster"

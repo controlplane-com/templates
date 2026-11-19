@@ -50,6 +50,7 @@ secrets:
 vars:
   admin_password: "{secrets.creds.client-admin-password}"
   rest_password: "{gen.restpw}"
+  connect_rest_password: ""
 
 values:
   kafka:

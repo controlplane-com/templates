@@ -36,6 +36,7 @@ secrets:
 vars:
   admin_password: "{gen.adminpw}"
   rest_password: "{gen.restpw}"
+  connect_rest_password: ""
 
 values:
   kafka:

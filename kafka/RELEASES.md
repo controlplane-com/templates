@@ -1,3 +1,11 @@
+# Release Notes - Version 4.5.0
+
+## What's New
+
+- **Kafka Connect REST API authentication**: set `rest_auth_secret` on a `kafka_connectors` entry to an opaque secret with one `username: password` line per user, and the REST API on port 8083 requires basic auth for every request. Without it, any client that reaches the port can read connector configs, including their credentials, and change connectors. The chart's own connector setup logs in as the first user. Other clients, such as the Kafka UI, need a username and password; the README has the Kafka UI example.
+- Off unless set: without `rest_auth_secret` a worker is configured as in 4.4.1.
+- Upgrading restarts the Kafka Connect replicas (and, as with any chart version change, the brokers).
+
 # Release Notes - Version 4.4.1
 
 ## What's New

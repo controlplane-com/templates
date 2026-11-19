@@ -129,7 +129,10 @@ checks:
       workload: "{release}-connect-e2e"
       container: kafka-connect
       script: |
-        wget -qO- http://127.0.0.1:8083/ | grep -o '"version":"[^"]*"' || echo "CONNECT-DOWN"
+        if [ -n '{connect_rest_password}' ]; then
+          set -- --header="Authorization: Basic $(printf 'e2e:%s' '{connect_rest_password}' | base64 | tr -d '\n')"
+        fi
+        wget -qO- "$@" http://127.0.0.1:8083/ | grep -o '"version":"[^"]*"' || echo "CONNECT-DOWN"
         for p in /proc/[0-9]*; do
           tr '\0' '\n' < $p/cmdline 2>/dev/null | grep -qx org.apache.kafka.connect.cli.ConnectDistributed &&
             tr '\0' '\n' < $p/cmdline | grep '^-Dlog4j.configuration='
@@ -138,5 +141,96 @@ checks:
         ls -l /opt/kafka/logs/connect.log* 2>/dev/null || echo "NO-CONNECT-LOG"
     expect:
       stdout: '\A"version":"3\.[0-9.]+"\n-Dlog4j\.configuration=file:/opt/kafka/config/connect-log4j-updated\.properties\nlog4j\.rootLogger=INFO, stdout\nNO-CONNECT-LOG\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+
+  - id: connect-rest-auth
+    issue: "#5596"
+    since: 4.5.0
+    description: >-
+      With rest_auth_secret set, the Kafka Connect REST API refuses every read and write without credentials, including
+      the ones that return connector configs and the admin loggers, refuses a wrong password, accepts every user in the
+      secret, and answers an unsigned internal task request with 400 (missing signature). With values carried from older
+      versions it stays open.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'
+        U=http://127.0.0.1:8083
+        code() { wget -q -S -O /dev/null "$@" 2>&1 | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p' | tail -1; }
+        raw() { printf '%s /%s HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$1" "$2" "${#3}" "$3" | nc 127.0.0.1 8083 | sed -n '1s/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p'; }
+        basic() { printf 'Authorization: Basic %s' "$(printf '%s' "$1" | base64 | tr -d '\n')"; }
+        if [ -n "$PW" ]; then
+          echo "NONE root=$(code $U/) plugins=$(code $U/connector-plugins) list=$(code $U/connectors) info=$(code "$U/connectors?expand=info") config=$(code $U/connectors/e2e-sink-a/config) create=$(code --header='Content-Type: application/json' --post-data='{"name":"x","config":{}}' $U/connectors) pause=$(raw PUT connectors/e2e-sink-a/pause) delete=$(raw DELETE connectors/e2e-sink-a) loggers=$(code $U/admin/loggers) setlogger=$(raw PUT admin/loggers/root '{"level":"DEBUG"}')"
+          echo "WRONG list=$(code --header="$(basic e2e:wrong)" $U/connectors)"
+          echo "USERS e2e=$(code --header="$(basic "e2e:$PW")" $U/connectors) kafka-ui=$(code --header="$(basic "kafka-ui:$PW")" $U/connectors)"
+          echo "UNSIGNED tasks=$(code --header='Content-Type: application/json' --post-data='[]' $U/connectors/e2e-sink-a/tasks)"
+        else
+          echo "OPEN list=$(code $U/connectors)"
+        fi
+    expect:
+      stdout: '\A(NONE root=401 plugins=401 list=401 info=401 config=401 create=401 pause=401 delete=401 loggers=401 setlogger=401\nWRONG list=401\nUSERS e2e=200 kafka-ui=200\nUNSIGNED tasks=400|OPEN list=200)\s*\Z'
+    retries: 8
+    retryDelaySeconds: 30
+
+  - id: connect-rest-auth-connectors
+    issue: "#5596"
+    since: 4.5.0
+    description: >-
+      With REST API auth on, the chart's connector setup still creates its connectors, and on two workers every
+      connector and task runs, spread over both: a follower's internal task-config requests pass the auth filter.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'
+        if [ -z "$PW" ]; then echo "SKIP no auth"; exit 0; fi
+        S=$(wget -qO- --header="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')" 'http://127.0.0.1:8083/connectors?expand=status')
+        echo "connectors: $(echo "$S" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
+        echo "states: $(echo "$S" | grep -o '"state":"[A-Z]*"' | cut -d'"' -f4 | sort | uniq -c | awk '{printf "%s %s ", $1, $2}')"
+        echo "workers: $(echo "$S" | grep -o '"worker_id":"[^"]*"' | sort -u | wc -l | tr -d ' ')"
+    expect:
+      stdout: '\A(connectors: e2e-sink-a e2e-sink-b \nstates: 6 RUNNING \nworkers: 2|SKIP no auth)\s*\Z'
+    retries: 10
+    retryDelaySeconds: 30
+
+  - id: connect-rest-auth-forwarding
+    issue: "#5596"
+    since: 4.5.0
+    description: >-
+      Each worker refuses a connector restart without credentials and accepts it with them. The connector runs on one
+      worker only, so at least one of them forwards the request, and the forwarded request keeps its credentials.
+    exec:
+      workload: "{release}-connect-e2e"
+      container: kafka-connect
+      script: |
+        PW='{connect_rest_password}'
+        if [ -z "$PW" ]; then echo "SKIP no auth"; exit 0; fi
+        A="Authorization: Basic $(printf 'e2e:%s' "$PW" | base64 | tr -d '\n')"
+        code() { wget -q -S -O /dev/null "$@" 2>&1 | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p' | tail -1; }
+        for i in 0 1; do
+          H=http://{release}-connect-e2e-$i.{release}-connect-e2e:8083/connectors/e2e-sink-a/restart
+          echo "worker-$i none=$(code --header='Content-Type: application/json' --post-data='' "$H") auth=$(code --header='Content-Type: application/json' --post-data='' --header="$A" "$H")"
+        done
+    expect:
+      stdout: '\A(worker-0 none=401 auth=20[0-9]\nworker-1 none=401 auth=20[0-9]|SKIP no auth)\s*\Z'
+    retries: 6
+    retryDelaySeconds: 30
+
+  - id: kafbat-ui-connect
+    issue: "#5596"
+    since: 4.5.0
+    description: >-
+      The Kafka UI lists the connectors of a Connect group with REST API auth, logging in as a user that is not the
+      first in the secret.
+    exec:
+      workload: "{release}-kafbat-ui"
+      container: kafbat-ui
+      script: |
+        if [ -z '{connect_rest_password}' ]; then echo "SKIP no auth"; exit 0; fi
+        wget -qO- http://127.0.0.1:8080/api/clusters/e2e/connectors | grep -o '"name":"e2e-sink-[ab]"' | sort -u | tr '\n' ' '
+    expect:
+      stdout: '\A("name":"e2e-sink-a" "name":"e2e-sink-b" |SKIP no auth)\s*\Z'
     retries: 8
     retryDelaySeconds: 30

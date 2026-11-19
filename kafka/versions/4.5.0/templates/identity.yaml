@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "kafka.name" . }}
+description: {{ include "kafka.clusterName" . }} identity
+tags: {{- include "kafka.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}

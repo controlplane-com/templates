@@ -211,7 +211,7 @@ Use `cpln workload force-redeployment RELEASE-openclaw --gvc GVC` only as a last
 - **The Control UI microphone only dictates until you choose a voice provider.** For spoken conversation (Talk), run `… node openclaw.mjs config set talk.realtime.provider openai`.
 - **To run sessions on another machine** (a laptop, a VM), pair it as a [session host](https://docs.openclaw.ai/gateway/cloud-sessions) using the public endpoint; with `model.provider: openai` it also needs the [Codex placement](https://docs.openclaw.ai/plugins/codex-harness/placement) steps, or it stays greyed out in the picker.
 - Access-knob changes take from about 30 seconds to 10 minutes to propagate.
-- **Uninstall deletes the volume and all state** — the WhatsApp link, MCP sign-ins, sessions and workspace — with no tested way to restore it into a new install. Copy out anything you need first.
+- **Uninstall deletes the volume and all state** — the WhatsApp link, MCP sign-ins, sessions and workspace — and a new install cannot restore it from the old snapshots, which belong to the deleted volume set. Copy out anything you need first.
 
 ## Links
 

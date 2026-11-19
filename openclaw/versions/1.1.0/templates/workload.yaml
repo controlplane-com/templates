@@ -120,7 +120,7 @@ spec:
       inheritEnv: false
       minCpu: 25m
       minMemory: 32Mi
-      cpu: 25m
+      cpu: 100m # burst for the chown/chmod walk at start; idles after (stateful cpu:minCpu <= 4:1)
       memory: 32Mi
       volumes:
         - path: /data

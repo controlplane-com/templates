@@ -253,10 +253,13 @@ if [ "${#tok}" -lt 24 ]; then
 fi
 # OpenClaw refuses state that another user could read or replace. The
 # volume-permissions container makes /data and the state private to this user;
-# wait for it (a few seconds) before anything touches the state.
-for i in $(seq 1 60); do [ -f /cpln-perms/ready ] && break; sleep 2; done
+# wait for it before anything touches the state. It walks every file under /data,
+# so a large workspace takes longer; 180 s plus the slowest boot stays inside the
+# liveness window (300 s + 5 x 30 s). Backticks, not $(...): container args expand $(NAME).
+i=0
+while [ ! -f /cpln-perms/ready ] && [ "$i" -lt 90 ]; do i=`expr $i + 1`; sleep 2; done
 if [ ! -f /cpln-perms/ready ]; then
-  echo "FATAL: the volume-permissions container did not prepare /data within 120 s (check its logs)" >&2
+  echo "FATAL: the volume-permissions container did not prepare /data within 180 s (check its logs)" >&2
   exit 70
 fi
 mkdir -p "$D/.cpln"

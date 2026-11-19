@@ -125,7 +125,7 @@ cpln secret create-dictionary --name my-nextcloud-s3-keys \
 | Private | `cpln port-forward {release}-nextcloud 8080:80 --gvc {gvc}`, then `http://localhost:8080` | same |
 | Internal | `http://{release}-nextcloud.{gvc}.cpln.local` | a user or app password |
 | WebDAV files | `/remote.php/dav/files/USERNAME/` on any of the above | same |
-| Calendars and contacts | the server address; clients find `/.well-known/caldav` and `/.well-known/carddav` (the web Calendar and Contacts apps are not installed by default: `occ app:install calendar contacts`) | same |
+| Calendars and contacts | the server address; clients find `/.well-known/caldav` and `/.well-known/carddav` (the web Calendar and Contacts apps are not installed by default: `occ app:install calendar`, then `occ app:install contacts`) | same |
 | PostgreSQL | `{release}-postgres.{gvc}.cpln.local:5432`, or `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432` in HA mode | the database credentials secret |
 
 Sign in with the admin login, then add users under **Accounts**. Desktop and mobile clients take the server address and sign in through the browser; for scripts and WebDAV mounts, create an app password under **Personal settings → Security**.

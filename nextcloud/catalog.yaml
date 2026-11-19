@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Nextcloud
+category: storage
+topology: single
+
+summary: >-
+  Nextcloud file sync and sharing with calendar, contacts and WebDAV: web replicas plus a background
+  jobs worker over a bundled PostgreSQL and Redis, with files on a shared volume or an S3 bucket.
+  Optional highly available PostgreSQL, multiple web replicas and database backups. The free
+  community edition; push notifications to the mobile apps are limited above 500 users.
+
+keywords:
+  - nextcloud
+  - file sync
+  - file sharing
+  - webdav
+  - caldav
+  - carddav
+  - groupware
+  - cloud storage
+  - document collaboration
+  - calendar
+  - contacts
+  - s3 primary storage
+  - dropbox alternative
+  - google drive alternative
+  - owncloud alternative
+
+useCases:
+  - Sync and share files across desktops and phones with the Nextcloud clients
+  - Host calendars and contacts for a team over CalDAV and CardDAV
+  - Mount team storage as a WebDAV drive
+  - Keep company files on infrastructure and in a bucket you control
+
+alternativeTo:
+  - Google Drive
+  - Dropbox
+  - Microsoft OneDrive
+  - Box
+
+pickInsteadIf:
+  - need: an SFTP or FTP server for automated file transfer
+    template: sftpgo
+  - need: an S3-compatible object store for applications
+    template: minio
+  - need: a distributed file and object store for large data
+    template: seaweedfs
+
+related:
+  - template: minio
+    relation: companion
+    note: S3-compatible bucket for Nextcloud's files with storage.type s3
+  - template: postgres
+    relation: companion
+    note: A standalone PostgreSQL to point other apps at
+
+prerequisites:
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: admin.secretName
+    required: true
+    description: Login of the first Nextcloud administrator (read on first boot only). When it is missing the deployment waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password, database]
+    valuesPath: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+    required: true
+    description: Credentials the bundled PostgreSQL initializes with and Nextcloud connects with; set the name for the database in use.
+  - kind: secret
+    secretType: dictionary
+    keys: [password]
+    valuesPath: redis.redis.auth.fromSecret.name
+    required: true
+    when: redis.enabled (the default)
+    description: Password the bundled Redis requires and Nextcloud authenticates with; Redis holds browser login sessions. Use a hex value.
+  - kind: bucket
+    valuesPath: storage.s3.bucket
+    required: false
+    when: storage.type s3
+    description: S3 or S3-compatible bucket that stores every user file.
+  - kind: cloud-account
+    valuesPath: storage.s3.cloudAccountName
+    required: false
+    when: storage.type s3 on AWS (storage.s3.auth.secretName empty)
+    description: Control Plane AWS cloud account for keyless bucket access, plus a bucket-scoped IAM policy (storage.s3.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKeyId, secretAccessKey]
+    valuesPath: storage.s3.auth.secretName
+    required: false
+    when: storage.type s3 with an S3-compatible storage.s3.endpoint
+    description: Static access keys for the S3-compatible file storage server.
+  - kind: bucket
+    valuesPath:
+      - postgres.backup.aws.bucket
+      - postgres.backup.gcp.bucket
+      - postgres.backup.minio.bucket
+      - postgresHA.backup.aws.bucket
+      - postgresHA.backup.gcp.bucket
+      - postgresHA.backup.minio.bucket
+    required: false
+    when: postgres.backup.enabled or postgresHA.backup.enabled
+    description: Object storage bucket that receives the scheduled database backups.
+  - kind: cloud-account
+    valuesPath:
+      - postgres.backup.aws.cloudAccountName
+      - postgres.backup.gcp.cloudAccountName
+      - postgresHA.backup.aws.cloudAccountName
+      - postgresHA.backup.gcp.cloudAccountName
+    required: false
+    when: database backup enabled with provider aws or gcp
+    description: Control Plane cloud account for the backup bucket, plus a bucket-scoped IAM policy on AWS (backup.aws.policyName).
+  - kind: secret
+    secretType: dictionary
+    keys: [accessKey, secretKey]
+    valuesPath:
+      - postgres.backup.minio.credentialsSecretName
+      - postgresHA.backup.minio.credentialsSecretName
+    required: false
+    when: database backup enabled with provider minio
+    description: Access keys for the MinIO or S3-compatible backup endpoint.

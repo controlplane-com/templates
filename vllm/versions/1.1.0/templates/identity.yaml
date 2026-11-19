@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "vllm.identity.name" . }}
+description: vLLM workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "vllm.tags" . | nindent 4 }}

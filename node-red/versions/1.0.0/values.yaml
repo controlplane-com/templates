@@ -1,0 +1,61 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# The ONE location of your GVC that Node-RED runs in; it must already be a GVC location.
+location: aws-us-east-1
+
+# ─── Node-RED ─────────────────────────────────────────────────────────────────
+image: nodered/node-red:5.0.9
+resources:
+  minCpu: 250m          # keep maxCpu <= 4x minCpu (stateful workload)
+  maxCpu: 1000m
+  minMemory: 256Mi
+  maxMemory: 1Gi
+timezone: UTC           # IANA timezone for inject/cron schedules (TZ)
+contextStorage: localfilesystem  # localfilesystem (context survives restarts) | memory (upstream default)
+safeMode: false         # true = start the editor without running any flow (recover from a crashing flow)
+volumeset:
+  capacity: 10          # GiB (minimum 10): flows, credentials, installed nodes, context, projects
+
+# ─── Snapshots ────────────────────────────────────────────────────────────────
+backup:
+  enabled: true         # scheduled snapshots of /data (no bucket needed)
+  schedule: "0 3 * * *" # cron, UTC; at most hourly (a single fixed minute)
+  retention: 7d         # how long each snapshot is kept, the final one taken at uninstall included
+
+# ─── Editor login and credential key (REQUIRED prerequisite secrets) ─────────
+admin:
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+  # A `dictionary` secret with keys `username` and `password` (at least 12 characters).
+  # Re-applied on every start: edit the secret and force a redeployment to change the login.
+  secretName: my-node-red-admin
+credentialSecret:
+  # REQUIRED PREREQUISITE SECRET — an `opaque` secret (encoding: plain), at least 16 characters.
+  # Encrypts every credential stored in your flows. Never rotate or delete it.
+  secretName: my-node-red-credential-secret
+
+# ─── HTTP In / Dashboard login (optional prerequisite) ───────────────────────
+httpNodeAuth:
+  secretName: ""        # e.g. my-node-red-http-auth: a `dictionary` with `username` and `password`; "" = endpoints open
+
+# ─── Palette (extra nodes) ────────────────────────────────────────────────────
+palette:
+  allowInstall: true    # false = the palette manager and function nodes cannot install modules
+  packages: []          # pinned name@version installed at boot, e.g. ["@flowfuse/node-red-dashboard@1.36.1"]
+
+# ─── Projects ─────────────────────────────────────────────────────────────────
+projects:
+  enabled: false        # git-backed projects in the editor (each project has its own credential key)
+
+# ─── Environment for flows ────────────────────────────────────────────────────
+extraEnv: []            # plain values, e.g. [{name: MQTT_HOST, value: broker.example.com}]
+envSecret:
+  secretName: ""        # e.g. my-node-red-env: a `dictionary`; each key listed below becomes an env var
+  keys: []              # e.g. [API_TOKEN, MQTT_PASSWORD]
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true         # editor, HTTP In endpoints and Dashboard on the public *.cpln.app URL; the editor always requires a login
+internalAccess:
+  type: same-gvc        # none | same-gvc | same-org | workload-list
+  workloads: []         # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

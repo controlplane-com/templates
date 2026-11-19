@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "node-red.identity.name" . }}
+description: Node-RED identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "node-red.tags" . | nindent 4 }}

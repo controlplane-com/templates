@@ -1,0 +1,250 @@
+# Feature checks for the node-red template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_user, admin_password, credential_key, http_user, http_password).
+#
+# The checks are Python (standard library) and Node.js run in the Node-RED container against its own
+# API on 127.0.0.1:1880. The runner reads any {word} as a placeholder, so the scripts use dict() and
+# % formatting, never dict literals, f-strings or JS template literals. The flow set is deployed with a
+# full deploy of fixed node ids, so every check can deploy it again and get the same flows.
+checks:
+  - id: admin-login
+    description: The admin login from the admin secret gets an admin API token, and the token reads the flows.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request, urllib.error
+        B = 'http://127.0.0.1:1880'
+        def req(m, p, body=None, h=None):
+            h = dict(h or dict())
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=60) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        c, b = req('POST', '/auth/token', dict(client_id='node-red-admin', grant_type='password', scope='*',
+                   username='{admin_user}', password='{admin_password}'))
+        t = json.loads(b).get('access_token') if c == 200 else None
+        if not t:
+            print('LOGIN_BAD %d' % c)
+        else:
+            c, b = req('GET', '/flows', h=dict(Authorization='Bearer ' + t))
+            print('LOGIN_OK' if c == 200 and b.startswith('[') else 'FLOWS_BAD %d' % c)
+        PY
+    expect:
+      stdout: "^LOGIN_OK$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: rejects-bad-password
+    description: A wrong admin password and an unknown user are both refused a token.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request, urllib.error
+        B = 'http://127.0.0.1:1880'
+        def token(u, pw):
+            body = json.dumps(dict(client_id='node-red-admin', grant_type='password', scope='*', username=u, password=pw)).encode()
+            r = urllib.request.Request(B + '/auth/token', data=body, headers=dict([('Content-Type', 'application/json')]), method='POST')
+            try:
+                with urllib.request.urlopen(r, timeout=60) as x:
+                    return x.status, x.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        c, b = token('{admin_user}', 'not-the-password-123')
+        print('WRONG_PW_REFUSED' if c in (401, 403) and 'access_token' not in b else 'WRONG_PW_GOT %d' % c)
+        c, b = token('nobody-e2e', '{admin_password}')
+        print('WRONG_USER_REFUSED' if c in (401, 403) and 'access_token' not in b else 'WRONG_USER_GOT %d' % c)
+        c, b = token('{admin_user}', '{admin_password}')
+        print('RIGHT_PW_OK' if c == 200 and 'access_token' in b else 'RIGHT_PW_GOT %d' % c)
+        PY
+    expect:
+      stdout: "(?s)^WRONG_PW_REFUSED\nWRONG_USER_REFUSED\nRIGHT_PW_OK$"
+
+  - id: admin-api-requires-auth
+    description: The admin API refuses calls without a token, while the editor page itself loads.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        code() { curl -s -o /dev/null -D - "$@" | head -1 | cut -d' ' -f2; }
+        for p in / /flows /nodes /settings/user; do
+          printf '%s %s\n' "$p" "$(code "http://127.0.0.1:1880$p")"
+        done
+    expect:
+      stdout: "(?s)^/ 200\n/flows 401\n/nodes 401\n/settings/user 401$"
+
+  - id: http-in-flow
+    description: >-
+      A flow deployed through the admin API serves an HTTP In endpoint that answers with the configured
+      timezone, and the endpoint refuses callers without the HTTP endpoint login.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: &deploy |
+        python3 - <<'PY'
+        import base64, json, sys, urllib.request, urllib.error
+        B = 'http://127.0.0.1:1880'
+        def req(m, p, body=None, h=None):
+            h = dict(h or dict())
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode()
+                h['Content-Type'] = 'application/json'
+            try:
+                with urllib.request.urlopen(urllib.request.Request(B + p, data=data, headers=h, method=m), timeout=60) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+        c, b = req('POST', '/auth/token', dict(client_id='node-red-admin', grant_type='password', scope='*',
+                   username='{admin_user}', password='{admin_password}'))
+        auth = dict(Authorization='Bearer ' + json.loads(b)['access_token'])
+        def fn(i, w, code):
+            return dict(id=i, type='function', z='e2etab', func=code, outputs=1, wires=[[w]])
+        def hin(i, url, w):
+            return dict(id=i, type='http in', z='e2etab', url=url, method='get', wires=[[w]])
+        nodes = [
+            dict(id='e2etab', type='tab', label='e2e'),
+            hin('e2eh1', '/e2e-ok', 'e2ef1'),
+            fn('e2ef1', 'e2er', "msg.payload = 'E2E-OK ' + env.get('TZ'); return msg;"),
+            hin('e2eh2', '/e2e-env', 'e2ef2'),
+            fn('e2ef2', 'e2er', "msg.payload = JSON.stringify([env.get('NR_ADMIN_PASSWORD') || '', env.get('NR_CREDENTIAL_SECRET') || '', env.get('NR_HTTP_NODE_PASSWORD') || '', env.get('TZ')]); return msg;"),
+            hin('e2eh3', '/e2e-ctx', 'e2ef3'),
+            fn('e2ef3', 'e2er', "global.set('e2e', msg.req.query.v); msg.payload = 'SET ' + global.get('e2e'); return msg;"),
+            hin('e2eh4', '/e2e-mark', 'e2ef4'),
+            fn('e2ef4', 'e2er', "global.set('persist-' + msg.req.query.v, 'kept-' + msg.req.query.v); msg.payload = 'MARKED'; return msg;"),
+            hin('e2eh5', '/e2e-get', 'e2ef5'),
+            fn('e2ef5', 'e2er', "msg.payload = String(global.get(msg.req.query.k)); return msg;"),
+            dict(id='e2er', type='http response', z='e2etab', wires=[]),
+            dict(id='e2ec', type='http request', z='e2etab', method='GET', ret='txt', url='http://127.0.0.1:1880/',
+                 authType='basic', wires=[[]], credentials=dict(user='e2e-cred-user', password='e2e-cred-pass')),
+        ]
+        # Keep the persist-* tabs earlier versions deployed and add this version's, so a later check can
+        # find the tab tagged with the version this scenario installed first.
+        c, b = req('GET', '/flows', h=auth)
+        old = json.loads(b) if c == 200 else []
+        keep = set(n['id'] for n in old if n.get('type') == 'tab' and str(n.get('label', '')).startswith('persist-'))
+        mine = 'e2ep-' + '{version}'.replace('.', '-')
+        keep.discard(mine)
+        nodes += [n for n in old if n['id'] in keep or n.get('z') in keep]
+        nodes.append(dict(id=mine, type='tab', label='persist-{version}'))
+        h = dict(auth)
+        h['Node-RED-Deployment-Type'] = 'full'
+        c, b = req('POST', '/flows', nodes, h)
+        if c not in (200, 204):
+            print('DEPLOY_BAD %d %s' % (c, b[:200]))
+            sys.exit(1)
+        PY
+        sleep 2
+        A='{http_user}:{http_password}'
+        curl -s -o /dev/null -u "$A" 'http://127.0.0.1:1880/e2e-mark?v={version}'
+        code() { curl -s -o /dev/null -D - "$@" | head -1 | cut -d' ' -f2; }
+        printf 'NOAUTH %s\n' "$(code http://127.0.0.1:1880/e2e-ok)"
+        printf 'BADAUTH %s\n' "$(code -u '{http_user}:wrong-e2e' http://127.0.0.1:1880/e2e-ok)"
+        curl -s -u "$A" http://127.0.0.1:1880/e2e-ok; echo
+        curl -s -u "$A" http://127.0.0.1:1880/e2e-env; echo
+    expect:
+      stdout: "(?m)^NOAUTH 401\nBADAUTH 401\nE2E-OK UTC$"
+
+  - id: env-scrubbed
+    description: >-
+      Flows cannot read the admin password, the credential key or the HTTP endpoint password from the
+      environment (env.get returns nothing), while an ordinary variable (TZ) is readable.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: *deploy
+    expect:
+      stdout: '(?m)^\["","","","UTC"\]$'
+
+  - id: credential-key-from-secret
+    description: >-
+      Credentials a flow stores are encrypted on the volume with the key from the credential secret: the
+      key from the secret decrypts flows_cred.json, and a different key does not.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        cat > /tmp/e2e-dec.js <<'JS'
+        const crypto = require('crypto');
+        const fs = require('fs');
+        const raw = JSON.parse(fs.readFileSync('/data/flows_cred.json', 'utf8'))['$'];
+        function dec(k) {
+          try {
+            const key = crypto.createHash('sha256').update(k).digest();
+            const d = crypto.createDecipheriv('aes-256-ctr', key, Buffer.from(raw.substring(0, 32), 'hex'));
+            const out = d.update(raw.substring(32), 'base64', 'utf8') + d.final('utf8');
+            return JSON.parse(out)['e2ec'].user === 'e2e-cred-user';
+          } catch (e) { return false; }
+        }
+        console.log(dec(process.argv[2]) ? 'SECRET_KEY_DECRYPTS' : 'SECRET_KEY_FAILS');
+        console.log(dec('a-different-key-0123456789') ? 'OTHER_KEY_DECRYPTS' : 'OTHER_KEY_FAILS');
+        JS
+        node /tmp/e2e-dec.js '{credential_key}'
+    expect:
+      stdout: "(?s)^SECRET_KEY_DECRYPTS\nOTHER_KEY_FAILS$"
+
+  - id: context-file-backed
+    description: >-
+      Global context set by a flow is written to /data/context on the volume (contextStorage
+      localfilesystem), not kept only in memory.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        V="e2e-$(date +%s)"
+        curl -s -u '{http_user}:{http_password}' "http://127.0.0.1:1880/e2e-ctx?v=$V"; echo
+        for i in $(seq 1 25); do
+          grep -q "$V" /data/context/global/global.json 2>/dev/null && { echo CTX_ON_DISK; exit 0; }
+          sleep 2
+        done
+        echo CTX_NOT_ON_DISK
+    expect:
+      stdout: "(?m)^SET e2e-[0-9]+\nCTX_ON_DISK$"
+    timeoutSeconds: 120
+
+  - id: flows-persist
+    description: >-
+      The flow tab tagged with the version this scenario installed first is still deployed. On a fresh
+      install that is the same version; after an upgrade it proves the flows on the volume carried over.
+      Never writes.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        python3 - <<'PY'
+        import json, urllib.request
+        B = 'http://127.0.0.1:1880'
+        body = json.dumps(dict(client_id='node-red-admin', grant_type='password', scope='*',
+                               username='{admin_user}', password='{admin_password}')).encode()
+        r = urllib.request.Request(B + '/auth/token', data=body, headers=dict([('Content-Type', 'application/json')]), method='POST')
+        with urllib.request.urlopen(r, timeout=60) as x:
+            t = json.loads(x.read())['access_token']
+        r = urllib.request.Request(B + '/flows', headers=dict(Authorization='Bearer ' + t))
+        with urllib.request.urlopen(r, timeout=60) as x:
+            flows = json.loads(x.read())
+        found = [n for n in flows if n.get('type') == 'tab' and n.get('label') == 'persist-{installed_version}']
+        print('FLOW_PERSISTED' if found else 'FLOW_MISSING (no tab persist-{installed_version})')
+        PY
+    expect:
+      stdout: "^FLOW_PERSISTED$"
+
+  - id: context-persists
+    description: >-
+      The global context value the version this scenario installed first stored is still readable by a
+      flow. After an upgrade (a restart) it proves the file-backed context was reloaded from the volume.
+    exec:
+      workload: "{release}-node-red"
+      container: node-red
+      script: |
+        curl -s -u '{http_user}:{http_password}' 'http://127.0.0.1:1880/e2e-get?k=persist-{installed_version}'; echo
+    expect:
+      stdout: "^kept-[0-9][0-9.]*$"

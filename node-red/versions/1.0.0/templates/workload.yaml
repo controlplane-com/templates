@@ -1,0 +1,151 @@
+{{- include "node-red.validate" . }}
+kind: workload
+name: {{ include "node-red.name" . }}
+description: Node-RED — flow editor, admin API, HTTP In endpoints and Dashboard, HTTP :1880
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "node-red.tags" . | nindent 4 }}
+spec:
+  {{- /*
+    `stateful`, one replica: Node-RED has no clustering, so a second replica would be a
+    second runtime running every flow again (crons, MQTT subscriptions, webhooks), and
+    the /data volume is a block (ext4) volume only a stateful workload can mount. Every
+    upgrade or restart is therefore a short full outage.
+  */}}
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "node-red.identity.name" . }}
+  containers:
+    - name: node-red
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      {{- /* Secret checks, optional palette install, settings.js, then Node-RED as
+             PID 1: see _script-start.tpl. Inline, so no secret or reveal grant is
+             needed for the script itself. */}}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{- include "node-red.inlineScript" (include "node-red.script.start" .) | nindent 10 }}
+      env:
+        # ── Editor login and credential key (prerequisite secrets) ──
+        # Read by the generated settings.js and deleted from process.env before any flow runs.
+        - name: NR_ADMIN_USERNAME
+          value: cpln://secret/{{ .Values.admin.secretName }}.username
+        - name: NR_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.admin.secretName }}.password
+        - name: NR_CREDENTIAL_SECRET
+          value: cpln://secret/{{ .Values.credentialSecret.secretName }}.payload
+        {{- if .Values.httpNodeAuth.secretName }}
+        # ── Basic auth on HTTP In endpoints and the Dashboard (optional) ──
+        - name: NR_HTTP_NODE_USERNAME
+          value: cpln://secret/{{ .Values.httpNodeAuth.secretName }}.username
+        - name: NR_HTTP_NODE_PASSWORD
+          value: cpln://secret/{{ .Values.httpNodeAuth.secretName }}.password
+        {{- end }}
+        {{- if .Values.palette.packages }}
+        # Validated pinned name@version list, installed by the start script when it changes.
+        - name: NR_PALETTE_PACKAGES
+          value: {{ join " " .Values.palette.packages | quote }}
+        {{- end }}
+        - name: NODE_RED_ENABLE_SAFE_MODE
+          value: {{ .Values.safeMode | quote }}
+        - name: TZ
+          value: {{ .Values.timezone | quote }}
+        {{- range .Values.envSecret.keys }}
+        - name: {{ . }}
+          value: cpln://secret/{{ $.Values.envSecret.secretName }}.{{ . }}
+        {{- end }}
+        {{- range .Values.extraEnv }}
+        - name: {{ .name }}
+          value: {{ .value | toString | quote }}
+        {{- end }}
+      ports:
+        # Editor, admin API, editor WebSocket, HTTP In nodes and Dashboard 2.0 share this port.
+        - number: 1880
+          protocol: http
+      volumes:
+        - path: /data
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "node-red.volume.name" . }}
+      readinessProbe:
+        # `/` serves the editor shell with or without a login (login is client-side) and
+        # is what the image's own healthcheck.js polls. Startup window ~ 10 + 30 x 15 =
+        # 460 s, inside which the palette install's 300 s cap fires.
+        httpGet:
+          path: /
+          port: 1880
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # First possible kill ~ 330 + 4 x 30 = 450 s, after the palette install's cap.
+        httpGet:
+          path: /
+          port: 1880
+          scheme: HTTP
+        initialDelaySeconds: 330
+        periodSeconds: 30
+        failureThreshold: 4
+        successThreshold: 1
+        timeoutSeconds: 5
+  # The image runs as node-red (uid/gid 1000) and a volumeset mounts root-owned.
+  securityOptions:
+    filesystemGroupId: 1000
+  {{- /*
+    Scale 0 EVERYWHERE by default, with one replica in the configured location only.
+    See `node-red.autoscaling` in _helpers.tpl.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "node-red.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for slow HTTP In flows; WebSockets are not cut by it
+  localOptions:
+    {{- include "node-red.localOptions" . | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is deliberately NOT set: the API drops it on a stateful
+      workload. terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /* Every field is declared: the API backfills the empty lists. */}}
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      # Flows call APIs and MQTT brokers, and palette installs reach the npm registry.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

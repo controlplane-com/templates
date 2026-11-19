@@ -44,7 +44,6 @@ alternativeTo:
   - Claude for Work
   - TypingMind
   - LobeChat
-  - AnythingLLM
 
 pickInsteadIf:
   - need: a chat UI with built-in local document RAG and Ollama model management in one workload
@@ -53,6 +52,8 @@ pickInsteadIf:
     template: ollama
   - need: an OpenAI-compatible gateway with virtual keys, budgets and rate limits
     template: litellm
+  - need: document workspaces with cited answers, a website chat widget and built-in retrieval, no extra services
+    template: anythingllm
 
 related:
   - template: ollama
@@ -67,6 +68,9 @@ related:
   - template: open-webui
     relation: alternative
     note: Single-workload chat UI with built-in document chat and Ollama model management
+  - template: anythingllm
+    relation: alternative
+    note: Document workspaces with built-in retrieval, a website chat widget and agents with MCP tools
 
 prerequisites:
   - kind: secret

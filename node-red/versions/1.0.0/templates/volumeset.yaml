@@ -1,0 +1,22 @@
+{{- /*
+  Block (ext4) volume: one per location, mounted only by the single stateful replica.
+  It holds the flows, the encrypted flow credentials (not their key, which is in the
+  credentialSecret secret), installed palette nodes, file-backed context and projects.
+  A snapshots block with no schedule takes no snapshots, so `backup.enabled: false`
+  renders the block without one (retention still applies to the final snapshot).
+*/}}
+kind: volumeset
+name: {{ include "node-red.volume.name" . }}
+description: Node-RED data (/data) — flows, credentials, installed nodes, context, projects
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "node-red.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.backup.retention | quote }}
+    {{- if .Values.backup.enabled }}
+    schedule: {{ .Values.backup.schedule | quote }}
+    {{- end }}

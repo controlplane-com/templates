@@ -1,0 +1,43 @@
+# node-red 1.0.0 — the production shape at the smallest size that runs: one Node-RED on its volume set
+# with daily snapshots, the editor login and credential key from prerequisite secrets, and HTTP In
+# endpoints behind their own login. All credentials are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  adminpw: hex
+  credkey: hex
+  httppw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: admin
+      password: "{gen.adminpw}"
+  credkey:
+    type: opaque
+    payload: "{gen.credkey}"
+  http:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.httppw}"
+
+vars:
+  admin_user: admin
+  admin_password: "{gen.adminpw}"
+  credential_key: "{gen.credkey}"
+  http_user: e2e
+  http_password: "{gen.httppw}"
+
+values:
+  location: aws-us-east-1
+  admin:
+    secretName: "{secrets.admin.name}"
+  credentialSecret:
+    secretName: "{secrets.credkey.name}"
+  httpNodeAuth:
+    secretName: "{secrets.http.name}"
+
+# New template: no earlier version to upgrade from.

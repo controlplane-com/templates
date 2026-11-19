@@ -1,0 +1,104 @@
+{{- include "anythingllm.validate" . }}
+{{- $env := include "anythingllm.env" . | fromJson }}
+kind: workload
+name: {{ include "anythingllm.name" . }}
+description: AnythingLLM server (UI, API, embed widget) and document collector
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "anythingllm.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "anythingllm.identity.name" . }}
+  containers:
+    - name: anythingllm
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - -c
+        - {{ include "anythingllm.inlineScript" (include "anythingllm.script.start" .) | quote }}
+      # Sorted by name: the API stores env alphabetically (rendered == stored).
+      env:
+        {{- range $name := keys $env | sortAlpha }}
+        - name: {{ $name }}
+          value: {{ get $env $name | squote }}
+        {{- end }}
+      ports:
+        - number: 3001
+          protocol: http
+      # Upstream's own unauthenticated health endpoint (the image HEALTHCHECK curls it). The startup window
+      # (10 s + 30 × 10 s) covers the database migrations and the 240 s first-boot admin step.
+      readinessProbe:
+        httpGet:
+          path: /api/ping
+          port: 3001
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /api/ping
+          port: 3001
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 10
+      volumes:
+        - path: /app/server/storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "anythingllm.volume.name" . }}
+  # The image runs as anythingllm (uid/gid 1000); the volume mounts root-owned otherwise.
+  securityOptions:
+    filesystemGroupId: 1000
+  # Exactly one replica, always: one process owns the SQLite database, the LanceDB files, the documents
+  # and the job scheduler on the volume. AnythingLLM has no multi-instance mode.
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: 1
+      metric: disabled
+      minScale: 1
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      # Model providers, the embedding model download, MCP servers and link scraping.
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if and (eq .Values.internalAccess.type "workload-list") .Values.internalAccess.workloads }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90

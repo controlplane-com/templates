@@ -1,0 +1,29 @@
+{{- $targets := list .Values.keys.secretName .Values.admin.secretName -}}
+{{- if and .Values.llm.provider .Values.llm.apiKeySecretName -}}
+{{- $targets = append $targets .Values.llm.apiKeySecretName -}}
+{{- end -}}
+{{- if and (ne .Values.embedding.engine "native") .Values.embedding.apiKeySecretName -}}
+{{- $targets = append $targets .Values.embedding.apiKeySecretName -}}
+{{- end -}}
+{{- range $name, $s := (default dict .Values.mcp.servers) -}}
+{{- if and $s.url $s.bearerTokenSecretName -}}
+{{- $targets = append $targets $s.bearerTokenSecretName -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.cplnMcp.keySecretName -}}
+{{- $targets = append $targets . -}}
+{{- end }}
+kind: policy
+name: {{ include "anythingllm.policy.name" . }}
+description: AnythingLLM secret access
+tags: {{- include "anythingllm.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "anythingllm.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- range $targets | uniq }}
+  - //secret/{{ . }}
+  {{- end }}

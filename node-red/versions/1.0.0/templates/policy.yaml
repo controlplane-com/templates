@@ -1,0 +1,19 @@
+kind: policy
+name: {{ include "node-red.policy.name" . }}
+description: Node-RED secret access
+tags: {{- include "node-red.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "node-red.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.admin.secretName }}
+  - //secret/{{ .Values.credentialSecret.secretName }}
+  {{- if .Values.httpNodeAuth.secretName }}
+  - //secret/{{ .Values.httpNodeAuth.secretName }}
+  {{- end }}
+  {{- if .Values.envSecret.secretName }}
+  - //secret/{{ .Values.envSecret.secretName }}
+  {{- end }}

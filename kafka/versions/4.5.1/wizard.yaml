@@ -1341,11 +1341,12 @@ steps:
                 - rule: >-
                     item.connector_properties == null || item.connector_properties.all(k, type(item.connector_properties[k]) != string ||
                     (!item.connector_properties[k].contains('\n') && !item.connector_properties[k].contains('\r') &&
-                    !item.connector_properties[k].contains('\\u') && !item.connector_properties[k].endsWith('\\')))
+                    !item.connector_properties[k].contains('\\u') && !item.connector_properties[k].endsWith('\\') &&
+                    !item.connector_properties[k].contains('$\\') && !item.connector_properties[k].contains('\\{')))
                   mirrors: kafka.validateConnectPropertySyntax
                   paths: [connector_properties]
                   message: >-
-                    A worker property value must be one line, without a `\u` escape or a trailing `\`: the worker's
+                    A worker property value must be one line, without a `\u` escape, a `\` next to `${` or a trailing `\`: the worker's
                     properties file would read more into it than the value.
                 - rule: >-
                     item.connector_properties == null || item.connector_properties.all(k, !k.startsWith('config.providers') ||
@@ -1363,9 +1364,10 @@ steps:
                     other users' passwords.
                 - rule: >-
                     item.secrets == null || type(item.secrets) != list || size(item.secrets) == 0 || item.image == null ||
-                    string(item.image).contains('@') ||
-                    string(item.image).lastIndexOf(':') < string(item.image).lastIndexOf('/') ||
-                    !string(item.image).substring(string(item.image).lastIndexOf(':') + 1).matches('^v?([0-2]\\.[0-9]+|3\\.[0-7])([^0-9]|$)')
+                    string(item.image).split('@')[0].lastIndexOf(':') < string(item.image).split('@')[0].lastIndexOf('/') ||
+                    !(string(item.image).split('@')[0].substring(string(item.image).split('@')[0].lastIndexOf(':') + 1).lowerAscii().matches('^kafka_[0-9]+\\.[0-9]+-') ?
+                      string(item.image).split('@')[0].substring(string(item.image).split('@')[0].lastIndexOf(':') + 1).lowerAscii().substring(string(item.image).split('@')[0].substring(string(item.image).split('@')[0].lastIndexOf(':') + 1).indexOf('-') + 1) :
+                      string(item.image).split('@')[0].substring(string(item.image).split('@')[0].lastIndexOf(':') + 1).lowerAscii()).matches('^[^0-9]*0*([0-2]\\.|3\\.0*[0-7]([^0-9]|$))')
                   mirrors: kafka.validateConnectorSecrets
                   paths: [image]
                   message: >-

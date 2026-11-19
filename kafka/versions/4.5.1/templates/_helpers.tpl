@@ -378,11 +378,10 @@ the two forms (F4), and, with secrets listed, none may point outside
 {{- fail (printf "Error: kafka_connectors '%s' lists its rest_auth_secret '%s' in secrets; every REST API user could then read the other users' passwords. Remove it from secrets." $group (trim (toString $g.rest_auth_secret))) -}}
 {{- end -}}
 {{- $image := toString ($g.image | default "") -}}
-{{- if not (contains "@" $image) -}}
-{{- $tag := trimPrefix ":" (regexFind ":[^:/]+$" $image) -}}
-{{- if regexMatch "^v?([0-2]\\.[0-9]+|3\\.[0-7])([^0-9]|$)" $tag -}}
+{{- $ref := index (splitList "@" $image) 0 -}}
+{{- $tag := regexReplaceAll "^kafka_[0-9]+\\.[0-9]+-" (lower (trimPrefix ":" (regexFind ":[^:/]+$" $ref))) "" -}}
+{{- if regexMatch "^[^0-9]*0*([0-2]\\.|3\\.0*[0-7]([^0-9]|$))" $tag -}}
 {{- fail (printf "Error: kafka_connectors '%s' mounts secrets with image %s; Kafka before 3.8 ignores allowed.paths, so the dir config provider could read any file. Use apache/kafka:3.9.1 or later." $group $image) -}}
-{{- end -}}
 {{- end -}}
 {{- range $k, $v := $cp -}}
 {{- if hasPrefix "config.providers.dir." $k -}}
@@ -473,8 +472,8 @@ Called once per Connect group, with or without rest_auth_secret or secrets.
 {{- fail (printf "Error: kafka_connectors '%s' connector_properties key %q holds whitespace, '\\', '=' or ':'; worker property names hold none of them. Remove them from the key." $group $k) -}}
 {{- end -}}
 {{- $sv := toString $v -}}
-{{- if or (contains "\n" $sv) (contains "\r" $sv) (contains "\\u" $sv) (hasSuffix "\\" $sv) -}}
-{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a line break, a '\\u' escape or a trailing '\\', which the worker's properties file reads as more than this value. Write the value on one line without them." $group $k) -}}
+{{- if or (contains "\n" $sv) (contains "\r" $sv) (contains "\\u" $sv) (hasSuffix "\\" $sv) (contains "$\\" $sv) (contains "\\{" $sv) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a line break, a '\\u' escape, a '\\' next to '${' or a trailing '\\', which the worker's properties file reads as more than this value. Write the value on one line without them." $group $k) -}}
 {{- end -}}
 {{- if and (hasPrefix "config.providers" $k) (contains "\\" $sv) -}}
 {{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a '\\'; config provider settings take plain class names and values. Remove it." $group $k) -}}
@@ -1892,6 +1891,30 @@ echo "REST API basic auth is on; the connector setup logs in as '$rest_user'"
 # may not load config providers of their own: those would read any env variable or file. The
 # worker's own config.providers (dir, env with its allowlist) are not affected. Kept last so it wins.
 export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Dorg.apache.kafka.automatic.config.providers=none"
+{{- if or $secretNames (include "kafka.connectFileProviders" $c) }}
+
+# allowed.paths (which keeps the dir and file config providers inside /opt/kafka/secrets) needs
+# Kafka 3.8 or later; older versions ignore it. Read the version from the client jar, whatever the image tag says.
+kafka_version=""
+for jar in /opt/kafka/libs/kafka-clients-*.jar; do
+  jar_name=${jar##*/}
+  [[ "$jar_name" =~ -(test|sources|javadoc)\.jar$ ]] && continue
+  if [[ "$jar_name" =~ ^kafka-clients-([0-9]+)\.([0-9]+)[^/]*\.jar$ ]]; then
+    kafka_version=${jar_name#kafka-clients-}; kafka_version=${kafka_version%.jar}
+    kafka_major=$((10#${BASH_REMATCH[1]})); kafka_minor=$((10#${BASH_REMATCH[2]}))
+    break
+  fi
+done
+if [[ -z "$kafka_version" ]]; then
+  echo "FATAL: cannot determine the Kafka version (no /opt/kafka/libs/kafka-clients-<version>.jar in this image). Config providers' allowed.paths needs Kafka 3.8 or later, so the worker does not start with secrets or a file/directory config provider. Use apache/kafka:3.9.1 or later."
+  exit 1
+fi
+if (( kafka_major < 3 || (kafka_major == 3 && kafka_minor < 8) )); then
+  echo "FATAL: this image runs Kafka $kafka_version, which ignores allowed.paths, so the dir and file config providers could read any file. The worker does not start with secrets or a file/directory config provider. Use apache/kafka:3.9.1 or later."
+  exit 1
+fi
+echo "Kafka version $kafka_version: config providers are limited with allowed.paths"
+{{- end }}
 
 # Start the connector setup process in the background
 setup_connectors &

@@ -1,0 +1,29 @@
+# vllm 1.1.0 (vLLM v0.34.0) — the default shape: one replica on one built-in GPU, the default
+# Qwen2.5-1.5B-Instruct with the hermes tool-call parser, private, internal access same-gvc. The API key is
+# a prerequisite secret CI creates. The GPU is a T4 at 3000m/12Gi (the README's T4 sizing): no built-in A10G
+# scheduled in aws-us-east-1 in 25 min (CI and the test org, 2026-11-18), while a T4 was ready in ~9 min.
+locations: [aws-us-east-1]
+timeoutSeconds: 1500                # GPU node, ~10 GB image pull, model download and load
+
+generated:
+  apikey: hex
+
+secrets:
+  apikey:
+    type: opaque
+    payload: "{gen.apikey}"
+
+vars:
+  model: Qwen/Qwen2.5-1.5B-Instruct
+
+values:
+  apiKey:
+    secretName: "{secrets.apikey.name}"
+  gpu:
+    model: t4
+  resources:
+    cpu: 3000m
+    memory: 12Gi
+
+upgradeFrom:
+  - version: 1.0.0

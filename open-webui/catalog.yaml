@@ -39,7 +39,6 @@ useCases:
 alternativeTo:
   - ChatGPT
   - ChatGPT Team
-  - AnythingLLM
   - LobeChat
   - TypingMind
 
@@ -52,6 +51,8 @@ pickInsteadIf:
     template: litellm
   - need: an AI agent with persistent memory, browser automation and chat-platform gateways
     template: hermes-agent
+  - need: document workspaces with cited answers, a website chat widget and a developer API
+    template: anythingllm
 
 related:
   - template: vllm
@@ -69,6 +70,9 @@ related:
   - template: librechat
     relation: alternative
     note: Multi-provider chat UI with agents, conversation search and optional chat over files
+  - template: anythingllm
+    relation: alternative
+    note: Document workspaces with built-in retrieval, a website chat widget and agents with MCP tools
 
 prerequisites:
   - kind: secret

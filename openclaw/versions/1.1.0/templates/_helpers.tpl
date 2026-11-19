@@ -41,6 +41,9 @@ volume-permissions script (busybox sh, runs as root). /data is the volume root:
 root-owned on a fresh volume, group-writable on one that had a filesystemGroupId
 (1.0.0). Give it to uid 1000 and strip group/other bits from everything under it
 but lost+found (OpenClaw runs as that one user; nothing else reads the state).
+Also clear the setgid bit that filesystemGroupId left on every directory: a
+directory created under one inherits it, and OpenClaw's doctor refuses such a new
+directory ("created directory admission failed", measured on 1.0.0 -> 1.1.0).
 Idempotent; runs on every replica start.
 */}}
 {{- define "openclaw.permissionsScript" -}}
@@ -52,7 +55,7 @@ for e in /data/.[!.]* /data/*; do
   [ -e "$e" ] || continue
   [ "$e" = /data/lost+found ] && continue
   chown -R 1000:1000 "$e"
-  chmod -R go-rwx "$e"
+  chmod -R go-rwx,g-s "$e"
 done
 echo "volume-permissions: /data and its state are private to uid 1000"
 touch /cpln-perms/ready

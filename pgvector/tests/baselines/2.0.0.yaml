@@ -26,7 +26,7 @@ values:
 
 # Every 1.x release runs PostgreSQL 18, so a plain upgrade to 2.0.0 (default PostgreSQL 19) must be
 # refused by the boot guard with the data untouched; the upgrade pinned to -pg18 then recovers it.
-# 1.0.0 also covers its pre-0.8.7 default image (CVE render guard) on the way.
+# 1.0.0 is the oldest version; it installs its own default image (pgvector 0.8.6 on PostgreSQL 18).
 upgradeFrom:
   - version: 1.0.2
     refused: {timeoutSeconds: 420}

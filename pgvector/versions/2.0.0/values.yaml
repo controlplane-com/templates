@@ -1,5 +1,5 @@
 # ─── Image ────────────────────────────────────────────────────────
-image: pgvector/pgvector:0.8.7-pg19 # PostgreSQL 19 + pgvector 0.8.7 (Debian bookworm). Upgrading a 1.x release: keep -pg18 (README, "Upgrading from 1.x")
+image: pgvector/pgvector:0.8.7-pg19 # -pgNN is the PostgreSQL major; a new install defaults to 19. A 1.x release keeps -pg18 (README, "Upgrading from 1.x")
 
 # ─── Resources ────────────────────────────────────────────────────
 resources:

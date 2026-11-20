@@ -35,7 +35,7 @@ The database credentials are a secret you create yourself — this chart never w
    returns zero lines, because the container never starts. The only diagnostic is
    `status.versions[].message` in `cpln workload get-deployments {release}-pgvector -o yaml` (note
    **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the secret and it
-   recovers on its own in up to about ten minutes (measured: 10 min 11 s), or run
+   recovers on its own within about ten minutes, or run
    `cpln workload force-redeployment {release}-pgvector`.
 
 2. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
@@ -354,7 +354,8 @@ an official pgvector tag older than 0.8.7 (CVE-2026-103484). Existing data and i
 
    `already exists` errors for the role, the database and the `vector` extension are expected. HNSW and
    IVFFlat indexes are rebuilt during the restore; for large ones raise `resources.maxMemory` first. For a
-   large database, run it in the background and follow the log:
+   large database, this form runs the copy in the background inside the container; poll
+   `/tmp/migrate.log` until it ends:
 
    ```bash
    cpln workload exec NEW_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
@@ -374,9 +375,8 @@ the database is down from the uninstall until the restore finishes.
 
 This template is a single server: a node failure reschedules it and reattaches the same volume, so
 the exposure is minutes of downtime, not data loss. For automatic failover use
-`postgres-highly-available`, whose image also carries pgvector — but it is **PostgreSQL 17, not 19**,
-with **pgvector 0.8.0 rather than 0.8.7**. Both `hnsw` and `ivfflat` exist in 0.8.0, so the gap is
-fixes and refinements, not a missing index type.
+`postgres-highly-available`, whose image also carries pgvector; check its README for the PostgreSQL
+and pgvector versions it runs, which can differ from this template's.
 
 ## Connecting
 
@@ -399,16 +399,11 @@ fixes and refinements, not a missing index type.
   `vector` is created first, so the server returns healthy with `vector` but without your extra
   extension — create it by hand, or reinstall while the volume is still empty.
 - **`publicAccess` is unencrypted** — the image ships no TLS certificate, so `sslmode=require` fails.
-- **In `transaction` pool mode, a plain `SET hnsw.ef_search` LEAKS BETWEEN CLIENTS.** This is an
-  isolation problem, not just a tuning one: PgBouncer hands the same server connection to different
-  clients, so your `SET` can be read — or overwritten — by someone else's session. Measured with 16
-  concurrent clients in transaction mode: 5 kept their own value, **9 read a different client's
-  value**, and 2 got `ERROR: unrecognized configuration parameter "hnsw.ef_search"`. Connecting
-  directly does not leak, and `poolMode: session` was clean 16/16.
-
-  It matters here specifically because `ef_search` is the knob that controls recall — raising it to
-  400 took an exact-match test from 4/5 to 5/5. Set it per query inside a transaction, which was also
-  clean 16/16:
+- **In `transaction` pool mode, a plain `SET hnsw.ef_search` LEAKS BETWEEN CLIENTS.** PgBouncer hands
+  the same server connection to different clients, so your `SET` can be read or overwritten by another
+  client's session, or fail with `unrecognized configuration parameter "hnsw.ef_search"`. Direct
+  connections and `poolMode: session` do not leak. `ef_search` controls recall, so set it per query
+  inside a transaction:
 
   ```sql
   BEGIN; SET LOCAL hnsw.ef_search = 100; SELECT ...; COMMIT;
@@ -417,10 +412,9 @@ fixes and refinements, not a missing index type.
   Or use `poolMode: session`, at the cost of the connection multiplexing PgBouncer is there for.
 - **Do not scale this workload past one replica** — a second stateful replica gets its own volume,
   which is a second empty database, not a replica.
-- **A `helm upgrade` restarts the server — measured at 92 seconds of failed writes.** Nothing
-  limits the rollout on a stateful workload, so treat every upgrade as a planned write outage of
-  roughly a minute and a half. Losing a replica costs about the same (84 s measured). Data is
-  never at risk — the same volume reattaches.
+- **A `helm upgrade` restarts the server.** Nothing limits the rollout on a stateful workload, so
+  treat every upgrade, and the loss of the replica, as a short planned write outage. Data is never at
+  risk: the same volume reattaches.
 - **Restore with a `psql` at least as new as the backup image** (19 for the default). An older client
   emits `invalid command \unrestrict` against a newer dump. The restore still completes, but the error
   is alarming and avoidable.
@@ -428,7 +422,7 @@ fixes and refinements, not a missing index type.
   change**, and once the image is pinned keep it in your values file; see [Upgrading from 1.x](#upgrading-from-1x).
 - **`helm uninstall` deletes the volume set**, so data does not survive a reinstall. Your credentials
   secret is left alone.
-- **Firewall changes take 30 seconds to a few minutes to take effect.** After changing
+- **Firewall changes can take several minutes to take effect.** After changing
   `internalAccess` or `publicAccess`, re-test rather than trusting the first response.
 
 ## Links

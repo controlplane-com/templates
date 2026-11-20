@@ -96,11 +96,11 @@ steps:
           Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
           write outage of a minute or two.
       - type: note
+        # Keyed on the installed version, not oldSelf.image: the <2.0.0 migration has already moved a
+        # pre-0.8.7 image to 0.8.7 in oldSelf. 1.0.0 is the only version that defaulted to 0.8.6.
         when: >-
-          context.mode == 'upgrade' && oldSelf != null &&
-          oldSelf.image.split(':')[0] in ['pgvector/pgvector', 'docker.io/pgvector/pgvector'] &&
-          size(oldSelf.image.split(':')) > 1 &&
-          oldSelf.image.split(':')[1].matches('^0[.]([0-7][.][0-9]|8[.][0-6]([^0-9]|$))')
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.0.1') < 0
         text: >-
           The CVE-2026-103484 fix is active after this upgrade's restart; existing data and indexes need nothing.
           `\dx` keeps reporting the old vector version until you run `ALTER EXTENSION vector UPDATE;` in each
@@ -179,18 +179,18 @@ steps:
         message: >-
           Extra extensions are created only on first boot, so changing the list does nothing on this release.
           Run CREATE EXTENSION IF NOT EXISTS in the database instead.
-      # The PostgreSQL major is the -pgNN part of the tag (0.8.7-pg19, 0.8.7-pg19-trixie, pg19), never
+      # The PostgreSQL major is the first -pgNN part of the tag (0.8.7-pg19, 0.8.7-pg19-trixie, pg19), never
       # imageMajor(), which reads the tag's leading digits (the pgvector version, 0). A tag without one
       # is not judged. The chart's boot guard refuses a mismatch at runtime; this stops it in the wizard.
       - rule: >-
-          oldSelf == null || !self.image.split(':')[size(self.image.split(':')) - 1].matches('(^|-)pg[0-9]+(-|$)') || !oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1].matches('(^|-)pg[0-9]+(-|$)') ||
-          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] == ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')[size(('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0]
+          oldSelf == null || size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))) == 0 || size(('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))) == 0 ||
+          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] == ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0]
         severity: warning
         paths: [image]
         messageExpression: >-
-          'The data directory of this release is PostgreSQL ' + ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')[size(('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] + ', and a PostgreSQL ' + ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] +
-          ' image refuses to start on it. Keep the image at ' + oldSelf.image + ', or move to PostgreSQL ' +
-          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+          'The data directory of this release is PostgreSQL ' + ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] + ', and a PostgreSQL ' +
+          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] + ' image refuses to start on it. Keep the image at ' + oldSelf.image +
+          ', or move to PostgreSQL ' + ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
         message: >-
           The data directory belongs to the installed PostgreSQL major version, and an image for a different
           major version refuses to start on it. Keep the installed image, or move to a new major with a dump

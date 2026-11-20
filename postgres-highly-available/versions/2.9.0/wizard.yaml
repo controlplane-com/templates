@@ -521,7 +521,7 @@ steps:
             required: true
             advanced: true
             when: self.backup.mode == 'logical'
-            description: Tag 18.x.x backs up PostgreSQL 18 and older clusters. A 17.x.x tag cannot back up a PostgreSQL 18 cluster.
+            description: Tag 18.x.x backs up PostgreSQL 17 and 18 clusters. A 17.x.x tag cannot back up a PostgreSQL 18 cluster.
           - path: backup.resources
             type: resources
             label: Backup resources

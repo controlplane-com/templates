@@ -90,7 +90,7 @@ backup:
     memory: 512Mi # 128Mi OOMKills wal-g mid-backup (exitCode 137) and silently produces no base backup
 
   logical: # logical backup settings
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0 # pg_dumpall 18 backs up PostgreSQL 18 and older clusters
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0 # backs up PostgreSQL 17 and 18 clusters
     schedule: "0 2 * * *" # cron schedule, default is daily at 2am UTC
 
   walg: # wal-g backup settings

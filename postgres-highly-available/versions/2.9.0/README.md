@@ -395,7 +395,7 @@ There are two backup options:
 
 **Note:** The HA Proxy must be enabled (`proxy.enabled: true`) for logical backups to function correctly.
 
-The logical backup image (`backup.logical.image`) runs `pg_dumpall`, which can back up its own PostgreSQL version and older ones. The default `18.2.0` tag backs up PostgreSQL 17 and 18 clusters; a `17.x.x` tag cannot back up a PostgreSQL 18 cluster.
+The logical backup image (`backup.logical.image`) runs `pg_dumpall`, which refuses a server newer than itself. The default `18.2.0` tag backs up PostgreSQL 17 and 18 clusters, and its dumps restore into either; a `17.x.x` tag cannot back up a PostgreSQL 18 cluster.
 
 Set `backup.enabled: true`, choose a `mode` (`logical` or `wal-g`), then set `backup.provider` to `aws`, `gcp`, or `minio` and fill in the corresponding block:
 
@@ -433,6 +433,10 @@ backup:
 ```
 
 ### AWS S3
+
+<b>Upgrading from 2.8.x or earlier:</b> this version removes the <code>cpln-connector</code> policy from the backup
+identity. It let the backup workload create IAM roles and attach policies to them, which a backup does not need;
+the identity now carries only your bucket-scoped policy. No action is needed.
 
 
 <b>Upgrading from 2.5.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.

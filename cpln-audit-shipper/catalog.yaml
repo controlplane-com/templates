@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../.schema/catalog.v1.schema.json
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+
+title: Audit Shipper
+category: security
+topology: stateless
+
+summary: >-
+  Continuously ships your org's Control Plane audit trail, and the Kubernetes audit logs of your mk8s
+  clusters, to Amazon S3, a syslog listener over TLS, or an OpenTelemetry collector. Each stream reads only
+  what is new, keeps a checkpoint in S3 or on a volume set, and resumes after restarts, upgrades and outages.
+  It creates its own service account, whose keys live only in memory. Every record keeps its event ID, so
+  duplicates can be dropped downstream.
+
+keywords:
+  - audit log export
+  - audit logs
+  - kubernetes audit logs
+  - siem
+  - syslog
+  - opentelemetry
+  - otlp
+  - s3 export
+  - compliance
+  - log archive
+  - audit retention
+  - who changed what
+
+useCases:
+  - Send Control Plane and mk8s Kubernetes audit events to a SIEM over syslog or OTLP
+  - Keep a long-term copy of the Control Plane audit trail in your own S3 bucket
+  - Retain audit history for compliance reviews and security investigations
+  - Query who changed which resource across the org with Athena or other S3-based tools
+
+prerequisites:
+  - kind: other
+    valuesPath: serviceAccount.existingName
+    required: false
+    when: you manage the service account yourself
+    description: An existing service account to use instead of the one the release creates; the release grants it readAudit (and readLogs with the Kubernetes source).
+  - kind: secret
+    secretType: opaque
+    valuesPath: serviceAccount.existingKeySecret
+    required: false
+    when: serviceAccount.existingName is set
+    description: Opaque secret (encoding plain) holding a key of that service account.
+  - kind: bucket
+    valuesPath: sink.s3.bucket
+    required: false
+    when: sink.type s3
+    description: S3 bucket that receives the audit records and, by default, the checkpoints. Set sink.s3.region to its region.
+  - kind: other
+    valuesPath: sink.syslog.host
+    required: false
+    when: sink.type syslog
+    description: A syslog listener over TCP or TLS that accepts RFC 5424 messages of up to 32 KiB.
+  - kind: other
+    valuesPath: sink.otlp.endpoint
+    required: false
+    when: sink.type otlp
+    description: An OTLP/HTTP endpoint that accepts JSON-encoded logs.
+  - kind: other
+    valuesPath: sources.k8sAudit.clusters
+    required: false
+    when: sources.k8sAudit.enabled
+    description: mk8s clusters with the logs add-on and audit logs on (spec.addOns.logs.auditEnabled).
+  - kind: secret
+    secretType: opaque
+    valuesPath: [sink.syslog.caSecret, sink.otlp.caSecret]
+    required: false
+    when: the listener or collector uses a private CA
+    description: Opaque secret holding the private CA bundle (PEM) of the syslog listener or OTLP endpoint.
+  - kind: secret
+    secretType: opaque
+    valuesPath: sink.otlp.authHeader.secret
+    required: false
+    when: sink.otlp.authHeader.name is set
+    description: Opaque secret whose payload is the whole value of the OTLP auth header, such as "Bearer TOKEN".
+  - kind: bucket
+    valuesPath: state.s3.bucket
+    required: false
+    when: state.backend s3 and a sink other than s3
+    description: Small bucket for the checkpoints, unless they go on a volume set in a single-location GVC.
+  - kind: cloud-account
+    valuesPath: aws.identity.cloudAccountName
+    required: false
+    when: S3 is used and aws.authMode identity
+    description: Control Plane AWS cloud account for the bucket's AWS account; the README has the bucket-scoped IAM policy to attach.
+  - kind: secret
+    secretType: aws
+    valuesPath: aws.secret.name
+    required: false
+    when: S3 is used and aws.authMode secret
+    description: AWS access keys (an aws secret, or a dictionary secret with accessKey, secretKey and optional sessionToken), used directly or to assume a role.

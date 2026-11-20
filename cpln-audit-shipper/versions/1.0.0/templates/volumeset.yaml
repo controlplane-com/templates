@@ -1,0 +1,13 @@
+{{- include "cas.validate" . -}}
+{{- if and (eq .Values.state.backend "volumeSet") (not .Values.state.volumeSet.existingName) }}
+kind: volumeset
+name: {{ include "cas.volumeset.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Audit shipper checkpoints
+tags:
+  {{- include "cas.tags" . | nindent 2 }}
+spec:
+  fileSystemType: shared
+  initialCapacity: {{ int .Values.state.volumeSet.capacity }}
+  performanceClass: shared
+{{- end }}

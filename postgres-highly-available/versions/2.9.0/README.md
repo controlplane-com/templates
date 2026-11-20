@@ -1,6 +1,6 @@
-# PostgreSQL 17 Highly Available with Patroni
+# PostgreSQL 18 Highly Available with Patroni
 
-This app deploys a highly available PostgreSQL 17 cluster using Patroni for automatic failover and etcd for distributed consensus. The setup delivers automatic leader election, health checking, and seamless failover capabilities in a single location with multi-zone capability and provides optional backup features.
+This app deploys a highly available PostgreSQL 18 cluster using Patroni for automatic failover and etcd for distributed consensus. The setup delivers automatic leader election, health checking, and seamless failover capabilities in a single location with multi-zone capability and provides optional backup features.
 
 ## Architecture
 
@@ -58,10 +58,18 @@ config:
   credentialsSecretName: my-postgres-ha-credentials
 ```
 
+<b>Upgrading from 2.8.x or earlier:</b> new clusters run PostgreSQL 18, but an existing cluster keeps
+the PostgreSQL version it was created with (17). The image, `controlplanecorporation/patroni-postgres:0.9`,
+bundles PostgreSQL 14 to 18, and each member runs the version of its data directory. A member with an empty
+volume that joins an existing cluster takes the version the running members report. The upgrade also moves
+17 clusters to the latest 17 minor release and changes the default logical backup image to the 18 tag,
+which backs up 17 clusters too. To move an existing cluster to PostgreSQL 18, see
+[Moving an existing cluster to PostgreSQL 18](#moving-an-existing-cluster-to-postgresql-18).
+
 <b>Upgrading from 2.8.0 or earlier:</b> 2.8.1 moves to `controlplanecorporation/patroni-postgres:0.8`,
 which carries pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the
 upgrade restarts the members; existing data and indexes need nothing. If you pinned `image` in your values,
-set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. In each database where you created the
+set it to the `0.9` tag (or `0.8`, which bundles PostgreSQL 17 only): tags `0.1` to `0.7` are refused at render. In each database where you created the
 `vector` extension, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;`,
 which only updates that record.
 
@@ -306,6 +314,23 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
   -- psql -h 127.0.0.1 -d postgres -c 'SELECT slot_name, failover, synced, active FROM pg_replication_slots'
 ```
 
+### Moving an existing cluster to PostgreSQL 18
+
+A cluster created on PostgreSQL 17 stays on 17. To move it to 18, install a second release of this chart
+(it starts on 18) in the same GVC with the same credentials secret, stop the applications that write to the
+old cluster, and copy everything across with `pg_dumpall` from inside the new release:
+
+```bash
+cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres -- bash -c '
+  pg_dumpall -h OLD_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" \
+    | psql -h NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" -d postgres -q'
+```
+
+`psql` reports that the roles and the application database already exist (the new release created them);
+those lines are expected and the data still loads. Check the row counts of your main tables on the new
+release, point your applications at `NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local`, then uninstall the
+old release.
+
 ## Cluster metrics
 
 Patroni serves Prometheus metrics on its REST API port, and the platform scrapes them into the
@@ -356,6 +381,7 @@ release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 - **Never turn `multiZone` or `etcd.multiZone` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning one on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **`walLevel` sets `wal_level` only when the cluster is created** — on an existing release follow [WAL level and logical replication](#wal-level-and-logical-replication).
 - **A replica that stays down does not fill the primary's disk** — Patroni keeps a replication slot per member, and `max_slot_wal_keep_size` caps the WAL those slots retain at a quarter of `volumeset.capacity`. A member offline long enough to exceed that has its slot invalidated and is re-cloned automatically when it returns.
+- **Each member runs the PostgreSQL version its cluster was created with** — the image bundles PostgreSQL 14 to 18 and reads it from the data directory. If you set `image`, it must include that version; a member whose version is missing exits with an error naming the versions the image has.
 - **Minimum Replicas**: For production use, maintain at least 3 PostgreSQL replicas and 3 etcd replicas
 - **Odd Number for etcd**: Always use an odd number of etcd replicas (3, 5, 7) for proper quorum
 - **Resource Allocation**: Ensure adequate CPU and memory resources for both PostgreSQL and etcd workloads
@@ -368,6 +394,8 @@ There are two backup options:
 - **WAL-G backups** provide continuous archiving with point-in-time recovery, suited for larger databases requiring minimal data loss.
 
 **Note:** The HA Proxy must be enabled (`proxy.enabled: true`) for logical backups to function correctly.
+
+The logical backup image (`backup.logical.image`) runs `pg_dumpall`, which can back up its own PostgreSQL version and older ones. The default `18.1.0` tag backs up PostgreSQL 17 and 18 clusters; a `17.x.x` tag cannot back up a PostgreSQL 18 cluster.
 
 Set `backup.enabled: true`, choose a `mode` (`logical` or `wal-g`), then set `backup.provider` to `aws`, `gcp`, or `minio` and fill in the corresponding block:
 

@@ -8,7 +8,7 @@ resources:
 
 # Patroni's Prometheus metrics are scraped by the platform automatically on the
 # REST API port — no knob, no exporter. See "Cluster metrics" in the README.
-image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
+image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused (CVE-2026-103484)
 
 # replica, or logical for logical replication / CDC (Debezium). Applied when the cluster is created; see the README to change it later.
 walLevel: replica
@@ -90,7 +90,7 @@ backup:
     memory: 512Mi # 128Mi OOMKills wal-g mid-backup (exitCode 137) and silently produces no base backup
 
   logical: # logical backup settings
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0 # tag 17.1.0 = Postgres 17, 18.1.0 = Postgres 18
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # pg_dumpall 18 backs up PostgreSQL 18 and older clusters
     schedule: "0 2 * * *" # cron schedule, default is daily at 2am UTC
 
   walg: # wal-g backup settings

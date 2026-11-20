@@ -185,7 +185,7 @@ Other registries, digests and non-version tags pass.
 {{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
 {{- if hasPrefix $prefix $image -}}
 {{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
-{{- fail (printf "postgres-highly-available: image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to controlplanecorporation/patroni-postgres:0.8, or remove `image` from your values to use the chart default." $raw) -}}
+{{- fail (printf "postgres-highly-available: image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to controlplanecorporation/patroni-postgres:0.9, or remove `image` from your values to use the chart default." $raw) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

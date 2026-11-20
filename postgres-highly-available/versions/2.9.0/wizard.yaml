@@ -26,6 +26,14 @@ steps:
           This version moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). The fix takes
           effect when the members restart. In each database that has the vector extension, `\dx` shows the old
           version until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
+      - type: note
+        severity: info
+        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.9.0') < 0
+        text: >-
+          New clusters from this version run PostgreSQL 18. An existing cluster keeps the PostgreSQL version
+          it was created with (17), because the image bundles both and each member runs the version of its
+          data directory. Moving an existing cluster to 18 is a dump and restore into a new release; see
+          Upgrading in the README.
       - path: replicas
         type: integer
         label: PostgreSQL members
@@ -47,7 +55,7 @@ steps:
             mirrors: pg-ha.validateImage
             message: >-
               This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
-              create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
+              create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.9.
       - path: resources
         type: resources
         label: Resources
@@ -513,7 +521,7 @@ steps:
             required: true
             advanced: true
             when: self.backup.mode == 'logical'
-            description: Tag 17.x.x for PostgreSQL 17, 18.x.x for PostgreSQL 18.
+            description: Tag 18.x.x backs up PostgreSQL 18 and older clusters. A 17.x.x tag cannot back up a PostgreSQL 18 cluster.
           - path: backup.resources
             type: resources
             label: Backup resources

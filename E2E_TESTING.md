@@ -202,6 +202,11 @@ python3 .github/e2e/run.py report --dir /tmp --out /tmp/report.md
 `--gvc` uses an existing GVC and leaves it in place; without it the runner creates and deletes a
 `templates-ci-*` GVC, which only the CI service account may do.
 
+Ctrl-C (SIGINT) or SIGTERM stops the run after cleanup: the running scenario uninstalls the release it
+installed, the teardown deletes the run's secrets, and the run exits 130 with a `harness · runner` failure
+in its result file. Signals that arrive during that cleanup are ignored. `report` skips any JSON file in
+`--dir` that is not a result file.
+
 ## The CI org
 
 Org `nifah`, service account `templates-ci` in group `template-pipeline`. Its policies let it create

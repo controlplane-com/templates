@@ -47,7 +47,8 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
 - **3.x → 4.0.0 without a pin:** the data is PG 17. Each replaced node's start script compares
   `$PGDATA/PG_VERSION` with `postgres -V` before any write to the volume, does not start PostgreSQL, and logs
   `REFUSING TO START` + the exact `--set image=ghcr.io/pgedge/pgedge-postgres:17-spock5-standard` every 30 s. The
-  probe fails, so the rollout stops at node-1 (highest index) of each location and node-0 keeps serving on 17.
+  probe fails, so the rollout stops at the highest-index node of each location (node-2 at the default 3 per location,
+  node-1 at 2) and the other nodes keep serving on 17.
   Fix: the same upgrade with the pin (no force-redeployment expected — the postgres pinned re-upgrade recovered a
   held replica in ~32 s). Users must keep the pin in their values (no `--reuse-values`); the wizard carries the
   installed image (computed migration) and warns over `oldSelf` if changed to another major. NOTES print the
@@ -58,7 +59,9 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   large objects, `ALTER SYSTEM`. Quiesce writes and check `sub_show_status` first.
 - **New readiness probe:** a node that takes > ~310 s to boot (long crash recovery) is restarted. Ready =
   `/tmp/pgedge-serving` written just before `exec postgres` + loopback `pg_isready`, so the fresh-boot setup server
-  never counts; installs now bring nodes up one at a time per location (OrderedReady waits on readiness).
+  never counts; installs now bring nodes up one at a time per location (OrderedReady waits on readiness), so
+  the subscription daemon retries with no deadline (15 s → 120 s backoff; a WARNING after 600 s) instead of 3.0.0's
+  one-shot 600 s, which could leave node-0 never subscribed to a late node.
 - **Backup 19.1.0 → a 17 node:** dumps fine; restoring that dump into a 17 server is not guaranteed — README and a
   wizard info rule say use `postgres-backup:17.1.0` on a release that stays on 17.
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,

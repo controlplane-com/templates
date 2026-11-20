@@ -1,0 +1,2083 @@
+{{/*
+Name
+*/}}
+{{- define "kafka.name" -}}
+{{- printf "%s" .Release.Name -}}
+{{- end }}
+
+{{/*
+Cluster Workload Name
+*/}}
+{{- define "kafka.clusterName" -}}
+{{- printf "%s-%s" (include "kafka.name" .) .Values.kafka.name -}}
+{{- end }}
+
+{{/*
+Log volume set name for a given index. Call with a dict: (dict "root" $root "index" $i).
+Defaults to "<release-name>-logs-<index>" (e.g. kafka-logs-0). If
+kafka.volumes.logs.externalVolumeSets has a non-empty entry at this index, that name is
+used instead — see kafka.volumeSetIsExternal. Both the volume set definitions and the
+workload mount URIs resolve names through this helper so they can never drift apart.
+*/}}
+{{- define "kafka.volumeSetName" -}}
+{{- $root := .root -}}
+{{- $index := int .index -}}
+{{- $external := (($root.Values.kafka.volumes.logs).externalVolumeSets) -}}
+{{- if and $external (gt (len $external) $index) (index $external $index) -}}
+{{- index $external $index -}}
+{{- else -}}
+{{- printf "%s-logs-%d" (include "kafka.name" $root) $index -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether the log volume set at a given index is externally managed (imported) rather than
+created by this chart. Call with a dict: (dict "root" $root "index" $i). Returns "true" when
+kafka.volumes.logs.externalVolumeSets has a non-empty entry at that index, otherwise "".
+An imported volume set is only referenced by the broker workload's mount URI — the chart
+does NOT emit a `kind: volumeset` for it, so it never tries to adopt or overwrite a volume
+set it didn't create (which would fail the cpln/release ownership tag). Use this for a volume
+set that was created/renamed outside the chart (e.g. a "-fresh" volume set from incident
+recovery): its data and settings are left exactly as they are and the workload just points at
+it.
+*/}}
+{{- define "kafka.volumeSetIsExternal" -}}
+{{- $root := .root -}}
+{{- $index := int .index -}}
+{{- $external := (($root.Values.kafka.volumes.logs).externalVolumeSets) -}}
+{{- if and $external (gt (len $external) $index) (index $external $index) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Guard against a partial externalVolumeSets list. If provided, it must have exactly one entry
+per kafka.logDirs (entries may be empty strings to keep that log dir chart-managed); a shorter
+list would leave a trailing log dir chart-managed under the default name and, on a cluster
+whose data lives in imported volume sets, mount a new empty volume set — the exact
+data-loss-on-upgrade footgun this feature prevents.
+*/}}
+{{- define "kafka.validateExternalVolumeSets" -}}
+{{- $external := (.Values.kafka.volumes.logs).externalVolumeSets -}}
+{{- if $external -}}
+  {{- $logDirCount := len (split "," .Values.kafka.logDirs) -}}
+  {{- if ne (len $external) $logDirCount -}}
+    {{- fail (printf "kafka.volumes.logs.externalVolumeSets has %d entr(y/ies) but kafka.logDirs defines %d log dir(s); provide exactly one entry per log dir (use an empty string to keep a log dir chart-managed), in the same order." (len $external) $logDirCount) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Convert .Values.kafka.memory to appropriate JVM heap size settings.
+*/}}
+{{- define "kafka.heap.opts" -}}
+{{- $memory := default "512Mi" .Values.kafka.memory }}
+{{- $memoryInMi := 0 }}
+{{- if hasSuffix "Gi" $memory }}
+  {{- $value := trimSuffix "Gi" $memory | float64 }}
+  {{- $memoryInMi = mul $value 1024 | int }}
+{{- else if hasSuffix "Mi" $memory }}
+  {{- $memoryInMi = trimSuffix "Mi" $memory | int }}
+{{- else }}
+  {{- $memoryInMi = 512 }} # Default to 512Mi if no suffix
+{{- end }}
+{{- $heapSize := div (mul $memoryInMi 60) 100 | int }}
+-Xmx{{ $heapSize }}m -Xms{{ $heapSize }}m
+{{- end }}
+
+{{/*
+Recovery threads per data dir. Kafka serializes log recovery within a single thread per
+data dir on broker startup, so a high partition count + slow disk = long recovery. We size
+this proportionally to the broker's CPU budget: 8 * ceil(cpuCores). Accepts millicore
+("1000m") or whole-core ("2") forms; ceils up so half-cores still get a useful pool.
+*/}}
+{{- define "kafka.recoveryThreads" -}}
+{{- $cpu := default "1000m" .Values.kafka.cpu | toString -}}
+{{- $millicores := 1000 -}}
+{{- if hasSuffix "m" $cpu -}}
+  {{- $millicores = trimSuffix "m" $cpu | int -}}
+{{- else -}}
+  {{- $millicores = mul (atoi $cpu) 1000 -}}
+{{- end -}}
+{{- $cores := div (add $millicores 999) 1000 -}}
+{{- mul 8 $cores -}}
+{{- end }}
+
+{{/*
+Sensible default for default.replication.factor: min(3, replicaCount). Kafka rejects
+default.replication.factor > replicas, so we clamp to the cluster size.
+*/}}
+{{- define "kafka.defaultReplicationFactor" -}}
+{{- $replicas := .Values.kafka.replicas | int -}}
+{{- if lt $replicas 3 -}}{{ $replicas }}{{- else -}}3{{- end -}}
+{{- end }}
+
+{{/*
+Sensible default for min.insync.replicas: max(1, defaultReplicationFactor - 1). With
+replication.factor=3 this gives 2 (tolerates one broker loss without unavailability and
+without losing acked writes); with replicas=2 it gives 1; with replicas=1 it gives 1.
+*/}}
+{{- define "kafka.minInsyncReplicas" -}}
+{{- $rf := include "kafka.defaultReplicationFactor" . | int -}}
+{{- if le $rf 1 -}}1{{- else -}}{{ sub $rf 1 }}{{- end -}}
+{{- end }}
+
+{{- define "kafka.validateListenerConfig" -}}
+  {{- if not .name -}}
+    {{- fail "Error: 'name' must be provided for the listener" -}}
+  {{- end -}}
+  {{- if not .protocol -}}
+    {{- fail "Error: 'protocol' must be provided for the listener" -}}
+  {{- end -}}
+  {{- $hasValidConfig := or .publicAddress .containerPort (and .directReplicaRouting .directReplicaRouting.enabled .directReplicaRouting.containerPort .directReplicaRouting.publicAddress) -}}
+  {{- if not $hasValidConfig -}}
+    {{- fail "Error: At least one of 'publicAddress', 'containerPort', or valid 'directReplicaRouting' (with enabled: true, containerPort, and publicAddress) must be provided for the listener" -}}
+  {{- end -}}
+  {{- if and .publicAddress .containerPort -}}
+    {{- fail "Error: When publicAddress is set for the listener, containerPort should not be specified as it will be automatically set to port range 3000-3004" -}}
+  {{- end -}}
+  {{- if .containerPort -}}
+    {{- $port := .containerPort | printf "%s" }}
+    {{- if or (eq $port "9091") (eq $port "9093") (eq $port "9094") -}}
+      {{- fail "Error: containerPort cannot be 9091, 9093, or 9094 for listener" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and .directReplicaRouting .directReplicaRouting.enabled -}}
+    {{- if .directReplicaRouting.containerPort -}}
+      {{- $port := .directReplicaRouting.containerPort | printf "%s" }}
+      {{- if or (eq $port "9091") (eq $port "9093") (eq $port "9094") -}}
+        {{- fail "Error: directReplicaRouting.containerPort cannot be 9091, 9093, or 9094 for listener" -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateAdminExists" -}}
+{{- $adminFound := false -}}
+{{- $saslPlaintextExists := false -}}
+{{- range .Values.kafka.listeners -}}
+  {{- if eq .protocol "SASL_PLAINTEXT" -}}
+    {{- $saslPlaintextExists = true -}}
+    {{- if and .sasl .sasl.admin -}}
+      {{- $adminFound = true -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if and $saslPlaintextExists (not $adminFound) -}}
+  {{- fail "Error: At least one SASL_PLAINTEXT listener must have an admin user configured in sasl.admin" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateAuthConfig" -}}
+{{- if eq .protocol "SASL_PLAINTEXT" -}}
+  {{- if not .sasl -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires sasl configuration to be enabled for listener '%s'" .name) -}}
+  {{- else if not .sasl.users -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires at least one user to be defined in sasl.users for listener '%s'" .name) -}}
+  {{- else -}}
+    {{- $userCount := len (splitList "," .sasl.users) -}}
+    {{- if not .sasl.passwords -}}
+      {{- fail (printf "Error: sasl.passwords must be provided when sasl.users is defined for listener '%s'" .name) -}}
+    {{- else -}}
+      {{- $passwordCount := len (splitList "," .sasl.passwords) -}}
+      {{- if ne $userCount $passwordCount -}}
+        {{- fail (printf "Error: Number of users (%d) does not match number of passwords (%d) for listener '%s'" $userCount $passwordCount .name) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateReplicas" -}}
+{{- $replicas := .Values.kafka.replicas | int }}
+{{- if or (gt $replicas 5) (eq $replicas 2) -}}
+  {{- fail "Invalid value for kafka.replicas. It must be less than or equal to 5 and not equal to 2." -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateOnePublicAddress" -}}
+{{- $publicAddressCount := 0 -}}
+{{- range .Values.kafka.listeners }}
+  {{- if .publicAddress }}
+    {{- $publicAddressCount = add $publicAddressCount 1 -}}
+  {{- end }}
+  {{- if and .directReplicaRouting .directReplicaRouting.enabled .directReplicaRouting.publicAddress }}
+    {{- $publicAddressCount = add $publicAddressCount 1 -}}
+  {{- end }}
+{{- end }}
+{{- if gt $publicAddressCount 1 -}}
+  {{- fail "There must be at most one listener with a publicAddress set (either listener.publicAddress or listener.directReplicaRouting.publicAddress)." -}}
+{{- end }}
+{{- end -}}
+
+{{- define "kafka.validatedirectReplicaRoutingConfig" -}}
+{{- range $key, $listener := .Values.kafka.listeners }}
+  {{- if and $listener.publicAddress $listener.directReplicaRouting }}
+    {{- if $listener.directReplicaRouting.enabled }}
+      {{- fail (printf "Error in listener '%s': Cannot have both 'publicAddress' at listener level and 'directReplicaRouting.enabled: true'. Use either legacy mode (publicAddress only) or new mode (directReplicaRouting with enabled: true)." $key) -}}
+    {{- end }}
+  {{- end }}
+  {{- if and $listener.directReplicaRouting $listener.directReplicaRouting.enabled }}
+    {{- if not $listener.directReplicaRouting.publicAddress }}
+      {{- fail (printf "Error in listener '%s': When directReplicaRouting.enabled is true, directReplicaRouting.publicAddress must be specified." $key) -}}
+    {{- end }}
+    {{- if not $listener.directReplicaRouting.containerPort }}
+      {{- fail (printf "Error in listener '%s': When directReplicaRouting.enabled is true, directReplicaRouting.containerPort must be specified." $key) -}}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "kafka.validateKafkaImage" -}}
+{{- $image := .Values.kafka.image -}}
+{{- if contains "bitnami" $image -}}
+  {{- fail (printf "Error: This chart does not support Bitnami images, please use Apache Kafka images instead. Current value: %s" $image) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateImage" -}}
+{{- $image := .image -}}
+{{- if contains "bitnami" $image -}}
+  {{- fail (printf "Error: This chart does not support Bitnami images, please use Apache Kafka images instead. Current value: %s" $image) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Validates only the plugin-download keys added in 4.3.0; an entry using 4.2.0 keys renders unchanged. */ -}}
+{{/* With rest_auth_secret set, refuse settings that leave part of the Kafka Connect REST API without auth. */}}
+{{/*
+A Kafka Connect worker does not start without worker-level key.converter and value.converter
+(ConfigException "Missing required configuration"), and helm install would still report success. 4.5.1.
+*/}}
+{{- define "kafka.validateConnectConverters" -}}
+{{- $cp := .connector_properties | default dict -}}
+{{- range $k := list "key.converter" "value.converter" -}}
+{{- if not (toString (index $cp $k | default "") | trim) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties must set %s (for example org.apache.kafka.connect.storage.StringConverter or org.apache.kafka.connect.converters.ByteArrayConverter); the Connect worker does not start without it." $.name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.validateConnectRestAuth" -}}
+{{- $secret := .rest_auth_secret | default "" | toString | trim -}}
+{{- if $secret -}}
+{{- $cp := .connector_properties | default dict -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $secret) -}}
+{{- fail (printf "Error: kafka_connectors '%s' rest_auth_secret must be a secret name, not a link or key reference: '%s'." .name $secret) -}}
+{{- end -}}
+{{- if hasKey $cp "rest.extension.classes" -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and connector_properties rest.extension.classes; rest_auth_secret sets that key, remove it from connector_properties." .name) -}}
+{{- end -}}
+{{- if and (hasKey $cp "connect.protocol") (ne (toString (index $cp "connect.protocol")) "sessioned") -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret with connect.protocol '%s'; only sessioned (the default) signs the workers' internal requests, which the REST API auth lets through. Remove connect.protocol." .name (toString (index $cp "connect.protocol"))) -}}
+{{- end -}}
+{{- if and (hasKey $cp "admin.listeners") (ne (toString (index $cp "admin.listeners")) "") -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and admin.listeners; the admin listener serves /admin/loggers without the REST API auth. Remove admin.listeners, or set it to \"\" to turn the admin endpoints off." .name) -}}
+{{- end -}}
+{{- $cname := .name -}}
+{{- range (.env | default list) -}}
+{{- if and (eq (toString .name) "KAFKA_OPTS") (contains "java.security.auth.login.config" (toString .value)) -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets rest_auth_secret and java.security.auth.login.config in KAFKA_OPTS; the REST API auth uses that JAAS file. Move the Kafka client login to sasl.jaas.config in connector_properties." $cname) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+================================================================================
+Connector secrets (4.5.1)
+
+kafka_connectors[].secrets lists Control Plane secrets the chart mounts under
+/opt/kafka/secrets/<name> on the kafka-connect container. Kafka's built-in
+DirectoryConfigProvider (provider `dir`, locked to /opt/kafka/secrets with
+allowed.paths) then resolves placeholders in worker properties and plugin configs:
+  ${dir:/opt/kafka/secrets/<name>:<key>}   a dictionary secret (a directory, one file per key)
+  ${dir:/opt/kafka/secrets:<name>}         an opaque secret (one file)
+================================================================================
+*/}}
+
+{{/* The listed secret names of one Connect group, comma-separated ("" when none). */}}
+{{- define "kafka.connectSecretNames" -}}
+{{- $names := list -}}
+{{- if kindIs "slice" .secrets -}}
+{{- range .secrets -}}
+{{- if and (kindIs "map" .) (hasKey . "name") -}}
+{{- $names = append $names (toString .name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{/*
+The chart-owned references to listed secrets in one string, one per line as
+<secret>|<key> (dictionary form) or <secret>| (opaque form).
+*/}}
+{{- define "kafka.connectSecretRefs" -}}
+{{- range regexFindAll "\\$\\{dir:/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)\\}" (toString .) -1 }}
+{{- $body := trimSuffix "}" (trimPrefix "${dir:/opt/kafka/secrets" .) }}
+{{- if hasPrefix "/" $body }}
+{{- $rest := trimPrefix "/" $body }}
+{{- $parts := splitn ":" 2 $rest }}
+{{ $parts._0 }}|{{ $parts._1 }}
+{{- else }}
+{{ trimPrefix ":" $body }}|
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* A bash single-quoted word. */}}
+{{- define "kafka.shellQuote" -}}
+'{{ replace "'" "'\\''" (toString .) }}'
+{{- end -}}
+
+{{/*
+Every `${dir:` placeholder in one string value must name a listed secret in one of
+the two forms (F4), and, with secrets listed, none may point outside
+/opt/kafka/secrets (F5). Call with (dict "value" v "names" <list> "where" <text> "group" <name>).
+*/}}
+{{- define "kafka.validateDirPlaceholders" -}}
+{{- $names := .names -}}
+{{- $where := .where -}}
+{{- $group := .group -}}
+{{- if kindIs "string" .value -}}
+{{- range (rest (splitList "${dir:" .value)) -}}
+{{- $seg := . -}}
+{{- $ph := printf "${dir:%s}" (regexReplaceAll "}.*$" $seg "") -}}
+{{- $underRoot := or (hasPrefix "/opt/kafka/secrets/" $seg) (hasPrefix "/opt/kafka/secrets:" $seg) -}}
+{{- $listed := false -}}
+{{- range $names -}}
+{{- if or (hasPrefix (printf "/opt/kafka/secrets/%s:" .) $seg) (hasPrefix (printf "/opt/kafka/secrets:%s}" .) $seg) -}}
+{{- $listed = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and $underRoot (not (regexMatch "^/opt/kafka/secrets(/[^:}/]+:[^}]+|:[^}]+)}" $seg)) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s has the placeholder %s, which names no key or no secret. Use ${dir:/opt/kafka/secrets/NAME:KEY} for a dictionary secret or ${dir:/opt/kafka/secrets:NAME} for an opaque one." $group $where $ph) -}}
+{{- end -}}
+{{- if and $underRoot (not $listed) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s reads %s, which names no secret listed in secrets. Use ${dir:/opt/kafka/secrets/NAME:KEY} for a dictionary secret or ${dir:/opt/kafka/secrets:NAME} for an opaque one, and list NAME in secrets." $group $where $ph) -}}
+{{- end -}}
+{{- if and (gt (len $names) 0) (not $underRoot) -}}
+{{- fail (printf "Error: kafka_connectors '%s' %s reads %s; with secrets set, the dir config provider can only read /opt/kafka/secrets/<secret>." $group $where $ph) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Render checks for kafka_connectors[].secrets (F1-F6). Called once per Connect group. */}}
+{{- define "kafka.validateConnectorSecrets" -}}
+{{- $g := . -}}
+{{- $group := toString $g.name -}}
+{{- $names := list -}}
+{{- if and (hasKey $g "secrets") (not (kindIs "invalid" $g.secrets)) -}}
+{{- if not (kindIs "slice" $g.secrets) -}}
+{{- fail (printf "Error: kafka_connectors '%s' secrets must be a list of {name: <secret>} entries." $group) -}}
+{{- end -}}
+{{- range $i, $s := $g.secrets -}}
+{{- if or (not (kindIs "map" $s)) (not (hasKey $s "name")) (not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" (toString $s.name))) -}}
+{{- fail (printf "Error: kafka_connectors '%s' secrets[%d].name must be a Control Plane secret name (lowercase letters, digits, hyphens)." $group $i) -}}
+{{- end -}}
+{{- if has (toString $s.name) $names -}}
+{{- fail (printf "Error: kafka_connectors '%s' lists secret '%s' twice in secrets." $group (toString $s.name)) -}}
+{{- end -}}
+{{- $names = append $names (toString $s.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $cp := $g.connector_properties | default dict -}}
+{{- if gt (len $names) 0 -}}
+{{- if eq (trim (toString ($g.rest_auth_secret | default ""))) "" -}}
+{{- fail (printf "Error: kafka_connectors '%s' mounts secrets but has no rest_auth_secret; every REST API client could read them through a connector. Set rest_auth_secret." $group) -}}
+{{- end -}}
+{{- if has (trim (toString $g.rest_auth_secret)) $names -}}
+{{- fail (printf "Error: kafka_connectors '%s' lists its rest_auth_secret '%s' in secrets; every REST API user could then read the other users' passwords. Remove it from secrets." $group (trim (toString $g.rest_auth_secret))) -}}
+{{- end -}}
+{{- $image := toString ($g.image | default "") -}}
+{{- $ref := index (splitList "@" $image) 0 -}}
+{{- $tag := regexReplaceAll "^kafka_[0-9]+\\.[0-9]+-" (lower (trimPrefix ":" (regexFind ":[^:/]+$" $ref))) "" -}}
+{{- if regexMatch "^[^0-9]*0*([0-2]\\.|3\\.0*[0-7]([^0-9]|$))" $tag -}}
+{{- fail (printf "Error: kafka_connectors '%s' mounts secrets with image %s; Kafka before 3.8 ignores allowed.paths, so the dir config provider could read any file. Use apache/kafka:3.9.1 or later." $group $image) -}}
+{{- end -}}
+{{- range $k, $v := $cp -}}
+{{- if hasPrefix "config.providers.dir." $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; with secrets set the chart configures the dir config provider, remove config.providers.dir.* from connector_properties." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $k, $v := $cp -}}
+{{- include "kafka.validateDirPlaceholders" (dict "value" $v "names" $names "where" (printf "worker property '%s'" $k) "group" $group) -}}
+{{- end -}}
+{{- range ($g.plugins | default list) -}}
+{{- if and (kindIs "map" .) (kindIs "map" .config) -}}
+{{- $pname := toString .name -}}
+{{- range $k, $v := .config -}}
+{{- include "kafka.validateDirPlaceholders" (dict "value" $v "names" $names "where" (printf "plugin '%s'" $pname) "group" $group) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The env config provider (EnvVarConfigProvider) of a Connect worker is always limited
+with allowlist.pattern so that ${env:CPLN_...} never resolves: CPLN_TOKEN is the
+workload's Control Plane API token. The chart sets the pattern itself (4.5.1), so a
+user-supplied allowlist.pattern is refused: a pattern can always be written to
+reopen CPLN_ (for example an alternation), so it cannot be combined safely.
+*/}}
+{{- define "kafka.connectEnvAllowlistPattern" -}}(?!CPLN_).*{{- end -}}
+
+{{/* The names of the providers whose class is EnvVarConfigProvider, comma-separated. */}}
+{{- define "kafka.connectEnvProviders" -}}
+{{- $names := list -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if and (regexMatch "^config\\.providers\\..+\\.class$" $k) (eq (trim (toString $v)) "org.apache.kafka.common.config.provider.EnvVarConfigProvider") -}}
+{{- $names = append $names (trimSuffix ".class" (trimPrefix "config.providers." $k)) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{- define "kafka.validateConnectEnvProvider" -}}
+{{- $group := toString .name -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if regexMatch "^config\\.providers\\..+\\.param\\.allowlist\\.pattern$" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; the chart sets allowlist.pattern on every env config provider so that ${env:CPLN_...} variables (the workload's Control Plane token among them) never resolve. Remove the key." $group $k) -}}
+{{- end -}}
+{{- if regexMatch "^config\\.providers\\..+\\.param\\.allowed\\.paths$" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' sets %s in connector_properties; the chart sets allowed.paths on every file and directory config provider (/opt/kafka/secrets and the extraVolumes paths), so that no provider reads the worker's own files. Remove the key." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The names of the providers whose class is FileConfigProvider or DirectoryConfigProvider, comma-separated. */}}
+{{- define "kafka.connectFileProviders" -}}
+{{- $names := list -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if and (regexMatch "^config\\.providers\\..+\\.class$" $k) (has (trim (toString $v)) (list "org.apache.kafka.common.config.provider.FileConfigProvider" "org.apache.kafka.common.config.provider.DirectoryConfigProvider")) -}}
+{{- $names = append $names (trimSuffix ".class" (trimPrefix "config.providers." $k)) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{/* allowed.paths for a user-declared file or directory config provider: the secrets root and every extraVolumes path. */}}
+{{- define "kafka.connectFileProviderPaths" -}}
+{{- $paths := list "/opt/kafka/secrets" -}}
+{{- range (.extraVolumes | default list) -}}
+{{- if and (kindIs "map" .) .path (not (has (toString .path) $paths)) -}}
+{{- $paths = append $paths (toString .path) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $paths -}}
+{{- end -}}
+
+{{/*
+Worker properties are written to a Java properties file, which reads whitespace, `=`
+and `:` in a key as the key's end and `\` as an escape (`\u0041`, a line continuation).
+So a key holding any of them, or a value holding a newline, `\u`, or a trailing `\`,
+would reach the worker as something other than what the chart checked (a key with a
+leading space reads as config.providers.*, a value can add or swallow a line).
+A config.providers.* value holds no `\` at all, so that its class is the one checked.
+Called once per Connect group, with or without rest_auth_secret or secrets.
+*/}}
+{{- define "kafka.validateConnectPropertySyntax" -}}
+{{- $group := toString .name -}}
+{{- range $k, $v := (.connector_properties | default dict) -}}
+{{- if regexMatch "[\\s\\\\=:]" $k -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties key %q holds whitespace, '\\', '=' or ':'; worker property names hold none of them. Remove them from the key." $group $k) -}}
+{{- end -}}
+{{- $sv := toString $v -}}
+{{- if or (contains "\n" $sv) (contains "\r" $sv) (contains "\\u" $sv) (hasSuffix "\\" $sv) (contains "$\\" $sv) (contains "\\{" $sv) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a line break, a '\\u' escape, a '\\' next to '${' or a trailing '\\', which the worker's properties file reads as more than this value. Write the value on one line without them." $group $k) -}}
+{{- end -}}
+{{- if and (hasPrefix "config.providers" $k) (contains "\\" $sv) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties '%s' holds a '\\'; config provider settings take plain class names and values. Remove it." $group $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The worker properties file of one Connect group (the -props secret). */}}
+{{- define "kafka.connectors.props" -}}
+{{- $g := .connector -}}
+{{- $root := .root -}}
+{{- $restAuth := $g.rest_auth_secret | default "" | toString | trim -}}
+{{- $secretNames := include "kafka.connectSecretNames" $g -}}
+{{- $cp := $g.connector_properties | default dict -}}
+{{- if not (hasKey $cp "bootstrap.servers") }}
+bootstrap.servers={{ include "kafka.clientBootstrapAddress" $root }}
+{{- end }}
+{{- range $key, $value := $cp }}
+{{- if not (and $secretNames (eq $key "config.providers")) }}
+{{ $key }}={{ $value }}
+{{- end }}
+{{- end }}
+{{- if $restAuth }}
+rest.extension.classes=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
+{{- end }}
+{{- if $secretNames }}
+{{- $providers := list }}
+{{- range splitList "," (toString (index $cp "config.providers" | default "")) }}
+{{- if and (trim .) (not (has (trim .) $providers)) }}
+{{- $providers = append $providers (trim .) }}
+{{- end }}
+{{- end }}
+{{- if not (has "dir" $providers) }}
+{{- $providers = append $providers "dir" }}
+{{- end }}
+config.providers={{ join "," $providers }}
+config.providers.dir.class=org.apache.kafka.common.config.provider.DirectoryConfigProvider
+config.providers.dir.param.allowed.paths=/opt/kafka/secrets
+{{- end }}
+{{- range (compact (splitList "," (include "kafka.connectEnvProviders" $g))) }}
+config.providers.{{ . }}.param.allowlist.pattern={{ include "kafka.connectEnvAllowlistPattern" $root }}
+{{- end }}
+{{- $filePaths := include "kafka.connectFileProviderPaths" $g }}
+{{- range (compact (splitList "," (include "kafka.connectFileProviders" $g))) }}
+config.providers.{{ . }}.param.allowed.paths={{ $filePaths }}
+{{- end }}
+{{- end -}}
+
+{{- define "kafka.validateConnectorDownloads" -}}
+{{- $c := . -}}
+{{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
+  {{- if not (has (toString $c.plugins_wait_timeout_action) (list "start" "restart")) -}}
+    {{- fail (printf "Error in kafka_connectors '%s': plugins_wait_timeout_action must be 'start' or 'restart', got '%v'" (toString $c.name) $c.plugins_wait_timeout_action) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (hasKey $c "plugins_wait_timeout_seconds") (not (kindIs "invalid" $c.plugins_wait_timeout_seconds)) -}}
+  {{- $t := $c.plugins_wait_timeout_seconds -}}
+  {{- $ok := false -}}
+  {{- if or (kindIs "int" $t) (kindIs "int64" $t) -}}
+    {{- $ok = ge (int64 $t) 0 -}}
+  {{- else if kindIs "float64" $t -}}
+    {{- $ok = and (ge $t 0.0) (eq $t (floor $t)) -}}
+  {{- else if kindIs "string" $t -}}
+    {{- $ok = regexMatch "^[0-9]+$" $t -}}
+  {{- end -}}
+  {{- if not $ok -}}
+    {{- fail (printf "Error in kafka_connectors '%s': plugins_wait_timeout_seconds must be a whole number of seconds, 0 or more (0 = wait forever), got '%v'" (toString $c.name) $t) -}}
+  {{- end -}}
+{{- end -}}
+{{- range $c.plugins -}}
+  {{- $p := . -}}
+  {{- range .artifacts -}}
+    {{- if and (hasKey . "sha256") (not (kindIs "invalid" .sha256)) (ne (toString .sha256) "") -}}
+      {{- if not (regexMatch "^[0-9A-Fa-f]{64}$" (toString .sha256)) -}}
+        {{- fail (printf "Error in kafka_connectors '%s', plugin '%s': artifact sha256 must be 64 hexadecimal characters, got '%v'" (toString $c.name) (toString $p.name) .sha256) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kafka.clientBootstrapAddress" -}}
+{{- $clusterName := include "kafka.clusterName" . -}}
+{{- $bootstrapAddress := "" -}}
+{{- $listenerName := "" -}}
+
+{{- if .listenerName -}}
+  {{- $listenerName = .listenerName -}}
+{{- else if .Values.kafka_connectors -}}
+  {{- range .Values.kafka_connectors -}}
+    {{- if .listener -}}
+      {{- $listenerName = .listener -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $listenerName -}}
+  {{- if hasKey .Values.kafka.listeners $listenerName -}}
+    {{- $listener := index .Values.kafka.listeners $listenerName -}}
+    {{- if $listener.publicAddress -}}
+      {{- $bootstrapAddress = printf "%s:3000" $listener.publicAddress -}}
+    {{- else -}}
+      {{- $containerPort := $listener.containerPort | int -}}
+      {{- $bootstrapAddress = printf "%s:%d" $clusterName $containerPort -}}
+    {{- end -}}
+  {{- else -}}
+    {{- $bootstrapAddress = include "kafka.bootstrapAddress" . -}}
+  {{- end -}}
+{{- else -}}
+  {{- $bootstrapAddress = include "kafka.bootstrapAddress" . -}}
+{{- end -}}
+
+{{- $bootstrapAddress -}}
+{{- end -}}
+
+{{- define "kafka.propertiesMapToList" -}}
+{{- range $key, $value := . -}}
+{{ $key }}={{ $value }}
+{{- end -}}
+{{- end -}}
+
+
+
+{{- define "kafka.connectors.download.script" -}}
+{{- $c := .connector | default dict -}}
+{{- $total := 0 -}}
+{{- range .plugins }}{{- if eq .enabled true }}{{- $total = add $total (len (.artifacts | default list)) -}}{{- end }}{{- end }}
+#!/bin/sh
+# Kafka Connect plugin downloader (chart 4.3.0).
+# Each artifact is downloaded to a staging dir on the plugin volume, verified, and renamed into
+# <plugins>/<plugin>/<key>/ (same filesystem, so the rename is atomic). An installed artifact is never
+# rewritten, so a restart skips it. Only artifacts recorded in .cpln-downloads/manifest are ever
+# deleted; files this chart did not download are never touched.
+# Kafka Connect waits for $SYNC/downloads-done before it scans plugin.path.
+set -u
+PLUGINS='{{ replace "'" "'\\''" (toString (.plugins_folder | default "/opt/kafka/plugins")) }}'
+STATE="$PLUGINS/.cpln-downloads"
+MANIFEST="$STATE/manifest"
+STAGING="$STATE/staging"
+RETIRED="$STATE/retired"
+SYNC=/opt/kafka/sync
+TOKEN='{{ if and (hasKey $c "plugins_redownload_token") (not (kindIs "invalid" $c.plugins_redownload_token)) }}{{ replace "'" "'\\''" (toString $c.plugins_redownload_token) }}{{ end }}'
+VERBOSE={{ if .verbose }}1{{ else }}0{{ end }}
+NL='
+'
+CHILD=""
+
+log() { echo "[plugins $(date -u +%H:%M:%S)] $*"; }
+vlog() { if [ "$VERBOSE" = 1 ]; then log "$@"; fi; return 0; }
+# Credentials never reach the log: userinfo becomes ***@ and a query string becomes ?<redacted>.
+redact() { printf '%s\n' "$1" | sed -e 's#\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1***@#g' -e 's#?.*#?<redacted>#'; }
+strip_userinfo() { printf '%s\n' "$1" | sed 's#^\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1#'; }
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+# fd 3 keeps the original stdout, so the trap's message is not lost inside a redirected call.
+exec 3>&1
+on_term() {
+  log "SIGTERM: stopping" >&3
+  stop_child
+  if [ -n "${FETCH_TMP:-}" ]; then rm -rf "$FETCH_TMP"; fi
+  exit 143
+}
+# A credentialed request runs in its own process group (setsid), so stopping it stops every process in it.
+CHILD_PG=0
+stop_child() {
+  if [ -z "$CHILD" ]; then return 0; fi
+  if [ "$CHILD_PG" = 1 ]; then kill -TERM "-$CHILD" 2>/dev/null; else kill "$CHILD" 2>/dev/null; fi
+}
+trap on_term TERM INT
+# Long operations run in the background and are waited on, so a SIGTERM is handled at once.
+bg() { CHILD_PG=0; "$@" & CHILD=$!; wait "$CHILD"; _rc=$?; CHILD=""; return $_rc; }
+
+plugin_name_ok() {
+  case "$1" in ''|.*|*/*|lost+found) return 1 ;; esac
+  case "$1" in *"$NL"*) return 1 ;; esac
+  return 0
+}
+
+# Add an entry (<plugin>/<key>) to the manifest of artifact dirs this chart created.
+record() {
+  if [ -f "$MANIFEST" ] && grep -qxF -- "$1" "$MANIFEST"; then return 0; fi
+  { if [ -f "$MANIFEST" ]; then cat "$MANIFEST"; fi; printf '%s\n' "$1"; } > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
+}
+
+# File name for a jar artifact: the last segment of the URL path, with .jar appended if missing.
+jar_name() {
+  u=$(strip_userinfo "$1"); u=${u%%#*}; u=${u%%\?*}; u=${u#*://}
+  case "$u" in */*) p=${u#*/} ;; *) p="" ;; esac
+  n=${p##*/}
+  if [ -z "$n" ]; then n=artifact; fi
+  case "$n" in *.jar) ;; *) n="$n.jar" ;; esac
+  printf '%s' "$n"
+}
+
+CR=$(printf '\r')
+TAB=$(printf '\t')
+
+# Parse a URL into U_SCHEME U_USERINFO U_HOSTPORT U_HOST U_PORT U_PATH (fragment dropped). Userinfo is
+# taken only from the authority, i.e. before the first "/", "?" or "#".
+url_parts() {
+  U_SCHEME=$(lower "${1%%://*}"); _r=${1#*://}
+  _a=${_r%%[/?#]*}; _rest=${_r#"$_a"}; _rest=${_rest%%#*}
+  case "$_rest" in /*) U_PATH=$_rest ;; \?*) U_PATH="/$_rest" ;; *) U_PATH=/ ;; esac
+  case "$_a" in *@*) U_USERINFO=${_a%@*}; U_HOSTPORT=${_a##*@} ;; *) U_USERINFO=""; U_HOSTPORT=$_a ;; esac
+  case "$U_HOSTPORT" in
+    \[*\]:*) U_HOST=${U_HOSTPORT%%]*}; U_HOST=${U_HOST#\[}; U_PORT=${U_HOSTPORT##*]:} ;;
+    \[*\]) U_HOST=${U_HOSTPORT#\[}; U_HOST=${U_HOST%]}; U_PORT="" ;;
+    *:*) U_HOST=${U_HOSTPORT%:*}; U_PORT=${U_HOSTPORT##*:} ;;
+    *) U_HOST=$U_HOSTPORT; U_PORT="" ;;
+  esac
+  if [ -z "$U_PORT" ]; then
+    case "$U_SCHEME" in https) U_PORT=443 ;; *) U_PORT=80 ;; esac
+  fi
+}
+
+# scheme://host:port of a URL, lowercased, for comparing hosts.
+origin() { url_parts "$1"; printf '%s://%s:%s' "$U_SCHEME" "$(lower "$U_HOST")" "$U_PORT"; }
+
+# Absolute form of a Location header value, relative to the URL that returned it (no userinfo).
+resolve_location() {
+  case "$2" in
+    *://*) printf '%s' "$2" ;;
+    //*) url_parts "$1"; printf '%s:%s' "$U_SCHEME" "$2" ;;
+    /*) url_parts "$1"; printf '%s://%s%s' "$U_SCHEME" "$U_HOSTPORT" "$2" ;;
+    *) url_parts "$1"; _d=${U_PATH%%\?*}; printf '%s://%s%s/%s' "$U_SCHEME" "$U_HOSTPORT" "${_d%/*}" "$2" ;;
+  esac
+}
+
+pct_decode() { printf '%b' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"; }
+
+# Like bg, but runs the command in its own process group and stops the whole group when FILE ($1)
+# has not grown for SECS ($2) seconds of real time. The size is read with stat (wc -c would read the
+# whole file on every check).
+bg_idle() {
+  _f=$1; _idle=$2; shift 2
+  CHILD_PG=1
+  setsid "$@" & CHILD=$!
+  _last=-1; _since=$(date +%s)
+  while kill -0 "$CHILD" 2>/dev/null; do
+    sleep 1 & wait $!
+    _size=$(stat -c %s "$_f" 2>/dev/null) || _size=0
+    _now=$(date +%s)
+    if [ "$_size" != "$_last" ]; then
+      _last=$_size; _since=$_now
+    elif [ $((_now-_since)) -ge "$_idle" ]; then
+      stop_child; wait "$CHILD" 2>/dev/null; CHILD=""; CHILD_PG=0
+      echo "download timed out" >&2
+      return 124
+    fi
+  done
+  wait "$CHILD"; _rc=$?; CHILD=""; CHILD_PG=0; return $_rc
+}
+
+# Container-local scratch for a credentialed request (the request holds the Authorization header).
+# Never on the plugin volume; removed after every request and by the SIGTERM trap.
+FETCH_TMP=""
+fetch_tmp_cleanup() { if [ -n "$FETCH_TMP" ]; then rm -rf "$FETCH_TMP"; FETCH_TMP=""; fi; }
+
+# Programs for a credentialed request, written to FETCH_TMP and run with "sh". nc runs HTTP_PROG or
+# TLS_PROG on the connected socket (stdin and stdout), and never half-closes it.
+# RECV_PROG HEAD BODY reads the response head into HEAD (skipping 1xx interim responses), then
+# streams the body straight into BODY, so the body is written once and never copied.
+RECV_PROG='CR=$(printf "\r")
+while :; do
+  : > "$1"
+  while IFS= read -r l; do l=${l%"$CR"}; [ -z "$l" ] && break; printf "%s\n" "$l" >> "$1"; done
+  case "$(sed -n "1s/^HTTP\/[0-9.]* \([0-9]\).*/\1/p" "$1")" in 1) continue ;; esac
+  break
+done
+exec cat > "$2"'
+# HTTP_PROG REQ RECV HEAD BODY
+HTTP_PROG='cat "$1"; exec sh "$2" "$3" "$4"'
+# TLS_PROG REQ RECV HEAD BODY SNI RC: ssl_client speaks TLS on fd 3; its exit status goes to RC.
+TLS_PROG='exec 3<&0 <"$1"
+{ ssl_client -s 3 -n "$5"; echo $? > "$6"; } | sh "$2" "$3" "$4" 3<&-'
+
+# One HTTP(S) request to the URL's own host; redirects are never followed. Writes the response head
+# to $2 and the body to $3 (on the volume: the body can be large, and neither holds a credential).
+# Used for http(s) URLs with credentials, because busybox wget sends URL credentials to every
+# redirect target.
+raw_get() {
+  url_parts "$1"
+  FETCH_TMP=$(umask 077; mktemp -d /tmp/cpln-fetch.XXXXXX) || { echo "cannot create a temporary directory" >&2; return 1; }
+  (
+    umask 077
+    {
+      printf 'GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Wget\r\nAccept: */*\r\n' "$U_PATH" "$U_HOSTPORT"
+      if [ -n "$U_USERINFO" ]; then
+        printf 'Authorization: Basic %s\r\n' "$(pct_decode "$U_USERINFO" | base64 | tr -d '\n')"
+      fi
+      printf 'Connection: close\r\n\r\n'
+    } > "$FETCH_TMP/req"
+    printf '%s\n' "$RECV_PROG" > "$FETCH_TMP/recv"
+    printf '%s\n' "$HTTP_PROG" > "$FETCH_TMP/http"
+    printf '%s\n' "$TLS_PROG" > "$FETCH_TMP/tls"
+  )
+  : > "$2"; : > "$3"
+  case "$U_SCHEME" in
+    http)
+      bg_idle "$3" 60 sh -c 'exec 2>"$1"; shift; exec nc "$@"' sh "$FETCH_TMP/err" \
+        -w 60 "$U_HOST" "$U_PORT" -e sh "$FETCH_TMP/http" "$FETCH_TMP/req" "$FETCH_TMP/recv" "$2" "$3" ;;
+    https)
+      bg_idle "$3" 60 sh -c 'exec 2>"$1"; shift; exec nc "$@"' sh "$FETCH_TMP/err" \
+        -w 60 "$U_HOST" "$U_PORT" -e sh "$FETCH_TMP/tls" "$FETCH_TMP/req" "$FETCH_TMP/recv" "$2" "$3" "$U_HOST" "$FETCH_TMP/rc" ;;
+  esac
+  _rc=$?
+  if [ "$_rc" -eq 0 ] && [ "$U_SCHEME" = https ] && [ "$(cat "$FETCH_TMP/rc" 2>/dev/null)" != 0 ]; then _rc=1; fi
+  if [ "$_rc" -ne 0 ]; then
+    if [ -s "$FETCH_TMP/err" ]; then head -n 1 "$FETCH_TMP/err" >&2
+    elif [ "$_rc" -ne 124 ]; then echo "connection to $U_HOST:$U_PORT failed" >&2; fi
+  fi
+  fetch_tmp_cleanup
+  return "$_rc"
+}
+
+# Check a received body ($2, its head in $1): de-chunk it when the response is chunked (the only case
+# that copies the body), and fail when it is shorter than Content-Length or a chunked body has no
+# final chunk. (De-chunking relies on busybox "head -c" reading exactly N bytes from a shared descriptor.)
+finish_response() {
+  if grep -qi '^transfer-encoding:.*chunked' "$1"; then
+    exec 5<"$2"
+    : > "$2.d"
+    while IFS= read -r _l <&5; do
+      _l=${_l%"$CR"}; _s=${_l%%;*}
+      case "$_s" in ''|*[!0-9A-Fa-f]*) exec 5<&-; rm -f "$2.d"; return 1 ;; esac
+      _n=$((0x$_s))
+      if [ "$_n" -eq 0 ]; then exec 5<&-; mv -f "$2.d" "$2"; return; fi
+      head -c "$_n" <&5 >> "$2.d"
+      IFS= read -r _l <&5
+    done
+    exec 5<&-
+    rm -f "$2.d"
+    return 1
+  fi
+  _cl=$(sed -n 's/^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1" | head -n 1)
+  if [ -n "$_cl" ] && [ "$(stat -c %s "$2")" -ne "$_cl" ]; then return 1; fi
+  return 0
+}
+
+# fetch URL FILE ERRFILE. A URL without credentials, or with a scheme other than http(s), is fetched
+# by busybox wget as before. An http(s) URL with credentials is requested from its own host only: a
+# redirect to the same host is followed with the credentials, a redirect to any other host (a
+# presigned storage URL, for example) is fetched WITHOUT them. Redirect URLs are never logged.
+fetch() {
+  url_parts "$1"
+  case "$U_SCHEME" in http|https) ;; *) U_USERINFO="" ;; esac
+  if [ -z "$U_USERINFO" ]; then
+    bg wget -q -T 60 -O "$2" "$1" 2>"$3"
+    return
+  fi
+  _url=$1; _hops=0
+  : > "$3"
+  while [ "$_hops" -lt 5 ]; do
+    rm -f "$2" "$2.head" "$2.d"
+    if ! raw_get "$_url" "$2.head" "$2" 2>>"$3"; then rm -f "$2" "$2.head"; return 1; fi
+    if ! bg finish_response "$2.head" "$2"; then
+      echo "incomplete response" >> "$3"; rm -f "$2" "$2.head"; return 1
+    fi
+    _status=$(sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$2.head")
+    case "$_status" in
+      2??) rm -f "$2.head"; return 0 ;;
+      301|302|303|307|308)
+        _loc=$(sed -n 's/^[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//p' "$2.head" | head -n 1 | tr -d "\r$TAB" | sed 's/ *$//')
+        rm -f "$2.head" "$2"
+        if [ -z "$_loc" ]; then echo "redirect without a Location header" >> "$3"; return 1; fi
+        _loc=$(strip_userinfo "$(resolve_location "$_url" "$_loc")")
+        if [ "$(origin "$_loc")" = "$(origin "$_url")" ]; then
+          url_parts "$_url"; _ui=$U_USERINFO
+          _url="${_loc%%://*}://${_ui}@${_loc#*://}"
+          _hops=$((_hops+1))
+          vlog "  redirected on the same host; following with the credentials"
+          continue
+        fi
+        vlog "  redirected to another host; following without the credentials"
+        bg wget -q -T 60 -O "$2" "$_loc" 2>>"$3"
+        return ;;
+      '') echo "no HTTP response" >> "$3"; rm -f "$2.head"; return 1 ;;
+      *)
+        echo "server returned error: $(sed -n 1p "$2.head" | tr -d '\r')" >> "$3"
+        rm -f "$2.head"; return 1 ;;
+    esac
+  done
+  echo "too many redirects" >> "$3"
+  return 1
+}
+
+config_skip() {
+  log "ERROR $1"
+  CONFIG_SKIPPED="${CONFIG_SKIPPED}$2${NL}"
+}
+
+fail_artifact() {
+  FAILED="${FAILED}${plugin}: ${rurl} ($1)${NL}"
+  rm -rf "$st"
+}
+
+# install_artifact PLUGIN TYPE URL SHA256. Returns 1 only for a failure worth retrying.
+install_artifact() {
+  plugin=$1; type=$2; url=$3; sha=$(lower "$4")
+  rurl=$(redact "$url")
+  if ! plugin_name_ok "$plugin"; then
+    config_skip "invalid plugin name '$plugin' (empty, starts with '.', contains '/' or is lost+found): skipped $rurl" "${plugin}: $rurl (invalid plugin name)"
+    return 0
+  fi
+  if [ -z "$url" ]; then
+    config_skip "plugin $plugin: an artifact has no url: skipped" "${plugin}: (artifact without a url)"
+    return 0
+  fi
+  case "$type" in
+    jar|zip|tar|tgz|tar.gz) ;;
+    *)
+      config_skip "plugin $plugin: unsupported artifact type '$type' for $rurl (supported: jar, zip, tar, tgz, tar.gz): skipped" "${plugin}: $rurl (unsupported type '$type')"
+      return 0 ;;
+  esac
+  if [ "$type" = jar ]; then JARP="${JARP}${plugin}${NL}"; fi
+  key=$(printf 'v2\n%s\n%s\n%s\n%s\n' "$type" "$(strip_userinfo "$url")" "$sha" "$TOKEN" | sha256sum | cut -c1-16)
+  KEEP="${KEEP}${plugin}/${key}${NL}"
+  dest="$PLUGINS/$plugin/$key"
+  st="$STAGING/$key"
+  if [ -d "$dest" ]; then
+    record "$plugin/$key"
+    vlog "skip $plugin $type $rurl (installed as $plugin/$key)"
+    return 0
+  fi
+  rm -rf "$st"
+  if ! mkdir -p "$st/x"; then
+    log "ERROR cannot create the staging dir $st"
+    fail_artifact "staging dir"; return 1
+  fi
+  report_progress
+  log "download $plugin $type $rurl"
+  vlog "  key $key, staging $st"
+  if ! fetch "$url" "$st/file" "$st/err"; then
+    err=$(tail -n 3 "$st/err" 2>/dev/null | tr '\n' ' ')
+    log "ERROR download failed: $rurl: $(redact "$err")"
+    fail_artifact "download failed"; return 1
+  fi
+  vlog "  downloaded $(stat -c %s "$st/file") bytes"
+  if [ -n "$sha" ]; then
+    if ! bg sha256sum "$st/file" > "$st/sum"; then
+      log "ERROR cannot checksum $rurl"; fail_artifact "checksum"; return 1
+    fi
+    got=$(cut -d' ' -f1 "$st/sum")
+    if [ "$got" != "$sha" ]; then
+      log "ERROR sha256 mismatch for $plugin $rurl: expected $sha, got $got"
+      fail_artifact "sha256 mismatch"; return 1
+    fi
+    vlog "  sha256 verified"
+  fi
+  case "$type" in
+    jar)
+      if ! bg unzip -l "$st/file" >/dev/null 2>&1; then
+        log "ERROR not a valid jar: $rurl"; fail_artifact "not a valid jar"; return 1
+      fi
+      if ! mv "$st/file" "$st/x/$(jar_name "$url")"; then
+        log "ERROR cannot stage $rurl"; fail_artifact "staging"; return 1
+      fi ;;
+    zip)
+      if ! bg unzip -l "$st/file" >/dev/null 2>&1 || ! bg unzip -q -o "$st/file" -d "$st/x" >/dev/null 2>&1; then
+        log "ERROR not a valid zip: $rurl"; fail_artifact "not a valid zip"; return 1
+      fi ;;
+    tgz|tar.gz)
+      if ! bg tar -tzf "$st/file" >/dev/null 2>&1 || ! bg tar -xzf "$st/file" -C "$st/x" 2>/dev/null; then
+        log "ERROR not a valid $type: $rurl"; fail_artifact "not a valid $type"; return 1
+      fi ;;
+    tar)
+      if ! bg tar -tf "$st/file" >/dev/null 2>&1 || ! bg tar -xf "$st/file" -C "$st/x" 2>/dev/null; then
+        log "ERROR not a valid tar: $rurl"; fail_artifact "not a valid tar"; return 1
+      fi ;;
+  esac
+  rm -f "$st/file" "$st/err" "$st/sum"
+  if ! mkdir -p "$PLUGINS/$plugin"; then
+    log "ERROR cannot create $PLUGINS/$plugin"; fail_artifact "plugin dir"; return 1
+  fi
+  if ! record "$plugin/$key"; then
+    log "ERROR cannot write $MANIFEST"; fail_artifact "manifest"; return 1
+  fi
+  if ! mv "$st/x" "$dest"; then
+    log "ERROR cannot move $plugin/$key into place"; fail_artifact "rename"; return 1
+  fi
+  rm -rf "$st"
+  INSTALLED=$((INSTALLED+1))
+  log "installed $plugin $type $rurl as $plugin/$key"
+  return 0
+}
+
+# Plugins with "enabled: true" (the only ones downloaded, as in earlier chart versions).
+enabled_plugins() {
+{{- range .plugins }}
+{{- if eq .enabled true }}
+  printf '%s\n' '{{ replace "'" "'\\''" (toString .name) }}'
+{{- end }}
+{{- end }}
+  :
+}
+
+not_enabled_plugins() {
+{{- range .plugins }}
+{{- if eq .enabled true }}
+{{- else }}
+  printf '%s\n' '{{ replace "'" "'\\''" (toString .name) }}'
+{{- end }}
+{{- end }}
+  :
+}
+
+# Until the first pass ends, $SYNC/pending says what is known so far (failures, config skips, the
+# artifact being downloaded now and how many are not checked yet), so a wait timeout inside the first
+# pass can name it. Later passes leave the previous pass's list in place until they end.
+FIRST_PASS=1
+report_progress() {
+  if [ "$FIRST_PASS" != 1 ]; then return 0; fi
+  {
+    printf '%s%s' "$FAILED" "$CONFIG_SKIPPED"
+    printf '%s: %s (most recently started; the first download pass has not finished)\n' "$plugin" "$rurl"
+    if [ "$ART_LEFT" -gt 0 ]; then printf '%s more configured artifact(s) not checked yet\n' "$ART_LEFT"; fi
+  } > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+}
+
+# One pass over every wanted artifact, in values order. Returns 1 if any retryable failure.
+run_all() {
+  KEEP=""; JARP=""; FAILED=""; CONFIG_SKIPPED=""; prc=0; ART_LEFT={{ $total }}
+{{- range .plugins }}
+{{- if eq .enabled true }}
+  P='{{ replace "'" "'\\''" (toString .name) }}'
+{{- range .artifacts }}
+  ART_LEFT=$((ART_LEFT-1))
+  install_artifact "$P" '{{ replace "'" "'\\''" (toString (.type | default "")) }}' '{{ replace "'" "'\\''" (toString (.url | default "")) }}' '{{ replace "'" "'\\''" (toString (.sha256 | default "")) }}' || prc=1
+{{- end }}
+{{- end }}
+{{- end }}
+  printf '%s%s' "$FAILED" "$CONFIG_SKIPPED" > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+  return $prc
+}
+
+# Top-level entries this chart does not manage. Listed so they are visible; never touched.
+report_unmanaged() {
+  list=""
+  for e in "$PLUGINS"/* "$PLUGINS"/.[!.]* "$PLUGINS"/..?*; do
+    if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+    n=${e##*/}
+    case "$n" in .cpln-downloads|lost+found) continue ;; esac
+    if enabled_plugins | grep -qxF -- "$n"; then continue; fi
+    if [ -f "$MANIFEST" ] && cut -d/ -f1 "$MANIFEST" | grep -qxF -- "$n"; then continue; fi
+    list="$list $n"
+  done
+  if [ -n "$list" ]; then log "left untouched (not downloaded by this chart):$list"; fi
+}
+
+# A configured plugin dir that also holds files this chart did not download shares their classloader.
+collision_check() {
+  enabled_plugins | while IFS= read -r p; do
+    if ! plugin_name_ok "$p" || [ ! -d "$PLUGINS/$p" ]; then continue; fi
+    for e in "$PLUGINS/$p"/* "$PLUGINS/$p"/.[!.]* "$PLUGINS/$p"/..?*; do
+      if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+      n=${e##*/}
+      if [ "$n" = "$p.jar" ]; then continue; fi
+      if [ -f "$MANIFEST" ] && grep -qxF -- "$p/$n" "$MANIFEST"; then continue; fi
+      log "WARNING: $p/ also contains files this chart did not download; they load in the same classloader as its artifacts"
+      break
+    done
+  done
+}
+
+manifest_entry_ok() {
+  case "$1" in [!./]*/*) ;; *) return 1 ;; esac
+  p=${1%/*}; k=${1#*/}
+  case "$p" in */*|lost+found) return 1 ;; esac
+  case "$k" in *[!0-9a-f]*) return 1 ;; esac
+  [ ${#k} -eq 16 ]
+}
+
+# Remove artifact dirs this chart created that are no longer wanted (URL changed, plugin removed or
+# not enabled). Only manifest entries are ever deleted.
+prune_manifest() {
+  if [ ! -f "$MANIFEST" ]; then return 0; fi
+  : > "$MANIFEST.new"
+  while IFS= read -r entry; do
+    if [ -z "$entry" ]; then continue; fi
+    case "$NL$KEEP" in *"$NL$entry$NL"*) printf '%s\n' "$entry" >> "$MANIFEST.new"; continue ;; esac
+    if ! manifest_entry_ok "$entry"; then
+      log "WARNING: dropping an unexpected manifest entry; nothing deleted"
+      continue
+    fi
+    if [ -e "$PLUGINS/$entry" ] || [ -L "$PLUGINS/$entry" ]; then
+      log "removing $entry (no longer configured)"
+      if ! rm -rf "${PLUGINS:?}/$entry"; then printf '%s\n' "$entry" >> "$MANIFEST.new"; continue; fi
+    fi
+    if rmdir "$PLUGINS/${entry%/*}" 2>/dev/null; then log "removed empty plugin dir ${entry%/*}"; fi
+  done < "$MANIFEST"
+  mv -f "$MANIFEST.new" "$MANIFEST"
+}
+
+# Chart <= 4.2.x wrote every jar artifact of plugin P to P/P.jar (possibly partial). For each enabled
+# plugin that has a jar artifact now, move that file out of the plugin path (reversible).
+retire_legacy() {
+  printf '%s' "$JARP" | while IFS= read -r p; do
+    if [ -z "$p" ]; then continue; fi
+    f="$PLUGINS/$p/$p.jar"
+    if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
+    mkdir -p "$RETIRED"
+    if mv "$f" "$RETIRED/$p.jar.$(date +%s).retired"; then
+      log "retired $p/$p.jar (written by chart 4.2.x or earlier) to .cpln-downloads/retired/"
+    fi
+  done
+}
+
+log "Kafka Connect plugin downloader starting (plugins folder $PLUGINS)"
+mkdir -p "$SYNC"
+rm -f "$SYNC/downloads-done" "$SYNC/pending"
+printf 'the first download pass has not started yet ({{ $total }} configured artifact(s))\n' > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+if ! mkdir -p "$STATE"; then
+  log "FATAL: cannot create $STATE; plugins_folder must be on the plugin volume"
+  exit 1
+fi
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+printf '2\n' > "$STATE/layout"
+not_enabled_plugins | while IFS= read -r p; do
+  log "skipping plugin $p: not downloaded because it has no \"enabled: true\""
+done
+report_unmanaged
+collision_check
+
+attempt=0
+INSTALLED=0
+until run_all; do
+  FIRST_PASS=0
+  attempt=$((attempt+1)); delay=$((attempt*10)); if [ $delay -gt 60 ]; then delay=60; fi
+  log "pass $attempt: some artifacts failed; retrying in ${delay}s. Kafka Connect keeps waiting."
+  bg sleep "$delay"
+done
+FIRST_PASS=0
+log "all artifacts present ($INSTALLED downloaded by this run)"
+
+if [ -f "$SYNC/connect-started-degraded" ]; then
+  log "all artifacts are now installed; Kafka Connect started without some of them, so restart the worker (cpln workload force-redeployment) to load them. Cleanup deferred until then."
+elif [ -n "$CONFIG_SKIPPED" ]; then
+  log "cleanup skipped: some artifacts were skipped because of a configuration error, so nothing is removed or retired until the configuration is fixed"
+else
+  prune_manifest
+  retire_legacy
+fi
+printf '%s' "$CONFIG_SKIPPED" > "$SYNC/pending.tmp" && mv -f "$SYNC/pending.tmp" "$SYNC/pending"
+touch "$SYNC/downloads-done"
+log "all plugins ready; signalled kafka-connect"
+while :; do bg sleep 2147483647; done
+{{- end }}
+
+{{- define "kafka.connectors.run.script" -}}
+{{- $c := .connector | default dict -}}
+{{- $waitTimeout := 900 -}}
+{{- if and (hasKey $c "plugins_wait_timeout_seconds") (not (kindIs "invalid" $c.plugins_wait_timeout_seconds)) -}}
+{{- if kindIs "string" $c.plugins_wait_timeout_seconds -}}
+{{- $waitTimeout = atoi $c.plugins_wait_timeout_seconds -}}
+{{- else -}}
+{{- $waitTimeout = int $c.plugins_wait_timeout_seconds -}}
+{{- end -}}
+{{- end -}}
+{{- $waitAction := "start" -}}
+{{- if and (hasKey $c "plugins_wait_timeout_action") (not (kindIs "invalid" $c.plugins_wait_timeout_action)) -}}
+{{- $waitAction = toString $c.plugins_wait_timeout_action -}}
+{{- end -}}
+{{- $restAuth := $c.rest_auth_secret | default "" | toString | trim -}}
+{{- $secretNames := include "kafka.connectSecretNames" $c -}}
+{{- $workerRefs := list -}}
+{{- range $k, $v := ($c.connector_properties | default dict) -}}
+{{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) -}}{{- if . -}}{{- $workerRefs = append $workerRefs . -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- $workerRefs = uniq $workerRefs -}}
+{{- $allRefs := $workerRefs -}}
+{{- range ($c.plugins | default list) -}}
+{{- if and (kindIs "map" .) (kindIs "map" .config) (not (and (hasKey . "enabled") (not .enabled))) -}}
+{{- range $k, $v := .config -}}
+{{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) -}}{{- if . -}}{{- $allRefs = append $allRefs . -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $allRefs = uniq $allRefs -}}
+#!/bin/bash
+set -e
+
+REST_AUTH_ARGS=()
+REST_AUTH_HDR=""
+
+# Names of the keys in a connector config. Values are never logged: they often hold credentials.
+config_keys() {
+  echo "$1" | sed -n 's/^[[:space:],{]*"\([^"]*\)":[[:space:]]*".*/\1/p' | grep -v '^name$' | tr '\n' ' '
+}
+{{- if $secretNames }}
+
+# Control Plane secrets mounted for the dir config provider. Only file names and sizes are read here, never values.
+SECRETS_ROOT=/opt/kafka/secrets
+secret_keys() {
+  ls -1 "$1" 2>/dev/null | grep -v '^___cpln___' | tr '\n' ' '
+}
+# What is wrong with one reference (<secret>|<key>, or <secret>| for an opaque secret); returns 1 when something is.
+secret_ref_problem() {
+  local s=${1%%|*} k=${1#*|}
+  local p="$SECRETS_ROOT/$s"
+  if [[ -n "$k" ]]; then
+    if [[ -f "$p" ]]; then
+      echo "$s is an opaque secret (one value): use \${dir:$SECRETS_ROOT:$s}"; return 1
+    elif [[ ! -d "$p" ]]; then
+      echo "secret '$s' is not mounted at $p"; return 1
+    elif [[ ! -f "$p/$k" ]]; then
+      echo "key '$k' of secret '$s' does not exist; its keys: $(secret_keys "$p")"; return 1
+    fi
+  else
+    if [[ -d "$p" ]]; then
+      echo "$s is a dictionary secret: use \${dir:$SECRETS_ROOT/$s:KEY}; its keys: $(secret_keys "$p")"; return 1
+    elif [[ ! -f "$p" ]]; then
+      echo "secret '$s' is not mounted at $p"; return 1
+    fi
+  fi
+  return 0
+}
+# Kafka passes a value on byte for byte, so warn about an empty one or one that ends with a newline.
+secret_ref_warn() {
+  local s=${1%%|*} k=${1#*|} f label
+  if [[ -n "$k" ]]; then f="$SECRETS_ROOT/$s/$k"; label="key '$k' of secret '$s'"; else f="$SECRETS_ROOT/$s"; label="secret '$s'"; fi
+  [[ -f "$f" ]] || return 0
+  if [[ ! -s "$f" ]]; then
+    echo "WARNING: $label is empty"
+  elif [[ "$(tail -c1 "$f" | wc -l)" -gt 0 ]]; then
+    echo "WARNING: $label ends with a newline, which Kafka passes on as part of the value"
+  fi
+}
+# A connector whose secret references do not resolve is not created or updated (Kafka would keep the placeholder text).
+connector_secrets_ok() {
+  local connector=$1 ref problem ok=0
+  shift
+  for ref in "$@"; do
+    if ! problem=$(secret_ref_problem "$ref"); then
+      echo "ERROR: connector $connector not created or updated: $problem"
+      ok=1
+    fi
+  done
+  return $ok
+}
+{{- end }}
+
+# Function to create or update a connector
+create_or_update_connector() {
+  local connector_name=$1
+  local config=$2
+  local cluster_connectors=$3
+  
+  echo "Checking if connector $connector_name exists in cluster..."
+  
+  # Check if connector exists in the cluster-wide list (reliable in distributed mode)
+  local exists=false
+  if echo "$cluster_connectors" | grep -q "\"$connector_name\""; then
+    exists=true
+    echo "Connector $connector_name found in cluster list"
+  else
+    echo "Connector $connector_name does not exist in cluster"
+  fi
+  
+  if [ "$exists" = true ]; then
+    echo "Connector $connector_name exists. Updating configuration..."
+    
+    # Extract just the config part from the full connector JSON
+    # Remove the "name" line, remove everything up to and including "config": {, remove last two lines (both closing braces)
+    local config_content=$(echo "$config" | sed '/^[[:space:]]*"name":/d' | sed '1,/^[[:space:]]*"config":[[:space:]]*{/d' | sed '$d' | sed '$d')
+    local update_config="{${config_content}}"
+    
+    echo "Updating connector $connector_name (config keys: $(config_keys "$update_config"))"
+    
+    # Update the connector using PUT with nc (BusyBox wget doesn't support PUT)
+    local content_length=$(echo -n "$update_config" | wc -c | xargs)
+    local response
+    response=$(echo -e "PUT /connectors/$connector_name/config HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Content-Type: application/json\r\nContent-Length: $content_length\r\nConnection: close\r\n\r\n$update_config" | nc localhost 8083 2>&1)
+    echo "HTTP response for $connector_name update: $(echo "$response" | head -1)"
+    if ! echo "$response" | grep -q "HTTP/1\.. 2"; then
+      echo "ERROR: Failed to update connector $connector_name. HTTP status: $(echo "$response" | head -1). The Kafka Connect log has the reason."
+    else
+      echo "Connector $connector_name updated successfully"
+    fi
+  else
+    echo "Connector $connector_name does not exist. Creating..."
+    
+    echo "Creating connector $connector_name (config keys: $(config_keys "$config"))"
+    
+    # Create the connector using POST; a failed request returns non-zero so the caller retries
+    local post_err
+    if ! post_err=$(wget -q "${REST_AUTH_ARGS[@]}" -O /dev/null "http://localhost:8083/connectors" \
+          --header="Content-Type: application/json" --post-data="$config" 2>&1); then
+      echo "ERROR: Failed to create connector $connector_name: ${post_err}. The Kafka Connect log has the reason."
+      return 1
+    fi
+    
+    echo "Connector $connector_name created successfully"
+    
+    # Add a delay after creation to allow connector to initialize
+    sleep 2
+  fi
+}
+
+# Function to check and setup truststore for SSL connections
+truststore_init() {
+  local hostname=$1
+  local port=$2
+  local alias=$3
+  local jdbc_props=$4
+  
+  echo "Setting up truststore for $hostname:$port with alias $alias"
+  
+  # Parse JDBC connection properties
+  local truststore_path
+  local truststore_password
+  
+  # First check if ssl.truststore.location is provided in the config
+  if [[ -n "${SSL_TRUSTSTORE_LOCATION}" ]]; then
+    truststore_path="${SSL_TRUSTSTORE_LOCATION}"
+    echo "Using ssl.truststore.location from config: $truststore_path"
+  # Then check if it's in JDBC properties
+  elif [[ "$jdbc_props" =~ ssl\.truststore\.location=([^;]+) ]]; then
+    truststore_path="${BASH_REMATCH[1]}"
+    echo "Using ssl.truststore.location from JDBC properties: $truststore_path"
+  elif [[ "$jdbc_props" =~ trustStorePath=([^;]+) ]]; then
+    truststore_path="${BASH_REMATCH[1]}"
+    echo "Using trustStorePath from JDBC properties: $truststore_path"
+  else
+    # Use default path if not specified
+    truststore_path="/tmp/kafka.client.truststore.jks"
+    echo "No truststore path specified, using default: $truststore_path"
+  fi
+  
+  # Check if ssl.truststore.password is provided
+  if [[ -n "${SSL_TRUSTSTORE_PASSWORD}" ]]; then
+    truststore_password="${SSL_TRUSTSTORE_PASSWORD}"
+    echo "Using ssl.truststore.password from config"
+  # Then check if it's in JDBC properties
+  elif [[ "$jdbc_props" =~ ssl\.truststore\.password=([^;]+) ]]; then
+    truststore_password="${BASH_REMATCH[1]}"
+    echo "Using ssl.truststore.password from JDBC properties"
+  elif [[ "$jdbc_props" =~ trustStorePassword=([^;]+) ]]; then
+    truststore_password="${BASH_REMATCH[1]}"
+    echo "Using trustStorePassword from JDBC properties"
+  else
+    # Generate random password if not specified
+    truststore_password=$(openssl rand -base64 12)
+    export SSL_TRUSTSTORE_PASSWORD="${truststore_password}"
+    echo "Generated random ssl.truststore.password"
+  fi
+  
+  # Create certs directory if it doesn't exist
+  mkdir -p $(dirname "$truststore_path")
+  
+  # Download CA certificate
+  echo "Downloading CA certificate for $hostname:$port"
+  echo | openssl s_client -connect $hostname:$port -showcerts 2>/dev/null | \
+    openssl x509 -outform PEM > $(dirname "$truststore_path")/$alias.pem || \
+    echo "WARNING: Failed to download certificate from $hostname:$port, truststore may be incomplete"
+
+  # Create truststore if it doesn't exist or override existing one
+  echo "Creating new truststore from $JAVA_HOME/lib/security/cacerts"
+  if [[ -f "$JAVA_HOME/lib/security/cacerts" ]]; then
+    cp "$JAVA_HOME/lib/security/cacerts" "$truststore_path" || \
+      echo "WARNING: Failed to copy cacerts to $truststore_path, truststore setup may be incomplete"
+  else
+    echo "WARNING: $JAVA_HOME/lib/security/cacerts not found, skipping truststore creation for $hostname"
+    return 0
+  fi
+
+  # Change the default password to our password
+  echo "Setting truststore password"
+  keytool -storepasswd -keystore "$truststore_path" \
+    -storepass "changeit" -new "${truststore_password}" || \
+    echo "WARNING: Failed to change truststore password for $hostname, continuing with default password"
+
+  # Import certificate into truststore (only if cert file is non-empty)
+  local cert_file="$(dirname "$truststore_path")/$alias.pem"
+  if [[ -s "$cert_file" ]]; then
+    echo "Importing certificate into truststore"
+    keytool -import -noprompt -alias $alias -file "$cert_file" \
+      -keystore "$truststore_path" -storepass "${truststore_password}" || \
+      echo "WARNING: Failed to import certificate for $alias, truststore may be incomplete"
+  else
+    echo "WARNING: Skipping certificate import for $alias, cert file is empty or missing"
+  fi
+
+  echo "Truststore setup completed for $hostname"
+}
+
+# Function to setup multi-domain truststore from values configuration
+setup_multi_domain_truststore() {
+  local plugin_name="$1"
+  local ssl_truststore_config="$2"
+  
+  echo "Setting up multi-domain truststore for plugin: $plugin_name"
+  
+  # Parse the ssl_truststore configuration (passed as JSON-like string)
+  local generate=$(echo "$ssl_truststore_config" | grep -o '"generate"[[:space:]]*:[[:space:]]*true' | wc -l)
+  
+  if [[ $generate -eq 0 ]]; then
+    echo "Multi-domain truststore generation disabled for $plugin_name"
+    return 0
+  fi
+  
+  echo "Multi-domain truststore generation enabled for $plugin_name"
+  
+  # Extract truststore path (REQUIRED)
+  local truststore_path=$(echo "$ssl_truststore_config" | grep -o '"truststore_path"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"truststore_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+  if [[ -z "$truststore_path" ]]; then
+    echo "ERROR: ssl_truststore.truststore_path is required when ssl_truststore.generate is true for plugin $plugin_name"
+    exit 1
+  fi
+  
+  # Extract password environment variable name (REQUIRED)
+  local password_env=$(echo "$ssl_truststore_config" | grep -o '"truststore_password_env"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"truststore_password_env"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+  if [[ -z "$password_env" ]]; then
+    echo "ERROR: ssl_truststore.truststore_password_env is required when ssl_truststore.generate is true for plugin $plugin_name"
+    exit 1
+  fi
+  
+  # Check if password already exists
+  if [[ -n "${!password_env}" ]]; then
+    echo "Using existing password from environment variable: $password_env"
+    local truststore_password="${!password_env}"
+  else
+    # Generate random password
+    local truststore_password=$(openssl rand -base64 12)
+    export "$password_env"="$truststore_password"
+    echo "Generated random password for $password_env"
+  fi
+  
+  # Create truststore directory if it doesn't exist
+  mkdir -p $(dirname "$truststore_path")
+  
+  # Create truststore if it doesn't exist or if we're starting fresh
+  if [[ ! -f "$truststore_path" ]]; then
+    echo "Creating new multi-domain truststore at: $truststore_path"
+    
+    # Validate JAVA_HOME exists
+    if [[ -z "$JAVA_HOME" ]]; then
+      echo "ERROR: JAVA_HOME environment variable is not set, required for truststore creation for plugin $plugin_name"
+      exit 1
+    fi
+    
+    # Validate cacerts file exists
+    if [[ ! -f "$JAVA_HOME/lib/security/cacerts" ]]; then
+      echo "ERROR: Java cacerts file not found at $JAVA_HOME/lib/security/cacerts for plugin $plugin_name"
+      exit 1
+    fi
+    
+    # Copy cacerts as base truststore
+    if ! cp "$JAVA_HOME/lib/security/cacerts" "$truststore_path"; then
+      echo "ERROR: Failed to create truststore file at $truststore_path for plugin $plugin_name"
+      exit 1
+    fi
+    
+    # Change the default password to our password
+    echo "Setting truststore password"
+    if ! keytool -storepasswd -keystore "$truststore_path" \
+         -storepass "changeit" -new "$truststore_password" >/dev/null 2>&1; then
+      echo "ERROR: Failed to set truststore password for plugin $plugin_name"
+      exit 1
+    fi
+  fi
+  
+  # Extract and process hostnames (REQUIRED)
+  local hostnames=$(echo "$ssl_truststore_config" | grep -o '"hostnames"[[:space:]]*:[[:space:]]*\[[^]]*\]' | sed 's/.*"hostnames"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/' | tr ',' '\n')
+  
+  if [[ -z "$hostnames" ]]; then
+    echo "ERROR: ssl_truststore.hostnames is required and must be a non-empty array when ssl_truststore.generate is true for plugin $plugin_name"
+    exit 1
+  fi
+  
+  # Validate that hostnames array is not empty
+  local hostname_count=$(echo "$hostnames" | grep -v '^$' | wc -l)
+  if [[ $hostname_count -eq 0 ]]; then
+    echo "ERROR: ssl_truststore.hostnames must contain at least one hostname when ssl_truststore.generate is true for plugin $plugin_name"
+    exit 1
+  fi
+  
+  # Download and import certificates for each hostname
+  while IFS= read -r hostname_entry; do
+    if [[ -n "$hostname_entry" ]]; then
+      # Clean up the hostname (remove quotes and whitespace)
+      local clean_hostname=$(echo "$hostname_entry" | sed 's/[[:space:]]*"\([^"]*\)".*/\1/' | xargs)
+      
+      if [[ -n "$clean_hostname" ]]; then
+        local hostname=$(echo "$clean_hostname" | cut -d':' -f1)
+        local port=$(echo "$clean_hostname" | cut -d':' -f2)
+        
+        # Validate hostname:port format
+        if [[ -z "$hostname" || -z "$port" || "$hostname" == "$port" ]]; then
+          echo "ERROR: Invalid hostname format '$clean_hostname' in ssl_truststore.hostnames for plugin $plugin_name. Expected format: 'hostname:port'"
+          exit 1
+        fi
+        
+        # Validate port is numeric
+        if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+          echo "ERROR: Invalid port '$port' in hostname '$clean_hostname' for plugin $plugin_name. Port must be numeric."
+          exit 1
+        fi
+        
+        local alias="$plugin_name-$(echo $hostname | tr '.' '-')"
+        
+                echo "Downloading certificate for $hostname:$port with alias $alias"
+        
+        # Download CA certificate
+        local cert_file="$(dirname "$truststore_path")/$alias.pem"
+        if ! echo | openssl s_client -connect $hostname:$port -showcerts 2>/dev/null | \
+             openssl x509 -outform PEM > "$cert_file"; then
+          echo "ERROR: Failed to download certificate from $hostname:$port for plugin $plugin_name"
+          exit 1
+        fi
+        
+        # Validate certificate file is not empty
+        if [[ ! -s "$cert_file" ]]; then
+          echo "ERROR: Downloaded certificate from $hostname:$port is empty for plugin $plugin_name"
+          exit 1
+        fi
+        
+        # Import certificate into truststore (skip if already exists)
+        if keytool -list -keystore "$truststore_path" -storepass "$truststore_password" -alias "$alias" >/dev/null 2>&1; then
+          echo "Certificate with alias $alias already exists in truststore, skipping"
+        else
+          echo "Importing certificate with alias $alias into truststore"
+          if ! keytool -import -noprompt -alias "$alias" -file "$cert_file" \
+               -keystore "$truststore_path" -storepass "$truststore_password" >/dev/null 2>&1; then
+            echo "ERROR: Failed to import certificate with alias $alias into truststore for plugin $plugin_name"
+            exit 1
+          fi
+        fi
+      fi
+    fi
+  done <<< "$hostnames"
+  
+
+  
+  echo "Multi-domain truststore setup completed for $plugin_name at: $truststore_path"
+}
+
+# Function to setup connectors in the background
+setup_connectors() {
+  echo "Starting connector setup process..."
+  
+  # Wait for Kafka Connect to start
+  echo "Waiting for Kafka Connect to start..."
+  until rest_err=$(wget -q "${REST_AUTH_ARGS[@]}" http://localhost:8083/ -O /dev/null 2>&1); do
+    if [[ "$rest_err" == *" 401 "* ]]; then
+      echo "ERROR: Kafka Connect refused the connector setup's login (401). The first line of the rest_auth_secret file must be 'username: password': ASCII, no spaces in the username, one line per user."
+    else
+      echo "Waiting for Kafka Connect REST API..."
+    fi
+    sleep 5
+  done
+
+  echo "Kafka Connect REST API is up. Waiting for connector plugins to load..."
+  # Wait for connector plugins to be available (indicates full initialization)
+  local retry_count=0
+  local max_retries=12
+  until wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connector-plugins 2>/dev/null | grep -q "class" || [ $retry_count -ge $max_retries ]; do
+    echo "Waiting for connector plugins to load... (attempt $((retry_count+1))/$max_retries)"
+    sleep 5
+    retry_count=$((retry_count+1))
+  done
+  
+  echo "Kafka Connect plugins loaded. Now waiting for existing connectors to be restored from connect-config topic..."
+  # Poll for connectors to be restored, but with a timeout
+  local connector_wait=0
+  local max_connector_wait=20
+  local prev_count=-1
+  while [ $connector_wait -lt $max_connector_wait ]; do
+    INSTALLED_CONNECTORS=$(wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
+    local current_count=$(echo "$INSTALLED_CONNECTORS" | tr -d '[]"' | tr ',' '\n' | grep -v '^$' | wc -l | xargs)
+    
+    if [ "$current_count" != "$prev_count" ]; then
+      echo "Connectors being restored... Found $current_count connector(s) so far: $INSTALLED_CONNECTORS"
+      prev_count=$current_count
+      connector_wait=0  # Reset wait counter when we see changes
+    else
+      if [ $connector_wait -eq 0 ] && [ "$current_count" -gt 0 ]; then
+        echo "Connector count stable at $current_count. Waiting 5 more seconds to ensure restoration is complete..."
+      fi
+      connector_wait=$((connector_wait+1))
+    fi
+    
+    sleep 1
+  done
+
+  # Get final list of currently installed connectors
+  echo "Fetching final list of installed connectors..."
+  INSTALLED_CONNECTORS=$(wget -q "${REST_AUTH_ARGS[@]}" -O - http://localhost:8083/connectors 2>/dev/null || echo "[]")
+  echo "Installed connectors: $INSTALLED_CONNECTORS"
+
+  # Build list of desired connectors from values file
+  DESIRED_CONNECTORS=({{- range .plugins }} "{{ .name }}"{{- end }})
+  echo "Desired connectors from values: ${DESIRED_CONNECTORS[@]}"
+  echo "Number of desired connectors: ${#DESIRED_CONNECTORS[@]}"
+  
+  # Remove connectors that are not in the desired list
+  if [[ "$INSTALLED_CONNECTORS" != "[]" && "$INSTALLED_CONNECTORS" != "" ]]; then
+    echo "$INSTALLED_CONNECTORS" | tr -d '[]"' | tr ',' '\n' | while IFS= read -r connector; do
+      connector=$(echo "$connector" | xargs) # trim whitespace
+      if [[ -n "$connector" ]]; then
+        found=false
+        for desired in "${DESIRED_CONNECTORS[@]}"; do
+          if [[ "$connector" == "$desired" ]]; then
+            found=true
+            break
+          fi
+        done
+        if [[ "$found" == "false" ]]; then
+          echo "Connector '$connector' is not enabled. Removing..."
+          (echo -e "DELETE /connectors/$connector HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Connection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
+        fi
+      fi
+    done
+  fi
+
+  # Create/update connectors
+  {{- range .plugins }}
+  {{- $prefs := list }}
+  {{- if kindIs "map" .config }}
+  {{- range $k, $v := .config }}
+  {{- range (splitList "\n" (include "kafka.connectSecretRefs" $v)) }}{{- if . }}{{- $prefs = append $prefs . }}{{- end }}{{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $prefs = uniq $prefs }}
+  {{- $pname := .name }}
+  echo "Processing connector: {{ .name }}"
+  {{- if hasKey . "enabled" }}
+  {{- if not .enabled }}
+  echo "Connector {{ .name }} is disabled. Removing if it exists..."
+  (echo -e "DELETE /connectors/{{ .name }} HTTP/1.1\r\nHost: localhost:8083\r\n${REST_AUTH_HDR}Connection: close\r\n\r\n" | nc localhost 8083 > /dev/null 2>&1) || true
+  
+  # Wait a bit between connectors to allow Kafka Connect API to stabilize
+  sleep 3
+  {{- else }}
+  echo "Creating/updating connector: {{ .name }}"
+
+{{- if hasKey . "ssl_truststore" }}
+# Setup multi-domain truststore if configured
+SSL_TRUSTSTORE_CONFIG='{"generate":{{ if hasKey .ssl_truststore "generate" }}{{ .ssl_truststore.generate }}{{ else }}false{{ end }}{{- if hasKey .ssl_truststore "truststore_path" }},"truststore_path":"{{ .ssl_truststore.truststore_path }}"{{- end }}{{- if hasKey .ssl_truststore "truststore_password_env" }},"truststore_password_env":"{{ .ssl_truststore.truststore_password_env }}"{{- end }}{{- if hasKey .ssl_truststore "hostnames" }},"hostnames":[{{- range $i, $hostname := .ssl_truststore.hostnames }}{{- if $i }},{{- end }}"{{ $hostname }}"{{- end }}]{{- end }}}'
+setup_multi_domain_truststore "{{ .name }}" "$SSL_TRUSTSTORE_CONFIG"
+{{- end }}
+
+{{- if and (hasKey .config "ssl") (eq .config.ssl "true") }}
+# Check if SSL is enabled
+# Export ssl.truststore.location if it exists
+{{- if hasKey .config "ssl.truststore.location" }}
+export SSL_TRUSTSTORE_LOCATION={{ index .config "ssl.truststore.location" | quote }}
+{{- end }}
+# Export ssl.truststore.password if it exists
+{{- if hasKey .config "ssl.truststore.password" }}
+export SSL_TRUSTSTORE_PASSWORD={{ index .config "ssl.truststore.password" | quote }}
+{{- end }}
+# Setup truststore
+truststore_init "{{ .config.hostname }}" "{{ .config.port }}" "{{ .name }}" "{{ default "" .config.jdbcConnectionProperties }}"
+{{- end }}
+
+CONFIG=$(cat << 'EOF'
+{
+  "name": "{{ .name }}",
+  "config": {
+    {{- $first := true }}
+    {{- range $key, $value := .config }}
+    {{- if $first }}{{ $first = false }}{{ else }},{{ end }}
+    "{{ $key }}": "{{ $value }}"
+    {{- end }}
+    {{- if and (hasKey .config "ssl") (eq .config.ssl "true") (not (hasKey .config "ssl.truststore.password")) }}
+    ,"ssl.truststore.password": "${SSL_TRUSTSTORE_PASSWORD}"
+    {{- end }}
+  }
+}
+EOF
+)
+
+# If we have a generated password, replace it in the config
+if [[ -n "${SSL_TRUSTSTORE_PASSWORD}" && ! "{{ if hasKey .config "ssl.truststore.password" }}true{{ else }}false{{ end }}" == "true" ]]; then
+  CONFIG=$(echo "$CONFIG" | sed "s|\${SSL_TRUSTSTORE_PASSWORD}|${SSL_TRUSTSTORE_PASSWORD}|g")
+fi
+
+  {{- if hasKey . "ssl_truststore" }}
+  {{- if hasKey .ssl_truststore "truststore_password_env" }}
+  # Replace plugin-specific truststore password if it exists
+  PLUGIN_PASSWORD_VAR="{{ .ssl_truststore.truststore_password_env }}"
+  echo "DEBUG: Looking for password in environment variable: $PLUGIN_PASSWORD_VAR"
+  if [[ -n "${!PLUGIN_PASSWORD_VAR}" ]]; then
+    echo "DEBUG: Replacing \${${PLUGIN_PASSWORD_VAR}} with password in config"
+    CONFIG=$(echo "$CONFIG" | sed "s|\${${PLUGIN_PASSWORD_VAR}}|${!PLUGIN_PASSWORD_VAR}|g")
+  else
+    echo "DEBUG: No password found in $PLUGIN_PASSWORD_VAR"
+  fi
+  {{- end }}
+  {{- end }}
+{{- if $prefs }}
+if connector_secrets_ok {{ include "kafka.shellQuote" $pname }}{{ range $prefs }} {{ include "kafka.shellQuote" . }}{{ end }}; then
+{{- end }}
+
+# Try to create connector with retry logic
+max_retries=5
+retry_count=0
+while [ $retry_count -lt $max_retries ]; do
+  if create_or_update_connector "{{ .name }}" "$CONFIG" "$INSTALLED_CONNECTORS"; then
+    echo "Successfully created/updated connector {{ .name }} on attempt $((retry_count+1))"
+    break
+  else
+    retry_count=$((retry_count+1))
+    if [ $retry_count -lt $max_retries ]; then
+      echo "Failed to create/update connector {{ .name }}, retrying in 10 seconds (attempt $retry_count/$max_retries)..."
+      sleep 10
+    else
+      echo "Failed to create/update connector {{ .name }} after $max_retries attempts"
+    fi
+  fi
+done
+{{- if $prefs }}
+fi
+{{- end }}
+
+# Wait a bit between connectors to allow Kafka Connect API to stabilize
+sleep 3
+{{- end }}
+  {{- else }}
+  echo "Creating/updating connector: {{ .name }}"
+  {{- if and (hasKey .config "ssl") (eq .config.ssl "true") }}
+  # Check if SSL is enabled
+  # Export ssl.truststore.location if it exists
+  {{- if hasKey .config "ssl.truststore.location" }}
+  export SSL_TRUSTSTORE_LOCATION={{ index .config "ssl.truststore.location" | quote }}
+  {{- end }}
+  # Export ssl.truststore.password if it exists
+  {{- if hasKey .config "ssl.truststore.password" }}
+  export SSL_TRUSTSTORE_PASSWORD={{ index .config "ssl.truststore.password" | quote }}
+  {{- end }}
+  # Setup truststore
+  truststore_init "{{ .config.hostname }}" "{{ .config.port }}" "{{ .name }}" "{{ default "" .config.jdbcConnectionProperties }}"
+  {{- end }}
+
+  CONFIG=$(cat << 'EOF'
+{
+  "name": "{{ .name }}",
+  "config": {
+    {{- $first := true }}
+    {{- range $key, $value := .config }}
+    {{- if $first }}{{ $first = false }}{{ else }},{{ end }}
+    "{{ $key }}": "{{ $value }}"
+    {{- end }}
+    {{- if and (hasKey .config "ssl") (eq .config.ssl "true") (not (hasKey .config "ssl.truststore.password")) }}
+    {{- if not $first }},{{ end }}
+    "ssl.truststore.password": "${SSL_TRUSTSTORE_PASSWORD}"
+    {{- end }}
+  }
+}
+EOF
+)
+
+  # If we have a generated password, replace it in the config
+  if [[ -n "${SSL_TRUSTSTORE_PASSWORD}" && ! "{{ if hasKey .config "ssl.truststore.password" }}true{{ else }}false{{ end }}" == "true" ]]; then
+    CONFIG=$(echo "$CONFIG" | sed "s|\${SSL_TRUSTSTORE_PASSWORD}|${SSL_TRUSTSTORE_PASSWORD}|g")
+  fi
+
+  {{- if hasKey . "ssl_truststore" }}
+{{- if hasKey .ssl_truststore "truststore_password_env" }}
+# Replace plugin-specific truststore password if it exists
+PLUGIN_PASSWORD_VAR="{{ .ssl_truststore.truststore_password_env }}"
+echo "DEBUG: Looking for password in environment variable: $PLUGIN_PASSWORD_VAR"
+if [[ -n "${!PLUGIN_PASSWORD_VAR}" ]]; then
+  echo "DEBUG: Replacing \${${PLUGIN_PASSWORD_VAR}} with password in config"
+  CONFIG=$(echo "$CONFIG" | sed "s|\${${PLUGIN_PASSWORD_VAR}}|${!PLUGIN_PASSWORD_VAR}|g")
+else
+  echo "DEBUG: No password found in $PLUGIN_PASSWORD_VAR"
+fi
+{{- end }}
+{{- end }}
+{{- if $prefs }}
+if connector_secrets_ok {{ include "kafka.shellQuote" $pname }}{{ range $prefs }} {{ include "kafka.shellQuote" . }}{{ end }}; then
+{{- end }}
+
+  # Try to create connector with retry logic
+max_retries=5
+retry_count=0
+while [ $retry_count -lt $max_retries ]; do
+  if create_or_update_connector "{{ .name }}" "$CONFIG" "$INSTALLED_CONNECTORS"; then
+    echo "Successfully created/updated connector {{ .name }} on attempt $((retry_count+1))"
+    break
+  else
+    retry_count=$((retry_count+1))
+    if [ $retry_count -lt $max_retries ]; then
+      echo "Failed to create/update connector {{ .name }}, retrying in 10 seconds (attempt $retry_count/$max_retries)..."
+      sleep 10
+    else
+      echo "Failed to create/update connector {{ .name }} after $max_retries attempts"
+    fi
+  fi
+done
+{{- if $prefs }}
+fi
+{{- end }}
+
+# Wait a bit between connectors to allow Kafka Connect API to stabilize
+sleep 3
+  {{- end }}
+  {{- end }}
+
+  echo "All Kafka connectors have been configured and started."
+}
+
+# Signal handler for graceful shutdown
+cleanup() {
+  echo "Received shutdown signal, stopping Kafka Connect..."
+  if [[ -n $KAFKA_PID ]]; then
+    kill -TERM $KAFKA_PID
+    wait $KAFKA_PID
+  fi
+  exit 0
+}
+
+# Set up signal handlers
+trap cleanup SIGTERM SIGINT
+
+# Wait for the plugins-downloader to finish (replaces the fixed 60 s sleep of chart 4.2.x and earlier):
+# plugin.path is scanned once per JVM, so a plugin that is still downloading would never be loaded.
+PLUGIN_SYNC=/opt/kafka/sync
+PLUGIN_WAIT_TIMEOUT={{ $waitTimeout }}
+PLUGIN_WAIT_ACTION={{ $waitAction }}
+print_pending_plugins() {
+  if [[ -s "$PLUGIN_SYNC/pending" ]]; then
+    sed 's/^/  - /' "$PLUGIN_SYNC/pending"
+  else
+    echo "  - (no report yet: the plugin downloader has not started)"
+  fi
+}
+plugins_waited=0
+if [[ -f "$PLUGIN_SYNC/connect-started-degraded" && ! -f "$PLUGIN_SYNC/downloads-done" ]]; then
+  # This replica already started Kafka Connect without some plugins; waiting again would only repeat the timeout.
+  echo "WARNING: Kafka Connect already started without some plugins on this replica; starting at once WITHOUT:"
+  print_pending_plugins
+  plugins_skip_wait=1
+else
+  plugins_skip_wait=0
+fi
+while [[ "$plugins_skip_wait" == 0 && ! -f "$PLUGIN_SYNC/downloads-done" ]]; do
+  if [[ "$PLUGIN_WAIT_TIMEOUT" -gt 0 && "$plugins_waited" -ge "$PLUGIN_WAIT_TIMEOUT" ]]; then
+    if [[ "$PLUGIN_WAIT_ACTION" == "restart" ]]; then
+      echo "FATAL: connector plugins not ready after ${PLUGIN_WAIT_TIMEOUT}s; exiting so the container restarts and waits again. Missing:"
+      print_pending_plugins
+      exit 1
+    fi
+    echo "WARNING: connector plugins not ready after ${PLUGIN_WAIT_TIMEOUT}s; starting Kafka Connect WITHOUT:"
+    print_pending_plugins
+    touch "$PLUGIN_SYNC/connect-started-degraded"
+    break
+  fi
+  if (( plugins_waited % 30 == 0 )); then
+    echo "Waiting for plugin downloads (${plugins_waited}s, timeout ${PLUGIN_WAIT_TIMEOUT}s, 0 = none)..."
+  fi
+  sleep 5 &
+  wait $!
+  plugins_waited=$((plugins_waited+5))
+done
+if [[ -f "$PLUGIN_SYNC/downloads-done" ]]; then
+  # connect-started-degraded is never cleared here: only a new replica (fresh scratch volume) clears it, so the
+  # downloader keeps deferring cleanup while a JVM that scanned the old files may still be running.
+  echo "Plugins ready after ${plugins_waited}s"
+  if [[ -s "$PLUGIN_SYNC/pending" ]]; then
+    echo "WARNING: these plugin artifacts were skipped because of a configuration error and are not installed:"
+    print_pending_plugins
+  fi
+fi
+
+{{- if $secretNames }}
+
+# Mounted secrets: warn about values Kafka would pass on unchanged, and stop when a worker property cannot be read.
+for ref in{{ range $allRefs }} {{ include "kafka.shellQuote" . }}{{ end }}; do
+  secret_ref_warn "$ref"
+done
+for ref in{{ range $workerRefs }} {{ include "kafka.shellQuote" . }}{{ end }}; do
+  if ! problem=$(secret_ref_problem "$ref"); then
+    echo "FATAL: a worker property in connector_properties cannot be resolved: $problem"
+    exit 1
+  fi
+done
+{{- end }}
+
+echo "Starting Kafka Connect distributed worker..."
+
+# Updating rest.advertised.host.name dynamically
+POD_ID=$(echo "$POD_NAME" | rev | cut -d'-' -f 1 | rev)
+WORKLOAD_NAME=$(echo $CPLN_WORKLOAD | sed 's|.*/workload/\([^/]*\)$|\1|')
+cp /opt/kafka/config/connect-distributed.properties /opt/kafka/config/connect-distributed-updated.properties
+echo "" >> /opt/kafka/config/connect-distributed-updated.properties
+echo "rest.advertised.host.name=${WORKLOAD_NAME}-${POD_ID}.${WORKLOAD_NAME}" >> /opt/kafka/config/connect-distributed-updated.properties
+{{- if $restAuth }}
+
+# REST API basic auth: the setup logs in as the first user, read as java.util.Properties reads it.
+REST_USERS_FILE=/opt/kafka/config/connect-rest-users.properties
+rest_line=$(tr -d '\r' < "$REST_USERS_FILE" | sed -n '/^[[:space:]]*[^#![:space:]]/{s/^[[:space:]]*//;p;q;}')
+rest_user=${rest_line%%[[:space:]:=]*}
+rest_password=$(printf '%s' "${rest_line#"$rest_user"}" | sed 's/^[[:space:]]*//;s/^[=:]//;s/^[[:space:]]*//')
+if [[ -z "$rest_user" || -z "$rest_password" ]]; then
+  echo "FATAL: the rest_auth_secret file has no 'username: password' line"
+  exit 1
+fi
+REST_AUTH="Authorization: Basic $(printf '%s:%s' "$rest_user" "$rest_password" | base64 | tr -d '\n')"
+REST_AUTH_ARGS=("--header=$REST_AUTH")
+REST_AUTH_HDR="$REST_AUTH\r\n"
+cat > /opt/kafka/config/connect-rest-jaas.conf <<'EOF'
+KafkaConnect {
+  org.apache.kafka.connect.rest.basic.auth.extension.PropertyFileLoginModule required
+  file="/opt/kafka/config/connect-rest-users.properties";
+};
+EOF
+export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Djava.security.auth.login.config=/opt/kafka/config/connect-rest-jaas.conf"
+echo "REST API basic auth is on; the connector setup logs in as '$rest_user'"
+{{- end }}
+
+# Clients a connector configures (producer/consumer/admin overrides, MirrorMaker source.*/target.*)
+# may not load config providers of their own: those would read any env variable or file. The
+# worker's own config.providers (dir, env with its allowlist) are not affected. Kept last so it wins.
+export KAFKA_OPTS="${KAFKA_OPTS:+$KAFKA_OPTS }-Dorg.apache.kafka.automatic.config.providers=none"
+{{- if or $secretNames (include "kafka.connectFileProviders" $c) }}
+
+# allowed.paths (which keeps the dir and file config providers inside /opt/kafka/secrets) needs
+# Kafka 3.8 or later; older versions ignore it. Read the version from the client jar, whatever the image tag says.
+kafka_version=""
+for jar in /opt/kafka/libs/kafka-clients-*.jar; do
+  jar_name=${jar##*/}
+  [[ "$jar_name" =~ -(test|sources|javadoc)\.jar$ ]] && continue
+  if [[ "$jar_name" =~ ^kafka-clients-([0-9]+)\.([0-9]+)[^/]*\.jar$ ]]; then
+    kafka_version=${jar_name#kafka-clients-}; kafka_version=${kafka_version%.jar}
+    kafka_major=$((10#${BASH_REMATCH[1]})); kafka_minor=$((10#${BASH_REMATCH[2]}))
+    break
+  fi
+done
+if [[ -z "$kafka_version" ]]; then
+  echo "FATAL: cannot determine the Kafka version (no /opt/kafka/libs/kafka-clients-<version>.jar in this image). Config providers' allowed.paths needs Kafka 3.8 or later, so the worker does not start with secrets or a file/directory config provider. Use apache/kafka:3.9.1 or later."
+  exit 1
+fi
+if (( kafka_major < 3 || (kafka_major == 3 && kafka_minor < 8) )); then
+  echo "FATAL: this image runs Kafka $kafka_version, which ignores allowed.paths, so the dir and file config providers could read any file. The worker does not start with secrets or a file/directory config provider. Use apache/kafka:3.9.1 or later."
+  exit 1
+fi
+echo "Kafka version $kafka_version: config providers are limited with allowed.paths"
+{{- end }}
+
+# Start the connector setup process in the background
+setup_connectors &
+SETUP_PID=$!
+
+# Log to stdout only: the stock 3.x config also writes connect.log, which fills ephemeral storage.
+if [[ -f /opt/kafka/config/connect-log4j.properties ]]; then
+  sed '/^log4j\.rootLogger=/s/, *connectAppender//' /opt/kafka/config/connect-log4j.properties > /opt/kafka/config/connect-log4j-updated.properties
+  export KAFKA_LOG4J_OPTS="${KAFKA_LOG4J_OPTS:--Dlog4j.configuration=file:/opt/kafka/config/connect-log4j-updated.properties}"
+fi
+
+# Start Kafka Connect in the foreground
+echo "Starting Kafka Connect in foreground mode..."
+exec /opt/kafka/bin/connect-distributed.sh /opt/kafka/config/connect-distributed-updated.properties &
+KAFKA_PID=$!
+
+# Wait for either process to finish
+wait $KAFKA_PID
+{{- end }}
+
+
+{{/*
+================================================================================
+Credentials from a secret (4.4.0)
+
+kafka.credentialsSecretName names a dictionary secret the user creates. When it is
+set, every broker password comes from it and the inline passwords are ignored:
+
+  inter-broker-password            the inter-broker listener password
+  controller-password              the KRaft controller listener password
+  <listener>-<username>-password   one per SASL user and per SASL admin, where
+                                   <listener> is the listener's `name`, lower-cased
+
+The passwords reach server.properties as `${env:KCRED_...}` references that Kafka's
+EnvVarConfigProvider resolves at start; each KCRED_ variable is a cpln://secret
+reference to the user's secret. The variables deliberately avoid the KAFKA_ prefix:
+the apache/kafka image writes every KAFKA_* variable into server.properties, which
+would put the resolved password in the broker's config file. Left empty, the chart
+renders exactly what 4.3.0 rendered.
+================================================================================
+*/}}
+
+{{/* The credentials secret's name, or "" when the inline passwords are used. */}}
+{{- define "kafka.credSecret" -}}
+{{- .Values.kafka.credentialsSecretName | default "" | toString | trim -}}
+{{- end -}}
+
+{{/*
+Environment variable that holds one SASL password on the broker.
+Call with (dict "listener" <listener name> "role" "ADMIN" | "USER_<index>").
+*/}}
+{{- define "kafka.credEnvName" -}}
+{{- printf "KCRED_%s_%s_PASSWORD" (regexReplaceAll "[^A-Z0-9]" (upper .listener) "_") .role -}}
+{{- end -}}
+
+{{/*
+Key of the credentials secret that holds a SASL user's password.
+Call with (dict "listener" <listener name> "user" <username>).
+*/}}
+{{- define "kafka.credKey" -}}
+{{- printf "%s-%s-password" (lower .listener) (trim .user) -}}
+{{- end -}}
+
+{{/* `cpln://secret/<credentials secret>.<key>` for a listener's admin password. */}}
+{{- define "kafka.credAdminRef" -}}
+{{- printf "cpln://secret/%s.%s" (include "kafka.credSecret" .root) (include "kafka.credKey" (dict "listener" .listener.name "user" .listener.sasl.admin.username)) -}}
+{{- end -}}
+
+{{/*
+With a credentials secret, a SASL listener still needs its usernames (the passwords
+come from the secret). Replaces kafka.validateAuthConfig in that mode.
+*/}}
+{{- define "kafka.validateAuthUsers" -}}
+{{- if eq .protocol "SASL_PLAINTEXT" -}}
+  {{- if not .sasl -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires sasl configuration to be enabled for listener '%s'" .name) -}}
+  {{- else if not .sasl.users -}}
+    {{- fail (printf "Error: SASL_PLAINTEXT protocol requires at least one user to be defined in sasl.users for listener '%s'" .name) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Checks that apply only with kafka.credentialsSecretName set: usernames and listener
+names that form valid secret keys, and no extra configuration that would switch off
+the EnvVarConfigProvider the references need.
+*/}}
+{{- define "kafka.validateCredentialsSecret" -}}
+{{- if include "kafka.credSecret" . -}}
+{{- range $key, $l := .Values.kafka.listeners -}}
+  {{- if $l.sasl -}}
+    {{- if not (regexMatch "^[A-Za-z0-9._-]+$" (toString $l.name)) -}}
+      {{- fail (printf "Error: with kafka.credentialsSecretName set, listener '%s' needs a name of letters, digits, '.', '_' or '-' (it forms the secret keys <listener>-<username>-password)" $key) -}}
+    {{- end -}}
+    {{- $names := list -}}
+    {{- if $l.sasl.admin -}}{{- $names = append $names (toString $l.sasl.admin.username) -}}{{- end -}}
+    {{- range splitList "," (toString ($l.sasl.users | default "")) -}}{{- if trim . -}}{{- $names = append $names (trim .) -}}{{- end -}}{{- end -}}
+    {{- range $names -}}
+      {{- if not (regexMatch "^[A-Za-z0-9._-]+$" .) -}}
+        {{- fail (printf "Error: with kafka.credentialsSecretName set, SASL username '%s' on listener '%s' must be letters, digits, '.', '_' or '-' (it forms the secret key <listener>-<username>-password)" . $key) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $extra := .Values.kafka.extra_configurations | default dict -}}
+{{- if hasKey $extra "config.providers" -}}
+  {{- $providers := list -}}
+  {{- range splitList "," (toString (index $extra "config.providers")) -}}{{- $providers = append $providers (trim .) -}}{{- end -}}
+  {{- if not (has "env" $providers) -}}
+    {{- fail "Error: kafka.extra_configurations sets config.providers without 'env'. With kafka.credentialsSecretName set, the brokers resolve their passwords through the 'env' config provider; add env to the list (for example 'env,file') or remove the key." -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (hasKey $extra "config.providers.env.class") (ne (toString (index $extra "config.providers.env.class")) "org.apache.kafka.common.config.provider.EnvVarConfigProvider") -}}
+  {{- fail "Error: kafka.extra_configurations sets config.providers.env.class to something other than org.apache.kafka.common.config.provider.EnvVarConfigProvider, which kafka.credentialsSecretName needs; remove the key." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The broker container's KCRED_ variables, one per password, each a reference to the
+credentials secret. Rendered only with kafka.credentialsSecretName set.
+*/}}
+{{- define "kafka.credEnv" -}}
+{{- $secret := include "kafka.credSecret" . -}}
+- name: KCRED_INTER_BROKER_PASSWORD
+  value: 'cpln://secret/{{ $secret }}.inter-broker-password'
+- name: KCRED_CONTROLLER_PASSWORD
+  value: 'cpln://secret/{{ $secret }}.controller-password'
+{{- range .Values.kafka.listeners }}
+{{- if .sasl }}
+{{- $lname := .name }}
+{{- if .sasl.admin }}
+- name: {{ include "kafka.credEnvName" (dict "listener" $lname "role" "ADMIN") }}
+  value: 'cpln://secret/{{ $secret }}.{{ include "kafka.credKey" (dict "listener" $lname "user" .sasl.admin.username) }}'
+{{- end }}
+{{- range $index, $user := (.sasl.users | default "" | toString | split ",") }}
+{{- if trim $user }}
+- name: {{ include "kafka.credEnvName" (dict "listener" $lname "role" (printf "USER%s" $index)) }}
+  value: 'cpln://secret/{{ $secret }}.{{ include "kafka.credKey" (dict "listener" $lname "user" $user) }}'
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* Labeling */}}
+
+{{/*
+Common labels
+*/}}
+{{- define "kafka.tags" -}}
+{{- include "cpln-common.tags" . }}
+{{- end }}

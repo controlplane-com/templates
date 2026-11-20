@@ -71,6 +71,34 @@ non-working `your-…` placeholders.
   `apache/kafka:3.9.1`; this chart's own live rows (all-secret install, inline→secret switch, rotation, REST
   Proxy file secrets, Connect `${env:}`, kafka_ui `$(VAR)`) are pending.
 
+## Connector credentials from secrets (4.5.1)
+
+| Piece | What it does |
+|---|---|
+| `kafka_connectors[].secrets: [{name}]` | mounts each secret at `/opt/kafka/secrets/<name>` on `kafka-connect` only (dictionary = directory of key files, opaque = one file); policy `reveal` on each, deduplicated against env/extraVolumes |
+| `dir` config provider | Kafka's `DirectoryConfigProvider`, `allowed.paths=/opt/kafka/secrets`; `config.providers` = the user's list + `dir` |
+| Placeholders | `${dir:/opt/kafka/secrets/NAME:KEY}` / `${dir:/opt/kafka/secrets:NAME}`; connector configs in REST, UI and config topic show only these (validate and non-password log lines show values) |
+| Automatic providers off | `-Dorg.apache.kafka.automatic.config.providers=none` appended last to `KAFKA_OPTS` on every Connect worker, with or without `secrets` (KIP-1006): connector client configs cannot load providers; the worker's own `config.providers` are unaffected (AbstractConfig skips the filter when provider props are passed) |
+| User file/dir providers | `allowed.paths=/opt/kafka/secrets,<extraVolumes paths>` appended for every user `FileConfigProvider`/`DirectoryConfigProvider`; a user `allowed.paths` is refused |
+| `env` allowlist | `allowlist.pattern=(?!CPLN_).*` on every `EnvVarConfigProvider` (KIP-887, Kafka 3.9 full-match regex), with or without `secrets` |
+| `cpln/checksum` tag | sha256 of the download script + run script + props on the Connect workload (nginx precedent) |
+
+- **Render refusals** (`kafka.validateConnectorSecrets`, `kafka.validateDirPlaceholders`, `kafka.validateConnectEnvProvider`, `kafka.validateConnectPropertySyntax`, each mirrored in the wizard): bad/duplicate names; `secrets` without `rest_auth_secret`, or listing it; `secrets` with an image tag before 3.8 (no `allowed.paths`; tag parsed before any `@digest`, scala `kafka_2.13-` prefix stripped, leading text/zeros tolerated); `config.providers.dir.*` in worker properties; a `${dir:}` naming an unlisted secret, with an empty key/name, or (with `secrets`) any path outside the root; any `config.providers.*.param.allowlist.pattern` or `.allowed.paths`. A user pattern is refused rather than combined: `.*)|(.*` escapes any wrapper.
+- **Boot-time Kafka version gate (authoritative)**: with `secrets` or a user File/Directory provider, the run script reads `/opt/kafka/libs/kafka-clients-<v>.jar` and exits `FATAL` before the worker if `<v>` < 3.8 or no jar is found (a digest-only `apache/kafka@sha256:` 3.7.0 ref passes render and stops here, measured 2026-11-19); logs `Kafka version <v>` otherwise. Not a CI check: a check cannot swap the image.
+- **Properties-file syntax, every Connect group** (`kafka.validateConnectPropertySyntax`): a key with whitespace, `\`, `=` or `:`, a value with a line break, `\u`, `$\`/`\{` or a trailing `\`, or any `\` in a `config.providers*` value is refused. Java's `Properties.load` strips/decodes these, so a leading-space ` config.providers.e.class` became an unrestricted env provider that resolved `CPLN_TOKEN` (proven live 2026-11-19); it also closes the same gap in the 4.5.0 `connect.protocol`/`admin.listeners`/`rest.extension.classes` checks.
+- **Any REST user can read mounted secrets**: `config/validate` returns resolved values (AbstractHerder transforms before validating). Hence REST auth is forced.
+- **Kafka keeps an unresolvable placeholder as literal text, silently.** The run script checks every reference (file names and sizes only): a bad one skips that connector with `ERROR: connector … not created or updated`; in a worker property it exits `FATAL`. Empty or trailing-newline values log a WARNING.
+- **A missing secret wedges the replica with empty logs**: `get-deployments` → "The secret X no longer exists. Workload updates are paused…".
+- **A dictionary mount also holds a platform file `___cpln___.secret`** beside the key files (measured 2026-11-19, test env); the preflight hides it from its key lists.
+- **Source connectors write with the worker's `producer.*` settings**: a worker without `producer.security.protocol`/`sasl.*` lets a MirrorSource create topics (admin client) but never write a record.
+- **Rotation = `force-redeployment`** (an ESS sync alone changes nothing in a running worker). Chart-side config changes roll the workers via the checksum tag.
+- **The `cpln/checksum` tag is a visible hash of the scripts and props**, which hold any literal credential a user still writes in `connector_properties` or a plugin config: placeholders keep it free of values, and a sha256 does not reveal one, but a guessable literal could be confirmed against it.
+- **Converters required, every Connect group** (`kafka.validateConnectConverters`, mirrored): `connector_properties` without `key.converter`/`value.converter` is refused; such a worker exits with `Missing required configuration "key.converter"` while `helm install` reports success (found in the 4.5.1 wizard round; already true of 4.5.0). The wizard's new-group default fills in StringConverter/ByteArrayConverter.
+- **The 4.5.1 render with `secrets` unset differs from 4.5.0 only** by the allowlist line (when an env provider is configured), the checksum tag and the policy dedupe.
+- **Not covered:** the brokers' own `EnvVarConfigProvider` (credentials-secret mode) has no allowlist; `connector.client.config.override.policy` stays the image's `All`. Follow-up candidates.
+- **4.5.0 and 4.4.x (merged) are open to the automatic-provider escape** (by reading: no `automatic.config.providers` flag, so a REST user's connector can declare its own Env/File provider). Not patched; 4.5.1 is the fix.
+- **ESS** (our template syncing AWS Secrets Manager, Vault and others into Control Plane secrets) is the intended source; `dictionaryFromJson` keys use dots for nested JSON and a non-JSON value lands in `__raw`.
+
 ## Kafka Connect plugins (4.3.0)
 
 | Piece | What it does |

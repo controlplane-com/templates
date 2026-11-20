@@ -37,6 +37,13 @@ vars:
   admin_password: "{gen.adminpw}"
   rest_password: "{gen.restpw}"
   connect_rest_password: ""
+  connect_env_provider: ""
+  # 4.5.1 mounted-secret checks: empty = not configured, so they print SKIP
+  connect_alias_dict: ""
+  connect_alias_opaque: ""
+  connect_alias_bad: ""
+  connect_secret_dict: ""
+  connect_secret_opaque: ""
 
 values:
   kafka:

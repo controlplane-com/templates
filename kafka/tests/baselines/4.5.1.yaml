@@ -1,0 +1,260 @@
+# kafka 4.5.1 — the recommended install: every password in prerequisite secrets, plus a two-worker Kafka Connect
+# group with REST API auth whose connectors read their credentials from mounted Control Plane secrets
+# (`secrets` + the dir config provider). Prod shape (three brokers, one location) at the smallest size that runs.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  kraft: kraft-cluster-id
+  restpw: hex
+  connectpw: hex
+  aliasdict: hex
+  aliasopaque: hex
+  aliasbad: hex
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [inter-broker-password, controller-password, client-admin-password, client-user-password]
+  kafbatconnect:
+    type: opaque
+    payload: |
+      kafka:
+        clusters:
+          - name: e2e
+            bootstrapServers: "{release}-cluster.{gvc}.cpln.local:9092"
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: PLAIN
+              sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{secrets.creds.client-admin-password}";'
+            kafkaConnect:
+              - name: e2e
+                address: "http://{release}-connect-e2e.{gvc}.cpln.local:8083"
+                username: kafka-ui
+                password: "{gen.connectpw}"
+      management:
+        health:
+          ldap:
+            enabled: false
+      auth:
+        type: DISABLED
+      server:
+        port: 8080
+  restjaas:
+    type: opaque
+    payload: |
+      KafkaClient {
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="admin"
+        password="{secrets.creds.client-admin-password}";
+      };
+      KafkaRest {
+        org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+        debug="true"
+        file="/etc/kafka-rest/password.properties";
+      };
+  restusers:
+    type: opaque
+    payload: "e2e: {gen.restpw},user"
+  connectrest:
+    type: opaque
+    payload: |
+      # Kafka Connect REST API users
+      e2e: {gen.connectpw}
+      kafka-ui: {gen.connectpw}
+  # Mounted on the Connect workers (kafka_connectors[].secrets). The aliases are canaries that only show up in a topic
+  # name when the worker resolved the placeholder; the admin password must never show up anywhere.
+  connsecrets:
+    type: dictionary
+    entries:
+      alias: "cd{gen.aliasdict}"
+      admin-password: "{secrets.creds.client-admin-password}"
+      wrong-password: "wrong-{gen.aliasbad}"
+  connopaque:
+    type: opaque
+    payload: "co{gen.aliasopaque}"
+
+vars:
+  admin_password: "{secrets.creds.client-admin-password}"
+  rest_password: "{gen.restpw}"
+  connect_rest_password: "{gen.connectpw}"
+  connect_env_provider: env
+  connect_alias_dict: "cd{gen.aliasdict}"
+  connect_alias_opaque: "co{gen.aliasopaque}"
+  connect_alias_bad: "cdbad{gen.aliasbad}"
+  connect_secret_dict: "{secrets.connsecrets.name}"
+  connect_secret_opaque: "{secrets.connopaque.name}"
+
+values:
+  kafka:
+    credentialsSecretName: "{secrets.creds.name}"
+    secrets:
+      kraft_cluster_id: "{gen.kraft}"
+    cpu: 500m
+    minCpu: 250m
+  kafbat_ui:
+    configuration_secret: "{secrets.kafbatconnect.name}"
+  kafka_rest_proxy:
+    jaas_conf_secret: "{secrets.restjaas.name}"
+    password_properties_secret: "{secrets.restusers.name}"
+    properties:
+      bootstrap.servers: "SASL_PLAINTEXT://{release}-cluster.{gvc}.cpln.local:9092"
+  kafka_connectors:
+    - name: e2e
+      image: apache/kafka:3.9.1
+      replicas: 2
+      rest_auth_secret: "{secrets.connectrest.name}"
+      secrets:
+        - name: "{secrets.connsecrets.name}"
+        - name: "{secrets.connopaque.name}"
+      cpu: 500m
+      memory: 1500Mi
+      minCpu: 250m
+      minMemory: 375Mi
+      timeoutSeconds: 15
+      listener: client
+      env:
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms700m -Xmx700m"
+        - name: CONNECT_ADMIN_PASSWORD
+          value: "cpln://secret/{secrets.creds.name}.client-admin-password"
+      firewall:
+        internal_inboundAllowType: same-gvc
+        external_outboundAllowCIDR: "0.0.0.0/0"
+      connector_properties:
+        group.id: e2e-connect
+        config.providers: env
+        config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+        security.protocol: SASL_PLAINTEXT
+        sasl.mechanism: PLAIN
+        sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${env:CONNECT_ADMIN_PASSWORD}";'
+        consumer.security.protocol: SASL_PLAINTEXT
+        consumer.sasl.mechanism: PLAIN
+        consumer.sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${env:CONNECT_ADMIN_PASSWORD}";'
+        # Source connectors (the mirrors) write with the worker's producer; its password comes through the dir provider,
+        # so a worker property is resolved from a mounted secret too.
+        producer.security.protocol: SASL_PLAINTEXT
+        producer.sasl.mechanism: PLAIN
+        producer.sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}";'
+        key.converter: org.apache.kafka.connect.storage.StringConverter
+        value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+        offset.storage.topic: e2e-connect-offsets
+        offset.storage.replication.factor: "3"
+        config.storage.topic: e2e-connect-configs
+        config.storage.replication.factor: "3"
+        status.storage.topic: e2e-connect-status
+        status.storage.replication.factor: "3"
+        plugin.path: /opt/kafka/plugins
+      plugins:
+        - name: e2e-sink-a
+          enabled: true
+          artifacts:
+            - type: jar
+              url: https://repo1.maven.org/maven2/org/apache/kafka/connect-file/3.9.1/connect-file-3.9.1.jar
+              sha256: 971bf984d140a55440ec966d0feaaa260a20eb3de368f897cbed7a373fbfd66f
+          config:
+            connector.class: org.apache.kafka.connect.file.FileStreamSinkConnector
+            tasks.max: "2"
+            topics: e2e
+            file: /tmp/e2e-sink-a.txt
+        - name: e2e-sink-b
+          config:
+            connector.class: org.apache.kafka.connect.file.FileStreamSinkConnector
+            tasks.max: "2"
+            topics: e2e
+            file: /tmp/e2e-sink-b.txt
+        - name: e2e-mirror-dir
+          # Mirror is on the image classpath: no enabled key, so nothing is downloaded and the connector is created.
+          config:
+            source.cluster.alias: "${dir:/opt/kafka/secrets:{secrets.connopaque.name}}"
+            target.cluster.alias: "${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:alias}"
+            connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+            tasks.max: "1"
+            topics: e2e
+            source.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            target.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            source.cluster.security.protocol: SASL_PLAINTEXT
+            source.cluster.sasl.mechanism: PLAIN
+            source.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            target.cluster.security.protocol: SASL_PLAINTEXT
+            target.cluster.sasl.mechanism: PLAIN
+            target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            sync.topic.acls.enabled: "false"
+            sync.topic.configs.enabled: "false"
+            replication.factor: "3"
+            offset-syncs.topic.replication.factor: "3"
+            refresh.topics.interval.seconds: "30"
+        - name: e2e-mirror-missing
+          config:
+            source.cluster.alias: srcmissing
+            target.cluster.alias: "${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:no-such-key}"
+            connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+            tasks.max: "1"
+            topics: e2e
+            source.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            target.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            source.cluster.security.protocol: SASL_PLAINTEXT
+            source.cluster.sasl.mechanism: PLAIN
+            source.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            target.cluster.security.protocol: SASL_PLAINTEXT
+            target.cluster.sasl.mechanism: PLAIN
+            target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            sync.topic.acls.enabled: "false"
+            sync.topic.configs.enabled: "false"
+            replication.factor: "3"
+            offset-syncs.topic.replication.factor: "3"
+            refresh.topics.interval.seconds: "30"
+        - name: e2e-mirror-bad
+          config:
+            source.cluster.alias: srcbad
+            target.cluster.alias: "cdbad{gen.aliasbad}"
+            connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+            tasks.max: "1"
+            topics: e2e
+            source.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            target.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            source.cluster.security.protocol: SASL_PLAINTEXT
+            source.cluster.sasl.mechanism: PLAIN
+            source.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:wrong-password}';"
+            target.cluster.security.protocol: SASL_PLAINTEXT
+            target.cluster.sasl.mechanism: PLAIN
+            target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:wrong-password}';"
+            sync.topic.acls.enabled: "false"
+            sync.topic.configs.enabled: "false"
+            replication.factor: "3"
+            offset-syncs.topic.replication.factor: "3"
+            refresh.topics.interval.seconds: "30"
+        - name: e2e-mirror-autoprov
+          # Declares a config provider of its own for its source admin client: blocked by
+          # -Dorg.apache.kafka.automatic.config.providers=none, so the connector fails instead of reading CPLN_GVC.
+          config:
+            source.cluster.alias: srcauto
+            target.cluster.alias: tgtauto
+            connector.class: org.apache.kafka.connect.mirror.MirrorSourceConnector
+            tasks.max: "1"
+            topics: e2e
+            source.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            target.cluster.bootstrap.servers: "{release}-cluster.{gvc}.cpln.local:9092"
+            source.cluster.security.protocol: SASL_PLAINTEXT
+            source.cluster.sasl.mechanism: PLAIN
+            source.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            target.cluster.security.protocol: SASL_PLAINTEXT
+            target.cluster.sasl.mechanism: PLAIN
+            target.cluster.sasl.jaas.config: "org.apache.kafka.common.security.plain.PlainLoginModule required username='admin' password='${dir:/opt/kafka/secrets/{secrets.connsecrets.name}:admin-password}';"
+            source.admin.config.providers: x
+            source.admin.config.providers.x.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+            source.admin.client.id: "e2e-auto-${x:CPLN_GVC}"
+            sync.topic.acls.enabled: "false"
+            sync.topic.configs.enabled: "false"
+            replication.factor: "3"
+            offset-syncs.topic.replication.factor: "3"
+            refresh.topics.interval.seconds: "30"
+
+# 4.5.0 → 4.5.1 with these values turns the mounted secrets on; 4.4.1 keeps its own values (the ${env:} pattern, REST
+# auth off); 4.1.0 and 3.2.0 keep their own values (no secrets in Connect).
+upgradeFrom:
+  - version: 4.5.0
+    values: new
+  - version: 4.4.1
+  - version: 4.1.0
+  - version: 3.2.0

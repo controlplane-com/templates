@@ -88,6 +88,47 @@ upgradeFrom:                        # each version needs its own baseline
       note: "2.x volumesets were renamed in 3.0.0; the upgrade deletes them"
 ```
 
+### Refused upgrades
+
+When the new version must refuse to start on the old version's data (a database major-version guard), the
+`upgradeFrom` entry says so, and gives the values that make the upgrade work:
+
+```yaml
+upgradeFrom:
+  - version: 3.4.2
+    refused:
+      timeoutSeconds: 420             # watch window (default 420): the upgrade must never be ready in it
+    then:
+      set: {image: "postgres:18"}     # deep-merged over the upgrade's values for the second upgrade
+```
+
+The scenario (`upgrade 3.4.2 → 4.0.0 (refused, then pinned)`) installs 3.4.2 and runs its checks, then
+runs a plain `cpln helm upgrade` with no `--wait`, as a user would. That must exit 0, and the release must
+never become ready for the whole window while a replica of the new workload version is held (not ready),
+so slowness does not count as a refusal. Next it runs the `phase: refused` checks, which prove why it was
+refused: the guard's message, the old data untouched, nothing running on it. The scenario fails if no such
+check covers the version, since never becoming ready proves nothing on its own. Last, it upgrades again
+with `then.set` and continues like any upgrade: every replica ready, drift, then the normal checks (so a
+`{installed_version}` row proves the data survived). A failed step skips the rest, apart from uninstall.
+
+```yaml
+  - id: guard-holds
+    since: 4.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set image=postgres:18"
+    retries: 8                      # an exec can land on the held container's restart
+```
+
+A check that only holds on a fresh install (the new major version, for one) takes `scenarios: "^install "`.
+
 An `upgradeFrom` entry marked `knownIssue` records an upgrade path that is known to be broken in a shipped
 version. Its failures warn with the note, except a leak on uninstall, which still fails. Keep a working
 upgrade source next to it, so an upgrade regression still blocks, and remove the entry with the fix.
@@ -130,6 +171,9 @@ checks:
     retries: 3                      # default 3
     retryDelaySeconds: 15
     timeoutSeconds: 120
+    phase: refused                  # optional: run ONLY in a refused upgrade's held step (default: ready,
+                                    # every other step)
+    scenarios: "^install "          # optional: regex on the scenario name; run only where it matches
     knownIssue:                     # optional: a failure warns instead of blocking
       note: "REST Proxy rejects valid users with jaas values carried from 4.1.0 and older"
       scenarios: "^upgrade "        # regex on the scenario name; default every scenario
@@ -157,6 +201,11 @@ python3 .github/e2e/run.py report --dir /tmp --out /tmp/report.md
 
 `--gvc` uses an existing GVC and leaves it in place; without it the runner creates and deletes a
 `templates-ci-*` GVC, which only the CI service account may do.
+
+Ctrl-C (SIGINT) or SIGTERM stops the run after cleanup: the running scenario uninstalls the release it
+installed, the teardown deletes the run's secrets, and the run exits 130 with a `harness · runner` failure
+in its result file. Signals that arrive during that cleanup are ignored. `report` skips any JSON file in
+`--dir` that is not a result file.
 
 ## The CI org
 

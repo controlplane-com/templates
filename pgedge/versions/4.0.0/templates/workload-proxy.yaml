@@ -1,0 +1,136 @@
+---
+kind: workload
+name: {{ include "pgedge.proxy.name" . }}
+description: Per-location HAProxy failover tier for pgEdge (local-preferred routing)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: haproxy
+      image: {{ .Values.proxy.image | quote }}
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - {{- include "pgedge.inlineScript" (include "pgedge.script.proxy" .) | nindent 10 }}
+      env:
+        # The pgsql-check username comes from the prerequisite credentials secret
+        # via env — a cpln:// reference only resolves in an env var, never inside
+        # the config file the start script writes.
+        - name: PG_CHECK_USER
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
+      cpu: {{ .Values.proxy.resources.cpu | quote }}
+      memory: {{ .Values.proxy.resources.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 5432
+          protocol: tcp
+        - number: 8404
+          protocol: http
+        - number: 8405
+          protocol: http
+      # "haproxy is running", deliberately NOT "has a healthy node": PgBouncer's own
+      # readiness already reports backend health, and a backend-aware probe here
+      # would restart-loop the proxy during a cluster-wide outage. The stats page
+      # answers only once haproxy has started, so a replica is never marked ready
+      # while nothing listens on 5432.
+      readinessProbe:
+        httpGet:
+          path: /stats
+          port: 8405
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 12   # the start script waits at most 60 s for the local node first
+        successThreshold: 1
+      livenessProbe:
+        httpGet:
+          path: /stats
+          port: 8405
+          scheme: HTTP
+        initialDelaySeconds: 90
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0
+      maxScale: 0
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  {{- /*
+    Every localOptions entry carries the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the null shape above and produce zero replicas in a location the
+    user did ask for.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.proxy.minReplicas }}
+        maxScale: {{ $.Values.proxy.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0  # Required to reach pgEdge nodes in remote locations
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        PgBouncer connects to this proxy on 5432, so a list naming only clients would
+        silently break the pool while every replica reports ready. The chart adds
+        its own workloads rather than requiring the user to know.
+      */}}
+      {{- $own := list
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgbouncer.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.proxy.name" .)) }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

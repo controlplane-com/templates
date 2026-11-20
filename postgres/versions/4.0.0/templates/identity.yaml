@@ -17,7 +17,8 @@ aws:
     # Proven removable by spike 2026-08-19: backups succeeded without it, and a
     # negative control (dropping the scoped policy instead) failed immediately,
     # confirming the result was not stale credentials.
-    - cpln-connector
+    # `cpln-connector` was removed in 4.0.0: the backup needs only the scoped
+    # bucket policy below, and the connector policy granted far more than that.
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

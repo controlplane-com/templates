@@ -13,8 +13,11 @@ and your data stays untouched.
   If `cpln workload get-deployments {{ include "postgres.name" . }} --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
   the logs say "REFUSING TO START", run this upgrade again with --set image=postgres:18
   (the major the logs name), and keep that image in your values for every later upgrade.
-{{- else }}
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.image }}
   This release runs {{ .Values.image }}: the server stays on that major. Keep the image in
   your values for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.image }}. If the server stays not ready and the logs say
+  "REFUSING TO START", set the image the logs name and keep it in your values.
 {{- end }}
   To move existing data to PostgreSQL 19: README, "Upgrading from 3.x" (dump and restore).

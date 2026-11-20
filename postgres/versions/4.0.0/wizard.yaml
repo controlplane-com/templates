@@ -21,7 +21,7 @@ steps:
         severity: warning
         when: >-
           context.mode == 'upgrade' && context.fromVersion != null &&
-          semverCompare(context.fromVersion, '4.0.0') < 0
+          semverCompare(context.fromVersion, '3.0.0') >= 0 && semverCompare(context.fromVersion, '4.0.0') < 0
         text: >-
           New installs of this version run PostgreSQL 19. This release keeps the major its data
           was created with, so the image below stays on it. Moving the data to 19 is a dump and
@@ -487,20 +487,10 @@ migrations:
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, named by backup.minio.credentialsSecretName.
   # A 3.x release that never set `image` runs postgres:18 (3.x's default), and its data directory is
   # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that
-  # data: keep the installed image instead. 2.x hard-coded postgres:17 on the same volume set. 1.x used
-  # another volume set name, so its upgrade starts on a new, empty volume and takes the default.
+  # data: keep the installed image instead.
   - fromVersions: ">=3.0.0 <4.0.0"
     to: image
     valueExpr: self.image
     note: >-
       The data directory keeps the PostgreSQL major it was created with, so the installed image is kept.
       To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading from 3.x).
-  - fromVersions: ">=2.0.0 <3.0.0"
-    to: image
-    valueExpr: "'postgres:17'"
-    note: >-
-      2.x ran postgres:17, and its data directory stays PostgreSQL 17, so the image is set to postgres:17.
-      To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading from 3.x).
-  # 2.x had no image key: give oldSelf the image it ran, so the major rule under Server applies.
-  - fromVersions: ">=2.0.0 <3.0.0"
-    assume: { image: "postgres:17" }

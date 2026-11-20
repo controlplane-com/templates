@@ -9,7 +9,7 @@ failing-over cluster use `postgres-highly-available`, or `postgres-multi-locatio
 - **Postgres workload** (`{release}-postgres`, stateful) — one replica, PostgreSQL 19, port 5432. A boot guard refuses to start on a data directory of another PostgreSQL major.
 - **Volume set** (`{release}-pg-vs`) — `PGDATA` on `ext4`, general-purpose SSD. Deleting it (uninstall) takes a final snapshot, kept 7 days; no scheduled snapshots are taken.
 - **PgBouncer workload** (`{release}-pgbouncer`, serverless) — connection pooler in front of Postgres. Optional (`pgbouncer.enabled`).
-- **Backup workload** (`{release}-postgres-backup`, cron) — scheduled `pg_dump` to S3, GCS or MinIO. Optional (`backup.enabled`).
+- **Backup workload** (`{release}-postgres-backup`, cron) — scheduled `pg_dumpall` to S3, GCS or MinIO. Optional (`backup.enabled`).
 - **Identity and policy** — `reveal` on exactly the secrets this release uses, plus a bucket-scoped cloud binding when backups are on.
 
 No secret is created by this chart: the database credentials are a secret you create yourself.
@@ -32,8 +32,8 @@ No secret is created by this chart: the database credentials are a secret you cr
    **If the secret does not exist at install time the deployment wedges silently.** `cpln logs`
    returns zero lines — the container never starts, so there is nothing to log. The only diagnostic
    is `status.versions[].message` in `cpln workload get-deployments {release}-postgres -o yaml` (note **`get-deployments`** — plain `cpln workload get` has no `versions` key). Create the
-   secret and it recovers on its own in about 6 minutes, or clear it immediately with
-   `cpln workload force-redeployment {release}-postgres` (~90 s).
+   secret and the workload recovers on its own after a few minutes; to start it right away, run
+   `cpln workload force-redeployment {release}-postgres`.
 
 2. **For backups only** — a bucket and, for AWS or GCP, a Control Plane
    [cloud account](https://docs.controlplane.com/guides/create-cloud-account):
@@ -293,8 +293,8 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set imag
      'PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" | psql -U "$POSTGRES_USER" -d postgres -q'
    ```
 
-   For a large database, start the copy in the background so it does not depend on the `exec`
-   session, then follow `/tmp/migrate.log` with later `exec` calls (`tail /tmp/migrate.log`):
+   For a large database, run the copy in the background inside the container and poll its log
+   with later `exec` calls (`tail /tmp/migrate.log`):
 
    ```bash
    cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \

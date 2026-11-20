@@ -13,7 +13,7 @@ HAProxy failover tier is always on, and backups gained a one-command restore.**
 | `-pgedge-proxy` (standard, 2/location) | HAProxy: local node-0 active → local nodes → remote nodes. Runtime DNS (`resolvers`), probes on :8405 |
 | `-pgedge` (stateful) | PG + Spock, full mesh, `replicaDirect`, `max_connections=300` on the command line |
 | `-pgedge-backup` (cron, optional) | Chart script in the stock backup image: backup by default, restore with `--env PGEDGE_ACTION=restore`. Runs in `locations[0]` only |
-| identity + 2 policies | reveal on chart secrets + credentials secret; `view` on the one install GVC |
+| identity + 2 policies | reveal on chart secrets + credentials secret; `view` on the one install GVC; AWS backups carry only the user's bucket policy (`cpln-connector` removed in 3.0.1) |
 
 ## Key knobs (shipped defaults)
 `locations` 3×3 · `postgres.credentialsSecretName` (dictionary: username/password/database) · `pgbouncer.poolMode`

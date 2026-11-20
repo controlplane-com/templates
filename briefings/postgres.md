@@ -80,7 +80,7 @@
   it. Treat every upgrade as a planned write outage. The FIRST upgrade after an install re-applies
   resources even with byte-identical values.
 - **`aws::ReadOnlyAccess` was REMOVED from the backup identity in 3.4.0**, leaving `cpln-connector`
-  plus the user's bucket-scoped policy. The spike that settled it is worth knowing, because the same
+  plus the user's bucket-scoped policy (`cpln-connector` itself went in 3.4.3). The spike that settled it is worth knowing, because the same
   reasoning applies to the ~21 other templates that still carry it: Control Plane attaches each
   `policyRef` as a managed policy on a **per-identity derived IAM role**, so permissions are the
   **union** of refs — and `ReadOnlyAccess` contains **no write actions at all** (its S3 portion is
@@ -92,11 +92,10 @@
   succeeded under the old six-action policy, because multipart authorizes under `s3:PutObject`. The
   four preflight/multipart actions added to the README policy JSON are defensive only — worth having,
   since orphaned multipart parts bill silently, but nothing breaks without them.
-- **`cpln-connector` on the identity is a separate open question.** The spike found a backup completed
-  with the scoped policy alone, and that attaching `cpln-connector` grants `iam:CreateRole` /
-  `AttachRolePolicy` over cpln-tagged resources — a *larger* privilege than the one 3.4.0 removed. It
-  is genuinely required on the parent cloud-account role; whether it belongs on each workload identity
-  has not been decided.
+- **`cpln-connector` was REMOVED from the backup identity in 3.4.3.** A backup completes with the
+  scoped policy alone, and attaching `cpln-connector` granted `iam:CreateRole` / `AttachRolePolicy`
+  over cpln-tagged resources — more than the backup uses. It stays on the parent cloud-account role,
+  where it is required.
 - **Firewall changes take 30–150 s to propagate.** Re-poll before concluding `internalAccess` is broken.
 
 ## Status

@@ -14,11 +14,13 @@ The CPLN_TOKEN / CPLN_ORG environment (or a cpln profile) selects the org.
 """
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import json
 import os
 import re
 import secrets as pysecrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -131,6 +133,43 @@ def missing(*args):
 ORG_ARGS = []
 
 
+# ─── interrupts ───────────────────────────────────────────────────────────────
+# SIGINT (Ctrl-C, or a cancelled Actions job) and SIGTERM both raise KeyboardInterrupt in the main thread, so
+# the running scenario uninstalls its release before the run exits. Once cleanup has begun, further signals
+# are logged and ignored: Actions sends SIGTERM a few seconds after SIGINT, and that must not abort the uninstall.
+STOP = {"signal": None, "cleaning": False}
+
+
+def on_signal(signum, frame):
+    name = signal.Signals(signum).name
+    if STOP["cleaning"]:
+        log(f"{name} received again: still cleaning up (kill -9 abandons the cleanup)")
+        return
+    STOP["signal"] = name
+    raise KeyboardInterrupt(name)
+
+
+@contextlib.contextmanager
+def scenario(t, sc):
+    """One scenario's group. A scenario sets t.installed right before its helm install; if the scenario is cut
+    short (an interrupt, or a harness error) while that release may exist, it is uninstalled here. The normal
+    path uninstalls explicitly, exactly as before."""
+    group(sc)
+    t.installed = None
+    try:
+        yield
+    except BaseException as e:
+        if isinstance(e, KeyboardInterrupt):
+            STOP["cleaning"] = True
+            log(f"interrupted ({STOP['signal'] or 'KeyboardInterrupt'}) during {sc}: uninstalling "
+                f"{t.installed or 'nothing (no release installed yet)'}")
+        if t.installed:
+            uninstall(t, sc)
+        raise
+    finally:
+        endgroup()
+
+
 # ─── plan / gate: what changed ────────────────────────────────────────────────
 
 def changed_files(base):
@@ -220,9 +259,13 @@ class Target:
         self.org = os.environ.get("CPLN_ORG", "")
         self.results = []          # {scenario, check, status, detail, new}
         self.created_secrets = []
+        self.installed = None      # the release the running scenario installed and has not yet uninstalled
         self.known = {}            # scenario → note: an upgradeFrom marked knownIssue warns instead of failing
         checks = load_yaml(os.path.join(ROOT, service, "tests", "checks.yaml"))
         self.checks = checks.get("checks", [])
+        for c in self.checks:
+            if c.get("phase", "ready") not in ("ready", "refused"):
+                raise ValueError(f"check {c.get('id')}: phase must be ready or refused, not {c['phase']!r}")
         # driftBlocks: true opts a template in to a FAILING drift check (it has no drift left to warn about).
         self.drift_blocks = checks.get("driftBlocks") is True
 
@@ -338,9 +381,17 @@ def prepare(t, base, ctx, version):
         ctx[key] = fill(str(value), ctx)
 
 
-def values_file(base, ctx):
+def deep_merge(a, b):
+    """b over a: maps merge key by key, anything else in b replaces a's value (as Helm merges -f files)."""
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return b
+    return {**a, **{k: deep_merge(a.get(k), v) for k, v in b.items()}}
+
+
+def values_file(base, ctx, overrides=None):
+    """overrides: an upgradeFrom entry's then.set, deep-merged over the baseline's values."""
     f = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-    yaml.safe_dump(fill(base.get("values") or {}, ctx), f)
+    yaml.safe_dump(deep_merge(fill(base.get("values") or {}, ctx), fill(overrides or {}, ctx)), f)
     f.close()
     return f.name
 
@@ -351,12 +402,15 @@ def chart_values(chart):
     return ["-f", os.path.join(chart, "values.yaml")]
 
 
-def helm(t, verb, version, vfile, timeout_s):
+def helm(t, verb, version, vfile, timeout_s, wait=True):
+    """wait=False is a user's plain `cpln helm upgrade`: no --wait (so a never-ready release leaves no failed
+    revision behind) and no replica wait."""
     chart = os.path.join(ROOT, t.service, "versions", version)
     args = ["helm", verb, t.release, chart, "--gvc", t.gvc, "--dependency-update", *chart_values(chart), "-f", vfile,
-            "--wait", "--timeout", str(timeout_s), "--tag", "=".join(MANAGED_TAG), "--state-tag", "=".join(MANAGED_TAG)]
+            *(["--wait", "--timeout", str(timeout_s)] if wait else []),
+            "--tag", "=".join(MANAGED_TAG), "--state-tag", "=".join(MANAGED_TAG)]
     code, out, err = cpln(*args, timeout=timeout_s + 300)
-    if code == 0 and not wait_all_replicas(t, timeout_s):
+    if code == 0 and wait and not wait_all_replicas(t, timeout_s):
         return 1, out + err + f"\nnot every replica was ready within {timeout_s}s of the helm {verb} returning"
     return code, out + err
 
@@ -420,6 +474,25 @@ def wait_all_replicas(t, timeout_s):
             return True
         time.sleep(10)
     return False
+
+
+def watch_refused(t, timeout_s):
+    """After a no-wait upgrade the chart must refuse to start: for the whole window the release never reads
+    ready, and at the end some replica of the new workload version exists and is not ready (so it is held,
+    not just lagging behind).
+    Returns (ok, detail)."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if all_replicas_ready(t):  # lag_ok=False: the old version still serving does not count as ready
+            return False, "the upgrade became ready: nothing refused it"
+        time.sleep(10)
+    for w in release_workloads(t):
+        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
+        for dep in d.get("items", []):
+            if any((v.get("workload") or 0) >= (w.get("version") or 0) and not v.get("ready")
+                   for v in dep.get("status", {}).get("versions") or []):
+                return True, f"never ready in {timeout_s}s; {w['name']}@{dep.get('name')} holds a new-version replica"
+    return False, f"never ready in {timeout_s}s, but no new-version replica is held (lag, not a refusal)"
 
 
 def deployments_summary(t):
@@ -494,12 +567,16 @@ def check_noop_upgrade(t, scenario, version, vfile, timeout_s):
     return t.record(scenario, "no-op upgrade ×2 (no churn)", ok, "; ".join(detail))
 
 
-def run_checks(t, scenario, version, ctx, new_version, warn=False):
-    """warn=True for the starting version of an upgrade: it has already shipped, so a PR cannot fix it."""
+def run_checks(t, scenario, version, ctx, new_version, warn=False, phase="ready"):
+    """warn=True for the starting version of an upgrade: it has already shipped, so a PR cannot fix it.
+    phase="refused" runs only the `phase: refused` checks (the step where the chart refused to start);
+    every other step runs only the rest. A check's `scenarios` regex limits it to matching scenario names."""
     ctx["version"] = version  # the version running now; {installed_version} is the scenario's first one
     for c in t.checks:
         cid = c["id"]
-        if not in_range(version, c):
+        if not in_range(version, c) or c.get("phase", "ready") != phase:
+            continue
+        if c.get("scenarios") and not re.search(c["scenarios"], scenario):
             continue
         is_new = str(c.get("since", "")) == new_version and version == new_version
         ok, detail = exec_check(t, c, ctx)
@@ -552,6 +629,7 @@ def uninstall(t, scenario):
         left = leftovers(t)
         if not left:
             ok = True
+            t.installed = None
             detail = f"needed {attempt} uninstall runs" if attempt > 1 else ""
             break
         detail = f"left behind after {attempt} runs: {', '.join(left)[:400]}"
@@ -575,53 +653,84 @@ def leftovers(t):
 
 def scenario_fresh(t, timeout_s):
     sc = f"install {t.version}"
-    group(sc)
-    base = t.baseline(t.version)
-    ctx = t.base_ctx(t.version, base)
-    prepare(t, base, ctx, t.version)
-    vfile = values_file(base, ctx)
-    code, out = helm(t, "install", t.version, vfile, timeout_s)
-    if t.record(sc, "install + every workload ready", code == 0,
-                "" if code == 0 else (out.strip()[-500:] + " | " + " | ".join(deployments_summary(t)))[:1500]):
-        check_drift(t, sc, t.version, vfile)
-        run_checks(t, sc, t.version, ctx, t.version)
-        check_noop_upgrade(t, sc, t.version, vfile, timeout_s)
-    uninstall(t, sc)
-    endgroup()
+    with scenario(t, sc):
+        base = t.baseline(t.version)
+        ctx = t.base_ctx(t.version, base)
+        prepare(t, base, ctx, t.version)
+        vfile = values_file(base, ctx)
+        t.installed = t.release
+        code, out = helm(t, "install", t.version, vfile, timeout_s)
+        if t.record(sc, "install + every workload ready", code == 0,
+                    "" if code == 0 else (out.strip()[-500:] + " | " + " | ".join(deployments_summary(t)))[:1500]):
+            check_drift(t, sc, t.version, vfile)
+            run_checks(t, sc, t.version, ctx, t.version)
+            check_noop_upgrade(t, sc, t.version, vfile, timeout_s)
+        uninstall(t, sc)
 
 
 def scenario_upgrade(t, src, timeout_s):
     """src: {"version": "4.1.0", "values": "carry"|"new", "timeoutSeconds": N, "knownIssue": {"note": ...}}.
     "carry" upgrades with the starting version's own values, the way a user's `helm upgrade -f
     my-values.yaml` does; "new" switches to the target's baseline. knownIssue makes every failure after
-    the starting install warn (except a leak on uninstall); timeoutSeconds overrides the upgrade's wait."""
+    the starting install warn (except a leak on uninstall); timeoutSeconds overrides the upgrade's wait.
+    "refused": {"timeoutSeconds": N} + "then": {"set": {...}}: the plain upgrade must be refused (see
+    upgrade_refused), then the same upgrade with then.set merged over its values must succeed."""
     old, mode = str(src["version"]), src.get("values", "carry")
-    sc = f"upgrade {old} → {t.version}" + (" (new values)" if mode == "new" else "")
-    group(sc)
-    install_timeout = timeout_s
-    timeout_s = int(src.get("timeoutSeconds", timeout_s))
-    old_base, new_base = t.baseline(old), t.baseline(t.version)
-    ctx = t.base_ctx(old, new_base)
-    prepare(t, old_base, ctx, old)
-    old_vfile = values_file(old_base, ctx)
-    code, out = helm(t, "install", old, old_vfile, install_timeout)
-    if t.record(sc, f"install {old} (starting point)", code == 0, "" if code == 0 else out.strip()[-500:]):
-        run_checks(t, sc + f" [before, on {old}]", old, ctx, t.version, warn=True)
-        if mode == "new":
-            # Secrets the new baseline adds are created now; ones it shares keep their values, as a user's would.
-            prepare(t, new_base, ctx, t.version)
-            new_vfile = values_file(new_base, ctx)
-        else:
-            new_vfile = old_vfile
-        if src.get("knownIssue"):
-            t.known[sc] = " ".join(str(src["knownIssue"].get("note", "")).split())
-        code, out = helm(t, "upgrade", t.version, new_vfile, timeout_s)
-        if t.record(sc, f"upgrade to {t.version} + every workload ready", code == 0,
-                    "" if code == 0 else (out.strip()[-500:] + " | " + " | ".join(deployments_summary(t)))[:1500]):
-            check_drift(t, sc, t.version, new_vfile)
-            run_checks(t, sc, t.version, ctx, t.version)
-    uninstall(t, sc)
-    endgroup()
+    refused = src.get("refused")
+    if refused is not None and not (src.get("then") or {}).get("set"):
+        raise ValueError(f"upgradeFrom {old}: `refused` needs `then.set`, the values that make the upgrade start")
+    sc = f"upgrade {old} → {t.version}" + (" (new values)" if mode == "new" else "") + \
+        (" (refused, then pinned)" if refused is not None else "")
+    with scenario(t, sc):
+        install_timeout = timeout_s
+        timeout_s = int(src.get("timeoutSeconds", timeout_s))
+        old_base, new_base = t.baseline(old), t.baseline(t.version)
+        ctx = t.base_ctx(old, new_base)
+        prepare(t, old_base, ctx, old)
+        old_vfile = values_file(old_base, ctx)
+        t.installed = t.release
+        code, out = helm(t, "install", old, old_vfile, install_timeout)
+        if t.record(sc, f"install {old} (starting point)", code == 0, "" if code == 0 else out.strip()[-500:]):
+            run_checks(t, sc + f" [before, on {old}]", old, ctx, t.version, warn=True)
+            if mode == "new":
+                # Secrets the new baseline adds are created now; ones it shares keep their values, as a user's would.
+                prepare(t, new_base, ctx, t.version)
+                new_vfile = values_file(new_base, ctx)
+            else:
+                new_vfile = old_vfile
+            if src.get("knownIssue"):
+                t.known[sc] = " ".join(str(src["knownIssue"].get("note", "")).split())
+            label = f"upgrade to {t.version} + every workload ready"
+            if refused is not None:
+                if not upgrade_refused(t, sc, new_vfile, int((refused if isinstance(refused, dict) else {}).get("timeoutSeconds", 420)), ctx):
+                    uninstall(t, sc)
+                    return
+                # The same upgrade again, with the pin the refusal asked for, must succeed with the data intact.
+                new_vfile = values_file(new_base if mode == "new" else old_base, ctx, (src.get("then") or {}).get("set"))
+                label = f"pinned upgrade to {t.version} (then.set) + every workload ready"
+            code, out = helm(t, "upgrade", t.version, new_vfile, timeout_s)
+            if t.record(sc, label, code == 0,
+                        "" if code == 0 else (out.strip()[-500:] + " | " + " | ".join(deployments_summary(t)))[:1500]):
+                check_drift(t, sc, t.version, new_vfile)
+                run_checks(t, sc, t.version, ctx, t.version)
+        uninstall(t, sc)
+
+
+def upgrade_refused(t, sc, vfile, window_s, ctx):
+    """A plain `cpln helm upgrade` (no --wait) must exit 0, then never become ready for window_s; the
+    `phase: refused` checks then prove why (the guard's message, the data untouched)."""
+    code, out = helm(t, "upgrade", t.version, vfile, window_s, wait=False)
+    if not t.record(sc, f"upgrade to {t.version} accepted (no --wait)", code == 0, "" if code == 0 else out.strip()[-500:]):
+        return False
+    ok, detail = watch_refused(t, window_s)
+    if not t.record(sc, f"upgrade to {t.version} refused (never ready)", ok,
+                    detail if ok else (detail + " | " + " | ".join(deployments_summary(t)))[:1500]):
+        return False
+    if not any(c.get("phase") == "refused" and in_range(t.version, c) for c in t.checks):
+        t.record(sc, "phase: refused checks", False, "no `phase: refused` check covers this version: "
+                 "a refusal must be proven by its message, not only by never becoming ready")
+    run_checks(t, sc + " [refused]", t.version, ctx, t.version, phase="refused")
+    return True
 
 
 def teardown(t):
@@ -670,6 +779,8 @@ def cmd_run(a):
     timeout_s = int(base.get("timeoutSeconds", 900))
     log(f"{service} {version}: release {release}, GVC {gvc} ({'created by this run' if own else 'existing'})")
     started = time.time()
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
     try:
         if own:
             create_gvc(t, base.get("locations") or ["aws-us-east-1"])
@@ -685,7 +796,11 @@ def cmd_run(a):
             scenario_upgrade(t, src, timeout_s)
     except Exception as e:  # a harness error is a failed run, never a silent pass
         t.record("harness", "runner", False, f"{type(e).__name__}: {e}")
+    except KeyboardInterrupt:  # SIGINT or SIGTERM: the scenario has uninstalled its release; finish the teardown
+        STOP["cleaning"] = True
+        t.record("harness", "runner", False, f"interrupted by {STOP['signal'] or 'KeyboardInterrupt'}")
     finally:
+        STOP["cleaning"] = True
         teardown(t)
     report = {"target": a.target, "gvc": gvc, "locations": base.get("locations"), "minutes": round((time.time() - started) / 60, 1),
               "results": t.results}
@@ -693,6 +808,8 @@ def cmd_run(a):
         json.dump(report, f, indent=1)
     failed = [r for r in t.results if r["status"] == "fail"]
     log(f"{service} {version}: {len(t.results) - len(failed)} passed, {len(failed)} failed")
+    if STOP["signal"] or any(r["scenario"] == "harness" and r["detail"].startswith("interrupted") for r in t.results):
+        return 130
     return 1 if failed else 0
 
 
@@ -720,6 +837,10 @@ def cmd_report(a):
     total_fail = 0
     for fn in files:
         r = load_yaml(os.path.join(a.dir, fn))
+        # --dir may hold other JSON (the documented local run uses /tmp): a result file is one `run` wrote.
+        if not (isinstance(r, dict) and "target" in r and isinstance(r.get("results"), list)):
+            print(f"report: skipping {fn}: not an e2e result file", file=sys.stderr)
+            continue
         res = r.get("results", [])
         fails = [x for x in res if x["status"] == "fail"]
         warns = [x for x in res if x["status"] == "warn"]
@@ -733,9 +854,10 @@ def cmd_report(a):
         lines.append("|---|---|---|")
         for x in res:
             mark = {"pass": "pass", "fail": "**FAIL**", "warn": "warn", "skip": "skip"}[x["status"]]
-            if x["new"]:
+            if x.get("new"):
                 mark += " · new"
-            detail = (" — " + x["detail"].replace("|", "\\|")) if x["detail"] else ""
+            # A helm error's tail is multi-line, and a raw newline ends the table row.
+            detail = (" — " + x["detail"].replace("|", "\\|").replace("\n", " ⏎ ")) if x.get("detail") else ""
             lines.append(f"| {x['scenario']} | {x['check']} | {mark}{detail[:400]} |")
         lines.append("")
     if run_url:

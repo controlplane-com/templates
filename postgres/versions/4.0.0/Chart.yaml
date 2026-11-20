@@ -1,10 +1,10 @@
 apiVersion: v2
 name: postgres
-description: Single-replica PostgreSQL with persistent storage, optional pooling and backups
+description: Single-replica PostgreSQL 19 with persistent storage, optional pooling and backups
 
 type: application
-version: 3.4.2
-appVersion: "18"
+version: 4.0.0
+appVersion: "19"
 
 dependencies:
   - name: cpln-common
@@ -13,6 +13,6 @@ dependencies:
 
 annotations:
   created: "2025-12-23"
-  lastModified: "2026-11-18"
-  postgresVersion: "18"
+  lastModified: "2026-11-20"
+  postgresVersion: "19"
   createsGvc: false

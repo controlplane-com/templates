@@ -1,4 +1,4 @@
-image: postgres:18  # versions before postgres:17 are compatible but do not support backup feature
+image: postgres:19  # PostgreSQL 19 for new installs. Upgrading a 3.x release: set postgres:18, its data's major (README, "Upgrading from 3.x")
 
 resources:
   minCpu: 200m
@@ -43,7 +43,7 @@ pgbouncer:
 
 backup: # compatible with Postgres 17+
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # tag 18.1.0 = Postgres 18, 17.1.0 = Postgres 17
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 17 or 18
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

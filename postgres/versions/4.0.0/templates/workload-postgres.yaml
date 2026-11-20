@@ -21,6 +21,12 @@ spec:
         - name: POSTGRES_USER
           value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.image }}
+      {{- /* The major-version guard runs first and then execs the stock
+      entrypoint (see _script-guard.tpl). */}}
+      command: /bin/bash
+      args:
+        - '-c'
+        - {{ include "pg.inlineArg" (include "pg.script.guard" .) }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
@@ -37,10 +43,14 @@ spec:
           command:
             - sh
             - '-c'
-            - 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
-        failureThreshold: 10
-        initialDelaySeconds: 17
-        periodSeconds: 5
+            {{- /* A held guard prints its fix and fails. pg_isready dials TCP on
+            loopback: during first boot the entrypoint runs a socket-only temporary
+            server, which a bare pg_isready reports as ready. Startup window
+            (the platform's implied startup probe) = 15 + 30 x 10 = 315 s. */}}
+            - 'if [ -f /tmp/pg-major-guard ]; then head -n 4 /tmp/pg-major-guard; exit 1; fi; pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
+        failureThreshold: 6
+        initialDelaySeconds: 15
+        periodSeconds: 10
         successThreshold: 1
         timeoutSeconds: 3
   defaultOptions:

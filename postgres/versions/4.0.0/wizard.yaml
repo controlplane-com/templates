@@ -17,14 +17,24 @@ steps:
         text: >-
           Every upgrade restarts the server. Nothing limits the rollout of a stateful workload,
           so plan a short write outage.
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '4.0.0') < 0
+        text: >-
+          New installs of this version run PostgreSQL 19. This release keeps the major its data
+          was created with, so the image below stays on it. Moving the data to 19 is a dump and
+          restore into a new release; see Upgrading from 3.x in the README.
       - path: image
         type: string
         format: image
         label: Postgres image
         required: true
         help: >-
-          For example `postgres:18` or `postgres:17`. The data directory is specific to a
-          major version: a different major on an existing volume does not start.
+          New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data
+          directory is specific to a major version: on an existing volume, an image of another
+          major does not start, and the server logs the image to set instead.
       - path: resources
         type: resources
         label: Resources
@@ -35,13 +45,19 @@ steps:
         memory: { min: 32Mi }
     rules:
       - rule: >-
-          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          oldSelf == null || !has(oldSelf.image) || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
           imageMajor(self.image) == imageMajor(oldSelf.image)
         severity: warning
         paths: [image]
+        messageExpression: >-
+          'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.image)) +
+          '; a PostgreSQL ' + string(imageMajor(self.image)) + ' image refuses to start on it. Keep the image at ' +
+          oldSelf.image + ', or move to PostgreSQL ' + string(imageMajor(self.image)) +
+          ' with a dump and restore into a new release (README, Upgrading from 3.x).'
         message: >-
-          The data directory belongs to the installed Postgres major version; a different major
-          version does not start on it. Upgrade with a dump and restore instead.
+          The data directory belongs to the installed Postgres major version; an image of a
+          different major refuses to start on it. Keep the installed image, or move with a dump
+          and restore into a new release (README, Upgrading from 3.x).
 
   - id: credentials
     title: Credentials
@@ -315,7 +331,9 @@ steps:
             label: Backup image
             required: true
             advanced: true
-            description: Tag 18.x.x for Postgres 18, 17.x.x for Postgres 17.
+            description: >-
+              Tag 19.x.x carries the PostgreSQL 19 client, which also backs up a server pinned to
+              17 or 18.
           - path: backup.resources
             type: resources
             label: Backup job resources
@@ -467,3 +485,22 @@ migrations:
   - fromVersions: "<3.4.0"
     from: backup.minio.secretKey
     note: MinIO keys moved to a dictionary secret with the keys accessKey and secretKey, named by backup.minio.credentialsSecretName.
+  # A 3.x release that never set `image` runs postgres:18 (3.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that
+  # data: keep the installed image instead. 2.x hard-coded postgres:17 on the same volume set. 1.x used
+  # another volume set name, so its upgrade starts on a new, empty volume and takes the default.
+  - fromVersions: ">=3.0.0 <4.0.0"
+    to: image
+    valueExpr: self.image
+    note: >-
+      The data directory keeps the PostgreSQL major it was created with, so the installed image is kept.
+      To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading from 3.x).
+  - fromVersions: ">=2.0.0 <3.0.0"
+    to: image
+    valueExpr: "'postgres:17'"
+    note: >-
+      2.x ran postgres:17, and its data directory stays PostgreSQL 17, so the image is set to postgres:17.
+      To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading from 3.x).
+  # 2.x had no image key: give oldSelf the image it ran, so the major rule under Server applies.
+  - fromVersions: ">=2.0.0 <3.0.0"
+    assume: { image: "postgres:17" }

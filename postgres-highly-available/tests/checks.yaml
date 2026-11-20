@@ -98,3 +98,29 @@ checks:
     # (~4 min in), so wait out the whole rollout.
     retries: 20
     retryDelaySeconds: 30
+
+  - id: postgres-major-matches-cluster
+    description: >-
+      A cluster created on 2.9.0 or later runs PostgreSQL 18; a cluster created on an earlier version keeps
+      running PostgreSQL 17 after the upgrade, on every member (the data directory's version decides).
+    since: 2.9.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.9.0 | sort -V | head -1)" = 2.9.0 ]; then want=18; else want=17; fi
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    retries: 8
+    retryDelaySeconds: 15

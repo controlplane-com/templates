@@ -1,13 +1,13 @@
 # pgvector
 
-PostgreSQL 18 with the [pgvector](https://github.com/pgvector/pgvector) extension pre-installed
+PostgreSQL 19 with the [pgvector](https://github.com/pgvector/pgvector) extension pre-installed
 **and already created**, so a fresh install can store embeddings and run similarity search
 immediately. One server on a persistent volume, with an optional PgBouncer connection
 pooler and optional scheduled backups to object storage.
 
 ## Architecture
 
-- **pgvector workload** (`{release}-pgvector`, stateful) — one replica, PostgreSQL 18 with pgvector 0.8.7, port 5432.
+- **pgvector workload** (`{release}-pgvector`, stateful) — one replica, PostgreSQL 19 with pgvector 0.8.7, port 5432. A start-up guard refuses to start PostgreSQL on a data directory from another major version (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Volume set** (`{release}-pgvector-vs`) — `PGDATA` on `ext4`, general-purpose SSD, final snapshot with 7-day retention.
 - **First-boot SQL secret** (`{release}-pgvector-init`) — mounted at `/docker-entrypoint-initdb.d/00-pgvector.sql`; runs `CREATE EXTENSION vector`. Holds no credentials.
 - **PgBouncer workload** (`{release}-pgbouncer`, serverless) — connection pooler in front of the database. Optional (`pgbouncer.enabled`).
@@ -51,7 +51,7 @@ The database credentials are a secret you create yourself — this chart never w
 ### Server, resources and database
 
 ```yaml
-image: pgvector/pgvector:0.8.7-pg18 # PostgreSQL 18 + pgvector 0.8.7 (Debian bookworm base)
+image: pgvector/pgvector:0.8.7-pg19 # PostgreSQL 19 + pgvector 0.8.7 (Debian bookworm). Upgrading a 1.x release: keep -pg18 (README, "Upgrading from 1.x")
 
 resources:
   minCpu: 300m
@@ -128,7 +128,7 @@ pgbouncer:
 ```yaml
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # PG18 client, matches the server major
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PG19 client; also backs up a server pinned to -pg18
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:
@@ -287,7 +287,7 @@ Lifecycle rules run in the background; objects are removed within about a day of
 ## Restoring a backup
 
 The dumps are whole-cluster `pg_dumpall` output and contain `CREATE EXTENSION IF NOT EXISTS vector`,
-so **restore into an image that carries pgvector** — replaying one into a stock `postgres:18` fails
+so **restore into an image that carries pgvector** — replaying one into a stock `postgres` image fails
 at that line. Replay the script against the `postgres` maintenance database as the superuser from your
 prerequisite secret, from a client that can reach both the bucket and the server — a workload inside
 the GVC, or your own machine with `cpln port-forward RELEASE_NAME-pgvector 5432:5432 --gvc GVC_NAME`
@@ -308,22 +308,73 @@ Use `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" -` for GCS. For MinI
 `aws configure set default.s3.addressing_style path`, export `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY`, and add `--endpoint-url "http://MINIO_ENDPOINT:9000"` to the `aws s3 cp`.
 
-## Upgrading from 1.0.0
+A dump taken by the default `postgres-backup:19.1.0` restores into PostgreSQL 19 or newer. Restoring it
+into a server pinned to PostgreSQL 18 can print `unrecognized configuration parameter` errors on `SET`
+lines, which `psql` skips; to keep backups that load cleanly into 18, set
+`backup.image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0`.
 
-1.0.1 moves to pgvector 0.8.7, which fixes CVE-2026-103484: in 0.8.6 and earlier, a database user
-who can create an IVFFlat index can run arbitrary code on the server.
+## Upgrading from 1.x
 
-- **If your values pin `image`** (an install through the Console wizard stores it), set it to
-  `pgvector/pgvector:0.8.7-pg18` or remove it. The chart refuses an official pgvector tag older than 0.8.7.
-- **The fix is in the server library and is active after the upgrade's restart**; existing data
-  and indexes need nothing. `\dx` keeps reporting `vector` 0.8.6 until you run
-  `ALTER EXTENSION vector UPDATE;` in each database that has it, which only updates that record.
+New installs of 2.0.0 run PostgreSQL 19. A 1.x release's data directory is PostgreSQL 18, and a
+PostgreSQL data directory only starts under the major version that created it. If a PostgreSQL 19 image
+meets an 18 data directory, the container does not start PostgreSQL and changes nothing on the volume:
+the replica stays not ready, and the logs repeat a `[pg-guard] REFUSING TO START` message with the exact
+fix.
+
+### Stay on PostgreSQL 18 with this chart
+
+Pin the image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does
+not reuse the release's values):
+
+```yaml
+image: pgvector/pgvector:0.8.7-pg18
+```
+
+If an upgrade ran without the pin and the server refuses to start, run the same upgrade again with
+`--set image=pgvector/pgvector:0.8.7-pg18`; the server comes back on its data. The Console wizard keeps
+the installed image on upgrade and blocks a change to another major.
+
+A 1.0.0 release that pinned `pgvector/pgvector:0.8.6-pg18` must move to `0.8.7-pg18`: the chart refuses
+an official pgvector tag older than 0.8.7 (CVE-2026-103484). Existing data and indexes need nothing;
+`ALTER EXTENSION vector UPDATE;` updates the version `\dx` reports.
+
+### Move to PostgreSQL 19 (dump and restore into a new release)
+
+1. Install 2.0.0 as a **new release** in the same GVC, with the **same credentials secret** and the same
+   `config.extraExtensions`. The dump carries each role's password hash, so a different secret would no
+   longer match.
+2. Stop writes to the old release.
+3. Stream the dump from the old server into the new one, inside the new container (the PostgreSQL 19
+   `pg_dumpall` reads the 18 server; nothing binary crosses `cpln workload exec`):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -h OLD_RELEASE-pgvector.GVC_NAME.cpln.local -U "$POSTGRES_USER" | psql -U "$POSTGRES_USER" -d postgres -q'
+   ```
+
+   `already exists` errors for the role, the database and the `vector` extension are expected. HNSW and
+   IVFFlat indexes are rebuilt during the restore; for large ones raise `resources.maxMemory` first. For a
+   large database, run it in the background and follow the log:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
+     'nohup bash -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dumpall -h OLD_RELEASE-pgvector.GVC_NAME.cpln.local -U \"\$POSTGRES_USER\" | psql -U \"\$POSTGRES_USER\" -d postgres -q" > /tmp/migrate.log 2>&1 &'
+   cpln workload exec NEW_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- tail -n 20 /tmp/migrate.log
+   ```
+
+4. Compare row counts on both servers, then point your applications at `NEW_RELEASE-pgvector` (or
+   `NEW_RELEASE-pgbouncer`).
+5. Uninstall the old release.
+
+To keep the release name instead, take a backup with the backup job, uninstall the release, install 2.0.0
+under the same name, and follow [Restoring a backup](#restoring-a-backup). Clients are unchanged, and
+the database is down from the uninstall until the restore finishes.
 
 ## High availability
 
 This template is a single server: a node failure reschedules it and reattaches the same volume, so
 the exposure is minutes of downtime, not data loss. For automatic failover use
-`postgres-highly-available`, whose image also carries pgvector — but it is **PostgreSQL 17, not 18**,
+`postgres-highly-available`, whose image also carries pgvector — but it is **PostgreSQL 17, not 19**,
 with **pgvector 0.8.0 rather than 0.8.7**. Both `hnsw` and `ivfflat` exist in 0.8.0, so the gap is
 fixes and refinements, not a missing index type.
 
@@ -370,8 +421,11 @@ fixes and refinements, not a missing index type.
   limits the rollout on a stateful workload, so treat every upgrade as a planned write outage of
   roughly a minute and a half. Losing a replica costs about the same (84 s measured). Data is
   never at risk — the same volume reattaches.
-- **Restore with a PostgreSQL 18 `psql`.** An older client emits `invalid command \unrestrict`
-  against a PG18 dump. The restore still completes, but the error is alarming and avoidable.
+- **Restore with a `psql` at least as new as the backup image** (19 for the default). An older client
+  emits `invalid command \unrestrict` against a newer dump. The restore still completes, but the error
+  is alarming and avoidable.
+- **Moving an existing release to another PostgreSQL major is a dump and restore, never an image
+  change**, and once the image is pinned keep it in your values file; see [Upgrading from 1.x](#upgrading-from-1x).
 - **`helm uninstall` deletes the volume set**, so data does not survive a reinstall. Your credentials
   secret is left alone.
 - **Firewall changes take 30 seconds to a few minutes to take effect.** After changing
@@ -381,6 +435,6 @@ fixes and refinements, not a missing index type.
 
 - [pgvector documentation](https://github.com/pgvector/pgvector)
 - [pgvector Docker image](https://hub.docker.com/r/pgvector/pgvector)
-- [PostgreSQL 18 documentation](https://www.postgresql.org/docs/18/index.html)
+- [PostgreSQL 19 documentation](https://www.postgresql.org/docs/19/index.html)
 - [PgBouncer configuration](https://www.pgbouncer.org/config.html)
 - [Create a Control Plane cloud account](https://docs.controlplane.com/guides/create-cloud-account)

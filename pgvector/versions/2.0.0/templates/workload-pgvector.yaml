@@ -21,6 +21,13 @@ spec:
         - name: POSTGRES_USER
           value: 'cpln://secret/{{ .Values.config.credentialsSecretName }}.username'
       image: {{ .Values.image }}
+      {{- /* The major-version guard (_script-guard.tpl) runs first and execs
+      the image's own entrypoint, so on the pass path PostgreSQL is started
+      exactly as the image would start it. */}}
+      command: /bin/bash
+      args:
+        - '-c'
+        - {{ include "pgvector.guardScript" . | include "pgvector.inlineScript" }}
       inheritEnv: false
       minCpu: {{ .Values.resources.minCpu | quote }}
       minMemory: {{ .Values.resources.minMemory | quote }}
@@ -47,10 +54,13 @@ spec:
             socket only, so a bare `pg_isready` reports ready while the init SQL
             is still running — measured 2026-08-26: socket rc=0 while TCP rc=2
             mid-init. Only the real server listens on TCP, after the extension
-            has been created. The larger budget below (15 + 18x10 = 195s) pays
-            for initdb plus that SQL; 18 is inside the platform's cap of 20.
+            has been created. A readiness probe implies a startup kill after
+            about initialDelaySeconds + 30 x periodSeconds (15 + 300 = 315 s),
+            which pays for initdb plus that SQL, or crash recovery.
+            While the major-version guard holds, the probe prints the first
+            lines of its message and fails, so the replica never reads ready.
             */}}
-            - 'pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
+            - 'if [ -f /tmp/pg-major-guard ]; then head -n 3 /tmp/pg-major-guard; exit 1; fi; pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}'
         failureThreshold: 18
         initialDelaySeconds: 15
         periodSeconds: 10

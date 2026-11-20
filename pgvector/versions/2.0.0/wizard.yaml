@@ -81,6 +81,16 @@ steps:
     fields:
       - type: note
         severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '2.0.0') < 0
+        text: >-
+          New installs of this version run PostgreSQL 19. This release keeps the PostgreSQL major its data
+          was created with (the image is carried over), and a PostgreSQL 19 image refuses to start on a
+          PostgreSQL 18 data directory. Moving to 19 is a dump and restore into a new release; see
+          "Upgrading from 1.x" in the README.
+      - type: note
+        severity: warning
         when: context.mode == 'upgrade'
         text: >-
           Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
@@ -102,10 +112,12 @@ steps:
         required: true
         description: >-
           The `-pgNN` suffix of the tag is the PostgreSQL major version, which is fixed once the volume holds
-          data.
+          data. New installs run PostgreSQL 19.
         help: >-
-          For example `pgvector/pgvector:0.8.7-pg18` (PostgreSQL 18, pgvector 0.8.7). The data directory is
-          specific to a PostgreSQL major version: a different major on an existing volume does not start.
+          For example `pgvector/pgvector:0.8.7-pg19` (PostgreSQL 19, pgvector 0.8.7) or
+          `pgvector/pgvector:0.8.7-pg18` (PostgreSQL 18). The data directory is specific to a PostgreSQL major
+          version: on an existing volume an image for a different major refuses to start and leaves the data
+          untouched.
         docs: "#server-and-resources"
         rules:
           - rule: >-
@@ -116,11 +128,11 @@ steps:
             messageExpression: >-
               'pgvector before 0.8.7 is open to CVE-2026-103484: a database user who can create an IVFFlat index ' +
               'can run arbitrary code. Use pgvector/pgvector:0.8.7' +
-              (self.image.matches('-pg[0-9]+') ? '-pg' + self.image.split('-pg')[1] : '-pg18') +
+              (self.image.matches('-pg[0-9]+') ? '-pg' + self.image.split('-pg')[1] : '-pg19') +
               ', keeping your PostgreSQL major version.'
             message: >-
               pgvector before 0.8.7 is open to CVE-2026-103484: a database user who can create an IVFFlat index
-              can run arbitrary code. Use a 0.8.7 tag with your current -pgNN suffix, such as pgvector/pgvector:0.8.7-pg18.
+              can run arbitrary code. Use a 0.8.7 tag with your current -pgNN suffix, such as pgvector/pgvector:0.8.7-pg19.
       - path: config.extraExtensions
         type: list
         label: Extra extensions
@@ -167,15 +179,22 @@ steps:
         message: >-
           Extra extensions are created only on first boot, so changing the list does nothing on this release.
           Run CREATE EXTENSION IF NOT EXISTS in the database instead.
+      # The PostgreSQL major is the -pgNN part of the tag (0.8.7-pg19, 0.8.7-pg19-trixie, pg19), never
+      # imageMajor(), which reads the tag's leading digits (the pgvector version, 0). A tag without one
+      # is not judged. The chart's boot guard refuses a mismatch at runtime; this stops it in the wizard.
       - rule: >-
-          oldSelf == null || !self.image.matches('-pg[0-9]+$') || !oldSelf.image.matches('-pg[0-9]+$') ||
-          self.image.split('-pg')[size(self.image.split('-pg')) - 1] ==
-          oldSelf.image.split('-pg')[size(oldSelf.image.split('-pg')) - 1]
+          oldSelf == null || !self.image.split(':')[size(self.image.split(':')) - 1].matches('(^|-)pg[0-9]+(-|$)') || !oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1].matches('(^|-)pg[0-9]+(-|$)') ||
+          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] == ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')[size(('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0]
         severity: warning
         paths: [image]
+        messageExpression: >-
+          'The data directory of this release is PostgreSQL ' + ('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')[size(('-' + oldSelf.image.split(':')[size(oldSelf.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] + ', and a PostgreSQL ' + ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] +
+          ' image refuses to start on it. Keep the image at ' + oldSelf.image + ', or move to PostgreSQL ' +
+          ('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')[size(('-' + self.image.split(':')[size(self.image.split(':')) - 1]).split('-pg')) - 1].split('-')[0] + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
         message: >-
-          The data directory belongs to the installed PostgreSQL major version; an image for a different major
-          version does not start on it. Move to a new major with a dump and restore instead.
+          The data directory belongs to the installed PostgreSQL major version, and an image for a different
+          major version refuses to start on it. Keep the installed image, or move to a new major with a dump
+          and restore into a new release (README, Upgrading from 1.x).
 
   - id: storage
     title: Storage
@@ -357,7 +376,8 @@ steps:
             label: Backup image
             required: true
             advanced: true
-            description: Tag 18.x.x carries the PostgreSQL 18 client, which matches the default server.
+            description: >-
+              Tag 19.x.x carries the PostgreSQL 19 client, which also backs up a server pinned to PostgreSQL 18.
           - path: backup.resources
             type: resources
             label: Backup job resources
@@ -630,3 +650,18 @@ steps:
           items: >-
             (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
             (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup'] : [])
+
+migrations:
+  # 2.0.0 changed the default image from PostgreSQL 18 to 19, and a carry-over moves changed values only: a
+  # 1.x release that kept the default would get the 19 image, which refuses to start on its 18 data. Keep the
+  # installed image, moving a pre-0.8.7 official tag (1.0.0's default 0.8.6-pg18) to 0.8.7 with the same
+  # -pgNN suffix, or pgvector.validateImage (CVE-2026-103484) refuses the render.
+  - fromVersions: "<2.0.0"
+    to: image
+    valueExpr: >-
+      self.image.matches('^(docker[.]io/)?pgvector/pgvector:0[.]([0-7][.][0-9]+|8[.][0-6])-pg[0-9]+') ?
+      'pgvector/pgvector:0.8.7-pg' + self.image.split('-pg')[1] : self.image
+    note: >-
+      The data directory of this release keeps the PostgreSQL major it was created with, so the installed
+      image is kept (moved to pgvector 0.8.7 if it was older). To move to PostgreSQL 19, dump and restore into
+      a new release (README, Upgrading from 1.x).

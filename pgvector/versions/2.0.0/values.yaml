@@ -1,5 +1,5 @@
 # ─── Image ────────────────────────────────────────────────────────
-image: pgvector/pgvector:0.8.7-pg18 # PostgreSQL 18 + pgvector 0.8.7 (Debian bookworm base)
+image: pgvector/pgvector:0.8.7-pg19 # PostgreSQL 19 + pgvector 0.8.7 (Debian bookworm). Upgrading a 1.x release: keep -pg18 (README, "Upgrading from 1.x")
 
 # ─── Resources ────────────────────────────────────────────────────
 resources:
@@ -56,7 +56,7 @@ pgbouncer:
 # ─── Backups (optional) ───────────────────────────────────────────
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # PG18 client, matches the server major
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PG19 client; also backs up a server pinned to -pg18
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

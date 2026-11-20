@@ -9,7 +9,8 @@ tags: {{- include "pgedge.tags" . | nindent 2 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
+    # `cpln-connector` was removed in 3.0.1: the backup needs only the scoped
+    # bucket policy below, and the connector policy granted far more than that.
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

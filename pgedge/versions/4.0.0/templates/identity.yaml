@@ -8,8 +8,8 @@ tags: {{- include "pgedge.tags" . | nindent 2 }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
+  {{- /* 4.0.0: cpln-connector removed; the backup needs only the bucket-scoped policy below */}}
   policyRefs:
-    - cpln-connector
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

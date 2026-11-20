@@ -118,7 +118,7 @@ checks:
             v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
             majors.append(v // 10000)
         ok = len(majors) == 3 and all(x == want for x in majors)
-        print(("MAJOR " if ok else "WRONG ") + f"want={want} members={majors}")
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
         ' "$want"
     expect:
       stdout: "^MAJOR want="

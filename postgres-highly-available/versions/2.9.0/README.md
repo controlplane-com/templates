@@ -69,7 +69,7 @@ which backs up 17 clusters too. To move an existing cluster to PostgreSQL 18, se
 <b>Upgrading from 2.8.0 or earlier:</b> 2.8.1 moves to `controlplanecorporation/patroni-postgres:0.8`,
 which carries pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the
 upgrade restarts the members; existing data and indexes need nothing. If you pinned `image` in your values,
-set it to the `0.9` tag (or `0.8`, which bundles PostgreSQL 17 only): tags `0.1` to `0.7` are refused at render. In each database where you created the
+set it to the `0.9` tag (or `0.8`, which bundles PostgreSQL 13 to 17 and so starts new clusters on 17): tags `0.1` to `0.7` are refused at render. In each database where you created the
 `vector` extension, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;`,
 which only updates that record.
 

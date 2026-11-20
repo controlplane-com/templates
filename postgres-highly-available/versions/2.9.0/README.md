@@ -395,7 +395,7 @@ There are two backup options:
 
 **Note:** The HA Proxy must be enabled (`proxy.enabled: true`) for logical backups to function correctly.
 
-The logical backup image (`backup.logical.image`) runs `pg_dumpall`, which can back up its own PostgreSQL version and older ones. The default `18.1.0` tag backs up PostgreSQL 17 and 18 clusters; a `17.x.x` tag cannot back up a PostgreSQL 18 cluster.
+The logical backup image (`backup.logical.image`) runs `pg_dumpall`, which can back up its own PostgreSQL version and older ones. The default `18.2.0` tag backs up PostgreSQL 17 and 18 clusters; a `17.x.x` tag cannot back up a PostgreSQL 18 cluster.
 
 Set `backup.enabled: true`, choose a `mode` (`logical` or `wal-g`), then set `backup.provider` to `aws`, `gcp`, or `minio` and fill in the corresponding block:
 

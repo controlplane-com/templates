@@ -244,6 +244,19 @@ without losing acked writes); with replicas=2 it gives 1; with replicas=1 it giv
 
 {{- /* Validates only the plugin-download keys added in 4.3.0; an entry using 4.2.0 keys renders unchanged. */ -}}
 {{/* With rest_auth_secret set, refuse settings that leave part of the Kafka Connect REST API without auth. */}}
+{{/*
+A Kafka Connect worker does not start without worker-level key.converter and value.converter
+(ConfigException "Missing required configuration"), and helm install would still report success. 4.5.1.
+*/}}
+{{- define "kafka.validateConnectConverters" -}}
+{{- $cp := .connector_properties | default dict -}}
+{{- range $k := list "key.converter" "value.converter" -}}
+{{- if not (toString (index $cp $k | default "") | trim) -}}
+{{- fail (printf "Error: kafka_connectors '%s' connector_properties must set %s (for example org.apache.kafka.connect.storage.StringConverter or org.apache.kafka.connect.converters.ByteArrayConverter); the Connect worker does not start without it." $.name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kafka.validateConnectRestAuth" -}}
 {{- $secret := .rest_auth_secret | default "" | toString | trim -}}
 {{- if $secret -}}

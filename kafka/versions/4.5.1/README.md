@@ -502,6 +502,7 @@ See [RELEASES.md](https://github.com/controlplane-com/templates/blob/main/kafka/
 - **A connector that is `FAILED` with "Failed to find any class" after its plugin arrived late needs a worker restart** (`cpln workload force-redeployment`). A REST restart does not rescan the plugins folder.
 - **After changing a secret a connector reads, run `cpln workload force-redeployment`** on its Connect workload; running workers keep the value they read at start.
 - **The Kafka Connect workload reports ready while it waits for plugins.** Read the `kafka-connect` container log for `Waiting for plugin downloads` or `WARNING: connector plugins not ready`.
+- **Every Kafka Connect group must set `key.converter` and `value.converter`** in `connector_properties` (4.5.1); the chart refuses a group without them, since its workers would not start.
 - **Connectors cannot declare config providers of their own (4.5.1).** The workers start with `-Dorg.apache.kafka.automatic.config.providers=none`; a connector whose config sets `config.providers` for its clients (`producer.override.*`, `consumer.override.*`, `admin.override.*`, MirrorMaker `source.*`/`target.*`) fails with `… is not allowed`. Declare providers in `connector_properties` instead.
 
 ### Links

@@ -9,6 +9,7 @@
 - **Worker config changes restart the workers by themselves**: a `cpln/checksum` tag on the Connect workload follows the worker properties, plugin configs and downloads. A changed secret value still needs `cpln workload force-redeployment`, also when ESS syncs it.
 - **Connectors can no longer load config providers of their own**: every Kafka Connect worker starts with `-Dorg.apache.kafka.automatic.config.providers=none`, so a connector config that declares `config.providers` for its clients (`*.override.*`, MirrorMaker `source.*`/`target.*`) fails instead of reading the worker's environment or files. A `FileConfigProvider` or `DirectoryConfigProvider` you add in `connector_properties` is limited to `/opt/kafka/secrets` and the `extraVolumes` paths.
 - **Worker property names with spaces, `\`, `=` or `:`, and values with a line break, a `\u` escape, a `\` next to `${` or a trailing `\`, are refused** for every Kafka Connect group: the worker's properties file would read them as different properties.
+- **`key.converter` and `value.converter` are required** in a Kafka Connect group's `connector_properties`: a worker without them never started, while the install still reported success. The install wizard now fills both in for a new group (`StringConverter` and `ByteArrayConverter`).
 - Off unless set: without `secrets` a worker is configured as in 4.5.0, apart from the limits above.
 - Upgrading restarts the Kafka Connect replicas (and, as with any chart version change, the brokers).
 

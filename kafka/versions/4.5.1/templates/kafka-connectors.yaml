@@ -3,6 +3,7 @@
 {{- include "kafka.validateImage" . -}}
 {{- include "kafka.validateConnectorDownloads" . -}}
 {{- include "kafka.validateConnectRestAuth" . -}}
+{{- include "kafka.validateConnectConverters" . -}}
 {{- include "kafka.validateConnectorSecrets" . -}}
 {{- include "kafka.validateConnectEnvProvider" . -}}
 {{- include "kafka.validateConnectPropertySyntax" . -}}

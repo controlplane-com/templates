@@ -1033,6 +1033,8 @@ steps:
               connector_properties:
                 group.id: connect-cluster
                 plugin.path: /opt/kafka/plugins
+                key.converter: org.apache.kafka.connect.storage.StringConverter
+                value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
               plugins: []
             item:
               type: object
@@ -1251,12 +1253,23 @@ steps:
                   paths: [plugins_wait_timeout_action]
                   message: The timeout action must be start or restart.
                 - rule: >-
+                    item.plugins == null || type(item.plugins) != list ||
                     item.plugins.all(p, type(p) != map || !('artifacts' in p) || type(p.artifacts) != list ||
                     p.artifacts.all(a, type(a) != map || !('sha256' in a) || a.sha256 == null || string(a.sha256) == '' ||
                     string(a.sha256).matches('^[0-9A-Fa-f]{64}$')))
                   mirrors: kafka.validateConnectorDownloads
                   paths: [plugins]
                   message: Every artifact `sha256` must be 64 hexadecimal characters.
+                - rule: >-
+                    item.connector_properties != null &&
+                    'key.converter' in item.connector_properties && string(item.connector_properties['key.converter']).trim() != '' &&
+                    'value.converter' in item.connector_properties && string(item.connector_properties['value.converter']).trim() != ''
+                  mirrors: kafka.validateConnectConverters
+                  paths: [connector_properties]
+                  message: >-
+                    Worker properties must set `key.converter` and `value.converter` (for example
+                    `org.apache.kafka.connect.storage.StringConverter` and
+                    `org.apache.kafka.connect.converters.ByteArrayConverter`); the Connect workers do not start without them.
                 - rule: >-
                     item.minCpu == null || item.minCpu == '' || item.cpu == null || item.cpu == '' ||
                     cpuMillicores(item.cpu) <= 4 * cpuMillicores(item.minCpu)

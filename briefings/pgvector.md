@@ -16,7 +16,7 @@
 | stateful workload `{release}-pgvector` | PostgreSQL 18 + pgvector 0.8.7 on 5432, pinned to 1 replica |
 | volumeset `{release}-pgvector-vs` | `PGDATA`, ext4, SSD, 10 GiB default, 7-day final snapshot, optional autoscaling |
 | opaque secret `{release}-pgvector-init` | first-boot SQL mounted at `/docker-entrypoint-initdb.d/00-pgvector.sql` — this is what runs `CREATE EXTENSION` |
-| identity + policy | `reveal` on the user's credentials secret + the init secret (+ MinIO creds when used); cloud binding only when backups are on |
+| identity + policy | `reveal` on the user's credentials secret + the init secret (+ MinIO creds when used); cloud binding only when backups are on; the AWS binding carries only the user's bucket policy (`cpln-connector` removed in 1.0.3) |
 | serverless workload `{release}-pgbouncer` (optional) | connection pooler |
 | cron workload `{release}-pgvector-backup` (optional) | nightly `pg_dumpall` → S3 / GCS / MinIO |
 

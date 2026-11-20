@@ -1,10 +1,10 @@
 # pgEdge Distributed PostgreSQL
 
-This template deploys a pgEdge active-active distributed PostgreSQL cluster using Spock multi-master replication. Every node accepts both reads and writes simultaneously, and data written to any node replicates to all others automatically. The cluster spans multiple geographic locations with configurable replicas per location, providing a globally distributed, fault-tolerant database with no single point of failure. From 2.0.0 the chart deploys into the GVC you install into and creates none of its own. From 3.0.0 the connection pooler is PgBouncer.
+This template deploys a pgEdge active-active distributed PostgreSQL cluster using Spock multi-master replication. Every node accepts both reads and writes simultaneously, and data written to any node replicates to all others automatically. The cluster spans multiple geographic locations with configurable replicas per location, providing a globally distributed, fault-tolerant database with no single point of failure. From 2.0.0 the chart deploys into the GVC you install into and creates none of its own. From 3.0.0 the connection pooler is PgBouncer. From 4.0.0 new installs run PostgreSQL 19 with Spock 5.0.14.
 
 ## Architecture
 
-- **pgEdge**: Stateful workload running PostgreSQL 17 with the Spock extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume.
+- **pgEdge**: Stateful workload running PostgreSQL 19 with the Spock 5 extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume. A node reports ready only once its PostgreSQL accepts connections, and it refuses to start on a data directory created by a different PostgreSQL major (see [Upgrading from 3.x](#upgrading-from-3x)).
 - **HAProxy failover tier** (per location): sits in front of the nodes and gives each location's PgBouncer a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a client keeps serving through a node failure.
 - **PgBouncer**: per-location connection pooler and the endpoint applications connect to. It pools one backend, the local HAProxy; node selection is HAProxy's job.
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
@@ -61,6 +61,72 @@ Note this is `get-deployments` — plain `cpln workload get` has no `versions` f
 repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
 
 The secret holds three keys: `username`, `password` and `database`. PgBouncer's admin console (database `pgbouncer`) accepts the same username and password. Clients must support SCRAM-SHA-256 authentication (libpq 10+, JDBC 42.2+).
+
+## Upgrading from 3.x
+
+4.0.0 installs PostgreSQL 19; 3.x ran PostgreSQL 17. A data directory stays on the PostgreSQL major
+that created it, so **a 3.x release keeps PostgreSQL 17 when it moves to the 4.0.0 chart**: pin the
+image in your values file.
+
+```bash
+cpln helm upgrade RELEASE_NAME oci://ghcr.io/controlplane-com/templates/pgedge --version 4.0.0 --gvc GVC_NAME \
+  -f values.yaml --set image=ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+```
+
+Keep `image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard` in your values file for every later
+upgrade: `cpln helm upgrade` does not reuse earlier values. The console's upgrade wizard keeps the
+installed image for you.
+
+**If you upgrade without the pin**, nothing on the volumes changes. Each node checks its data
+directory before starting PostgreSQL; a node whose data is PostgreSQL 17 does not start, and logs
+every 30 s:
+
+```
+[pgedge] node aws_us_west_2_2: REFUSING TO START: the data directory was created by PostgreSQL 17, but this image (...) runs PostgreSQL 19.
+[pgedge] node aws_us_west_2_2: PostgreSQL has NOT been started and nothing on the volume was changed. Your data is intact.
+```
+
+The upgrade stops at the first node it replaces in each location, which stays not ready in
+`cpln workload get-deployments RELEASE_NAME-pgedge --gvc GVC_NAME`; the other nodes keep serving on
+PostgreSQL 17 through HAProxy. Run the upgrade again with the pin above, and the held nodes start on
+PostgreSQL 17 with their data.
+
+### Moving a 3.x cluster to PostgreSQL 19
+
+Moving to a new PostgreSQL major is a backup and a restore into a new release, never an image change:
+
+1. On the 3.x release, enable backups (see [Backing Up](#backing-up)) and stop application writes.
+   On every node, `SELECT subscription_name, status FROM spock.sub_show_status();` must show every row
+   `replicating`, so the node you dump holds every write.
+2. Take a backup in the first location:
+   `cpln workload cron start OLD_RELEASE-pgedge-backup --gvc GVC_NAME --location FIRST_LOCATION`
+3. Install 4.0.0 as a **new release** with backups enabled against the same bucket, the same
+   credentials secret and the `locations` you want. Leave `image` at the 4.0.0 default.
+4. Restore the old release's backup into it:
+   ```bash
+   cpln workload cron start NEW_RELEASE-pgedge-backup --gvc GVC_NAME --location FIRST_LOCATION \
+     --env PGEDGE_ACTION=restore --env RESTORE_FILE=OLD_PREFIX/pgedge-OLD_RELEASE-YYYY-MM-DDTHH-MM-SSZ.dump
+   ```
+5. Point applications at `NEW_RELEASE-pgbouncer.GVC_NAME.cpln.local:5432`, then uninstall the old
+   release.
+
+To keep the release name instead: take the backup, uninstall the old release, install 4.0.0 under the
+same name with backups enabled against the same bucket, and restore with no `RESTORE_FILE` (the job
+picks the newest `pgedge-RELEASE_NAME-*.dump`). Applications are down from the uninstall until the
+restore finishes.
+
+**What does not carry over to the new cluster:**
+
+- Spock state: node names, subscriptions, replication slots and origins are created fresh by the new
+  nodes. Custom replication-set memberships are not restored; every table goes into `default`, or
+  `default_insert_only` when it has no primary key.
+- Commit timestamps used by last-update-wins: every restored row carries the time of the restore.
+- The conflict history in `spock.exception_log`.
+- Roles other than the credentials user, object ownership and `GRANT`s.
+- Databases other than the credentials database, and large objects.
+- `ALTER SYSTEM` settings on the nodes.
+- Writes made after the dump, and writes on other nodes that had not yet replicated to the node that
+  was dumped (why writes stop first).
 
 ## Upgrading from 2.x
 
@@ -192,7 +258,7 @@ locations: # For replicas: use 1 for dev/testing, 3 for production
   - name: aws-eu-central-1
     replicas: 3
 
-image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+image: ghcr.io/pgedge/pgedge-postgres:19.0-spock5.0.14-standard-1  # PostgreSQL 19 for new installs; upgrading a 3.x release keeps 17 (README, "Upgrading from 3.x")
 
 resources:
   minCpu: 500m
@@ -441,7 +507,7 @@ location, so backups pause while that whole location is down.
 ```yaml
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0  # PostgreSQL 19 tools; also backs up nodes pinned to 17
   schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only; keep the quotes
   activeDeadlineSeconds: 21600  # a backup or restore still running after 6 h is stopped
 
@@ -592,10 +658,16 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 - The archive is downloaded to the job's local disk before it is applied. For a large database, raise
   `backup.activeDeadlineSeconds`.
 - Ownership and `GRANT`s are not restored; every object belongs to the credentials user.
+- The default backup image carries the PostgreSQL 19 tools, which back up nodes on PostgreSQL 17 or 19.
+  A backup made by a newer `pg_dump` restores into that PostgreSQL version or newer. To restore into a
+  release pinned to PostgreSQL 17, set `backup.image` to
+  `ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0` on that release.
 
 ## Important Notes
 
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency)
+- **Moving an existing cluster to a new PostgreSQL major is a backup and a restore into a new release, never an image change.** A 3.x release keeps PostgreSQL 17 by pinning `image`, and keeps that pin in its values on every upgrade — see [Upgrading from 3.x](#upgrading-from-3x)
+- **An upgrade that a node refuses stops at that node**; the other nodes keep serving. A node that takes longer than about 5 minutes to start (for example, a long crash recovery) is restarted by the platform
 - **3.0.0 changes the client endpoint** to `RELEASE_NAME-pgbouncer`, and backups change format — see [Upgrading from 2.x](#upgrading-from-2x)
 - **Never run a plain `helm upgrade` from 1.x onto 2.x or later** — it deletes the GVC the 1.x chart created and everything in it. See [Upgrading in place from 1.1.1](#upgrading-in-place-from-111) or [Migrating from 1.x](#migrating-from-1x)
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`

@@ -11,7 +11,7 @@ locations: # For replicas: use 1 for dev/testing, 3 for production
   - name: aws-eu-central-1
     replicas: 3
 
-image: ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+image: ghcr.io/pgedge/pgedge-postgres:19.0-spock5.0.14-standard-1  # PostgreSQL 19 for new installs; upgrading a 3.x release keeps 17 (README, "Upgrading from 3.x")
 
 resources:
   minCpu: 500m
@@ -73,7 +73,7 @@ internal_access: # Applies to the pgedge, PgBouncer and HAProxy workloads
 
 backup:
   enabled: false
-  image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+  image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0  # PostgreSQL 19 tools; also backs up nodes pinned to 17
   schedule: "0 2 * * *"   # daily at 2am UTC — runs in locations[0] only
   activeDeadlineSeconds: 21600  # a backup or restore still running after 6 h is stopped
 

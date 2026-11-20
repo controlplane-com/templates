@@ -85,16 +85,29 @@ steps:
       - title: Image and resources
         docs: "#image-and-resources"
         fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '4.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the PostgreSQL major its
+              data was created with. Moving to 19 is a backup, a new release and a restore; see Upgrading
+              from 3.x.
           - path: image
             type: string
             format: image
             label: pgEdge image
             required: true
+            description: >-
+              New installs run PostgreSQL 19. A node does not start on data created by another PostgreSQL
+              major.
+            help: >-
+              Use `ghcr.io/pgedge/pgedge-postgres:19.0-spock5.0.14-standard-1` for PostgreSQL 19, or
+              `ghcr.io/pgedge/pgedge-postgres:17-spock5-standard` to keep a 3.x release's PostgreSQL 17
+              data running. Keep the same major on every later upgrade.
             rules:
-              - rule: imageMajor(self.image) < 0 || imageMajor(self.image) == 17
-                message: >-
-                  The node start script runs PostgreSQL from `/usr/pgsql-17/bin`, so the image must be a
-                  PostgreSQL 17 pgEdge image.
+              - rule: imageMajor(self.image) < 0 || imageMajor(self.image) >= 17
+                message: pgEdge images for PostgreSQL 17 and later are supported.
           - path: resources
             type: resources
             label: Resources per node
@@ -103,6 +116,17 @@ steps:
             cpu: { min: 25m }
             memory: { min: 32Mi }
     rules:
+      - rule: >-
+          oldSelf == null || imageMajor(self.image) < 0 || imageMajor(oldSelf.image) < 0 ||
+          imageMajor(self.image) == imageMajor(oldSelf.image)
+        severity: warning
+        paths: [image]
+        message: >-
+          This release's data was created by a different PostgreSQL major than this image runs, and the
+          nodes refuse to start on it. Keep the installed image, or move to the new major with a backup,
+          a new release and a restore (README, Upgrading from 3.x).
+        messageExpression: >-
+          'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.image)) + '; a PostgreSQL ' + string(imageMajor(self.image)) + ' image refuses to start on it. Keep the image at ' + oldSelf.image + ', or move to ' + string(imageMajor(self.image)) + ' with a backup, a new release and a restore (README, Upgrading from 3.x).'
       - rule: oldSelf == null || !oldSelf.multiZone || self.multiZone
         paths: [multiZone]
         message: >-
@@ -608,6 +632,8 @@ steps:
             label: Backup image
             required: true
             advanced: true
+            description: >-
+              Tag 19.x.x carries the PostgreSQL 19 tools, which also back up nodes pinned to PostgreSQL 17.
           - path: backup.resources
             type: resources
             label: Backup job resources
@@ -622,6 +648,24 @@ steps:
             message: >-
               128Mi of memory or less was measured OOM-killing the GCS upload. Give the backup job more
               memory.
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) >= imageMajor(self.image)
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The backup image's major version must be at least the nodes' PostgreSQL major version; an
+              older pg_dump cannot dump a newer server.
+          - rule: >-
+              imageMajor(self.image) < 0 || imageMajor(self.backup.image) < 0 ||
+              imageMajor(self.backup.image) <= imageMajor(self.image)
+            severity: info
+            paths: [backup.image]
+            message: >-
+              Backups from a newer pg_dump restore into that PostgreSQL version or newer. To restore into
+              this release's older PostgreSQL, set the backup image to the tag of the nodes' major.
+            messageExpression: >-
+              'Backups from a newer pg_dump restore into that PostgreSQL version or newer. To restore into this release\'s PostgreSQL ' + string(imageMajor(self.image)) + ', set the backup image to ghcr.io/controlplane-com/backup-images/postgres-backup:' + string(imageMajor(self.image)) + '.1.0.'
           - rule: self.backup.provider in ['aws', 'gcp']
             mirrors: pgedge.validateBackupConfig
             paths: [backup.provider]
@@ -740,6 +784,14 @@ rules:
       `pgcat` from the values.
 
 migrations:
+  # The data directory keeps the PostgreSQL major it was created with (17 before 4.0.0), so an
+  # upgrade keeps the installed image, default or not; the image rule blocks a hand-made change.
+  - fromVersions: ">=2.0.0 <4.0.0"
+    to: image
+    valueExpr: self.image
+    note: >-
+      The data directory is on the PostgreSQL major of the installed image, so the image stays on it.
+      To move to PostgreSQL 19, back up, install a new release and restore (README, Upgrading from 3.x).
   - { fromVersions: "<3.0.0", from: pgcat.poolMode, to: pgbouncer.poolMode }
   - { fromVersions: "<3.0.0", from: pgcat.defaultPoolSize, to: pgbouncer.defaultPoolSize }
   - { fromVersions: "<3.0.0", from: pgcat.minReplicas, to: pgbouncer.minReplicas }

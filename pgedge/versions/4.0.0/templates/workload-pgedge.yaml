@@ -29,6 +29,30 @@ spec:
       ports:
         - number: 5432
           protocol: tcp
+      {{- /*
+        Readiness is LOCAL only (loopback, no quorum), so a concurrent restart of
+        every node still lets each become ready on its own. Ready means the final
+        server is up: the start script writes /tmp/pgedge-serving just before
+        `exec postgres`, so the fresh-boot setup server never counts. While the
+        major-version guard holds a node, the probe prints the guard's first lines
+        and fails, so a refused upgrade stops at that node instead of rolling onto
+        every node (maxUnavailableReplicas cannot limit this: the API drops it on a
+        stateful workload). The implied startup kill is about
+        initialDelaySeconds + 30 x periodSeconds = 310 s, which covers the GVC
+        check (<= 40 s), initdb and node setup. Every field is declared so the
+        stored probe equals the rendered one.
+      */}}
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - '-c'
+            - 'if [ -f /tmp/pgedge-major-guard ]; then head -n 3 /tmp/pgedge-major-guard; exit 1; fi; [ -s /tmp/pgedge-serving ] || exit 1; read -r b < /tmp/pgedge-serving; "${b}/pg_isready" -h 127.0.0.1 -p 5432 -U "${PG_USERNAME}" -q'
+        failureThreshold: 3
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 5
       volumes:
         - path: /pgvol
           recoveryPolicy: retain

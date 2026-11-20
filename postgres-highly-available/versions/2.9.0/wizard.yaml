@@ -23,8 +23,8 @@ steps:
         severity: info
         when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.8.1') < 0
         text: >-
-          This version moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). The fix takes
-          effect when the members restart. In each database that has the vector extension, `\dx` shows the old
+          Versions before 2.8.1 ship a pgvector older than 0.8.7 (CVE-2026-103484); this version's image
+          carries 0.8.7, and the fix takes effect when the members restart. In each database that has the vector extension, `\dx` shows the old
           version until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
       - type: note
         severity: info
@@ -33,7 +33,7 @@ steps:
           New clusters from this version run PostgreSQL 18. An existing cluster keeps the PostgreSQL version
           it was created with (17), because the image bundles both and each member runs the version of its
           data directory. Moving an existing cluster to 18 is a dump and restore into a new release; see
-          Upgrading in the README.
+          "Moving an existing cluster to PostgreSQL 18" in the README.
       - path: replicas
         type: integer
         label: PostgreSQL members

@@ -296,7 +296,7 @@ own slots and a few logical consumers.
 
 ### Logical slots across a leader change
 
-A client that creates its slot as a PostgreSQL 17 **failover slot** (Debezium's `slot.failover`, on by
+A client that creates its slot as a PostgreSQL 17+ **failover slot** (Debezium's `slot.failover`, on by
 default in the `debezium-server` template from 1.3.0) keeps its position across a switchover: every replica
 holds a synchronized copy (`synced = true` in `pg_replication_slots`), and the new leader already has the
 slot, so the client resumes without missing the changes made in between. A slot created without failover
@@ -314,7 +314,7 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
   -- psql -h 127.0.0.1 -d postgres -c 'SELECT slot_name, failover, synced, active FROM pg_replication_slots'
 ```
 
-### Moving an existing cluster to PostgreSQL 18
+## Moving an existing cluster to PostgreSQL 18
 
 A cluster created on PostgreSQL 17 stays on 17. To move it to 18, install a second release of this chart
 (it starts on 18) in the same GVC with the same credentials secret, stop the applications that write to the
@@ -554,6 +554,8 @@ Lifecycle rules run in the background; objects are removed within about a day of
 the upload pipeline still writes a ~20-byte empty gzip under a normal-looking timestamped filename, and the
 job exits non-zero. Check the object size before restoring from it: a real dump is kilobytes at minimum.
 
+
+A dump restores into a PostgreSQL 17 or 18 cluster. Use `psql` 18, or 17.6 or later: dumps contain `\restrict` lines that older `psql` releases reject. The `patroni-postgres:0.9` image's `psql` qualifies.
 
 Run the following from a client workload **in the same GVC** that has access to the bucket — `*.cpln.local` names do not resolve from anywhere else. It streams the dump through the proxy, `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local`, so the restore writes to the current leader.
 

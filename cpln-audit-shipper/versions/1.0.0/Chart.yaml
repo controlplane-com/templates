@@ -1,0 +1,16 @@
+apiVersion: v2
+name: cpln-audit-shipper
+description: Ships Control Plane audit trail and mk8s Kubernetes audit logs to S3, syslog or OTLP
+type: application
+version: 1.0.0
+appVersion: "1.1.1"
+
+annotations:
+  created: "2026-11-16"
+  lastModified: "2026-11-17"
+  createsGvc: false
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"

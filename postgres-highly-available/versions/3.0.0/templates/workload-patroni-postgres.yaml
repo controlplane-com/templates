@@ -31,6 +31,12 @@ spec:
           value: cpln://secret/{{ .Values.config.credentialsSecretName }}.password
         - name: APP_DATABASE
           value: cpln://secret/{{ .Values.config.credentialsSecretName }}.database
+        {{- /*
+          Read by the start script, which writes it to Patroni's shared configuration. It is an env var
+          rather than part of the script so that changing it changes the workload and restarts the members.
+        */}}
+        - name: PG_HA_SYNCHRONOUS
+          value: {{ include "pg-ha.synchronousConfig" . | quote }}
       {{- if and .Values.backup.enabled (eq .Values.backup.mode "wal-g") }}
         - name: WALG_COMPRESSION_METHOD
           value: zstd

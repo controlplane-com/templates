@@ -52,6 +52,11 @@ resources:
 
 walLevel: replica # or logical, for logical replication / CDC (Debezium); fixed when the cluster is created
 
+synchronous: # see Synchronous replication
+  enabled: false
+  nodeCount: 1   # replicas each commit waits for; lower than replicas
+  strict: false  # true: writes wait when no replica is in sync
+
 config:
   # REQUIRED prerequisite `dictionary` secret holding `username`, `password`
   # and `database`. It must EXIST BEFORE INSTALL — see Prerequisites.
@@ -64,7 +69,7 @@ bundles PostgreSQL 14 to 18, and each member runs the version of its data direct
 volume that joins an existing cluster takes the version the running members report. The upgrade also moves
 17 clusters to the latest 17 minor release and changes the default logical backup image to the 18 tag,
 which backs up 17 clusters too. To move an existing cluster to PostgreSQL 18, see
-[Moving an existing cluster to PostgreSQL 18](#moving-an-existing-cluster-to-postgresql-18).
+[Upgrading an existing cluster to PostgreSQL 18](#upgrading-an-existing-cluster-to-postgresql-18).
 
 <b>Upgrading from 2.8.0 or earlier:</b> 2.8.1 moves to `controlplanecorporation/patroni-postgres:0.8`,
 which carries pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the
@@ -258,6 +263,48 @@ was created, and the chart is never consulted again. Run the `edit-config` comma
 existing cluster to 45 / 10 / 15.
 
 
+## Synchronous replication
+
+By default replication is asynchronous: the leader acknowledges a commit as soon as it has written it, and
+the replicas follow a moment later. If the leader fails in that moment, the replica that takes over may be
+missing the last few acknowledged transactions.
+
+```yaml
+synchronous:
+  enabled: true
+  nodeCount: 1    # replicas each commit waits for
+  strict: false
+```
+
+With `enabled: true`, Patroni names `nodeCount` replicas as synchronous standbys, and the leader acknowledges
+a commit only after they have written it. Patroni fails over or switches over only to a synchronous standby,
+so a failover loses no acknowledged transaction. Each commit takes one network round trip to the standby
+longer. `nodeCount` must be lower than `replicas`, because the leader is not one of them; with 3 members,
+`nodeCount: 2` makes every commit wait for both replicas.
+
+**When a synchronous standby stops answering**, commits wait until Patroni replaces it. A standby that
+disconnects is replaced on Patroni's next loop; one that hangs without closing its connection is noticed
+when the leader's `wal_sender_timeout` (15 seconds with synchronous replication on) expires. Then:
+
+- **`strict: false` (the default):** Patroni names another replica, or, when no replica is left, turns
+  synchronous replication off until one catches up. Writes carry on, but while no replica is synchronous a
+  failover can lose acknowledged transactions again.
+- **`strict: true`:** no commit is ever acknowledged by the leader alone. When no replica is in sync, writes
+  wait until one is back. Choose it when losing a transaction is worse than stopping writes.
+
+A client that gives up on a commit waiting for a standby does not undo it: the transaction is already
+written on the leader and becomes visible once the wait ends.
+
+The setting applies to a running cluster as well: changing it in your values and upgrading restarts the
+members one at a time, and each member writes it to the cluster's shared configuration when it starts.
+That also means the chart's value replaces a synchronous setting changed with `patronictl edit-config`.
+`patronictl list` shows the synchronous standbys as `Sync Standby`:
+
+```bash
+cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+  -- patronictl -c /tmp/patroni_config.yml list
+```
+
 ## WAL level and logical replication
 
 `walLevel` sets PostgreSQL's `wal_level`: `replica` (the default) is all streaming replication between
@@ -314,22 +361,43 @@ cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container patroni-p
   -- psql -h 127.0.0.1 -d postgres -c 'SELECT slot_name, failover, synced, active FROM pg_replication_slots'
 ```
 
-## Moving an existing cluster to PostgreSQL 18
+## Upgrading an existing cluster to PostgreSQL 18
 
-A cluster created on PostgreSQL 17 stays on 17. To move it to 18, install a second release of this chart
-(it starts on 18) in the same GVC with the same credentials secret, stop the applications that write to the
-old cluster, and copy everything across with `pg_dumpall` from inside the new release:
+Upgrading the release to this version keeps an existing cluster on the PostgreSQL major it was created
+with (17). PostgreSQL cannot change major version in place inside a running Patroni cluster, so the move
+to 18 is a copy into a new release. Applications cannot write while the copy runs, so plan a maintenance
+window about as long as a `pg_dumpall` of your data takes.
 
-```bash
-cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres -- bash -c '
-  pg_dumpall -h OLD_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" \
-    | psql -h NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" -d postgres -q'
-```
+1. **Install a second release of this template** (3.0.0 or later) in the same GVC, with the same values as
+   the old one and the same `config.credentialsSecretName`. A new release always starts on PostgreSQL 18.
+   If the old release has WAL-G backups, give the new one a different `backup.*.prefix`.
+2. **Wait until the new release is ready.** One member is the leader and the others are streaming:
 
-`psql` reports that the roles and the application database already exist (the new release created them);
-those lines are expected and the data still loads. Check the row counts of your main tables on the new
-release, point your applications at `NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local`, then uninstall the
-old release.
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres \
+     -- patronictl -c /tmp/patroni_config.yml list
+   ```
+
+3. **Stop the applications that write to the old cluster** (suspend their workloads), so nothing changes
+   during the copy.
+4. **Copy everything** with `pg_dumpall` from inside the new release:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres -- bash -c '
+     pg_dumpall -h OLD_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" \
+       | psql -h NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local -U "$PGUSER" -d postgres -q'
+   ```
+
+   `psql` reports that the roles and the application database already exist (the new release created
+   them); those lines are expected and the data still loads.
+5. **Check the copy:** compare the row counts of your main tables on both releases.
+6. **Point your applications at `NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local`** (or the new
+   PgBouncer endpoint) and resume them.
+7. **Uninstall the old release** once you are satisfied. Uninstalling deletes its volumes, so take a
+   backup of it first if you want one to fall back on.
+
+`pg_dumpall` copies roles, databases and data, not replication slots. With `walLevel: logical`, a change
+data capture client such as Debezium creates its slot again on the new release and takes a new snapshot.
 
 ## Cluster metrics
 

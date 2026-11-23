@@ -163,6 +163,16 @@ before anything is applied.
 {{- if not (has .Values.walLevel (list "replica" "logical")) -}}
 {{- fail (printf "postgres-highly-available: walLevel must be 'replica' or 'logical', got '%v'. Use 'logical' only when something reads logical replication (for example Debezium change data capture)." .Values.walLevel) -}}
 {{- end -}}
+{{- $sync := .Values.synchronous | default dict -}}
+{{- if and $sync.strict (not $sync.enabled) -}}
+{{- fail "postgres-highly-available: synchronous.strict needs synchronous.enabled: true." -}}
+{{- end -}}
+{{- if $sync.enabled -}}
+{{- $n := int ($sync.nodeCount | default 0) -}}
+{{- if or (lt $n 1) (ge $n (int .Values.replicas)) -}}
+{{- fail (printf "postgres-highly-available: synchronous.nodeCount must be at least 1 and lower than replicas (%d), got %v. Each commit waits for that many replicas, and the leader is not one of them." (int .Values.replicas) $sync.nodeCount) -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") -}}
 {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
 {{- fail "postgres-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED in 2.5.0. Create a `dictionary` secret holding the keys `accessKey` and `secretKey`, and set backup.minio.credentialsSecretName to its name. See Backup setup in the README." -}}
@@ -188,4 +198,14 @@ Other registries, digests and non-version tags pass.
 {{- fail (printf "postgres-highly-available: image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set image to controlplanecorporation/patroni-postgres:0.9, or remove `image` from your values to use the chart default." $raw) -}}
 {{- end -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+Patroni's synchronous replication settings as JSON. The start script writes them to the cluster's
+shared configuration on every start, so a running cluster follows the chart value.
+*/}}
+{{- define "pg-ha.synchronousConfig" -}}
+{{- $sync := .Values.synchronous | default dict -}}
+{{- $on := $sync.enabled | default false -}}
+{{- dict "synchronous_mode" $on "synchronous_mode_strict" (and $on ($sync.strict | default false)) "synchronous_node_count" (int ($sync.nodeCount | default 1)) | toJson -}}
 {{- end }}

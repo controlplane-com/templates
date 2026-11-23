@@ -32,8 +32,8 @@ steps:
         text: >-
           New clusters from this version run PostgreSQL 18. An existing cluster keeps the PostgreSQL version
           it was created with (17), because the image bundles both and each member runs the version of its
-          data directory. Moving an existing cluster to 18 is a dump and restore into a new release; see
-          "Moving an existing cluster to PostgreSQL 18" in the README.
+          data directory. Moving an existing cluster to 18 is a copy into a new release; see
+          "Upgrading an existing cluster to PostgreSQL 18" in the README.
       - path: replicas
         type: integer
         label: PostgreSQL members
@@ -89,7 +89,41 @@ steps:
             description: >-
               Also lets clients such as Debezium read row changes through a replication slot. The replicas
               keep a synchronized copy of failover slots, so the slot survives a switchover.
+      - path: synchronous.enabled
+        type: boolean
+        label: Synchronous replication
+        docs: "#synchronous-replication"
+        description: >-
+          A commit returns only after a replica has written it, and failover goes only to that replica,
+          so a failover loses no committed transaction. Commits take one network round trip longer.
+        help: >-
+          Applies to a running cluster too. Changing it restarts the members one at a time.
+      - path: synchronous.nodeCount
+        type: integer
+        label: Replicas each commit waits for
+        when: self.synchronous.enabled
+        required: true
+        min: 1
+        suggestions: [1, 2]
+        description: Must be lower than the number of members, because the leader is not one of them.
+      - path: synchronous.strict
+        type: boolean
+        label: Strict
+        when: self.synchronous.enabled
+        description: >-
+          When no replica is in sync, writes wait until one is, instead of continuing without one. No
+          commit is ever acknowledged by the leader alone, but losing the replicas stops writes.
     rules:
+      - rule: "!self.synchronous.enabled || (self.synchronous.nodeCount >= 1 && self.synchronous.nodeCount < self.replicas)"
+        mirrors: pg-ha.validate
+        paths: [synchronous.nodeCount]
+        message: >-
+          The replicas each commit waits for must be at least 1 and lower than the number of PostgreSQL
+          members, because the leader is not one of them.
+      - rule: "!self.synchronous.strict || self.synchronous.enabled"
+        mirrors: pg-ha.validate
+        paths: [synchronous.strict]
+        message: Strict mode needs synchronous replication turned on.
       - rule: self.replicas >= 3
         severity: info
         paths: [replicas]

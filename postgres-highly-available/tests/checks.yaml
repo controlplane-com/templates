@@ -124,3 +124,25 @@ checks:
       stdout: "^MAJOR want="
     retries: 8
     retryDelaySeconds: 15
+
+  - id: synchronous-setting-applied
+    description: >-
+      The cluster's shared Patroni configuration carries the chart's synchronous replication setting, also on
+      a cluster created before 3.0.0 (whose configuration has no such keys until the start script writes them).
+    since: 3.0.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/config | python3 -c '
+        import json, os, sys
+        want = json.loads(os.environ["PG_HA_SYNCHRONOUS"])
+        have = json.load(sys.stdin)
+        bad = [k for k in want if have.get(k) != want[k]]
+        print(("APPLIED " if not bad else "DIFFERS ") + " ".join("%s=%s" % (k, have.get(k)) for k in sorted(want)))
+        '
+    expect:
+      stdout: "^APPLIED synchronous_mode=False synchronous_mode_strict=False synchronous_node_count=1$"
+    retries: 8
+    retryDelaySeconds: 15

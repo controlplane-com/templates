@@ -13,6 +13,14 @@ image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clus
 # replica, or logical for logical replication / CDC (Debezium). Applied when the cluster is created; see the README to change it later.
 walLevel: replica
 
+# Synchronous replication. A commit returns only after nodeCount replicas have written it, and Patroni fails
+# over only to one of those replicas, so a failover loses no committed transaction. Commits wait one network
+# round trip longer. Applies to running clusters too: changing it restarts the members one at a time.
+synchronous:
+  enabled: false
+  nodeCount: 1 # replicas each commit waits for; must be lower than replicas
+  strict: false # true: when no replica is in sync, writes wait instead of continuing without one
+
 # ─── Database credentials ─────────────────────────────────────────────────────
 config:
   # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.

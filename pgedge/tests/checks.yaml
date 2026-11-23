@@ -57,6 +57,32 @@ checks:
     retryDelaySeconds: 15
     timeoutSeconds: 180
 
+  # Runs before pooled-write-replicates on purpose: on 3.x (the upgrade source) the pooler can be ready
+  # before the full mesh exists, and a row written then never reaches the late peers (fixed in 4.0.0 by
+  # the pooler waiting for the mesh; 4.0.0's own install proves that with first-pooled-write-on-every-node).
+  # Waiting for the mesh first keeps data-survives-upgrade about the upgrade, not that 3.x bootstrap window.
+  - id: subscriptions-replicating
+    description: Every node has a replicating Spock subscription from each of its 3 peers.
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        bad=""
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
+          n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from spock.sub_show_status() where status = 'replicating'" 2>&1)
+          [ "$n" = "3" ] || bad="$bad $H=$n"
+        done; done
+        [ -z "$bad" ] && echo ALL_REPLICATING || echo "NOT REPLICATING:$bad"
+    expect:
+      stdout: "^ALL_REPLICATING$"
+    retries: 10
+    retryDelaySeconds: 15
+
   - id: pooled-write-replicates
     description: >-
       A row written through PgBouncer in the first location is read back on a node in the second location
@@ -106,28 +132,6 @@ checks:
     expect:
       stdout: "password authentication failed"
       notStdout: "^EXIT=0$"
-
-  - id: subscriptions-replicating
-    description: Every node has a replicating Spock subscription from each of its 3 peers.
-    exec:
-      workload: "{release}-pgedge"
-      container: pgedge
-      replica: "{release}-pgedge-0"
-      location: "{locations.0}"
-      shell: bash
-      script: |
-        export PGPASSWORD='{pg_password}'
-        bad=""
-        for L in {locations.0} {locations.1}; do for i in 0 1; do
-          H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
-          n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from spock.sub_show_status() where status = 'replicating'" 2>&1)
-          [ "$n" = "3" ] || bad="$bad $H=$n"
-        done; done
-        [ -z "$bad" ] && echo ALL_REPLICATING || echo "NOT REPLICATING:$bad"
-    expect:
-      stdout: "^ALL_REPLICATING$"
-    retries: 10
-    retryDelaySeconds: 15
 
   - id: data-survives-upgrade
     description: >-

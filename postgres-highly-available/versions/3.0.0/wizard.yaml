@@ -28,7 +28,7 @@ steps:
           version until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
       - type: note
         severity: info
-        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.9.0') < 0
+        when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '3.0.0') < 0
         text: >-
           New clusters from this version run PostgreSQL 18. An existing cluster keeps the PostgreSQL version
           it was created with (17), because the image bundles both and each member runs the version of its

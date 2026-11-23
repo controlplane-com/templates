@@ -58,7 +58,7 @@ config:
   credentialsSecretName: my-postgres-ha-credentials
 ```
 
-<b>Upgrading from 2.8.x or earlier:</b> new clusters run PostgreSQL 18, but an existing cluster keeps
+<b>Upgrading from 2.x:</b> new clusters run PostgreSQL 18, but an existing cluster keeps
 the PostgreSQL version it was created with (17). The image, `controlplanecorporation/patroni-postgres:0.9`,
 bundles PostgreSQL 14 to 18, and each member runs the version of its data directory. A member with an empty
 volume that joins an existing cluster takes the version the running members report. The upgrade also moves
@@ -434,7 +434,7 @@ backup:
 
 ### AWS S3
 
-<b>Upgrading from 2.8.x or earlier:</b> this version removes the <code>cpln-connector</code> policy from the backup
+<b>Upgrading from 2.x:</b> this version removes the <code>cpln-connector</code> policy from the backup
 identity. It let the backup workload create IAM roles and attach policies to them, which a backup does not need;
 the identity now carries only your bucket-scoped policy. No action is needed.
 

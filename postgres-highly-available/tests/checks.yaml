@@ -101,15 +101,15 @@ checks:
 
   - id: postgres-major-matches-cluster
     description: >-
-      A cluster created on 2.9.0 or later runs PostgreSQL 18; a cluster created on an earlier version keeps
+      A cluster created on 3.0.0 or later runs PostgreSQL 18; a cluster created on an earlier version keeps
       running PostgreSQL 17 after the upgrade, on every member (the data directory's version decides).
-    since: 2.9.0
+    since: 3.0.0
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
       shell: bash
       script: |
-        if [ "$(printf '%s\n' '{installed_version}' 2.9.0 | sort -V | head -1)" = 2.9.0 ]; then want=18; else want=17; fi
+        if [ "$(printf '%s\n' '{installed_version}' 3.0.0 | sort -V | head -1)" = 3.0.0 ]; then want=18; else want=17; fi
         curl -s localhost:8008/cluster | python3 -c '
         import json, sys, urllib.request
         want = int(sys.argv[1])

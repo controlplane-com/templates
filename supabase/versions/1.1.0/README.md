@@ -465,13 +465,7 @@ unset PGPASSWORD
 
 For GCS, swap the first command for `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" -`.
 
-**WAL-G** — a restore needs an empty data directory:
-
-1. List backups: `cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list`
-2. Stop the Postgres workload, and create a **new** volume set to restore into.
-3. Run a one-off workload with that volume set mounted at `/var/lib/postgresql/data` and run `wal-g backup-fetch /var/lib/postgresql/data/pg_data BACKUP_NAME`.
-4. Point the Postgres workload at the restored volume set and start it.
-5. Set a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups, so the restored cluster does not collide with the original's WAL stream.
+**WAL-G** — list backups with `cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list`. A restore means `wal-g backup-fetch` into an **empty** data directory plus WAL replay, and the chart provides no built-in path for that — treat it as a manual recovery following the [WAL-G PostgreSQL docs](https://github.com/wal-g/wal-g/blob/master/docs/PostgreSQL.md), never against the live volume set. If you restore into a new cluster, give it a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups so it does not collide with the original's WAL stream.
 
 ## Important Notes
 

@@ -510,15 +510,15 @@ Use `gsutil cp "gs://BUCKET_NAME/..." -` for GCS, or add
 `--endpoint-url "http://MINIO_ENDPOINT:9000"` with `aws configure set default.s3.addressing_style path`
 for MinIO.
 
-**WAL-G** — a point-in-time restore needs an empty data directory, so restore into a new volume set:
-
-1. `wal-g backup-list` to pick a backup.
-2. Stop the Patroni workload.
-3. Create a new volume set and mount it at `/var/lib/postgresql/data` on a one-off restore workload.
-4. `wal-g backup-fetch /var/lib/postgresql/data/pgdata <backup_name>`.
-5. Re-point the Patroni workload at the restored volume set and start it.
-6. Change the WAL-G prefix before re-enabling backups, or the new cluster's WAL collides with the old
-   system identifier.
+**WAL-G** — the chart has no way to restore a WAL-G backup into the running cluster: a restore needs an
+empty data directory, and the Patroni workload's volume set is named by the release, so re-pointing it by
+hand is reverted by the next upgrade. To recover data, fetch a base backup into an **empty** data directory
+on a scratch PostgreSQL 17 instance outside this release with the same `WALG_*` and cloud settings as the
+sidecar (`wal-g backup-list` in the `wal-g-backup` container lists them): `wal-g backup-fetch DATA_DIRECTORY
+BACKUP_NAME`, then start PostgreSQL with `restore_command = 'wal-g wal-fetch %f %p'` and a `recovery.signal`
+file so it replays the archived WAL, and load what you need into the cluster with `pg_dump` / `pg_restore`
+through the proxy. If you reinitialize the cluster, change the WAL-G prefix before enabling `wal-g` again,
+or the new cluster's WAL collides with the old system identifier.
 
 ## Connecting
 

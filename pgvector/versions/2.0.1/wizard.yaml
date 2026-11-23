@@ -651,6 +651,10 @@ steps:
             (self.pgbouncer.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgbouncer'] : []) +
             (self.backup.enabled ? ['//gvc/' + context.gvc + '/workload/' + context.releaseName + '-pgvector-backup'] : [])
 
+yamlOnly:
+  - path: upgradeHint
+    reason: Set by a template that bundles this one, so the boot guard's log names that template's own values path; not a user setting.
+
 migrations:
   # 2.0.0 changed the default image from PostgreSQL 18 to 19, and a carry-over moves changed values only: a
   # 1.x release that kept the default would get the 19 image, which refuses to start on its 18 data. Keep the

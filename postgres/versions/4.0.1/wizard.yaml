@@ -469,6 +469,10 @@ steps:
         paths: [backup.enabled]
         message: Backups need Postgres 17 or later; the selected image is older.
 
+yamlOnly:
+  - path: upgradeHint
+    reason: Set by a template that bundles this one, so the boot guard's log names that template's own values path; not a user setting.
+
 migrations:
   - fromVersions: "<3.4.0"
     from: config.username

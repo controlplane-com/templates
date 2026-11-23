@@ -84,3 +84,11 @@ backup:
     # secret holding `accessKey` and `secretKey`. See Storage setup in the README.
     credentialsSecretName: my-pgvector-minio-credentials
     prefix: pgvector/backups # folder name where your backups will be stored
+
+# How the major-version boot guard names the fix in its log. Leave these alone when you install this
+# template directly. A template that bundles this one as a subchart sets them to its own values path
+# (e.g. `pgvector.image`), its console field and its README section.
+upgradeHint:
+  imageKey: image
+  consoleField: "Upgrade > Server > pgvector image"
+  readme: 'README, "Upgrading from 1.x"'

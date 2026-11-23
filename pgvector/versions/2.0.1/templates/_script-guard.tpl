@@ -25,10 +25,10 @@ elif [ -s "$PGDATA/PG_VERSION" ]; then
       echo "[pg-guard] REFUSING TO START: the data directory was created by PostgreSQL ${data_major}, but this image (${CPLN_IMAGE:-unknown}) runs PostgreSQL ${server_major}."
       echo "[pg-guard] PostgreSQL has NOT been started and nothing on the volume was changed. Your data is intact."
       echo "[pg-guard] FIX: run your upgrade again with the image pinned to PostgreSQL ${data_major}:"
-      echo "[pg-guard]   cpln helm upgrade {{ .Release.Name }} <chart> --gvc {{ .Values.global.cpln.gvc }} -f <your values> --set image=pgvector/pgvector:0.8.7-pg${data_major}"
-      echo "[pg-guard]   (console: Upgrade > Server > pgvector image = pgvector/pgvector:0.8.7-pg${data_major})"
-      echo "[pg-guard] Keep image: pgvector/pgvector:0.8.7-pg${data_major} in your values for every later upgrade."
-      echo "[pg-guard] To move this data to PostgreSQL ${server_major}: dump and restore into a new release (README, \"Upgrading from 1.x\")."
+      echo "[pg-guard]   cpln helm upgrade {{ .Release.Name }} <chart> --gvc {{ .Values.global.cpln.gvc }} -f <your values> --set {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}=pgvector/pgvector:0.8.7-pg${data_major}"
+      echo "[pg-guard]   (console: {{ .Values.upgradeHint.consoleField | replace "\"" "\\\"" }} = pgvector/pgvector:0.8.7-pg${data_major})"
+      echo "[pg-guard] Keep {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}: pgvector/pgvector:0.8.7-pg${data_major} in your values for every later upgrade."
+      echo "[pg-guard] To move this data to PostgreSQL ${server_major}: dump and restore into a new release ({{ .Values.upgradeHint.readme | replace "\"" "\\\"" }})."
     } > "$G"
     trap 'exit 0' TERM INT
     while :; do cat "$G" >&2; sleep 30 & wait $!; done

@@ -12,6 +12,51 @@
 driftBlocks: true
 
 checks:
+  # First on purpose: it runs the moment the install reports ready, before any other check gives the mesh time.
+  - id: first-pooled-write-on-every-node
+    description: >-
+      Right after the install reports ready, the first row written through PgBouncer is on EVERY node.
+      Subscriptions start from "now", so a node that subscribed to the writing node after the write never
+      gets the row: this fails whenever PgBouncer serves before replication between all nodes exists.
+    since: 4.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      # The row is written ONCE per run (a fixed marker, inserted only if absent), so a retry re-reads the
+      # same early row instead of writing a new, later one: waiting longer cannot make a node that missed
+      # it receive it. The 30 s poll covers replication lag only.
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          psql -h "replica-$i.{release}-pgedge.$L.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+            -c "create table if not exists e2e (id uuid primary key default gen_random_uuid(), version text not null, marker text not null)" >/dev/null
+        done; done
+        M="e2e-first-pooled-write"
+        psql -h "{release}-pgbouncer.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "insert into e2e (version, marker) select '{version}', '$M' where not exists (select 1 from e2e where marker = '$M')" >/dev/null
+        set +e
+        for n in $(seq 1 6); do
+          bad=""
+          for L in {locations.0} {locations.1}; do for i in 0 1; do
+            H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
+            c=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where marker = '$M'" 2>&1)
+            [ "$c" = "1" ] || bad="$bad $H=$c"
+          done; done
+          [ -z "$bad" ] && { echo "ON_EVERY_NODE $M"; exit 0; }
+          sleep 5
+        done
+        echo "MISSING $M on:$bad"
+    expect:
+      stdout: "^ON_EVERY_NODE e2e-first-pooled-write$"
+    retries: 2
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
   - id: pooled-write-replicates
     description: >-
       A row written through PgBouncer in the first location is read back on a node in the second location

@@ -4,7 +4,7 @@
 replication across locations, every node writable. Open source (PostgreSQL License; Spock and the pgEdge
 "standard" image are free). Deploys into an existing GVC, creates none (2.0.0+). **3.0.0: PgBouncer 1.26 replaced
 pgcat, the HAProxy failover tier is always on, and backups gained a one-command restore. 4.0.0: PostgreSQL 19, a
-boot guard that refuses a data directory of another major, and a node readiness probe.**
+boot guard that refuses a data directory of another major, a node readiness probe, and a pooler that waits for the full replication mesh.**
 
 **Use cases.** Multi-region SaaS writing near users · low-latency regional reads · surviving a whole-region loss.
 
@@ -60,8 +60,16 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
 - **New readiness probe:** a node that takes > ~310 s to boot (long crash recovery) is restarted. Ready =
   `/tmp/pgedge-serving` written just before `exec postgres` + loopback `pg_isready`, so the fresh-boot setup server
   never counts; installs now bring nodes up one at a time per location (OrderedReady waits on readiness), so
-  the subscription daemon retries with no deadline (15 s → 120 s backoff; a WARNING after 600 s) instead of 3.0.0's
-  one-shot 600 s, which could leave node-0 never subscribed to a late node.
+  the subscription daemon retries every 10 s with no deadline (a WARNING after 600 s naming what is missing) instead
+  of 3.0.0's one-shot 600 s, which could leave node-0 never subscribed to a late node.
+- **PgBouncer waits for the full mesh (4.0.0).** Subscriptions use `synchronize_data := false`, so a row written before
+  a peer subscribed never reaches it (CI caught it: rows missing on node-1 everywhere after "all ready"). Each node's
+  daemon, once it has seen every node with a replicating sub from each peer (by name), writes
+  `$PGDATA/pgedge-mesh-ready` = `"LOCATIONS|REPLICAS"`; PgBouncer's `ready.sh` reads it through HAProxy with
+  `pg_read_file` (credentials user = initdb superuser) and remembers it in `/tmp/pgbouncer/mesh-ready`. On the volume,
+  so a pooler restarted during a node outage is ready at once; a topology change clears it (node boot) and the pooler
+  accepts only its own topology. Probe 20 + 30 × 40 = 1220 s startup window vs 3 × 310 + 60 = 990 s worst case at 3
+  nodes/location. CI check `first-pooled-write-on-every-node` writes once and re-reads (retries cannot mask).
 - **Backup 19.1.0 → a 17 node:** dumps fine; restoring that dump into a 17 server is not guaranteed — README and a
   wizard info rule say use `postgres-backup:17.1.0` on a release that stays on 17.
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,

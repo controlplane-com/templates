@@ -1,8 +1,10 @@
 # pgEdge — maintainer briefing
 
-**What it is.** pgEdge Distributed PostgreSQL (PG 17 + Spock 5): multi-master replication across locations, every
-node writable. Deploys into an existing GVC, creates none (2.0.0+). **3.0.0: PgBouncer 1.26 replaced pgcat, the
-HAProxy failover tier is always on, and backups gained a one-command restore.**
+**What it is.** pgEdge Distributed PostgreSQL (PG 19 + Spock 5.0.14 from 4.0.0; PG 17 before): multi-master
+replication across locations, every node writable. Open source (PostgreSQL License; Spock and the pgEdge
+"standard" image are free). Deploys into an existing GVC, creates none (2.0.0+). **3.0.0: PgBouncer 1.26 replaced
+pgcat, the HAProxy failover tier is always on, and backups gained a one-command restore. 4.0.0: PostgreSQL 19, a
+boot guard that refuses a data directory of another major, a node readiness probe, and a pooler that waits for the full replication mesh.**
 
 **Use cases.** Multi-region SaaS writing near users · low-latency regional reads · surviving a whole-region loss.
 
@@ -11,12 +13,13 @@ HAProxy failover tier is always on, and backups gained a one-command restore.**
 |---|---|
 | `-pgbouncer` (standard, 2–4/location) | Client endpoint `RELEASE-pgbouncer.GVC.cpln.local:5432`. CNPG image at an immutable dated tag; inline start script writes ini + SCRAM userlist at boot. Serves only the configured database |
 | `-pgedge-proxy` (standard, 2/location) | HAProxy: local node-0 active → local nodes → remote nodes. Runtime DNS (`resolvers`), probes on :8405 |
-| `-pgedge` (stateful) | PG + Spock, full mesh, `replicaDirect`, `max_connections=300` on the command line |
+| `-pgedge` (stateful) | PG + Spock, full mesh, `replicaDirect`, `max_connections=300` on the command line. 4.0.0: `PG_BIN` found at runtime (exactly one `/usr/pgsql-*/bin`, else FATAL), major guard, local readiness probe (startup kill ≈ 310 s) |
 | `-pgedge-backup` (cron, optional) | Chart script in the stock backup image: backup by default, restore with `--env PGEDGE_ACTION=restore`. Runs in `locations[0]` only |
 | identity + 2 policies | reveal on chart secrets + credentials secret; `view` on the one install GVC; AWS backups carry only the user's bucket policy (`cpln-connector` removed in 3.0.1) |
 
 ## Key knobs (shipped defaults)
-`locations` 3×3 · `postgres.credentialsSecretName` (dictionary: username/password/database) · `pgbouncer.poolMode`
+`locations` 3×3 · `image` `pgedge-postgres:19.0-spock5.0.14-standard-1` (immutable epoch tag) · `backup.image`
+`postgres-backup:19.1.0` (also dumps nodes pinned to 17) · `postgres.credentialsSecretName` (dictionary: username/password/database) · `pgbouncer.poolMode`
 transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/maxReplicas` 2/4 · `proxy` 2/2 ·
 `internal_access.type` same-gvc · `volumeset.snapshots` daily 03:00 UTC / 7d · `backup.enabled` false, `memory`
 256Mi, `activeDeadlineSeconds` 21600.
@@ -41,6 +44,40 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   bare probe workload); the start script escalates INT → KILL 30 s after SIGTERM.
 
 ## Traps
+- **3.x → 4.0.0 without a pin:** the data is PG 17. Each replaced node's start script compares
+  `$PGDATA/PG_VERSION` with `postgres -V` before any write to the volume, does not start PostgreSQL, and logs
+  `REFUSING TO START` + the exact `--set image=ghcr.io/pgedge/pgedge-postgres:17-spock5-standard` every 30 s. The
+  probe fails, so the rollout stops at the highest-index node of each location (node-2 at the default 3 per location,
+  node-1 at 2) and the other nodes keep serving on 17.
+  Fix: the same upgrade with the pin (no force-redeployment expected — the postgres pinned re-upgrade recovered a
+  held replica in ~32 s). Users must keep the pin in their values (no `--reuse-values`); the wizard carries the
+  installed image (computed migration) and warns over `oldSelf` if changed to another major. NOTES print the
+  warning on every install/upgrade (`cpln helm` always reports `IsUpgrade` false).
+- **17 → 19 = backup job → new 4.0.0 release (same bucket + credentials secret) → restore job with
+  `RESTORE_FILE`.** Not carried: Spock state (subscriptions, slots, origins, custom repsets), commit timestamps
+  (last-update-wins baseline), `spock.exception_log`, non-credential roles, ownership/GRANTs, other databases,
+  large objects, `ALTER SYSTEM`. Quiesce writes and check `sub_show_status` first.
+- **New readiness probe:** a node that takes > ~310 s to boot (long crash recovery) is restarted. Ready =
+  `/tmp/pgedge-serving` written just before `exec postgres` + loopback `pg_isready`, so the fresh-boot setup server
+  never counts; installs now bring nodes up one at a time per location (OrderedReady waits on readiness), so
+  the subscription daemon retries every 10 s with no deadline (a WARNING after 600 s naming what is missing) instead
+  of 3.0.0's one-shot 600 s, which could leave node-0 never subscribed to a late node.
+- **PgBouncer waits for the full mesh (4.0.0).** Subscriptions use `synchronize_data := false`, so a row written before
+  a peer subscribed never reaches it (CI caught it: rows missing on node-1 everywhere after "all ready"). Each node's
+  daemon, once it has seen every node with a replicating sub from each peer (by name), writes
+  `$PGDATA/pgedge-mesh-ready` = `"LOCATIONS|REPLICAS"`; PgBouncer's `ready.sh` reads it through HAProxy with
+  `pg_read_file` (credentials user = initdb superuser) and remembers it in `/tmp/pgbouncer/mesh-ready`. On the volume,
+  so a pooler restarted during a node outage is ready at once; a topology change clears it (node boot) and the pooler
+  accepts only its own topology. Probe 20 + 30 × 40 = 1220 s startup window vs 3 × 310 + 60 = 990 s worst case at 3
+  nodes/location. CI check `first-pooled-write-on-every-node` writes once and re-reads (retries cannot mask).
+  **Backported to 3.0.2** (PG 17 line: the marker, the gated pooler, the no-deadline daemon; not the guard, runtime
+  `PG_BIN` or node probe). ≤ 3.0.1 has the window (CI saw a row written right after a 3.0.1 install missing on one node
+  for good); upgrading does not repair a missed row, so the 3.0.2 README tells users who wrote in the first minutes
+  after install to compare row counts per node. Live (1 × 3): fresh mesh + pooler ready ~90 s; 3.0.1 → 3.0.2 in place
+  kept 100/100 rows on every node, each node wrote the marker as it restarted, old poolers served until the new ones
+  were ready.
+- **Backup 19.1.0 → a 17 node:** dumps fine; restoring that dump into a 17 server is not guaranteed — README and a
+  wizard info rule say use `postgres-backup:17.1.0` on a release that stays on 17.
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,
   `proxy.enabled: false`, `pgbouncer.routing` or a pgcat image. Data tier kept; every node restarts once, rolling within a location (~65 s outage only with 1 node/location). Old
   `.sql.gz` backups are not restorable by the job — take a backup after upgrading.

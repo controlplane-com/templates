@@ -1,0 +1,51 @@
+# pgedge 4.0.0 — production shape at the smallest size that runs: two nearby locations with 2 nodes each
+# (2 per location is what keeps a rolling node restart to a short failover), PgBouncer and HAProxy 2 per
+# location, the credentials in a prerequisite secret. Cross-location checks move a handful of rows only.
+locations: [aws-us-east-1, aws-us-east-2]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  locations:
+    - name: aws-us-east-1
+      replicas: 2
+    - name: aws-us-east-2
+      replicas: 2
+  resources:
+    minCpu: 250m
+    minMemory: 512Mi
+    maxCpu: 1
+    maxMemory: 2Gi
+  postgres:
+    credentialsSecretName: "{secrets.creds.name}"
+  proxy:
+    minReplicas: 2
+    maxReplicas: 2
+  pgbouncer:
+    minReplicas: 2
+    maxReplicas: 2
+
+# A 3.x data directory is PostgreSQL 17. The default 4.0.0 image (19) must be refused by the boot guard:
+# the rollout stops at node-1 of each location (nodes roll 1 -> 0) while node-0 keeps serving on 17. The
+# pinned upgrade then brings every node back on 17 with its data. 420 s covers replacing node-1 (node
+# restarts were ~110 s apart in 3.0.0's measured rollouts) with margin; a held node is restarted by the
+# readiness-implied startup probe only after ~310 s, and stays held each time.
+upgradeFrom:
+  - version: 3.0.2
+    refused: {timeoutSeconds: 420}
+    then: {set: {image: "ghcr.io/pgedge/pgedge-postgres:17-spock5-standard"}}

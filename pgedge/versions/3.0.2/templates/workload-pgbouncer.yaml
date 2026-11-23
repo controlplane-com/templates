@@ -1,0 +1,149 @@
+---
+kind: workload
+name: {{ include "pgedge.pgbouncer.name" . }}
+description: PgBouncer connection pooler for pgEdge
+tags: {{- include "pgedge.tags" . | nindent 2 }}
+spec:
+  type: standard
+  containers:
+    - name: pgbouncer
+      image: {{ .Values.pgbouncer.image | quote }}
+      # The image supplies only the binary; the inline start script writes the config and runs it.
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - {{- include "pgedge.inlineScript" (include "pgedge.script.pgbouncer" .) | nindent 10 }}
+      env:
+        - name: PG_USERNAME
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.username
+        - name: PG_PASSWORD
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
+        - name: PG_DATABASE
+          value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        # The topology, so readiness accepts only a mesh marker for this topology.
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
+      cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
+      memory: {{ .Values.pgbouncer.resources.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 5432
+          protocol: tcp
+      # The check itself is written by the start script (_script-pgbouncer.tpl):
+      # this PgBouncer answers; replication between ALL pgEdge nodes has been
+      # established once (remembered, so a later node failure never takes the pooler
+      # down); this location's HAProxy has a healthy node anywhere.
+      #
+      # Sizing. The pooler may wait for the whole cluster to boot, and the platform
+      # kills a never-ready container after about initialDelaySeconds + 30 x
+      # periodSeconds (failureThreshold does not count) = 20 + 30 x 40 = 1220 s.
+      # The nodes have no readiness probe in 3.x, so each counts as started once its
+      # container runs; a node's boot (GVC check <= 40 s, initdb, node setup) takes
+      # minutes at most, so the full mesh exists well inside 1220 s. Should a slow
+      # cluster outlast the window, the replica restarts and is ready as soon as the marker exists -- it
+      # is on the node's volume. failureThreshold 8 x 40 s keeps a READY pooler
+      # serving through ~5 min with no healthy node anywhere, as before.
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - /tmp/pgbouncer/ready.sh
+        initialDelaySeconds: 20
+        periodSeconds: 40
+        failureThreshold: 8
+        timeoutSeconds: 10   # three bounded steps: 2 + 4 + 3 s
+        successThreshold: 1
+      # Backend-INDEPENDENT on purpose: a cluster outage must never restart poolers.
+      # Catches a hung PgBouncer process only.
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE"
+        initialDelaySeconds: 15
+        periodSeconds: 5
+        failureThreshold: 3   # measured: the platform acts after ~60 s regardless; a hung pooler serves again in ~90 s
+        timeoutSeconds: 4
+        successThreshold: 1
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "pgedge.identity.name" . }}
+  defaultOptions:
+    autoscaling:
+      metric: disabled   # a GVC location this release did not ask for runs NOTHING
+      minScale: 0
+      maxScale: 0
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone }}
+    suspend: false
+    timeoutSeconds: 5
+  {{- /*
+    Every localOptions entry must carry the COMPLETE field set defaultOptions
+    carries: localOptions is a full override, and a field left out would fall
+    through to the null shape above and produce zero replicas in a location the
+    user did ask for.
+  */}}
+  localOptions:
+    {{- range $location := .Values.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        metric: rps
+        minScale: {{ $.Values.pgbouncer.minReplicas }}
+        maxScale: {{ $.Values.pgbouncer.maxReplicas }}
+        maxConcurrency: 0
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      multiZone:
+        enabled: {{ $.Values.multiZone }}
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  firewallConfig:
+    {{- /* the empty lists are API backfills, declared so rendered == stored */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []  # only talks to this location's in-GVC HAProxy
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internal_access.type | quote }}
+      {{- if eq .Values.internal_access.type "workload-list" }}
+      {{- /*
+        This list governs ALL inbound internal traffic, INCLUDING traffic between
+        THIS release's own workloads: Spock logical replication between pgEdge
+        nodes across locations, and PgBouncer -> HAProxy -> node connections. A list
+        naming only clients denies replication and the mesh silently diverges,
+        so the chart adds its own workloads rather than requiring the user to
+        know. Confirmed live in etcd-multi-location and clickhouse (2026-08-27),
+        where the same omission destroyed the cluster while every replica
+        reported ready.
+      */}}
+      {{- $own := list
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.name" .))
+            (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "pgedge.pgbouncer.name" .)) }}
+      inboundAllowWorkload:
+        {{- range $own }}
+        - {{ . }}
+        {{- end }}
+        {{- range .Values.internal_access.workloads }}
+        {{- if not (has . $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else if .Values.internal_access.workloads }}
+      inboundAllowWorkload: {{ .Values.internal_access.workloads | toYaml | nindent 8 }}
+      {{- else }}
+      inboundAllowWorkload: []   # API backfill, declared so rendered == stored
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

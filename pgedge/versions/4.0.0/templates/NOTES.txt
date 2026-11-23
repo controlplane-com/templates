@@ -1,0 +1,18 @@
+pgEdge {{ .Chart.Version }} — image {{ .Values.image }}
+
+Connect through PgBouncer in each location:
+  {{ include "pgedge.pgbouncer.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432
+{{- if hasPrefix "ghcr.io/pgedge/pgedge-postgres:17" .Values.image }}
+
+Image pinned to PostgreSQL 17: the nodes stay on PostgreSQL 17. Keep this image in your
+values file for every later upgrade.
+{{- else }}
+
+IF THIS IS AN UPGRADE OF A 3.x RELEASE: this chart defaults to PostgreSQL 19. A 3.x data
+directory is PostgreSQL 17: each node the upgrade replaces refuses to start (your data is
+untouched); the upgrade stops at the first one in each location, and the other nodes keep serving.
+If `cpln workload get-deployments {{ include "pgedge.name" . }} --gvc {{ .Values.global.cpln.gvc }}` shows a node that stays
+not ready and the logs say "REFUSING TO START", run this upgrade again with
+  --set image=ghcr.io/pgedge/pgedge-postgres:17-spock5-standard
+To move to PostgreSQL 19: README, "Upgrading from 3.x".
+{{- end }}

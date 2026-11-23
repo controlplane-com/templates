@@ -1,0 +1,40 @@
+# pgedge 3.0.0 — the upgrade source for 4.0.0 (PostgreSQL 17). Same shape as 4.0.0.yaml; no image is set,
+# so the release runs 3.0.0's default (PostgreSQL 17), as a customer install that never set `image` does.
+locations: [aws-us-east-1, aws-us-east-2]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  locations:
+    - name: aws-us-east-1
+      replicas: 2
+    - name: aws-us-east-2
+      replicas: 2
+  resources:
+    minCpu: 250m
+    minMemory: 512Mi
+    maxCpu: 1
+    maxMemory: 2Gi
+  postgres:
+    credentialsSecretName: "{secrets.creds.name}"
+  proxy:
+    minReplicas: 2
+    maxReplicas: 2
+  pgbouncer:
+    minReplicas: 2
+    maxReplicas: 2

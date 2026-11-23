@@ -1,0 +1,219 @@
+# Feature checks for the pgedge template. Each runs after install (and after each upgrade) on every version
+# in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version} {locations.N}, and the baseline vars
+# (pg_user, pg_password, pg_db).
+#
+# Every authenticated connection goes over TCP to a node's replica FQDN: the nodes trust the local socket
+# without a password (--auth-local=trust), so a socket connection would pass the auth checks whatever the
+# password was. DDL does not replicate, so the table is created on every node before any row is written.
+# The node list is the baselines' shape: 2 locations x 2 nodes.
+#
+# No drift left on a 4.0.0 install (drift-diff clean on two live installs): drift fails the run, not warns.
+driftBlocks: true
+
+checks:
+  # First on purpose: it runs the moment the install reports ready, before any other check gives the mesh time.
+  - id: first-pooled-write-on-every-node
+    description: >-
+      Right after the install reports ready, the first row written through PgBouncer is on EVERY node.
+      Subscriptions start from "now", so a node that subscribed to the writing node after the write never
+      gets the row: this fails whenever PgBouncer serves before replication between all nodes exists.
+    since: 3.0.2
+    scenarios: "^install "
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      # The row is written ONCE per run (a fixed marker, inserted only if absent), so a retry re-reads the
+      # same early row instead of writing a new, later one: waiting longer cannot make a node that missed
+      # it receive it. The 30 s poll covers replication lag only.
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          psql -h "replica-$i.{release}-pgedge.$L.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+            -c "create table if not exists e2e (id uuid primary key default gen_random_uuid(), version text not null, marker text not null)" >/dev/null
+        done; done
+        M="e2e-first-pooled-write"
+        psql -h "{release}-pgbouncer.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "insert into e2e (version, marker) select '{version}', '$M' where not exists (select 1 from e2e where marker = '$M')" >/dev/null
+        set +e
+        for n in $(seq 1 6); do
+          bad=""
+          for L in {locations.0} {locations.1}; do for i in 0 1; do
+            H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
+            c=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where marker = '$M'" 2>&1)
+            [ "$c" = "1" ] || bad="$bad $H=$c"
+          done; done
+          [ -z "$bad" ] && { echo "ON_EVERY_NODE $M"; exit 0; }
+          sleep 5
+        done
+        echo "MISSING $M on:$bad"
+    expect:
+      stdout: "^ON_EVERY_NODE e2e-first-pooled-write$"
+    retries: 2
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
+  # Runs before pooled-write-replicates on purpose: on 3.0.1 (the upgrade source for 3.0.2) the pooler can
+  # be ready before the full mesh exists, and a row written then never reaches the late peers (fixed in
+  # 3.0.2 by the pooler waiting for the mesh; first-pooled-write-on-every-node proves that on 3.0.2+).
+  # Waiting for the mesh first keeps data-survives-upgrade about the upgrade, not that bootstrap window.
+  - id: subscriptions-replicating
+    description: Every node has a replicating Spock subscription from each of its 3 peers.
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        bad=""
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
+          n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from spock.sub_show_status() where status = 'replicating'" 2>&1)
+          [ "$n" = "3" ] || bad="$bad $H=$n"
+        done; done
+        [ -z "$bad" ] && echo ALL_REPLICATING || echo "NOT REPLICATING:$bad"
+    expect:
+      stdout: "^ALL_REPLICATING$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: pooled-write-replicates
+    description: >-
+      A row written through PgBouncer in the first location is read back on a node in the second location
+      (Spock multi-master replication across locations).
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        set -e
+        export PGPASSWORD='{pg_password}'
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          psql -h "replica-$i.{release}-pgedge.$L.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+            -c "create table if not exists e2e (id uuid primary key default gen_random_uuid(), version text not null, marker text not null)" >/dev/null
+        done; done
+        M="e2e-$(date +%s%N)"
+        psql -h "{release}-pgbouncer.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "insert into e2e (version, marker) values ('{version}', '$M')" >/dev/null
+        R="replica-0.{release}-pgedge.{locations.1}.{gvc}.cpln.local"
+        for n in $(seq 1 12); do
+          if psql -h "$R" -U {pg_user} -d {pg_db} -qtA -c "select marker from e2e where marker = '$M'" | grep -qx "$M"; then
+            echo "REPLICATED $M"; exit 0
+          fi
+          sleep 5
+        done
+        echo "NOT REPLICATED $M to $R"
+    expect:
+      stdout: "^REPLICATED e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+    timeoutSeconds: 180
+
+  - id: rejects-bad-password
+    description: A wrong password is refused over TCP (the control for the check above).
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        PGPASSWORD=wrong-password psql -h "replica-0.{release}-pgedge.{locations.0}.{gvc}.cpln.local" \
+          -U {pg_user} -d {pg_db} -c "select 1" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "password authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is on every node. On a fresh install
+      that is the same version; after an upgrade it proves every node's data directory carried over and
+      caught up on replication.
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        bad=""
+        for L in {locations.0} {locations.1}; do for i in 0 1; do
+          H="replica-$i.{release}-pgedge.$L.{gvc}.cpln.local"
+          n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+          [ "${n:-0}" -ge 1 ] 2>/dev/null || bad="$bad $H=${n:-none}"
+        done; done
+        [ -z "$bad" ] && echo PERSISTED || echo "MISSING rows for {installed_version}:$bad"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: fresh-is-19
+    description: A fresh install runs PostgreSQL 19 with Spock 5.0.14.
+    since: 4.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        psql -h "replica-0.{release}-pgedge.{locations.0}.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'VERSION=' || current_setting('server_version_num') || ' SPOCK=' || extversion from pg_extension where extname = 'spock'"
+    expect:
+      stdout: "^VERSION=19[0-9]{4} SPOCK=5\\.0\\.14$"
+
+  - id: guard-holds
+    description: >-
+      On the default (PostgreSQL 19) upgrade of a 17 cluster, the first node the rollout replaces is held
+      by the boot guard: its data is still 17, PostgreSQL is not running, and the guard names the pin.
+    since: 4.0.0
+    phase: refused
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-1"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pgedge-major-guard
+    expect:
+      stdout: "(?s)^DATA=17$.*^NO_POSTGRES$.*REFUSING TO START.*--set image=ghcr\\.io/pgedge/pgedge-postgres:17-spock5-standard"
+    retries: 8                      # an exec can land on the held container's restart
+
+  - id: still-serving-while-refused
+    description: >-
+      While node-1 is held, a write through PgBouncer in the first location still succeeds (HAProxy routes
+      to node-0, which is still on the old revision).
+    since: 4.0.0
+    phase: refused
+    exec:
+      workload: "{release}-pgedge"
+      container: pgedge
+      replica: "{release}-pgedge-0"
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        M="e2e-held-$(date +%s%N)"
+        psql -h "{release}-pgbouncer.{gvc}.cpln.local" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "insert into e2e (version, marker) values ('refused', '$M')" -c "select marker from e2e where marker = '$M'" \
+          | grep -qx "$M" && echo "SERVED $M"
+    expect:
+      stdout: "^SERVED e2e-held-"
+    retries: 4
+    retryDelaySeconds: 15

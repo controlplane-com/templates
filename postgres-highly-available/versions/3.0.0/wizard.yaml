@@ -120,10 +120,6 @@ steps:
         message: >-
           The replicas each commit waits for must be at least 1 and lower than the number of PostgreSQL
           members, because the leader is not one of them.
-      - rule: "!self.synchronous.strict || self.synchronous.enabled"
-        mirrors: pg-ha.validate
-        paths: [synchronous.strict]
-        message: Strict mode needs synchronous replication turned on.
       - rule: self.replicas >= 3
         severity: info
         paths: [replicas]

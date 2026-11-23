@@ -23,6 +23,10 @@ vars:
 values:
   config:
     credentialsSecretName: "{secrets.creds.name}"
+  # On here (the chart default is off) so CI runs the synchronous path: the fresh install and the 2.4.1
+  # upgrade, which switches to these values, turn it on; the 2.8.1 upgrade keeps it off.
+  synchronous:
+    enabled: true
 
 # 2.8.1 is the previous version (same values): its PostgreSQL 17 cluster must keep running 17 on the
 # 3.0.0 image. 2.4.1 is the version customers run. Its `postgres:` block is refused from 2.5.0 on, so that

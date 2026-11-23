@@ -164,9 +164,6 @@ before anything is applied.
 {{- fail (printf "postgres-highly-available: walLevel must be 'replica' or 'logical', got '%v'. Use 'logical' only when something reads logical replication (for example Debezium change data capture)." .Values.walLevel) -}}
 {{- end -}}
 {{- $sync := .Values.synchronous | default dict -}}
-{{- if and $sync.strict (not $sync.enabled) -}}
-{{- fail "postgres-highly-available: synchronous.strict needs synchronous.enabled: true." -}}
-{{- end -}}
 {{- if $sync.enabled -}}
 {{- $n := int ($sync.nodeCount | default 0) -}}
 {{- if or (lt $n 1) (ge $n (int .Values.replicas)) -}}

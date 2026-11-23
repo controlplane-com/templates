@@ -19,7 +19,7 @@ walLevel: replica
 synchronous:
   enabled: false
   nodeCount: 1 # replicas each commit waits for; must be lower than replicas
-  strict: false # true: when no replica is in sync, writes wait instead of continuing without one
+  strict: false # true: when no replica is in sync, writes wait instead of continuing without one (needs enabled)
 
 # ─── Database credentials ─────────────────────────────────────────────────────
 config:

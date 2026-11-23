@@ -12,8 +12,8 @@ summary: >-
   quorum for leader election and automatic failover, and an HAProxy endpoint that always routes
   to the current primary. Options: multi-zone placement, a PgBouncer pooler, and backups to S3,
   GCS or MinIO as scheduled logical dumps or continuous WAL-G archiving with point-in-time
-  recovery, logical WAL for change data capture, and synchronous replication so a failover loses no
-  committed transaction. Pick it for a production Postgres that must keep accepting writes when a replica or
+  recovery, logical WAL for change data capture, and synchronous replication so that a failover to an
+  in-sync replica loses no acknowledged transaction. Pick it for a production Postgres that must keep accepting writes when a replica or
   node fails.
 
 keywords:
@@ -39,7 +39,6 @@ keywords:
   - database backups
   - logical replication
   - synchronous replication
-  - zero data loss failover
 
 useCases:
   - Production relational database that survives a replica or node failure

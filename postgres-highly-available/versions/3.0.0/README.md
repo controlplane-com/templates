@@ -369,7 +369,8 @@ to 18 is a copy into a new release. Applications cannot write while the copy run
 window about as long as a `pg_dumpall` of your data takes.
 
 1. **Install a second release of this template** (3.0.0 or later) in the same GVC, with the same values as
-   the old one and the same `config.credentialsSecretName`. A new release always starts on PostgreSQL 18.
+   the old one and the same `config.credentialsSecretName`, but without a pinned `image` (or with the `0.9`
+   tag): a new release on that image starts on PostgreSQL 18, while `0.8` starts it on 17.
    If the old release has WAL-G backups, give the new one a different `backup.*.prefix`.
 2. **Wait until the new release is ready.** One member is the leader and the others are streaming:
 

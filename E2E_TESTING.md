@@ -43,7 +43,8 @@ For the version under test, on a fresh install:
 4. **Two no-op upgrades**: the second must report nothing `Updated`, and no stored spec may change.
 5. Uninstall removes every resource of the release (uninstall can exit 0 having deleted nothing).
 
-Then, for each `upgradeFrom` entry: install that version with its own baseline, run its checks, upgrade
+Then each of the baseline's `variants` (see [Variants](#variants)) gets the same five steps on a fresh
+install of its own. Then, for each `upgradeFrom` entry: install that version with its own baseline, run its checks, upgrade
 into the version under test, and repeat 1-3 and 5. The checks on the starting version only **warn**: that
 version has already shipped and the PR cannot fix it. Everything run against the version under test blocks.
 
@@ -87,6 +88,36 @@ upgradeFrom:                        # each version needs its own baseline
     knownIssue:                     # optional: everything after the starting install warns
       note: "2.x volumesets were renamed in 3.0.0; the upgrade deletes them"
 ```
+
+### Variants
+
+The baseline stays the chart's typical install. An optional feature that changes what the chart does
+(synchronous replication, a backup mode, an HA flag) gets a **variant**: one more fresh install of the same
+version with `values` deep-merged over the baseline's. To also test turning the feature on in an existing
+release, give an `upgradeFrom` entry a `set` (merged over that upgrade's values) and a `name`.
+
+```yaml
+variants:
+  - name: sync                      # lowercase, digits, '-', at most 20 characters; scenario "install 3.0.0 [sync]"
+    values:
+      synchronous:
+        enabled: true
+    timeoutSeconds: 1200            # optional: this install's own wait
+
+upgradeFrom:
+  - version: 2.4.1
+    values: new
+    name: sync                      # scenario "upgrade 2.4.1 → 3.0.0 (new values) [sync]"
+    set:                            # turned on by the upgrade
+      synchronous:
+        enabled: true
+```
+
+Select a variant's checks with `scenarios: "\\[sync\\]"`, and keep a default-only check off it with
+`scenarios: "^(?!.*\\[sync\\])"`. Each variant costs a full install in every run, so add one only for a
+feature with its own failure modes; a value the chart merely passes through needs none. Variants use the
+baseline's `generated` values and `secrets`. The same version may appear twice in `upgradeFrom` (plain and
+with `set`). Locally, `--variants none` (or a comma-separated list of names) limits which run.
 
 ### Refused upgrades
 
@@ -179,6 +210,7 @@ checks:
     phase: refused                  # optional: run ONLY in a refused upgrade's held step (default: ready,
                                     # every other step)
     scenarios: "^install "          # optional: regex on the scenario name; run only where it matches
+                                    # (variant scenarios also start "install ": use "\\[NAME\\]")
     knownIssue:                     # optional: a failure warns instead of blocking
       note: "REST Proxy rejects valid users with jaas values carried from 4.1.0 and older"
       scenarios: "^upgrade "        # regex on the scenario name; default every scenario
@@ -200,7 +232,7 @@ behaviour, and give the new version a baseline (copy the previous one and adjust
 
 ```bash
 python3 .github/e2e/run.py run --target kafka/4.4.0 --gvc test-gvc-2 --release test-e2e \
-  --upgrades none --out /tmp/kafka.json
+  --upgrades none --variants none --out /tmp/kafka.json
 python3 .github/e2e/run.py report --dir /tmp --out /tmp/report.md
 ```
 

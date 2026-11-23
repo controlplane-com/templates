@@ -130,6 +130,7 @@ checks:
       The cluster's shared Patroni configuration carries the chart's synchronous replication setting, also on
       a cluster created before 3.0.0 (whose configuration has no such keys until the start script writes them).
     since: 3.0.0
+    scenarios: "^(?!.*\\[sync\\])"  # the default install and upgrades: synchronous off
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -148,6 +149,33 @@ checks:
         print(("APPLIED " if not bad else "DIFFERS ") + " ".join("%s=%s" % (k, have.get(k)) for k in sorted(want)) + " roles=%s" % sorted(roles))
         '
     expect:
-      stdout: "^APPLIED synchronous_mode=(True|False) synchronous_mode_strict=False synchronous_node_count=1 "
+      stdout: "^APPLIED synchronous_mode=False synchronous_mode_strict=False synchronous_node_count=1 "
+    retries: 8
+    retryDelaySeconds: 15
+  - id: synchronous-replication-on
+    description: >-
+      With synchronous.enabled, Patroni runs in synchronous mode with a sync standby: on a fresh install, and
+      on a 2.4.1 cluster the upgrade turns it on for.
+    since: 3.0.0
+    scenarios: "\\[sync\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/config > /tmp/sync-config.json
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, os, sys
+        want = json.loads(os.environ["PG_HA_SYNCHRONOUS"])
+        have = json.load(open("/tmp/sync-config.json"))
+        roles = [m["role"] for m in json.load(sys.stdin)["members"]]
+        bad = [k for k in want if have.get(k) != want[k]]
+        # A cluster created before 3.0.0 has none of these keys until the start script writes them.
+        if want["synchronous_mode"] != ("sync_standby" in roles):
+            bad.append("roles")
+        print(("APPLIED " if not bad else "DIFFERS ") + " ".join("%s=%s" % (k, have.get(k)) for k in sorted(want)) + " roles=%s" % sorted(roles))
+        '
+    expect:
+      stdout: "^APPLIED synchronous_mode=True synchronous_mode_strict=False synchronous_node_count=1 "
     retries: 8
     retryDelaySeconds: 15

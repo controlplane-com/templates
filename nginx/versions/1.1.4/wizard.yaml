@@ -1,0 +1,422 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Nginx
+# A stateless serverless proxy with no volume and no location handling: every GVC location runs an
+# identical copy, which is what a proxy wants, so there is no gvc block.
+
+steps:
+  - id: routing
+    title: Routing
+    description: Which workloads in this GVC the proxy forwards requests to, by path.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.0') < 0
+            text: >-
+              1.1.0 renamed this release's resources. The configuration secret, identity and policy get new
+              names, and the example backend `example` is replaced by `RELEASE_NAME-example`, behind the
+              **Example backend** switch below; an `example` entry in your locations has been removed and the
+              switch set from it. The proxy workload is now always `RELEASE_NAME-nginx`: if you had changed
+              `proxyWorkload.name`, the upgrade deletes the old proxy workload and creates a new one with a
+              new canonical endpoint, so repoint any custom domain or client at it.
+            textExpression: >-
+              '1.1.0 renamed this release' + "'" + 's resources. The configuration secret, identity and policy
+              get new names, and the example backend `example` is replaced by `' + context.releaseName +
+              '-example`, behind the **Example backend** switch below; an `example` entry in your locations
+              has been removed and the switch set from it. The proxy workload is now always `' +
+              context.releaseName + '-nginx`: if you had changed `proxyWorkload.name`, the upgrade deletes the
+              old proxy workload and creates a new one with a new canonical endpoint, so repoint any custom
+              domain or client at it.'
+      - id: example
+        title: Example backend
+        toggle: enableExample
+        description: >-
+          Deploys a demo page as the workload `RELEASE_NAME-example` and routes `/` to it, so the proxy
+          answers before you add your own services. Every request that none of your locations match goes to
+          it. Turn it off to route `/` to a service of your own. Its image,
+          `gcr.io/knative-samples/helloworld-go`, is published only as `latest`, so the demo page can change;
+          the proxy itself is pinned.
+        docs: "#example-backend"
+        fields: []
+      - id: locations
+        title: Locations
+        description: >-
+          Each entry forwards the requests whose path matches to a workload in this GVC. Longer prefixes win
+          over shorter ones; `/health` and `/fail` are built in. A Custom nginx.conf (below) replaces all of this.
+        docs: "#locations"
+        fields:
+          - type: note
+            severity: warning
+            when: size(self.locations) > 0
+            text: >-
+              Every target's internal firewall must allow `RELEASE_NAME-nginx` (for example Same GVC, or a
+              workload list that names it). A target whose firewall refuses the proxy, or that does not exist,
+              answers its route with the `/fail` body and a 5XX status.
+            textExpression: >-
+              'Every target' + "'" + 's internal firewall must allow `' + context.releaseName + '-nginx` (for
+              example Same GVC, or a workload list that names it). A target whose firewall refuses the proxy, or
+              that does not exist, answers its route with the `/fail` body and a 5XX status.'
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && oldSelf != null &&
+              (self.locations != oldSelf.locations || self.enableExample != oldSelf.enableExample ||
+               (has(oldSelf.nginxConf) ? self.nginxConf != oldSelf.nginxConf : self.nginxConf != ''))
+            text: >-
+              The upgrade rolls the proxy onto the new routing by itself. With one replica, requests may fail for a few seconds while the new replica takes over.
+          - path: locations
+            type: list
+            label: Locations
+            widget: table
+            newItem: { path: "", regexModifier: "", workload: "", port: 8080 }
+            itemLabel: >-
+              ((item.regexModifier == null || item.regexModifier == '') ? '' : item.regexModifier + ' ') +
+              item.path + ' → ' + item.workload + ':' + (item.port == null ? '' : string(item.port))
+            help: >-
+              Nginx picks the longest matching prefix, unless an exact (`=`) location matches first or a
+              regular expression (`~`, `~*`) matches; **Prefix, no regex** (`^~`) stops the regex check for
+              its prefix. See the [Nginx location directive](https://nginx.org/en/docs/http/ngx_http_core_module.html#location).
+              A 500, 502, 503 or 504 from a target is answered with the `/fail` body; the status code is kept.
+            item:
+              type: object
+              fields:
+                - path: path
+                  type: string
+                  label: Path
+                  required: true
+                  placeholder: /api
+                  pattern: '^\S+$'
+                  patternMessage: Leave out spaces.
+                - path: regexModifier
+                  type: enum
+                  label: Match
+                  options:
+                    - { value: "", label: Prefix }
+                    - { value: "=", label: Exact (=) }
+                    - { value: "^~", label: "Prefix, no regex (^~)" }
+                    - { value: "~", label: Regex (~) }
+                    - { value: "~*", label: "Regex, any case (~*)" }
+                - path: workload
+                  type: ref
+                  label: Workload
+                  required: true
+                  description: The bare workload name; the chart adds `.GVC_NAME.cpln.local` itself.
+                  ref: { kind: workload, format: name, mustExist: error }
+                - path: port
+                  type: integer
+                  label: Port
+                  required: true
+                  description: The port the target listens on.
+                  min: 1
+                  max: 65535
+              rules:
+                - rule: >-
+                    item.path == null || item.path == '' || (item.regexModifier != null &&
+                    item.regexModifier.startsWith('~')) || item.path.startsWith('/')
+                  severity: warning
+                  paths: [path]
+                  message: >-
+                    A prefix or exact path must start with /, or no request ever matches it. Add the leading /,
+                    or choose a regex match.
+                - when: context.releaseName != null && item.workload != null
+                  rule: item.workload != context.releaseName + '-nginx'
+                  severity: warning
+                  paths: [workload]
+                  message: This entry points the proxy at itself, so its requests loop. Choose another workload.
+        rules:
+          - when: self.enableExample
+            rule: >-
+              !self.locations.exists(l, l.path == '/' &&
+              (l.regexModifier == null || l.regexModifier == '' || l.regexModifier == '^~'))
+            paths: [locations]
+            message: >-
+              The example backend already has the location /, so a second prefix location for / stops nginx
+              from starting (duplicate location). Turn off the example backend, or use an exact (=) or regex
+              match.
+          - rule: >-
+              !self.locations.exists(l, (l.path == '/health' || l.path == '/fail') &&
+              (l.regexModifier == null || l.regexModifier == '' || l.regexModifier == '^~'))
+            paths: [locations]
+            message: >-
+              /health and /fail are built-in prefix locations, so another prefix location for either stops
+              nginx from starting (duplicate location). Use another path.
+          - rule: >-
+              isUnique(self.locations.filter(l, l.path != null && l.path != '' &&
+              (l.regexModifier == null || l.regexModifier == '' || l.regexModifier == '^~')).map(l, l.path)) &&
+              isUnique(self.locations.filter(l, l.path != null && l.path != '' && l.regexModifier == '=').map(l, l.path))
+            paths: [locations]
+            message: >-
+              Two prefix locations, or two exact locations, have the same path, which stops nginx from
+              starting (duplicate location). Merge them, or change one path.
+          - when: "!self.enableExample"
+            rule: size(self.locations) > 0
+            severity: info
+            paths: [locations]
+            message: >-
+              With no locations and no example backend, the proxy answers only /health and /fail; every other
+              path returns 404.
+
+      - id: custom-config
+        title: Custom nginx.conf
+        description: >-
+          Leave empty to use the configuration generated from the settings above. To run your own
+          `nginx.conf` instead, paste the whole file here.
+        docs: "#configuration"
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '1.1.3') < 0
+            text: >-
+              Before 1.1.3 the install screen kept nginx.conf as a separate file. If you never edited it, this
+              box is empty and the configuration is generated from the settings above, as before. If you edited
+              it, your file is here and keeps replacing the generated one; clear the box to switch to the
+              settings above.
+          - type: note
+            severity: warning
+            when: self.nginxConf != ''
+            text: >-
+              This file replaces the generated `nginx.conf`, so the example backend and locations above take
+              effect only where it uses them (`.Values.locations`, `.Values.enableExample`); the example backend workload is still deployed while its switch is on. Helm template
+              syntax in it is rendered. Keep `listen 80` and a `location /health` that answers 200: the
+              health probes check it.
+          - path: nginxConf
+            type: string
+            multiline: true
+            label: nginx.conf
+            placeholder: Empty uses the generated configuration
+
+  - id: proxy
+    title: Proxy
+    description: The nginx image and the compute of each proxy replica.
+    fields:
+      - type: note
+        text: >-
+          The proxy is always published on its canonical endpoint, open to the internet, and no setting makes
+          it private; other workloads in the GVC cannot reach it internally. Any authentication is up to the
+          services behind it. Read the address from `status.canonicalEndpoint` in
+          `cpln workload get RELEASE_NAME-nginx --gvc GVC_NAME -o yaml`.
+        textExpression: >-
+          'The proxy is always published on its canonical endpoint, open to the internet, and no setting
+          makes it private; other workloads in the GVC cannot reach it internally. Any authentication is up
+          to the services behind it. Read the address from `status.canonicalEndpoint` in `cpln workload get ' +
+          context.releaseName + '-nginx --gvc ' + (context.gvc != null ? context.gvc : 'GVC_NAME') + ' -o yaml`.'
+      - type: note
+        severity: warning
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.3') < 0 && self.proxyWorkload.image != 'nginx:1.31.7'
+        text: >-
+          This version's default image is `nginx:1.31.7`, which fixes six nginx security advisories open in
+          1.31.4 (all medium). This release keeps the image it set; move it to 1.31.7 or later unless you
+          need that exact image.
+        textExpression: >-
+          'This version' + "'" + 's default image is `nginx:1.31.7`, which fixes six nginx security
+          advisories open in 1.31.4 (all medium). This release keeps `' + self.proxyWorkload.image +
+          '`; move it to 1.31.7 or later unless you need that exact image.'
+      - type: note
+        when: >-
+          context.mode == 'upgrade' && context.fromVersion != null &&
+          semverCompare(context.fromVersion, '1.1.2') < 0 && self.proxyWorkload.image == 'nginx:1.31.7'
+        text: >-
+          Versions before 1.1.2 ran `nginx:latest`. The image is now pinned, so this upgrade restarts the
+          proxy on `nginx:1.31.7`. The proxy holds no data. See
+          [Upgrading from 1.1.1 or earlier](/template-catalog/templates/nginx#upgrading-from-1-1-1-or-earlier).
+      - path: proxyWorkload.image
+        type: string
+        format: image
+        label: Nginx image
+        required: true
+        docs: "#proxy-workload"
+      - path: resources
+        type: resources
+        label: Resources
+        required: true
+        description: Per replica.
+        docs: "#resources"
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+      # A serverless workload accepts 1 to 600 (nodelibs/schema/src/workloadOptions.ts SLS_MAX_TIMEOUT_SECONDS).
+      - path: proxyWorkload.timeoutSeconds
+        type: integer
+        label: Request timeout
+        unit: seconds
+        required: true
+        description: How long a request may take, including the wait for a target to answer.
+        docs: "/reference/workload/general#timeout-seconds"
+        min: 1
+        max: 600
+      - path: proxyWorkload.port
+        type: integer
+        label: Container port
+        required: true
+        readOnly: true
+        advanced: true
+        description: >-
+          Fixed at 80: the generated `nginx.conf` listens on 80 and the health probes check 80; neither
+          follows this value.
+        min: 1
+        max: 65535
+        rules:
+          - rule: self.proxyWorkload.port == 80
+            message: >-
+              Set the container port to 80. Nginx listens only on 80, so any other port sends the proxy's
+              traffic to a port nothing listens on.
+
+  - id: scaling
+    title: Scaling
+    description: How many proxy replicas run, and how many requests each one takes.
+    sections:
+      - title: Autoscaling
+        description: >-
+          The proxy scales on CPU, at a 50 % target, between the minimum and the maximum. It is stateless,
+          so more replicas need nothing else; with one replica a restart briefly interrupts traffic.
+        docs: "#scaling-and-availability"
+        fields:
+          - path: autoscaling.minScale
+            type: integer
+            label: Minimum replicas
+            required: true
+            min: 0
+            suggestions: [0, 1, 2, 3]
+          - path: autoscaling.maxScale
+            type: integer
+            label: Maximum replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3, 5, 10]
+          - path: autoscaling.maxConcurrency
+            type: integer
+            label: Concurrent requests per replica
+            required: true
+            description: Requests beyond this wait until a replica has room; 0 means no limit.
+            min: 0
+            max: 30000
+            suggestions: [0, 100, 500, 1000, 5000]
+        rules:
+          - rule: >-
+              self.autoscaling.minScale == null || self.autoscaling.maxScale == null ||
+              self.autoscaling.minScale <= self.autoscaling.maxScale
+            paths: [autoscaling.maxScale]
+            message: The maximum replicas must be at least the minimum replicas.
+          - rule: self.autoscaling.minScale == null || self.autoscaling.minScale > 0
+            severity: info
+            paths: [autoscaling.minScale]
+            message: >-
+              With 0 minimum replicas the proxy scales to zero after 5 minutes without requests, and the next
+              request waits for a replica to start.
+
+migrations:
+  # 1.0.0 named the proxy workload RELEASE-<proxyWorkload.name>; 1.1.0 fixed it to RELEASE-nginx.
+  - fromVersions: "<1.1.0"
+    from: proxyWorkload.name
+    note: >-
+      The proxy workload is now always RELEASE_NAME-nginx. If this value was not nginx, the upgrade replaces
+      the proxy workload, and its canonical endpoint changes.
+  # 1.0.0 deployed its example backend, named example, whenever a location targeted the workload example
+  # (the default locations did). 1.1.0 replaced it with enableExample and RELEASE-example, which takes /.
+  # A list is carried whole when changed, so drop the old example entry (it would target a workload that
+  # no longer exists and, with the example on, duplicate /) and set the switch from it.
+  - fromVersions: "<1.1.0"
+    to: locations
+    valueExpr: self.locations.filter(l, l.workload != 'example')
+    note: The entry for the old example backend is removed; the Example backend switch replaces it.
+  - fromVersions: "<1.1.0"
+    to: enableExample
+    valueExpr: self.locations.exists(l, l.workload == 'example')
+    note: >-
+      The example backend is on when this release routed to the old example backend. It now always takes
+      the path /.
+  # The classic install screen stored the chart file nginx.conf as the value nginxConf (annotation
+  # file-nginxConf, removed in 1.1.3, where nginxConf became an ordinary value). A release that never edited
+  # it holds the shipped default (1.0.0's, or 1.1.0-1.1.2's); clear that so the generated configuration
+  # applies, and carry a real edit.
+  - fromVersions: "<1.1.3"
+    to: nginxConf
+    valueExpr: |-
+      !has(self.nginxConf) || self.nginxConf == null ? '' :
+      self.nginxConf == """user nginx;
+      worker_processes auto;
+
+      events {
+        worker_connections 1024;
+      }
+
+      http {
+        server {
+          listen 80 default_server;
+
+          location /health {
+            return 200 '{"success":true,"message":"OK"}';
+          }
+
+          location /fail {
+            return 500 '{"success":false,"message":"Error"}';
+          }
+
+          # This is an example of adding a workload as a location to nginx. See Host header and and it's value. 
+      {{- range .Values.locations }}
+          location {{ .regexModifier }} {{ .path }} {
+            proxy_pass http://{{ .workload }}.{{ $.Values.global.cpln.gvc }}.cpln.local:{{ .port }};
+            proxy_http_version 1.1;
+            proxy_set_header Host {{ .workload }}.{{ $.Values.global.cpln.gvc }}.cpln.local;
+            proxy_intercept_errors on;
+            error_page 500 502 503 504 /fail;
+          }
+      {{- end }}
+        }
+      }""" ? '' :
+      self.nginxConf == """user nginx;
+      worker_processes auto;
+
+      events {
+        worker_connections 1024;
+      }
+
+      http {
+        server {
+          listen 80 default_server;
+
+          location /health {
+            return 200 '{"success":true,"message":"OK"}';
+          }
+
+          location /fail {
+            return 500 '{"success":false,"message":"Error"}';
+          }
+
+      {{- if .Values.enableExample }}
+          location / {
+            proxy_pass http://{{ include "nginx.example.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Host {{ include "nginx.example.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local;
+            proxy_intercept_errors on;
+            error_page 500 502 503 504 /fail;
+          }
+      {{- end }}
+      {{- range .Values.locations }}
+          location {{ .regexModifier }} {{ .path }} {
+            proxy_pass http://{{ .workload }}.{{ $.Values.global.cpln.gvc }}.cpln.local:{{ .port }};
+            proxy_http_version 1.1;
+            proxy_set_header Host {{ .workload }}.{{ $.Values.global.cpln.gvc }}.cpln.local;
+            proxy_intercept_errors on;
+            error_page 500 502 503 504 /fail;
+          }
+      {{- end }}
+        }
+      }""" ? '' :
+      self.nginxConf
+    note: >-
+      An nginx.conf edited on the classic install screen is carried into Custom nginx.conf; an unedited one
+      is cleared so the generated configuration applies.
+  # proxyWorkload.capacityAI could never apply: the chart scales on CPU and the platform refuses Capacity AI
+  # with that metric. 1.1.3 removes the value; the workload keeps capacityAI: false.
+  - fromVersions: "<1.1.3"
+    from: proxyWorkload.capacityAI
+    note: >-
+      Capacity AI is removed: the proxy scales on CPU, and the platform does not allow Capacity AI with
+      CPU-based scaling, so it never applied.

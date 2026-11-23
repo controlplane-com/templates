@@ -1,0 +1,204 @@
+# ─── Dify ─────────────────────────────────────────────────────────────────────
+dify:
+  # Official images; api, worker and beat share apiImage. Keep api and web on the same tag.
+  apiImage: langgenius/dify-api:1.19.0
+  webImage: langgenius/dify-web:1.19.0
+  gatewayImage: nginx:1.30.6-alpine
+  # Replicas of the gateway, web, API, code sandbox and SSRF proxy (1-3).
+  # set dify.replicas: 2, worker.replicas: 2 and postgresHA.enabled: true for near-zero-downtime upgrades and failover
+  replicas: 1
+  # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+  # A `dictionary` secret with keys secretKey (signs logins; never rotate), initPassword (at most 30
+  # characters; asked once on the /install page), pluginDaemonKey and pluginInnerApiKey (long random letters and digits).
+  secretName: my-dify-secrets
+  publicUrl: ""                 # "" = the gateway's *.cpln.app endpoint; or https://dify.example.com (no trailing /) for a custom domain
+  requestTimeoutSeconds: 600    # longest request or stream on the public URL before it is cut (1-3600)
+  volumeset:
+    capacity: 10                # GiB (minimum 10): uploads and the keys that decrypt stored provider credentials; never delete it
+  # Plain (non-secret) Dify settings for api, worker and beat, e.g. UPLOAD_FILE_SIZE_LIMIT, LOG_LEVEL.
+  extraEnv: []
+  # extraEnv:
+  #   - name: UPLOAD_FILE_SIZE_LIMIT
+  #     value: "50"
+  resources:
+    gateway:
+      minCpu: 25m
+      maxCpu: 200m
+      minMemory: 32Mi
+      maxMemory: 128Mi
+    web:
+      minCpu: 100m
+      maxCpu: 500m
+      minMemory: 256Mi
+      maxMemory: 512Mi
+    api:
+      minCpu: 250m
+      maxCpu: 1000m
+      minMemory: 512Mi
+      maxMemory: 1536Mi
+    beat:
+      minCpu: 50m
+      maxCpu: 250m
+      minMemory: 256Mi
+      maxMemory: 512Mi
+
+# ─── Celery worker (document indexing, async tasks) ──────────────────────────
+worker:
+  replicas: 1                   # 1-3
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1536Mi
+
+# ─── Plugin daemon (runs model-provider and tool plugins; one replica) ───────
+pluginDaemon:
+  image: langgenius/dify-plugin-daemon:0.6.14-local
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 20                # GiB (minimum 10): installed plugins and their Python environments
+
+# ─── Code execution (Code node, Template Transform, Jinja2) ───────────────────
+codeExecution:
+  endpoint: ""                  # "" = the bundled dify-sandbox workload; or the URL of your own sandbox-compatible executor
+  # REQUIRED PREREQUISITE SECRET — an `opaque` secret (encoding: plain): the key Dify and the executor share.
+  apiKeySecretName: my-dify-sandbox-key
+  sandbox:
+    image: langgenius/dify-sandbox:0.2.15
+    resources:
+      minCpu: 100m
+      maxCpu: 500m
+      minMemory: 128Mi
+      maxMemory: 512Mi
+
+# ─── SSRF proxy (keeps flows' HTTP requests off private and in-GVC addresses) ─
+ssrfProxy:
+  enabled: true                 # false lets HTTP Request nodes, tools and code call any service in this GVC
+  image: ubuntu/squid:6.6-24.04_edge
+  resources:
+    minCpu: 25m
+    maxCpu: 200m
+    minMemory: 64Mi
+    maxMemory: 256Mi
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: true                 # public *.cpln.app URL; /install is guarded by initPassword, every page needs a login
+internalAccess:                 # who in Control Plane may reach the gateway (the other tiers admit only each other)
+  type: same-gvc                # none | same-gvc | same-org | workload-list
+  workloads: []                 # used only with workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
+
+# ─── Database: single PostgreSQL with pgvector (default) ─────────────────────
+# Every knob of the `postgres` template is available under this key. Enable exactly one of postgres / postgresHA.
+postgres:
+  enabled: true
+  image: pgvector/pgvector:0.8.7-pg18
+  config:
+    # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
+    # A `dictionary` secret with exactly username, password and database, LETTERS AND DIGITS ONLY
+    # (the plugin daemon passes the password unquoted).
+    credentialsSecretName: my-dify-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10                # GiB (minimum 10)
+  backup: # pass-through to the postgres template's backup feature (Postgres 17+)
+    enabled: false
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    schedule: "0 2 * * *"       # daily at 2am UTC
+    resources:
+      cpu: 100m
+      memory: 128Mi
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-dify-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-dify-backup-cloudaccount
+      policyName: my-dify-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-dify-backup-bucket
+      cloudAccountName: my-dify-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-dify-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres template docs).
+      credentialsSecretName: my-dify-minio-credentials
+      prefix: postgres/backups
+
+# ─── Database: highly available PostgreSQL ───────────────────────────────────
+# 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint; every knob of the
+# `postgres-highly-available` template is available under this key.
+postgresHA:
+  enabled: false
+  image: controlplanecorporation/patroni-postgres:0.8   # includes pgvector 0.8.7
+  config:
+    # REQUIRED PREREQUISITE SECRET when enabled — same keys and letters-and-digits rule as postgres.config above.
+    credentialsSecretName: my-dify-db-credentials
+  replicas: 3
+  resources:                    # per Patroni replica
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 2Gi
+  volumeset:
+    capacity: 10                # GiB per replica (minimum 10)
+  backup: # pass-through to the postgres-highly-available template's backup feature
+    enabled: false
+    mode: logical               # logical or wal-g
+    resources:
+      cpu: 100m
+      memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
+    logical:
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      schedule: "0 2 * * *"     # daily at 2am UTC
+    walg:
+      intervalSeconds: 21600    # every 6 hours
+    provider: aws               # aws, gcp or minio
+    aws:
+      bucket: my-dify-backup-bucket
+      region: us-east-1
+      cloudAccountName: my-dify-backup-cloudaccount
+      policyName: my-dify-backup-policy
+      prefix: postgres/backups
+    gcp:
+      bucket: my-dify-backup-bucket
+      cloudAccountName: my-dify-backup-cloudaccount
+      prefix: postgres/backups
+    minio:                      # any S3-compatible endpoint, e.g. an internal MinIO template deployment
+      endpoint: http://my-minio-workload:9000
+      bucket: my-dify-backup-bucket
+      # REQUIRED prerequisite dictionary secret holding `accessKey` and `secretKey`,
+      # only when backup is enabled with provider: minio (see the postgres-highly-available docs).
+      credentialsSecretName: my-dify-minio-credentials
+      prefix: postgres/backups
+
+# ─── Redis (cache, task queue, plugin state; one node, password required) ────
+redis:
+  enabled: true                 # required
+  mode: dev                     # required: one node; the chart refuses production (Sentinel) mode
+  redis:
+    image: redis:8
+    resources:
+      maxCpu: 200m
+      maxMemory: 256Mi
+      minCpu: 80m
+      minMemory: 128Mi
+    auth:
+      # REQUIRED PREREQUISITE SECRET — a `dictionary` secret with key `password` (letters and digits).
+      # Required because user code runs inside this GVC.
+      fromSecret:
+        enabled: true
+        name: my-dify-redis
+        passwordKey: password

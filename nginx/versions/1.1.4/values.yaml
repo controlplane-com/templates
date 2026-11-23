@@ -1,0 +1,23 @@
+proxyWorkload:
+  image: nginx:1.31.7 # pinned: `latest` makes installs non-reproducible
+  port: 80
+  timeoutSeconds: 5
+
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+autoscaling:
+  minScale: 1
+  maxScale: 1
+  maxConcurrency: 1000
+
+enableExample: true # deploy an example backend that answers every path none of your locations match
+
+locations: [] # add your own proxy targets here
+  # - path: /
+  #   workload: my-workload
+  #   port: 8080
+  #   regexModifier: ""
+
+nginxConf: "" # a full nginx.conf replacing the generated one (Helm template syntax is rendered); empty = generated from the settings above

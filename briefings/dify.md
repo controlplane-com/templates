@@ -3,7 +3,7 @@
 ## What it is
 - Dify 1.19.0: an open-source builder for LLM apps (visual workflows, chatbots, agents, RAG: answers grounded in your documents), published as web apps, through a REST service API or as an MCP server (Model Context Protocol, how AI clients discover tools).
 - Licence: Dify Open Source License = Apache-2.0 plus two rules: no multi-tenant service (one tenant = one workspace) and the console logo/copyright must stay, without a commercial licence. Free, no registration. Accepted by the maintainer 2026-11-10; README and catalog say so.
-- Official images `langgenius/dify-api` / `dify-web` 1.19.0, `dify-plugin-daemon:0.6.14-local`, `dify-sandbox:0.2.15`; `nginx:1.30.6-alpine` gateway; `ubuntu/squid:6.6-24.04_edge` SSRF proxy.
+- Official images `langgenius/dify-api` / `dify-web` 1.19.0, `dify-plugin-daemon:0.6.14-local`, `dify-sandbox:0.2.15`; `nginx:1.30.7-alpine` gateway (1.30.6 in 1.0.0); `ubuntu/squid:6.6-24.04_edge` SSRF proxy.
 
 ## Common use cases
 - Internal chatbot over company documents (knowledge base + pgvector, PostgreSQL's vector-search extension).
@@ -48,3 +48,4 @@
 - **CI:** `initPassword` uses the 22-char `kraft-cluster-id` generator because `hex` is 32 characters (kept, ruling 2026-11-10).
 - **Drift:** every dify resource is clean; the remaining Drift-tab fields belong to the postgres 3.4.1 / redis 3.9.0 subcharts.
 - **Uninstall deletes the database and both volumes.** The first upgrade after install may restart the bundled PostgreSQL.
+- **1.0.1** (2026-11): gateway `nginx:1.30.7-alpine`, fixing CVE-2026-123633, CVE-2026-123007 and CVE-2026-123634 (#5638). Not exploitable as shipped (plain `listen 8080`, `protocol: http` port, Envoy terminates client HTTP/2); bumped as hygiene. No other change.

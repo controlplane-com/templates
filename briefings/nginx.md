@@ -22,7 +22,7 @@ Does not create a GVC.
 
 | Knob | Default | Notes |
 |---|---|---|
-| `proxyWorkload.image` | `nginx:1.31.7` | pinned in 1.1.2 (1.31.4; was `nginx:latest`); 1.31.7 since 1.1.3 |
+| `proxyWorkload.image` | `nginx:1.31.9` | pinned in 1.1.2 (1.31.4; was `nginx:latest`); 1.31.7 in 1.1.3; 1.31.9 since 1.1.4 |
 | `enableExample` | `true` | deploys the demo backend and routes **all** traffic to it |
 | `locations` | `[]` | your own proxy targets |
 | `autoscaling` | — | the proxy is stateless and scales horizontally |
@@ -39,8 +39,9 @@ Does not create a GVC.
   doubled hostname and a 502 (served as the `/fail` body).
 - **Targets must allow the proxy in their internal firewall.** Only the example backend is set up for this
   (`workload-list` naming the proxy); a user's own targets need `same-gvc` or a list that includes it.
-- **`proxyWorkload.port` is inert.** nginx.conf hardcodes `listen 80` and both probes hardcode port 80; the value
-  only changes the declared container port. Chart follow-up candidate.
+- **`proxyWorkload.port` moves the listener (1.1.4+).** The generated nginx.conf listens on it and both probes check
+  it; through 1.1.3 it only changed the declared container port (listener and probes fixed at 80). A custom
+  `nginxConf` must listen on it. The wizard refuses the platform's reserved ports.
 - **The proxy is always public.** `inboundAllowCIDR: 0.0.0.0/0` is hardcoded with no access knob, and no
   internal firewall is set. Chart follow-up candidate.
 - **A routing change rolls the proxy by itself.** The `cpln/checksum` tag on the proxy workload changes with the
@@ -55,4 +56,5 @@ Does not create a GVC.
   a malformed entry produces a container that will not start rather than a failed `helm install`.
 
 ## Version history
+- **1.1.4** (2026-11): nginx 1.31.9, fixing CVE-2026-123633 and CVE-2026-123007 (HTTP/2 RCE, CVSS 9.2) plus CVE-2026-113425 and CVE-2026-121810. Not exploitable as shipped (no `http2` in the config, `protocol: http` port, Envoy terminates client HTTP/2); bumped as hygiene (#5638). `proxyWorkload.port` now works (#5213). First version with e2e tests (`tests/`: routes on 80, a `port` variant on 8080, upgrade from 1.1.3).
 - **1.1.3** (2026-10): nginx 1.31.7, fixing the six advisories open in 1.31.4 (CVE-2026-15176, -93479, -95101, -97629, -97205, -90439; all medium, all fixed in 1.31.7 / 1.30.6). The shipped `nginx.conf` uses none of the affected features (alias+rewrite, HTTP/3, TLS session tickets, AIO), so default installs were not exposed; custom configs might be. No image guard: medium severity, and 1.1.2 had no wizard storing `image` in release values. First version with a `wizard.yaml`. The chart-files annotation `file-nginxConf` is removed (the console sends any version with chart files to the classic YAML screen, so the wizard never opened); the same capability is now the value `nginxConf` (empty = the generated `files/_nginxConf.txt`; set = rendered with `tpl` in its place, exactly as the file was). The classic screen stored the file as `nginxConf: |-` in release values, so an edited config carries over by itself; the wizard's `<1.1.3` migration clears an UNEDITED one (exact match with 1.0.0's or 1.1.0–1.1.2's shipped file) so the generated config applies. Maintainer ruling 2026-10-23: support both the wizard and a custom config. `proxyWorkload.capacityAI` removed (the chart scales on `metric: cpu`, which the API refuses with Capacity AI, so `true` could never install); the workload keeps `capacityAI: false`.

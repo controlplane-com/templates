@@ -81,6 +81,40 @@ log_connections = 0
 log_disconnections = 0
 EOF
 
+# Readiness check, run by the workload's readinessProbe (sh /tmp/pgbouncer/ready.sh).
+# Quoted heredoc: written byte for byte, every $ expands when the probe runs.
+# 1. This PgBouncer answers.
+# 2. Until replication between ALL pgEdge nodes has been established once, the
+#    replica stays NOT ready: rows written before every node subscribes to the
+#    node that took them would never reach those nodes (subscriptions start from
+#    "now", not from existing data). A node writes pgedge-mesh-ready in its data
+#    directory once it has seen every node replicating from every peer; it is read
+#    here through this location's HAProxy with the credentials already in env, and
+#    only a marker for THIS topology counts. Seen once, it is remembered in
+#    /tmp/pgbouncer/mesh-ready, so a later node failure never takes the pooler down.
+# 3. This location's HAProxy has a healthy node ANYWHERE (HAProxy closes the
+#    connection when it has none), which keeps the pooler ready through a local
+#    node death.
+# Real protocol bytes, never a bare port check (the mesh sidecar completes TCP
+# handshakes); every step is time-bounded so the probe can never hang.
+cat > "${RUN_DIR}/ready.sh" <<'EOF'
+#!/bin/sh
+H="__BACKEND_HOST__"
+pg_isready -q -t 2 -h 127.0.0.1 -p 5432 -U "${PG_USERNAME}" -d "${PG_DATABASE}" || exit 1
+if [ ! -f /tmp/pgbouncer/mesh-ready ]; then
+  GOT=$(PGPASSWORD="${PG_PASSWORD}" PGCONNECT_TIMEOUT=3 timeout 4 psql -X -qtA -h "${H}" -p 5432 \
+    -U "${PG_USERNAME}" -d "${PG_DATABASE}" -c "SELECT pg_read_file('pgedge-mesh-ready', true)" 2>/dev/null) || exit 1
+  if [ "${GOT}" != "${PGEDGE_LOCATIONS}|${PGEDGE_REPLICAS}" ]; then
+    echo "waiting for replication between all pgEdge nodes"
+    exit 1
+  fi
+  : > /tmp/pgbouncer/mesh-ready
+fi
+exec pg_isready -q -t 3 -h "${H}" -p 5432 -U "${PG_USERNAME}" -d "${PG_DATABASE}"
+EOF
+sed -i "s|__BACKEND_HOST__|${BACKEND_HOST}|" "${RUN_DIR}/ready.sh"
+rm -f "${RUN_DIR}/mesh-ready"
+
 echo "[pgbouncer] $(/usr/bin/pgbouncer -V 2>&1 | tr '\n' ' ')"
 echo "[pgbouncer] serving database '${DB_KEY}' via ${BACKEND_HOST}:5432 (this location's HAProxy)"
 echo "[pgbouncer] nofile limit: $(ulimit -n)"

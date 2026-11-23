@@ -40,12 +40,12 @@ values:
     minReplicas: 2
     maxReplicas: 2
 
-# A 3.0.0 data directory is PostgreSQL 17. The default 4.0.0 image (19) must be refused by the boot guard:
+# A 3.x data directory is PostgreSQL 17. The default 4.0.0 image (19) must be refused by the boot guard:
 # the rollout stops at node-1 of each location (nodes roll 1 -> 0) while node-0 keeps serving on 17. The
 # pinned upgrade then brings every node back on 17 with its data. 420 s covers replacing node-1 (node
 # restarts were ~110 s apart in 3.0.0's measured rollouts) with margin; a held node is restarted by the
 # readiness-implied startup probe only after ~310 s, and stays held each time.
 upgradeFrom:
-  - version: 3.0.1
+  - version: 3.0.2
     refused: {timeoutSeconds: 420}
     then: {set: {image: "ghcr.io/pgedge/pgedge-postgres:17-spock5-standard"}}

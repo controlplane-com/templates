@@ -20,27 +20,37 @@ spec:
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.password
         - name: PG_DATABASE
           value: cpln://secret/{{ .Values.postgres.credentialsSecretName }}.database
+        # The topology, so readiness accepts only a mesh marker for this topology.
+        {{- include "pgedge.locationEnv" . | nindent 8 }}
       cpu: {{ .Values.pgbouncer.resources.cpu | quote }}
       memory: {{ .Values.pgbouncer.resources.memory | quote }}
       inheritEnv: false
       ports:
         - number: 5432
           protocol: tcp
-      # Real protocol bytes, never a bare port check (the mesh sidecar completes TCP
-      # handshakes). -t bounds each exec so the probe can never hang. Half 1: this
-      # PgBouncer answers. Half 2: this location's HAProxy has a healthy node ANYWHERE
-      # (HAProxy closes the connection when it has none), which keeps the pooler ready
-      # through a local node death.
+      # The check itself is written by the start script (_script-pgbouncer.tpl):
+      # this PgBouncer answers; replication between ALL pgEdge nodes has been
+      # established once (remembered, so a later node failure never takes the pooler
+      # down); this location's HAProxy has a healthy node anywhere.
+      #
+      # Sizing. The pooler may wait for the whole cluster to boot, and the platform
+      # kills a never-ready container after about initialDelaySeconds + 30 x
+      # periodSeconds (failureThreshold does not count) = 20 + 30 x 40 = 1220 s.
+      # The nodes have no readiness probe in 3.x, so each counts as started once its
+      # container runs; a node's boot (GVC check <= 40 s, initdb, node setup) takes
+      # minutes at most, so the full mesh exists well inside 1220 s. Should a slow
+      # cluster outlast the window, the replica restarts and is ready as soon as the marker exists -- it
+      # is on the node's volume. failureThreshold 8 x 40 s keeps a READY pooler
+      # serving through ~5 min with no healthy node anywhere, as before.
       readinessProbe:
         exec:
           command:
             - /bin/sh
-            - -c
-            - pg_isready -q -t 3 -h 127.0.0.1 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" && exec pg_isready -q -t 3 -p 5432 -U "$PG_USERNAME" -d "$PG_DATABASE" -h "{{ include "pgedge.proxy.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local"
+            - /tmp/pgbouncer/ready.sh
         initialDelaySeconds: 20
-        periodSeconds: 15
-        failureThreshold: 20   # ~5 min first-ready budget while pgEdge + HAProxy boot (max is 20)
-        timeoutSeconds: 5
+        periodSeconds: 40
+        failureThreshold: 8
+        timeoutSeconds: 10   # three bounded steps: 2 + 4 + 3 s
         successThreshold: 1
       # Backend-INDEPENDENT on purpose: a cluster outage must never restart poolers.
       # Catches a hung PgBouncer process only.

@@ -6,7 +6,7 @@ This template deploys a pgEdge active-active distributed PostgreSQL cluster usin
 
 - **pgEdge**: Stateful workload running PostgreSQL 17 with the Spock extension. All nodes are active writers connected in a full-mesh replication ring. Each replica gets its own persistent volume.
 - **HAProxy failover tier** (per location): sits in front of the nodes and gives each location's PgBouncer a single stable target. It routes to the local node and, when the local nodes are unhealthy, fails over — first to another local node, then to a remote location — so a client keeps serving through a node failure.
-- **PgBouncer**: per-location connection pooler and the endpoint applications connect to. It pools one backend, the local HAProxy; node selection is HAProxy's job.
+- **PgBouncer**: per-location connection pooler and the endpoint applications connect to. It pools one backend, the local HAProxy; node selection is HAProxy's job. It becomes ready once replication between all nodes is established, so the first writes reach every node.
 - **Spock**: Multi-master logical replication extension included in the pgEdge image. Handles cross-node replication with last-update-wins conflict resolution.
 - **Volume set**: One `ext4` volume per pgEdge replica, snapshotted daily (03:00 UTC) and kept for 7 days by default.
 - **Identity + two policies**: `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each node can confirm at boot that the GVC really has every location you listed.
@@ -596,6 +596,8 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-pgedge-backup", container="ba
 ## Important Notes
 
 - **Your application must retry failed connections and statements** — without it, every upgrade and replica restart shows up as errors in your app. Retry with a short backoff for 10–15 s and make retried writes idempotent; see [Resiliency](#resiliency)
+- **PgBouncer becomes ready only once replication between all nodes is established** (from 3.0.2) — on a new install, or after you add nodes or locations, it waits for the last node. Once ready it stays ready through later node failures
+- **Wrote data in the first minutes after installing 3.0.1 or earlier?** A row written before every node had subscribed to the node that took it never reached the late nodes, and upgrading does not copy it over. Compare `SELECT count(*)` for each table on every node (connect to each node directly) and re-insert any missing rows
 - **3.0.0 changes the client endpoint** to `RELEASE_NAME-pgbouncer`, and backups change format — see [Upgrading from 2.x](#upgrading-from-2x)
 - **Never run a plain `helm upgrade` from 1.x onto 2.x or later** — it deletes the GVC the 1.x chart created and everything in it. See [Upgrading in place from 1.1.1](#upgrading-in-place-from-111) or [Migrating from 1.x](#migrating-from-1x)
 - **The GVC must contain every location you list** (it may contain more). A missing one is not caught at install — the pgEdge container exits with `FATAL: locations declared in values are not in GVC …`

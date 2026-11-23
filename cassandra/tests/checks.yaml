@@ -78,9 +78,11 @@ checks:
       stdout: "^READ e2e-"
     # Patient on purpose: on 1.1.1 (an upgrade source) the role appears ~10 min after replica 0 starts,
     # after the readiness wait, and the row it writes is what data-survives-upgrade reads on 1.1.2.
-    # Promptness is asserted by app-user-ready-promptly, not here.
-    retries: 14
-    retryDelaySeconds: 30
+    # 7 min of retries was too short in CI once (11-23: the 1.1.1 role was still not usable 10 min after
+    # readiness, likely the default-role race restarting replica 0's init); 20 min covers one restart.
+    # Promptness is asserted by app-user-ready-promptly, not here; 1.1.2 passes on the first attempt.
+    retries: 20
+    retryDelaySeconds: 60
 
   - id: rejects-bad-password
     description: A wrong password for the application role is refused (the control for the check above).

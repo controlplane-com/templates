@@ -95,3 +95,38 @@ checks:
     # `container not found` while the new one starts; this runs long enough to reach the new one.
     retries: 8
     retryDelaySeconds: 15
+
+  - id: fresh-is-19
+    description: A fresh 2.0.0 install runs PostgreSQL 19 with the vector extension 0.8.7 created.
+    since: 2.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{pg_workload}"
+      container: pgvector
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "show server_version_num" \
+          -c "select 'EXT ' || extversion from pg_extension where extname = 'vector'" 2>&1
+    expect:
+      stdout: "(?s)^19[0-9]{4}$.*^EXT 0\\.8\\.7$"
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.x release (PostgreSQL 18 data) to the PostgreSQL 19 default is refused by the
+      boot guard: the data directory is still 18, PostgreSQL is not running, and the guard names the pin.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{pg_workload}"
+      container: pgvector
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set image=pgvector/pgvector:0\\.8\\.7-pg18"
+    # an exec can land on the held container's restart
+    retries: 8

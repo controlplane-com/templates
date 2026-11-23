@@ -4,7 +4,7 @@
 Subcommands (see E2E_TESTING.md for the test-file format):
   plan     --base SHA [--targets "svc/ver ..."]   which versions this PR must test (JSON on stdout)
   gate     --base SHA                             fail when a chart change ships without test changes
-  run      --target svc/ver --out FILE            one target: every scenario, then teardown
+  run      --target svc/ver --out FILE            one target: every scenario (install, variants, upgrades), then teardown
   sweep    [--older-than-hours N]                 delete CI GVCs a dead run left behind
   report   --dir DIR --out FILE                   one Markdown report from the per-target JSON files
 
@@ -476,33 +476,90 @@ def wait_all_replicas(t, timeout_s):
     return False
 
 
+REFUSED_HELD_POLLS, REFUSED_HELD_S = 3, 60
+TRANSITION_RE = re.compile(r"transition|restarted shortly|initializing", re.I)
+
+
+def held_workloads(t, targets):
+    """The release's workloads whose new version is held: in every location that wants replicas, the
+    deployment is not ready and has a version entry for the workload version the upgrade set
+    (targets[name]) or later that is not ready and carries no transition message ("Replica 0 will be
+    restarted shortly (version transition 2 -> 3)", "Replica 0 is initializing"). Older entries may still
+    be ready: a stateful workload with several replicas rolls one at a time, and the replicas the rollout
+    has not reached yet keep serving while the first replaced one is held.
+
+    Measured (2026-11-23, get-deployments every 5 s):
+    - postgres 3.4.3 -> 4.0.0 (1 replica): for ~90 s only `v2 ready "Replica 0 will be restarted shortly
+      (version transition: 2 -> 3)"`, with NO v3 entry; then `v3 not ready "Replica 0 is initializing"`;
+      then held: `v3 not ready "containers with unready status: [postgresql]"`.
+    - pgedge 3.0.2 -> 4.0.0 (2 replicas/location, CI): held = `v2 ready "Replica 0 will be restarted
+      shortly (version transition: 2 -> 3)"` + `v3 not ready "containers with unready status: [pgedge]"`;
+      the v2 entry keeps that message for as long as node-1 is held."""
+    held = []
+    for w in release_workloads(t):
+        if w.get("spec", {}).get("type") == "cron" or w["name"] not in targets:
+            continue
+        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc)
+        if d is None:
+            continue
+        deps = [dep for dep in d.get("items", []) if (dep.get("status", {}).get("desiredScale") or 0) > 0]
+        if not deps:
+            continue
+        ok = True
+        for dep in deps:
+            st = dep.get("status", {})
+            new = [v for v in st.get("versions") or [] if (v.get("workload") or 0) >= targets[w["name"]]]
+            if (st.get("ready") or not new
+                    or any(v.get("ready") or TRANSITION_RE.search(v.get("message") or "") for v in new)):
+                ok = False
+                break
+        if ok:
+            held.append(w["name"])
+    return held
+
+
 def watch_refused(t, timeout_s):
     """After a no-wait upgrade the chart must refuse to start: for the whole window the release never reads
-    ready, and at the end some replica of the new workload version exists and is not ready (so it is held,
-    not just lagging behind).
+    ready, and the window ends with a workload's new version HELD (held_workloads) on at least
+    REFUSED_HELD_POLLS consecutive polls spanning REFUSED_HELD_S seconds, so the `phase: refused` checks
+    then run on the new replica, not the old one still serving through the platform's version transition.
     Returns (ok, detail)."""
+    targets = {w["name"]: w.get("version") or 0 for w in release_workloads(t)}  # spec versions the upgrade set
     deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    streak, since, held = 0, None, []
+    while True:
         if all_replicas_ready(t):  # lag_ok=False: the old version still serving does not count as ready
             return False, "the upgrade became ready: nothing refused it"
+        held = held_workloads(t, targets)
+        if held:
+            streak, since = streak + 1, since or time.time()
+        else:
+            streak, since = 0, None
+        if time.time() >= deadline:
+            break
         time.sleep(10)
-    for w in release_workloads(t):
-        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
-        for dep in d.get("items", []):
-            if any((v.get("workload") or 0) >= (w.get("version") or 0) and not v.get("ready")
-                   for v in dep.get("status", {}).get("versions") or []):
-                return True, f"never ready in {timeout_s}s; {w['name']}@{dep.get('name')} holds a new-version replica"
-    return False, f"never ready in {timeout_s}s, but no new-version replica is held (lag, not a refusal)"
+    if streak >= REFUSED_HELD_POLLS and time.time() - since >= REFUSED_HELD_S:
+        return True, (f"never ready in {timeout_s}s; new version held by {', '.join(held)} "
+                      f"for the last {int(time.time() - since)}s ({streak} polls)")
+    if streak:
+        return False, (f"never ready in {timeout_s}s, but the new version was held only for the last "
+                       f"{int(time.time() - since)}s ({streak} polls; need {REFUSED_HELD_POLLS} over "
+                       f"{REFUSED_HELD_S}s): raise refused.timeoutSeconds if the transition is slow")
+    return False, (f"never ready in {timeout_s}s, but no workload's new version was ever held at the end "
+                   "(the old replica still serving, or still in its version transition: lag, not a refusal)")
 
 
 def deployments_summary(t):
+    """One line per deployment, with every version entry's workload version, readiness and message."""
     lines = []
     for w in release_workloads(t):
         d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
         for dep in d.get("items", []):
             st = dep.get("status", {})
-            msgs = [v.get("message") for v in st.get("versions", []) if v.get("message")]
-            lines.append(f"{w['name']}@{dep.get('name')}: ready={st.get('ready')} {'; '.join(msgs)[:200]}")
+            vers = "; ".join(f"v{v.get('workload')} ready={v.get('ready')}" + (f" {v['message']}" if v.get("message") else "")
+                             for v in st.get("versions") or [])
+            lines.append(f"{w['name']}@{dep.get('name')} (spec v{w.get('version')}): ready={st.get('ready')} "
+                         f"{vers[:300]}")
     return lines
 
 
@@ -651,13 +708,35 @@ def leftovers(t):
     return left
 
 
-def scenario_fresh(t, timeout_s):
-    sc = f"install {t.version}"
+VARIANT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
+
+
+def variants(base):
+    """The baseline's `variants`: extra fresh installs of the same version, each with `values` deep-merged
+    over the baseline's (optional `timeoutSeconds`). They test optional features without changing the
+    baseline, which stays the chart's typical install."""
+    out = base.get("variants") or []
+    names = [str(v.get("name", "")) for v in out]
+    for v, n in zip(out, names):
+        if not VARIANT_NAME.match(n):
+            raise ValueError(f"variant name {n!r}: lowercase letters, digits and '-', at most 20 characters")
+        if not v.get("values"):
+            raise ValueError(f"variant {n}: `values` is required (the overlay that makes it a variant)")
+    if len(set(names)) != len(names):
+        raise ValueError(f"variant names must be unique: {names}")
+    return out
+
+
+def scenario_fresh(t, timeout_s, variant=None):
+    """variant: one of the baseline's `variants`; its scenario is named `install VERSION [NAME]`."""
+    sc = f"install {t.version}" + (f" [{variant['name']}]" if variant else "")
     with scenario(t, sc):
         base = t.baseline(t.version)
         ctx = t.base_ctx(t.version, base)
         prepare(t, base, ctx, t.version)
-        vfile = values_file(base, ctx)
+        vfile = values_file(base, ctx, (variant or {}).get("values"))
+        if variant and variant.get("timeoutSeconds"):
+            timeout_s = int(variant["timeoutSeconds"])
         t.installed = t.release
         code, out = helm(t, "install", t.version, vfile, timeout_s)
         if t.record(sc, "install + every workload ready", code == 0,
@@ -669,7 +748,9 @@ def scenario_fresh(t, timeout_s):
 
 
 def scenario_upgrade(t, src, timeout_s):
-    """src: {"version": "4.1.0", "values": "carry"|"new", "timeoutSeconds": N, "knownIssue": {"note": ...}}.
+    """src: {"version": "4.1.0", "values": "carry"|"new", "set": {...}, "name": "x", "timeoutSeconds": N,
+    "knownIssue": {"note": ...}}. `set` is deep-merged over the upgrade's values (a feature turned on by the
+    upgrade); `name` labels the scenario `... [x]` so checks can select it.
     "carry" upgrades with the starting version's own values, the way a user's `helm upgrade -f
     my-values.yaml` does; "new" switches to the target's baseline. knownIssue makes every failure after
     the starting install warn (except a leak on uninstall); timeoutSeconds overrides the upgrade's wait.
@@ -679,8 +760,11 @@ def scenario_upgrade(t, src, timeout_s):
     refused = src.get("refused")
     if refused is not None and not (src.get("then") or {}).get("set"):
         raise ValueError(f"upgradeFrom {old}: `refused` needs `then.set`, the values that make the upgrade start")
+    if refused is not None and src.get("set"):
+        raise ValueError(f"upgradeFrom {old}: use `then.set` with `refused`, not `set`")
     sc = f"upgrade {old} → {t.version}" + (" (new values)" if mode == "new" else "") + \
-        (" (refused, then pinned)" if refused is not None else "")
+        (" (refused, then pinned)" if refused is not None else "") + \
+        (f" [{src['name']}]" if src.get("name") else (" (+set)" if src.get("set") else ""))
     with scenario(t, sc):
         install_timeout = timeout_s
         timeout_s = int(src.get("timeoutSeconds", timeout_s))
@@ -698,6 +782,9 @@ def scenario_upgrade(t, src, timeout_s):
                 new_vfile = values_file(new_base, ctx)
             else:
                 new_vfile = old_vfile
+            if src.get("set"):
+                # Values the upgrade turns on: an optional feature switched on in an existing release.
+                new_vfile = values_file(new_base if mode == "new" else old_base, ctx, src["set"])
             if src.get("knownIssue"):
                 t.known[sc] = " ".join(str(src["knownIssue"].get("note", "")).split())
             label = f"upgrade to {t.version} + every workload ready"
@@ -729,7 +816,10 @@ def upgrade_refused(t, sc, vfile, window_s, ctx):
     if not any(c.get("phase") == "refused" and in_range(t.version, c) for c in t.checks):
         t.record(sc, "phase: refused checks", False, "no `phase: refused` check covers this version: "
                  "a refusal must be proven by its message, not only by never becoming ready")
+    before = sum(r["status"] == "fail" for r in t.results)
     run_checks(t, sc + " [refused]", t.version, ctx, t.version, phase="refused")
+    if sum(r["status"] == "fail" for r in t.results) > before:
+        log("  deployments when the refused checks failed: " + " | ".join(deployments_summary(t))[:1500])
     return True
 
 
@@ -785,14 +875,24 @@ def cmd_run(a):
         if own:
             create_gvc(t, base.get("locations") or ["aws-us-east-1"])
             log(f"GVC locations: {', '.join(sorted(base.get('locations') or ['aws-us-east-1']))}")
+        chosen = variants(base)  # checked before anything is installed
+        if a.variants:
+            wanted = set(a.variants.split(","))
+            chosen = [v for v in chosen if v["name"] in wanted]
         if not a.skip_fresh:
             scenario_fresh(t, timeout_s)
+        for i, v in enumerate(chosen):
+            t.release = release + "v" + str(i)
+            scenario_fresh(t, timeout_s, v)
         sources = [s if isinstance(s, dict) else {"version": str(s)} for s in base.get("upgradeFrom") or []]
         if a.upgrades:
             wanted = set(a.upgrades.split(","))
             sources = [s for s in sources if str(s["version"]) in wanted]
-        for src in sources:
-            t.release = release + "u" + str(src["version"]).replace(".", "")
+        versions = [str(s["version"]) for s in sources]
+        for i, src in enumerate(sources):
+            # The same version listed twice (plain, and with `set`) needs two release names.
+            t.release = release + "u" + str(src["version"]).replace(".", "") + \
+                (str(i) if versions.count(str(src["version"])) > 1 else "")
             scenario_upgrade(t, src, timeout_s)
     except Exception as e:  # a harness error is a failed run, never a silent pass
         t.record("harness", "runner", False, f"{type(e).__name__}: {e}")
@@ -882,6 +982,7 @@ def main():
     p.add_argument("--release", help="release name (default: generated from the run id)")
     p.add_argument("--skip-fresh", action="store_true", help="run only the upgrade scenarios")
     p.add_argument("--upgrades", help="comma-separated upgrade sources to run (default: the baseline's upgradeFrom; 'none' for none)")
+    p.add_argument("--variants", help="comma-separated variant names to run (default: every variant; 'none' for none)")
     p = sub.add_parser("sweep"); p.add_argument("--older-than-hours", type=float, default=3)
     p = sub.add_parser("report"); p.add_argument("--dir", required=True); p.add_argument("--out", required=True)
     a = ap.parse_args()

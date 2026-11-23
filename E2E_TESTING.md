@@ -43,7 +43,8 @@ For the version under test, on a fresh install:
 4. **Two no-op upgrades**: the second must report nothing `Updated`, and no stored spec may change.
 5. Uninstall removes every resource of the release (uninstall can exit 0 having deleted nothing).
 
-Then, for each `upgradeFrom` entry: install that version with its own baseline, run its checks, upgrade
+Then each of the baseline's `variants` (see [Variants](#variants)) gets the same five steps on a fresh
+install of its own. Then, for each `upgradeFrom` entry: install that version with its own baseline, run its checks, upgrade
 into the version under test, and repeat 1-3 and 5. The checks on the starting version only **warn**: that
 version has already shipped and the PR cannot fix it. Everything run against the version under test blocks.
 
@@ -88,6 +89,36 @@ upgradeFrom:                        # each version needs its own baseline
       note: "2.x volumesets were renamed in 3.0.0; the upgrade deletes them"
 ```
 
+### Variants
+
+The baseline stays the chart's typical install. An optional feature that changes what the chart does
+(synchronous replication, a backup mode, an HA flag) gets a **variant**: one more fresh install of the same
+version with `values` deep-merged over the baseline's. To also test turning the feature on in an existing
+release, give an `upgradeFrom` entry a `set` (merged over that upgrade's values) and a `name`.
+
+```yaml
+variants:
+  - name: sync                      # lowercase, digits, '-', at most 20 characters; scenario "install 3.0.0 [sync]"
+    values:
+      synchronous:
+        enabled: true
+    timeoutSeconds: 1200            # optional: this install's own wait
+
+upgradeFrom:
+  - version: 2.4.1
+    values: new
+    name: sync                      # scenario "upgrade 2.4.1 → 3.0.0 (new values) [sync]"
+    set:                            # turned on by the upgrade
+      synchronous:
+        enabled: true
+```
+
+Select a variant's checks with `scenarios: "\\[sync\\]"`, and keep a default-only check off it with
+`scenarios: "^(?!.*\\[sync\\])"`. Each variant costs a full install in every run, so add one only for a
+feature with its own failure modes; a value the chart merely passes through needs none. Variants use the
+baseline's `generated` values and `secrets`. The same version may appear twice in `upgradeFrom` (plain and
+with `set`). Locally, `--variants none` (or a comma-separated list of names) limits which run.
+
 ### Refused upgrades
 
 When the new version must refuse to start on the old version's data (a database major-version guard), the
@@ -104,8 +135,15 @@ upgradeFrom:
 
 The scenario (`upgrade 3.4.2 → 4.0.0 (refused, then pinned)`) installs 3.4.2 and runs its checks, then
 runs a plain `cpln helm upgrade` with no `--wait`, as a user would. That must exit 0, and the release must
-never become ready for the whole window while a replica of the new workload version is held (not ready),
-so slowness does not count as a refusal. Next it runs the `phase: refused` checks, which prove why it was
+never become ready for the whole window, and the window must end with the new version HELD for at least
+3 polls over 60 s: in every location, the deployment is not ready and has an entry for the workload version
+the upgrade set that is not ready and carries no "will be restarted shortly (version transition N -> N+1)"
+or "is initializing" message. After a stateful upgrade the old replica keeps serving under the transition
+message for ~90 s before any new-version entry appears, so slowness and that transition do not count as a
+refusal, and the checks below run on the new replica. Older-version entries may stay ready: with several
+replicas the rollout replaces one at a time, and the replicas it has not reached keep serving while the
+first replaced one is held. Size `timeoutSeconds` to cover the transition, the new replica's start and that minute. On a failed
+watch or refused check the log shows every deployment's version entries and messages. Next it runs the `phase: refused` checks, which prove why it was
 refused: the guard's message, the old data untouched, nothing running on it. The scenario fails if no such
 check covers the version, since never becoming ready proves nothing on its own. Last, it upgrades again
 with `then.set` and continues like any upgrade: every replica ready, drift, then the normal checks (so a
@@ -174,6 +212,7 @@ checks:
     phase: refused                  # optional: run ONLY in a refused upgrade's held step (default: ready,
                                     # every other step)
     scenarios: "^install "          # optional: regex on the scenario name; run only where it matches
+                                    # (variant scenarios also start "install ": use "\\[NAME\\]")
     knownIssue:                     # optional: a failure warns instead of blocking
       note: "REST Proxy rejects valid users with jaas values carried from 4.1.0 and older"
       scenarios: "^upgrade "        # regex on the scenario name; default every scenario
@@ -195,7 +234,7 @@ behaviour, and give the new version a baseline (copy the previous one and adjust
 
 ```bash
 python3 .github/e2e/run.py run --target kafka/4.4.0 --gvc test-gvc-2 --release test-e2e \
-  --upgrades none --out /tmp/kafka.json
+  --upgrades none --variants none --out /tmp/kafka.json
 python3 .github/e2e/run.py report --dir /tmp --out /tmp/report.md
 ```
 

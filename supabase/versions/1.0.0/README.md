@@ -350,25 +350,13 @@ unset PGPASSWORD
 
 ### WAL-G Restore
 
-A WAL-G restore requires an empty data directory. Follow these steps:
+List the available backups from the `wal-g-backup` sidecar:
 
-1. Exec into the `wal-g-backup` sidecar and list available backups:
 ```sh
-cpln workload connect {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list
+cpln workload exec {release-name}-postgres --gvc {gvc} --container wal-g-backup -- wal-g backup-list
 ```
 
-2. Stop the Postgres workload via the CPLN console or CLI.
-
-3. Create a new volume set to restore into (do not reuse the existing one — it must be empty).
-
-4. Run a one-off workload with the new volume set mounted at `/var/lib/postgresql/data` and restore:
-```sh
-wal-g backup-fetch /var/lib/postgresql/data/pg_data BACKUP_NAME
-```
-
-5. Re-point the Postgres workload to the restored volume set and restart.
-
-6. After restore, change `backup.aws.prefix` (or `backup.gcp.prefix`) to a new path before re-enabling backups to avoid WAL stream conflicts with the original cluster's archived segments.
+A restore means `wal-g backup-fetch` into an **empty** data directory plus WAL replay, and the chart provides no built-in path for that — treat it as a manual recovery following the [WAL-G PostgreSQL docs](https://github.com/wal-g/wal-g/blob/master/docs/PostgreSQL.md), never against the live volume set. If you restore into a new cluster, give it a new `backup.aws.prefix` (or `backup.gcp.prefix`) before re-enabling backups so it does not collide with the original's WAL stream.
 
 ## Important Notes
 

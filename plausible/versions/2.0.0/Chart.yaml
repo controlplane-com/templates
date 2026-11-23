@@ -2,7 +2,7 @@ apiVersion: v2
 name: plausible
 description: Plausible privacy-friendly web analytics with PostgreSQL and ClickHouse backing stores
 type: application
-version: 1.0.0
+version: 2.0.0
 appVersion: "3.2.1"
 
 dependencies:
@@ -10,7 +10,7 @@ dependencies:
     version: 1.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres
-    version: 3.4.2
+    version: 4.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: clickhouse
     version: 3.1.0
@@ -18,5 +18,5 @@ dependencies:
 
 annotations:
   created: "2026-11-09"
-  lastModified: "2026-11-18"
+  lastModified: "2026-11-23"
   createsGvc: false

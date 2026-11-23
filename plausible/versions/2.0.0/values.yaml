@@ -46,7 +46,8 @@ internalAccess:
 # ─── PostgreSQL (accounts, sites, goals, job queue) ───────────────────────────
 # Every knob of the `postgres` template is available under this key.
 postgres:
-  image: postgres:18
+  # PostgreSQL 19 for new installs. Upgrading a 1.x release: set postgres:18, its data's major (README, "Upgrading from 1.x")
+  image: postgres:19
   config:
     # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
     # A `dictionary` secret with exactly three keys: username, password, database (URL-safe values —
@@ -64,7 +65,7 @@ postgres:
   # "Storage setup (backups only)".
   backup:
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0 # 18.1.0 = PG18, 17.1.0 = PG17
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 17 or 18
     schedule: "0 2 * * *"  # daily at 2am UTC
     resources:
       cpu: 100m

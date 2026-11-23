@@ -5,7 +5,7 @@ This app deploys [Plausible Community Edition](https://plausible.io/self-hosted-
 ## Architecture
 
 - **Plausible**: `standard` workload on port 8000 with one replica. It serves the dashboard, `/js/*` tracker scripts and `POST /api/event`, and runs the scheduled jobs. It keeps no data of its own. Upgrades start the new replica before the old one stops.
-- **PostgreSQL**: the `postgres` template, holding users, teams, sites, goals and the job queue.
+- **PostgreSQL 19**: the `postgres` template, holding users, teams, sites, goals and the job queue.
 - **ClickHouse**: the `clickhouse` template as a single node with `provider: local`, so every event and session is stored on its volume and no bucket is needed.
 - **Identity and policies**: the Plausible workload can `reveal` exactly the secrets it reads and `view` its own GVC. At start it checks that the GVC has one location.
 
@@ -92,7 +92,7 @@ internalAccess:
 
 ```yaml
 postgres:
-  image: postgres:18
+  image: postgres:19 # upgrading a 1.x release: postgres:18, see Upgrading from 1.x
   config:
     credentialsSecretName: my-plausible-db-credentials
   resources:
@@ -188,6 +188,49 @@ mc ilm rule ls ALIAS/BUCKET_NAME
 
 Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
 
+## Upgrading from 1.x
+
+New installs run PostgreSQL 19. The database of a 1.x release was created by PostgreSQL 18 (or the major
+of the image it ran), and a PostgreSQL data directory only opens with its own major. The chart never
+converts data in place: before PostgreSQL starts, a guard compares the data's major with the image's,
+and on a mismatch it does not start the server and changes nothing on the volume. Plausible then waits
+for the database and restarts until it comes up. ClickHouse and its events are not affected.
+
+**A refused upgrade** leaves `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME`
+not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+The fix the log prints says `--set image=...`; in this chart the key is `postgres.image`.
+
+**Stay on PostgreSQL 18 with this chart:** run the upgrade again with the image pinned, and keep
+`postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not
+reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move the PostgreSQL data to 19, side by side** (accounts, sites and goals only):
+
+1. Install this version as a NEW release in the same GVC with the **same three secrets**. The dump carries
+   the old role's password hash, and the signing key keeps sessions and two-factor logins valid.
+2. Stop writes to the old release (turn its `publicAccess` off).
+3. Replace the new database with the old one, from inside the new PostgreSQL container (the PostgreSQL 19
+   `pg_dump` reads the old server; `--clean` drops the tables the new Plausible created at first boot):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+4. Restart the new app with `cpln workload force-redeployment NEW_RELEASE-plausible --gvc GVC_NAME`, log
+   in, and check your sites and goals. Then point the tracker snippet at the new release's endpoint.
+
+These steps do not copy the analytics events, which live in the old release's ClickHouse: the new release
+starts with an empty event history. If you need the history, stay on PostgreSQL 18.
+
 ## Connecting
 
 | What | Value |
@@ -216,6 +259,7 @@ Use `http://localhost:8000` in step 2, not another host name: Plausible accepts 
 - **Tracking needs `publicAccess.enabled: true`.** Visitors' browsers must reach the tracker script and `/api/event`.
 - **One app replica.** Plausible keeps each visitor's open session in the replica's memory, so several replicas would split visits and distort bounce rate and visit duration. A restart of the replica is a short outage, and tracker hits during it are lost.
 - **Analytics events have no scheduled backup or snapshot.** They live only on the ClickHouse volume. PostgreSQL is backed up only when `postgres.backup.enabled` is on.
+- **Upgrading a 1.x release needs `postgres.image: postgres:18`** in your values, on that upgrade and every later one; without it PostgreSQL refuses to start on the existing data. See [Upgrading from 1.x](#upgrading-from-1x).
 - **Uninstalling deletes both volumes.** Each keeps one final snapshot for 7 days; after that the data is gone.
 - **Do not change the signing key.** A new `SECRET_KEY_BASE` logs everyone out and breaks two-factor logins for every enrolled user.
 - **A deployment that never starts and shows no logs** is a missing prerequisite secret. Check `cpln workload get-deployments RELEASE_NAME-plausible --gvc GVC_NAME -o yaml`, field `status.versions[].message`. After creating the secret, run `cpln workload force-redeployment WORKLOAD --gvc GVC_NAME` for every workload whose message names it (`RELEASE_NAME-plausible`, and `RELEASE_NAME-clickhouse-server` for the ClickHouse secret); a deployment does not pick it up on its own.

@@ -1,7 +1,7 @@
 # Feature checks for the plausible template. Each runs after install (and after each upgrade) on every
 # version in its since/until range. Add a check with `since: <new version>` for every change you ship.
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (ch_password,
-# ch_db, owner_password, app_version). The runner reads any {word} as a placeholder, so the scripts write
+# ch_db, owner_password, app_version, and from 2.0.0 pg_password). The runner reads any {word} as a placeholder, so the scripts write
 # $VAR, never the braced form.
 #
 # The Plausible image is Alpine with BusyBox (sh, wget, nc, timeout; no curl, no bash). The checks run in
@@ -52,6 +52,22 @@ checks:
         tr -d '\r' < /tmp/e2e-login.txt | grep -i '^location:' | sed 's/^[Ll]ocation: */FIRST_LAUNCH_REDIRECT /'
     expect:
       stdout: "^FIRST_LAUNCH_REDIRECT /register$|^ALREADY_SEEDED$"
+
+  - id: postgres-data-survives-upgrade
+    description: >-
+      After an upgrade from 1.x (refused, then pinned to postgres:18) the owner account and site seeded on
+      the installed version are still in PostgreSQL. Runs before the seed, so a lost database cannot pass.
+    since: 2.0.0
+    scenarios: "^upgrade "
+    exec:
+      workload: "{release}-plausible"
+      container: plausible
+      script: |
+        /app/bin/plausible rpc 'IO.puts(if Plausible.Repo.get_by(Plausible.Site, domain: "e2e.example"), do: "SITE_KEPT", else: "SITE_MISSING")'
+    expect:
+      stdout: "^SITE_KEPT$"
+    retries: 4
+    retryDelaySeconds: 15
 
   - id: seed
     description: An owner account and the site e2e.example are created headlessly (idempotent).
@@ -169,3 +185,36 @@ checks:
         [ "$n" -ge 1 ] 2>/dev/null && echo "PERSISTED $n"
     expect:
       stdout: "^PERSISTED [1-9]"
+
+  - id: postgres-fresh-is-19
+    description: A fresh install runs the bundled PostgreSQL 19 (an upgrade pinned to 18 keeps 18).
+    since: 2.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U plausible -d plausible -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: postgres-guard-holds
+    description: >-
+      A plain upgrade from 1.x onto its PostgreSQL 18 data is held by the postgres major-version guard: the
+      data directory is still 18, no postgres process runs, and the guard file names the pin to 18.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*postgres:18"
+    retries: 8

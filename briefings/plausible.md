@@ -16,10 +16,13 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-plausible` (standard, 1 replica) | Dashboard, tracker script, `/api/event`, cron jobs; port 8000; no volume |
-| `{release}-postgres` (postgres 3.4.2 subchart) | Accounts, sites, goals, job queue |
+| `{release}-postgres` (postgres 4.0.0 subchart, `postgres:19`) | Accounts, sites, goals, job queue |
 | `{release}-clickhouse-server` (clickhouse 3.1.0, `provider: local`) | Every event and session, on its volumeset; no bucket |
 | identity + reveal policy + GVC-view policy | Reveal on exactly the secrets read; `view` on its own GVC for the boot-time location check |
 
+- **2.0.0 = PostgreSQL 19 (work item 5605):** new installs run `postgres:19`, backups use `postgres-backup:19.1.0`. Plausible has no HA database mode, so every install is affected. No in-place conversion: postgres 4.0.0's boot guard refuses a data directory of another major (replica not ready, volume untouched, log `[pg-guard] REFUSING TO START`). A plain `helm upgrade` from 1.x is refused until `postgres.image: postgres:18` is pinned; the wizard carries the installed image (parent migration `>=1.0.0 <2.0.0`) and warns on a major change. NOTES.txt prints the pin on every install/upgrade. The guard's own message says `--set image=`; the README says the key here is `postgres.image`.
+- **Moving 1.x data to 19:** side-by-side release with the same three secrets, `pg_dump --clean --if-exists` of the app database from inside the new postgres container. It does NOT copy ClickHouse events (no tested path); the README says stay on 18 to keep the history.
+- No `cpln-connector` on any identity (postgres 4.0.0's backup identity dropped it in 3.4.3; the parent never had one).
 - Three prerequisite secrets (signing key, PostgreSQL credentials, ClickHouse credentials); the chart creates none.
 - One GVC location only. The app refuses to start in a GVC with more than one location, because postgres would run an empty copy per location, and an app on an empty database offers owner registration to anyone.
 - Image guard: Plausible CE tags below v3.2.1 are refused at render (CVE-2026-8467, `/storybook` remote code execution).
@@ -43,7 +46,7 @@
 - **"Deployment never starts, no logs"** means a missing prerequisite secret: `cpln workload get-deployments … -o yaml` → `status.versions[].message`.
 - **App log `FATAL … location`:** `clickhouse.locations[0].name` is not the GVC's location, or the GVC has several locations.
 - **Never rotate `SECRET_KEY_BASE`:** it logs everyone out and breaks two-factor (TOTP, time-based one-time codes) for every enrolled user.
-- **No scheduled backup or snapshot of analytics events in 1.0.0** (ClickHouse volumeset only). PostgreSQL (accounts, sites, goals) has opt-in scheduled backups via `postgres.backup.*` (aws, gcp, minio). Uninstall deletes both volumes; each keeps one final snapshot for 7 days.
+- **No scheduled backup or snapshot of analytics events** (ClickHouse volumeset only). PostgreSQL (accounts, sites, goals) has opt-in scheduled backups via `postgres.backup.*` (aws, gcp, minio). Uninstall deletes both volumes; each keeps one final snapshot for 7 days.
 - **Why one replica:** visitor sessions live in each app replica's memory, and Control Plane does not pin a visitor to one replica, so two or more replicas would split visits and skew bounce rate. A crash is a short outage, and tracker hits in that window are lost.
 - **Visitor IP** comes from the leftmost `X-Forwarded-For` entry; a client can spoof it, which affects unique-visitor counts only.
 - **No email without SMTP:** no invites by email, no password resets, no weekly reports.
@@ -51,5 +54,5 @@
 - **MaxMind dropped from 1.0.0** (no test key; maintainer ruling 2026-11-09): locations are DB-IP country-level only.
 - Probes declare `scheme: HTTP` (API backfill). A secret created after install needs `force-redeployment`.
 - **Fresh-install migration skip:** Plausible migration `20240801091615_capitalize_known_sources` sends ~1000-element arrays as ClickHouse HTTP query parameters; the mesh sidecar returns `431 headers_too_large` and `db migrate` fails. Only when ClickHouse stopped at `20240709181437` AND `events_v2` + `sessions_v2` are empty, the start script records it as applied and re-runs `db migrate` (the migration only rewrites existing rows). Maintainer ruling 2026-11-10. A future Plausible migration with large URL parameters would hit the same 431.
-- **Open (not fixed in 1.0.0):** `clickhouse.provider` is not validated by the parent, so `--set clickhouse.provider=aws` renders an S3 config and installs; the template is meant to keep ClickHouse local.
-- **Status:** live-tested 2026-11-10 in test-gvc-3 (two fresh installs, migration-skip guard negative control, drift clean, E2E 13/13); wizard rounds 1-2 passed; maintainer walkthrough approved 2026-11-11; shipped in #711.
+- **Open (not fixed in 1.0.0 or 2.0.0):** `clickhouse.provider` is not validated by the parent, so `--set clickhouse.provider=aws` renders an S3 config and installs; the template is meant to keep ClickHouse local.
+- **Status:** live-tested 2026-11-10 in test-gvc-3 (two fresh installs, migration-skip guard negative control, drift clean, E2E 13/13); wizard rounds 1-2 passed; maintainer walkthrough approved 2026-11-11; shipped in #711. 2.0.0 (PostgreSQL 19) built 2026-11-23, awaiting its test round.

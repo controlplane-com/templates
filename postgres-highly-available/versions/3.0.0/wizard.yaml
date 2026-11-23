@@ -550,7 +550,7 @@ steps:
             advanced: true
             when: self.backup.mode == 'wal-g' && context.mode == 'install'
             description: Start the new cluster from another release's WAL-G backups in the same bucket instead of an empty database.
-            docs: "#restoring-backup"
+            docs: "#restoring-a-backup"
           - path: backup.walg.restore.fromPrefix
             type: string
             label: Source prefix

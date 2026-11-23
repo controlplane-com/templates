@@ -477,17 +477,24 @@ def wait_all_replicas(t, timeout_s):
 
 
 REFUSED_HELD_POLLS, REFUSED_HELD_S = 3, 60
-TRANSITION_RE = re.compile(r"transition|restarted shortly", re.I)
+TRANSITION_RE = re.compile(r"transition|restarted shortly|initializing", re.I)
 
 
 def held_workloads(t, targets):
-    """The release's workloads whose new version is held: in every location that wants replicas, every
-    version entry reports the workload version the upgrade set (targets[name]) or later, none is ready, and
-    none carries the platform's "Replica 0 will be restarted shortly (version transition 2 -> 3)" message.
+    """The release's workloads whose new version is held: in every location that wants replicas, the
+    deployment is not ready and has a version entry for the workload version the upgrade set
+    (targets[name]) or later that is not ready and carries no transition message ("Replica 0 will be
+    restarted shortly (version transition 2 -> 3)", "Replica 0 is initializing"). Older entries may still
+    be ready: a stateful workload with several replicas rolls one at a time, and the replicas the rollout
+    has not reached yet keep serving while the first replaced one is held.
 
-    Measured (postgres 3.2.0 -> 4.0.0): after a stateful upgrade the OLD replica keeps serving, ready, for
-    ~90 s under that message before the new replica starts and the guard holds it, so an entry merely
-    being new-version-and-not-ready is not proof the new replica exists."""
+    Measured (2026-11-23, get-deployments every 5 s):
+    - postgres 3.4.3 -> 4.0.0 (1 replica): for ~90 s only `v2 ready "Replica 0 will be restarted shortly
+      (version transition: 2 -> 3)"`, with NO v3 entry; then `v3 not ready "Replica 0 is initializing"`;
+      then held: `v3 not ready "containers with unready status: [postgresql]"`.
+    - pgedge 3.0.2 -> 4.0.0 (2 replicas/location, CI): held = `v2 ready "Replica 0 will be restarted
+      shortly (version transition: 2 -> 3)"` + `v3 not ready "containers with unready status: [pgedge]"`;
+      the v2 entry keeps that message for as long as node-1 is held."""
     held = []
     for w in release_workloads(t):
         if w.get("spec", {}).get("type") == "cron" or w["name"] not in targets:
@@ -501,10 +508,9 @@ def held_workloads(t, targets):
         ok = True
         for dep in deps:
             st = dep.get("status", {})
-            vers = st.get("versions") or []
-            if (st.get("ready") or not vers
-                    or any((v.get("workload") or 0) < targets[w["name"]] or v.get("ready")
-                           or TRANSITION_RE.search(v.get("message") or "") for v in vers)):
+            new = [v for v in st.get("versions") or [] if (v.get("workload") or 0) >= targets[w["name"]]]
+            if (st.get("ready") or not new
+                    or any(v.get("ready") or TRANSITION_RE.search(v.get("message") or "") for v in new)):
                 ok = False
                 break
         if ok:

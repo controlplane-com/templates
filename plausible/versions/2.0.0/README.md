@@ -197,13 +197,11 @@ and on a mismatch it does not start the server and changes nothing on the volume
 for the database and restarts until it comes up. ClickHouse and its events are not affected.
 
 **A refused upgrade** leaves `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME`
-not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+not ready, and the logs repeat `[pg-guard] REFUSING TO START` with the exact fix every 30 seconds:
 
 ```bash
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
 ```
-
-The fix the log prints says `--set image=...`; in this chart the key is `postgres.image`.
 
 **Stay on PostgreSQL 18 with this chart:** run the upgrade again with the image pinned, and keep
 `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not

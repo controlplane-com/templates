@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 4.0.0
+    version: 4.0.1
     title: Bundled PostgreSQL
     after: database
     steps:

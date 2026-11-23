@@ -88,6 +88,12 @@ postgres:
       # with provider: minio. See README "Storage setup (backups only)".
       credentialsSecretName: my-plausible-minio-credentials
       prefix: plausible/backups
+  # Names this chart's values path, wizard field and README section in the postgres major-version guard's
+  # log, so its fix line reads --set postgres.image=... Not a user setting.
+  upgradeHint:
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
 
 # ─── ClickHouse (all events and sessions) ─────────────────────────────────────
 clickhouse:

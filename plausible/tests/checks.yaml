@@ -204,7 +204,8 @@ checks:
   - id: postgres-guard-holds
     description: >-
       A plain upgrade from 1.x onto its PostgreSQL 18 data is held by the postgres major-version guard: the
-      data directory is still 18, no postgres process runs, and the guard file names the pin to 18.
+      data directory is still 18, no postgres process runs, and the guard file names this chart's pin
+      (--set postgres.image=postgres:18) and wizard field.
     since: 2.0.0
     phase: refused
     exec:
@@ -216,5 +217,5 @@ checks:
         grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
         cat /tmp/pg-major-guard
     expect:
-      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*postgres:18"
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:18.*Upgrade > Database > Postgres image"
     retries: 8

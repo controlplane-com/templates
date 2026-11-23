@@ -16,11 +16,11 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-plausible` (standard, 1 replica) | Dashboard, tracker script, `/api/event`, cron jobs; port 8000; no volume |
-| `{release}-postgres` (postgres 4.0.0 subchart, `postgres:19`) | Accounts, sites, goals, job queue |
+| `{release}-postgres` (postgres 4.0.1 subchart, `postgres:19`) | Accounts, sites, goals, job queue |
 | `{release}-clickhouse-server` (clickhouse 3.1.0, `provider: local`) | Every event and session, on its volumeset; no bucket |
 | identity + reveal policy + GVC-view policy | Reveal on exactly the secrets read; `view` on its own GVC for the boot-time location check |
 
-- **2.0.0 = PostgreSQL 19 (work item 5605):** new installs run `postgres:19`, backups use `postgres-backup:19.1.0`. Plausible has no HA database mode, so every install is affected. No in-place conversion: postgres 4.0.0's boot guard refuses a data directory of another major (replica not ready, volume untouched, log `[pg-guard] REFUSING TO START`). A plain `helm upgrade` from 1.x is refused until `postgres.image: postgres:18` is pinned; the wizard carries the installed image (parent migration `>=1.0.0 <2.0.0`) and warns on a major change. NOTES.txt prints the pin on every install/upgrade. The guard's own message says `--set image=`; the README says the key here is `postgres.image`.
+- **2.0.0 = PostgreSQL 19 (work item 5605):** new installs run `postgres:19`, backups use `postgres-backup:19.1.0`. Plausible has no HA database mode, so every install is affected. No in-place conversion: postgres 4.0.0's boot guard refuses a data directory of another major (replica not ready, volume untouched, log `[pg-guard] REFUSING TO START`). A plain `helm upgrade` from 1.x is refused until `postgres.image: postgres:18` is pinned; the wizard carries the installed image (parent migration `>=1.0.0 <2.0.0`) and warns on a major change. NOTES.txt prints the pin on every install/upgrade. postgres 4.0.1's `upgradeHint` (set in values.yaml) makes the guard's log print `--set postgres.image=postgres:<major>`, the Database step field and README "Upgrading from 1.x".
 - **Moving 1.x data to 19:** side-by-side release with the same three secrets, `pg_dump --clean --if-exists` of the app database from inside the new postgres container. It does NOT copy ClickHouse events (no tested path); the README says stay on 18 to keep the history.
 - No `cpln-connector` on any identity (postgres 4.0.0's backup identity dropped it in 3.4.3; the parent never had one).
 - Three prerequisite secrets (signing key, PostgreSQL credentials, ClickHouse credentials); the chart creates none.

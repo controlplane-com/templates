@@ -1,0 +1,802 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Hindsight
+
+# The bundled PostgreSQL is a single-location stateful database that every Hindsight replica shares:
+# one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: pgvector
+    version: 1.0.2
+    when: self.pgvector.enabled
+    title: Single-instance PostgreSQL
+    after: access
+    steps:
+      - { id: server, title: Database server, description: "The PostgreSQL with pgvector that holds every memory bank, fact, entity and document." }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the pgvector template docs.
+    exclude:
+      # Chosen in the Credentials step, next to the HA mode's secret, so both modes ask in one place.
+      - config.credentialsSecretName
+      # Hindsight connects to <release>-pgvector directly (yamlOnly below).
+      - pgbouncer
+      - publicAccess
+    override:
+      internalAccess.type:
+        description: >-
+          Hindsight connects to its database like any other workload: keep Same GVC, or add the Hindsight
+          workloads under Allowed workloads.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: access
+    steps:
+      - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold every memory bank, fact, entity and document." }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Hindsight connects to the HAProxy leader endpoint directly (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          Hindsight connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
+          Hindsight workloads under Allowed workloads.
+
+steps:
+  - id: credentials
+    title: Credentials
+    description: The prerequisite secrets (API key, LLM key, web UI access key, database credentials), the LLM provider and which PostgreSQL holds the memories.
+    sections:
+      - title: API key
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              These secrets must exist **before** you install: the API key, the LLM provider's key (unless your
+              model server needs none), the web UI access key (while the web UI is on) and the database
+              credentials. If one is missing, the deployment waits and `cpln logs` shows nothing at all.
+          - path: auth.apiKeySecretName
+            type: ref
+            label: API key secret
+            required: true
+            description: >-
+              An opaque secret holding the Bearer token for the REST API and MCP. One key opens every memory bank;
+              the web UI's backend uses it too.
+            help: >-
+              Create it with `printf '%s' "$(openssl rand -hex 32)" | cpln secret create-opaque --name SECRET_NAME
+              --encoding plain -f -`. Rotating it does not restart Hindsight; force a redeployment of the API, the
+              workers and the web UI afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-api-key'"
+        rules:
+          - rule: self.auth.apiKeySecretName != null && self.auth.apiKeySecretName != ''
+            mirrors: hindsight.validateAuth
+            paths: [auth.apiKeySecretName]
+            message: The API key secret is required.
+      - title: LLM
+        docs: "#configuration"
+        fields:
+          - path: llm.provider
+            type: string
+            label: Provider
+            required: true
+            pattern: '^[a-z0-9-]+$'
+            patternMessage: Use a provider name in lowercase, such as openai or ollama.
+            suggestions: [openai, anthropic, gemini, groq, ollama, litellm, lmstudio]
+            description: >-
+              Any API-key provider Hindsight supports. For a self-hosted model use `ollama`, or `openai` with the
+              server's URL in the Models step (vLLM, LiteLLM).
+          - type: note
+            when: self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none']
+            text: Ollama, LM Studio, mock and none need no API key. Set an Ollama or LM Studio server's URL in the Models step.
+          - id: llmAuth
+            virtual: true
+            type: enum
+            label: LLM authentication
+            widget: segmented
+            required: true
+            when: "!(self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none'])"
+            init: >-
+              (self.llm.apiKeySecretName == null || self.llm.apiKeySecretName == '') &&
+              (self.llm.provider in ['ollama', 'lmstudio'] || (self.llm.baseUrl != null && self.llm.baseUrl != '')) ? 'none' : 'key'
+            description: >-
+              Choose No key for a self-hosted server without authentication (vLLM, LiteLLM); you set its URL in the
+              Models step.
+            options:
+              - value: key
+                label: API key secret
+              - value: none
+                label: No key
+                set: { llm.apiKeySecretName: "" }
+          - path: llm.apiKeySecretName
+            type: ref
+            label: LLM API key secret
+            required: true
+            when: "ui.llmAuth == 'key' && !(self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none'])"
+            description: An opaque secret holding the LLM provider's API key.
+            help: Rotating it does not restart Hindsight; force a redeployment of the API and the workers afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-llm-key'"
+        rules:
+          - rule: self.llm.provider.matches('^[a-z0-9-]+$')
+            mirrors: hindsight.validateLlm
+            paths: [llm.provider]
+            message: Use a provider name in lowercase, such as openai or ollama.
+          - rule: >-
+              !(self.llm.provider in ['llamacpp', 'claude-code', 'chatgpt', 'openai-codex', 'github-copilot',
+              'cursor', 'nous', 'xai-oauth'])
+            mirrors: hindsight.validateLlm
+            paths: [llm.provider]
+            message: >-
+              This provider cannot run in this deployment (llamacpp is not in the image; the others need an
+              interactive login). Use an API-key provider, or Ollama or vLLM through a base URL.
+      - title: Web UI access key
+        when: self.ui.enabled
+        fields:
+          - path: ui.accessKeySecretName
+            type: ref
+            label: Access key secret
+            required: true
+            description: An opaque secret holding the key you type to log in to the web UI (turn the web UI off in the Access step).
+            help: >-
+              Create it with `printf '%s' "$(openssl rand -hex 16)" | cpln secret create-opaque --name SECRET_NAME
+              --encoding plain -f -`. Rotating it takes effect after a forced redeployment of the web UI.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-ui-key'"
+        rules:
+          - rule: self.ui.accessKeySecretName != null && self.ui.accessKeySecretName != ''
+            mirrors: hindsight.validateUi
+            paths: [ui.accessKeySecretName]
+            message: The access key secret is required.
+      - title: Database
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.pgvector.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica with pgvector. Upgrades and restarts cause a short outage.
+                set: { postgresHA.enabled: false, pgvector.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, pgvector.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: pgvector.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.pgvector.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            when: oldSelf != null && self.postgresHA.enabled != oldSelf.postgresHA.enabled
+            text: >-
+              Switching the database type deploys a new, empty database; the memory banks in the current one are
+              not moved.
+          - type: note
+            text: Uninstalling deletes the database volume, and with it every memory bank.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.pgvector.enabled
+        description: One PostgreSQL replica with pgvector. Its server, storage, network and backups follow the Access step.
+        fields:
+          - type: note
+            when: >-
+              (self.pgvector.config.credentialsSecretName == null || self.pgvector.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: pgvector.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, letters and digits only:
+              Hindsight puts them in a connection URL.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Hindsight connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Hindsight.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-hindsight-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Hindsight connects through. Their settings follow the Access step.
+        fields:
+          - type: note
+            when: >-
+              (self.postgresHA.config.credentialsSecretName == null || self.postgresHA.config.credentialsSecretName == '') &&
+              self.pgvector.config.credentialsSecretName != null && self.pgvector.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.pgvector.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, letters and digits only:
+              Hindsight puts them in a connection URL.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Hindsight connects with them.
+              Changing it later is a database operation: follow the postgres-highly-available template's password
+              rotation steps, then update the secret and force a redeployment of Hindsight.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-hindsight-db-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.pgvector.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.pgvector.config.credentialsSecretName) != ''
+        mirrors: hindsight.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, pgvector.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.pgvector.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.pgvector.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, pgvector.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: models
+    title: Models
+    description: The LLM that extracts facts and answers reflect, and the embedding and reranking models recall uses.
+    sections:
+      - title: LLM model
+        docs: "#configuration"
+        fields:
+          - path: llm.model
+            type: string
+            label: Model
+            required: true
+            when: self.llm.provider != 'none'
+            suggestions: [gpt-5-mini, gpt-5, claude-sonnet-4-5, gemini-2.5-flash]
+            description: >-
+              Must support JSON-schema (structured) output.
+            help: >-
+              Hindsight asks for up to 65k output tokens per retain call. For a model with a smaller output limit,
+              add `HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS` (above 3000) under Extra environment variables in the
+              Hindsight step.
+          - path: llm.baseUrl
+            type: string
+            label: Base URL
+            placeholder: http://my-ollama.my-gvc.cpln.local:11434/v1
+            description: >-
+              Leave empty for the provider's own endpoint. For a model server in Control Plane use its internal
+              name, for example `http://RELEASE-ollama.GVC.cpln.local:11434/v1`.
+        rules:
+          # With an API key chosen, the key field's REQUIRED covers this check.
+          - when: ui.llmAuth == 'none'
+            rule: >-
+              (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '') || (self.llm.baseUrl != null && self.llm.baseUrl != '') ||
+              self.llm.provider in ['ollama', 'lmstudio', 'mock', 'none']
+            mirrors: hindsight.validateLlm
+            paths: [llm.baseUrl]
+            message: >-
+              With No key chosen in the Credentials step, set the base URL of a server without authentication, or go
+              back and choose the LLM API key secret.
+          - rule: "(self.llm.model != null && self.llm.model != '') || self.llm.provider == 'none'"
+            mirrors: hindsight.validateLlm
+            paths: [llm.model]
+            message: The model is required.
+          - rule: "(self.llm.baseUrl == null || self.llm.baseUrl == '') || self.llm.baseUrl.matches('^https?://\\\\S+[^/]$')"
+            mirrors: hindsight.validateUrls
+            paths: [llm.baseUrl]
+            message: Use a URL that starts with http:// or https://, with no spaces and no trailing /.
+      - title: Embeddings
+        fields:
+          - type: note
+            severity: warning
+            when: oldSelf == null
+            text: >-
+              Choose the embedding model now. Stored memories keep the vectors of the model that wrote them, so
+              changing it after install means re-embedding every memory with the CLI ("Changing the embedding
+              model" in the README); this wizard does not allow the change on upgrade.
+          - path: embeddings.provider
+            type: enum
+            label: Embeddings
+            widget: cards
+            required: true
+            options:
+              - value: local
+                label: Bundled model
+                description: BAAI/bge-small-en-v1.5, run inside Hindsight with no external call. Needs the full image.
+              - value: openai
+                label: OpenAI or compatible
+                description: OpenAI, or any OpenAI-compatible embeddings server such as Ollama or vLLM.
+          - path: embeddings.model
+            type: string
+            label: Model
+            when: self.embeddings.provider == 'openai'
+            suggestions: [text-embedding-3-small, text-embedding-3-large, nomic-embed-text]
+            description: Leave empty for `text-embedding-3-small`.
+          - path: embeddings.baseUrl
+            type: string
+            label: Base URL
+            when: self.embeddings.provider == 'openai'
+            placeholder: http://my-ollama.my-gvc.cpln.local:11434/v1
+            description: Leave empty for OpenAI.
+          - path: embeddings.apiKeySecretName
+            type: ref
+            label: API key secret
+            when: self.embeddings.provider == 'openai'
+            description: An opaque secret holding the embeddings API key. Leave empty to use the LLM's key.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-hindsight-embeddings-key'"
+        rules:
+          - rule: self.embeddings.provider in ['local', 'openai']
+            mirrors: hindsight.validateEmbeddings
+            paths: [embeddings.provider]
+            message: Choose the bundled model or OpenAI or compatible.
+          - rule: >-
+              self.embeddings.provider != 'openai' || (self.embeddings.baseUrl != null && self.embeddings.baseUrl != '') ||
+              (self.embeddings.apiKeySecretName != null && self.embeddings.apiKeySecretName != '') || (self.llm.apiKeySecretName != null && self.llm.apiKeySecretName != '')
+            mirrors: hindsight.validateEmbeddings
+            paths: [embeddings.apiKeySecretName]
+            message: Choose an API key secret (here or for the LLM), or set the base URL of a server without authentication.
+          - rule: "(self.embeddings.baseUrl == null || self.embeddings.baseUrl == '') || self.embeddings.baseUrl.matches('^https?://\\\\S+[^/]$')"
+            mirrors: hindsight.validateUrls
+            paths: [embeddings.baseUrl]
+            message: Use a URL that starts with http:// or https://, with no spaces and no trailing /.
+          - rule: >-
+              oldSelf == null ||
+              (self.embeddings.provider == oldSelf.embeddings.provider && self.embeddings.model == oldSelf.embeddings.model)
+            paths: [embeddings.provider, embeddings.model]
+            message: >-
+              Stored memories keep the vectors of the installed embedding model, so switching models breaks recall
+              unless every memory is re-embedded. Keep the installed embeddings settings here; to switch, follow
+              "Changing the embedding model" in the template's README, which re-embeds and upgrades with the CLI.
+      - title: Reranker
+        fields:
+          - path: reranker.provider
+            type: enum
+            label: Reranker
+            widget: cards
+            required: true
+            options:
+              - value: local
+                label: Bundled model
+                description: hs-rerank-1, run inside Hindsight. Best recall ranking; needs the full image.
+              - value: rrf
+                label: Rank fusion only
+                description: Combines the semantic, keyword and graph rankings with no model.
+        rules:
+          - rule: self.reranker.provider in ['local', 'rrf']
+            mirrors: hindsight.validateReranker
+            paths: [reranker.provider]
+            message: Choose the bundled model or rank fusion only.
+
+  - id: server
+    title: Hindsight
+    description: The API image, its replicas and compute, the optional workers and extra settings.
+    sections:
+      - title: API server
+        docs: "#configuration"
+        fields:
+          - path: hindsight.image
+            type: string
+            format: image
+            label: Image
+            required: true
+            description: >-
+              The default full image bundles the embedding and reranker models. The `-slim` image is less than
+              half the size and needs OpenAI or compatible embeddings and rank fusion only.
+          - path: hindsight.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            max: 10
+            suggestions: [1, 2, 3]
+            description: >-
+              Replicas share PostgreSQL, so they are interchangeable. 2 with dedicated workers and highly available
+              PostgreSQL keeps the API up through upgrades.
+          - path: hindsight.resources
+            type: resources
+            label: Resources
+            required: true
+            description: Per replica. With no dedicated workers, retain and consolidation run here too.
+            cpu: { min: 25m }
+            memory: { min: 512Mi }
+          - path: hindsight.requestTimeoutSeconds
+            type: integer
+            label: Request timeout (seconds)
+            required: true
+            min: 1
+            max: 3600
+            suggestions: [60, 300, 900]
+            description: >-
+              The longest request before it is cut; a synchronous retain or reflect waits on the LLM. A small local
+              model on CPU can need minutes for one reflect: raise it (up to 3600).
+          - path: hindsight.dbPoolMaxSize
+            type: integer
+            label: Database connections per process
+            required: true
+            min: 2
+            max: 100
+            advanced: true
+            suggestions: [10, 20, 30]
+            description: Each API replica and each worker opens up to this many PostgreSQL connections.
+        rules:
+          - rule: self.hindsight.replicas >= 1 && self.hindsight.replicas <= 10
+            mirrors: hindsight.validateReplicas
+            paths: [hindsight.replicas]
+            message: Use between 1 and 10 replicas.
+          - rule: self.hindsight.requestTimeoutSeconds >= 1 && self.hindsight.requestTimeoutSeconds <= 3600
+            mirrors: hindsight.validateTimeout
+            paths: [hindsight.requestTimeoutSeconds]
+            message: Use between 1 and 3600 seconds.
+          - rule: >-
+              !self.hindsight.image.contains('-slim') ||
+              (self.embeddings.provider == 'openai' && self.reranker.provider == 'rrf')
+            mirrors: hindsight.validateSlimImage
+            paths: [hindsight.image]
+            message: >-
+              The slim image has no local models: in the Models step choose OpenAI or compatible embeddings and rank
+              fusion only, or use the full image.
+          - rule: >-
+              self.hindsight.dbPoolMaxSize >= 2 && self.hindsight.dbPoolMaxSize <= 100 &&
+              self.hindsight.dbPoolMaxSize * (self.hindsight.replicas + (self.worker.enabled ? self.worker.replicas : 0)) <= 90
+            mirrors: hindsight.validateDbPool
+            paths: [hindsight.dbPoolMaxSize]
+            messageExpression: >-
+              string(self.hindsight.dbPoolMaxSize * (self.hindsight.replicas + (self.worker.enabled ? self.worker.replicas : 0))) +
+              ' connections across the API replicas and workers is more than the 90 PostgreSQL has room for; lower the connections per process or the replica counts.'
+            message: >-
+              The API replicas and workers together would open more than the 90 connections PostgreSQL has room for;
+              lower the connections per process or the replica counts.
+      - id: workers
+        title: Dedicated workers
+        toggle: worker.enabled
+        description: >-
+          Off, each API replica also runs retain, consolidation and other background tasks. On, they move to their
+          own workload, so a large batch does not slow down recall.
+        fields:
+          - path: worker.replicas
+            type: integer
+            label: Worker replicas
+            required: true
+            min: 1
+            max: 10
+            suggestions: [1, 2, 3]
+            description: Workers claim tasks from PostgreSQL, so each replica takes its share of the queue.
+          - path: worker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            advanced: true
+            description: Per worker replica.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 512Mi }
+        rules:
+          - rule: "!self.worker.enabled || (self.worker.replicas >= 1 && self.worker.replicas <= 10)"
+            mirrors: hindsight.validateReplicas
+            paths: [worker.replicas]
+            message: Use between 1 and 10 worker replicas.
+          - rule: cpuMillicores(self.worker.resources.maxCpu) <= 4 * cpuMillicores(self.worker.resources.minCpu)
+            mirrors: hindsight.validateWorkerCpu
+            paths: [worker.resources]
+            message: Raise the worker's minimum CPU to at least a quarter of its maximum.
+      - title: Extra environment variables
+        advanced: true
+        fields:
+          - path: hindsight.extraEnv
+            type: list
+            label: Extra environment variables
+            widget: table
+            uniqueBy: [name]
+            newItem: { name: "", value: "" }
+            itemLabel: "item.name"
+            description: >-
+              Plain upstream settings (`HINDSIGHT_API_*`) for the API and the workers, for example
+              `HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS` for a model with a small output limit. Put keys and tokens
+              in Extra secrets instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: string
+                  label: Name
+                  required: true
+                  pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                  patternMessage: Use letters, digits and _, not starting with a digit.
+                - path: value
+                  type: string
+                  label: Value
+                  required: true
+      - title: Extra secrets
+        advanced: true
+        fields:
+          - id: extraSecretsMode
+            virtual: true
+            type: enum
+            label: Extra secrets
+            widget: segmented
+            required: true
+            init: "self.hindsight.extraSecrets.secretName == null || self.hindsight.extraSecrets.secretName == '' ? 'none' : 'secret'"
+            options:
+              - value: none
+                label: None
+                set: { hindsight.extraSecrets.secretName: "", hindsight.extraSecrets.keys: [] }
+              - value: secret
+                label: From a secret
+          - path: hindsight.extraSecrets.secretName
+            type: ref
+            label: Extra secrets secret
+            required: true
+            when: ui.extraSecretsMode == 'secret'
+            description: >-
+              A dictionary secret you create; each key listed below becomes an environment variable of the same
+              name, for example `HINDSIGHT_API_RERANKER_COHERE_API_KEY`.
+            help: Rotating the secret does not restart Hindsight; force a redeployment of the API and the workers afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "self.hindsight.extraSecrets.keys"
+          - path: hindsight.extraSecrets.keys
+            type: list
+            label: Keys
+            widget: tags
+            unique: true
+            when: ui.extraSecretsMode == 'secret'
+            description: The keys of the secret to expose. Each must exist in the secret.
+            item:
+              type: string
+              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              patternMessage: Use letters, digits and _, not starting with a digit.
+        rules:
+          - rule: (self.hindsight.extraSecrets.secretName == '') == (size(self.hindsight.extraSecrets.keys) == 0)
+            mirrors: hindsight.validateExtraSecrets
+            paths: [hindsight.extraSecrets.keys]
+            message: List at least one key of the extra secrets, or clear the secret.
+    rules:
+      - rule: >-
+          (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n,
+          !(n.upperAscii() in ['HS_DB_USER', 'HS_DB_PASSWORD', 'HS_DB_NAME', 'HINDSIGHT_API_DATABASE_URL',
+          'HINDSIGHT_API_MIGRATION_DATABASE_URL', 'HINDSIGHT_API_READ_DATABASE_URL', 'HINDSIGHT_API_DB_POOL_MIN_SIZE',
+          'HINDSIGHT_API_DB_POOL_MAX_SIZE', 'HINDSIGHT_API_MCP_AUTH_TOKEN', 'HINDSIGHT_API_MCP_STATELESS',
+          'HINDSIGHT_API_WORKER_ENABLED', 'HINDSIGHT_API_WORKER_ID', 'HINDSIGHT_API_WORKER_HTTP_PORT',
+          'HINDSIGHT_API_LLM_PROVIDER', 'HINDSIGHT_API_LLM_MODEL', 'HINDSIGHT_API_LLM_BASE_URL',
+          'HINDSIGHT_API_LLM_API_KEY', 'HINDSIGHT_API_EMBEDDINGS_PROVIDER', 'HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL',
+          'HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL', 'HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY',
+          'HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS', 'HINDSIGHT_API_RERANKER_PROVIDER', 'HINDSIGHT_API_HOST',
+          'HINDSIGHT_API_PORT', 'HF_HUB_OFFLINE', 'HINDSIGHT_ENABLE_API', 'HINDSIGHT_ENABLE_CP']) &&
+          !n.upperAscii().startsWith('HINDSIGHT_API_TENANT_'))
+        mirrors: hindsight.validateEnvNames
+        paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
+        message: >-
+          The chart sets the database, API key, MCP, worker, LLM, embeddings and reranker variables itself, and
+          refuses every HINDSIGHT_API_TENANT_* setting and HINDSIGHT_API_MCP_AUTH_TOKEN, which could switch off the
+          API-key check; set the others in the Models and Hindsight steps instead.
+      - rule: (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n, !n.upperAscii().startsWith('CPLN_'))
+        mirrors: hindsight.validateEnvNames
+        paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
+        message: Names starting with CPLN_ are reserved by Control Plane.
+      - rule: >-
+          (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n,
+          n == '' || n.matches('^[A-Za-z_][A-Za-z0-9_]*$'))
+        mirrors: hindsight.validateEnvNames
+        paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
+        message: Environment variable names use letters, digits and _, and do not start with a digit.
+      - rule: >-
+          (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).all(n,
+          (self.hindsight.extraSecrets.keys + self.hindsight.extraEnv.map(e, e.name)).filter(m, m == n).size() == 1)
+        mirrors: hindsight.validateEnvNames
+        paths: [hindsight.extraSecrets.keys, hindsight.extraEnv]
+        message: Each name may appear only once across the secret keys and the extra variables.
+
+  - id: access
+    title: Access and web UI
+    description: The public endpoints of the API and the web UI, and which workloads can reach the API inside Control Plane.
+    sections:
+      - title: Public API endpoint
+        docs: "#connecting"
+        fields:
+          - path: publicAccess.api
+            type: boolean
+            label: Serve the API and MCP on a public HTTPS endpoint
+            description: >-
+              A public `*.cpln.app` URL for MCP clients and agents outside Control Plane; the API key is still
+              required. Firewall changes take 30 seconds to a few minutes to take effect.
+      - id: web-ui
+        title: Web UI
+        toggle: ui.enabled
+        description: >-
+          A web UI for browsing banks, entities and documents and trying recall and reflect, behind the access key
+          from the Credentials step. It calls the API inside the GVC with the API key, so anyone who logs in can
+          read and change every bank.
+        fields:
+          - path: publicAccess.ui
+            type: boolean
+            label: Serve the web UI on a public HTTPS endpoint
+            description: >-
+              A public `*.cpln.app` URL; the access key is still required. Off, reach it with `cpln port-forward`.
+              Firewall changes take 30 seconds to a few minutes to take effect.
+          - path: ui.image
+            type: string
+            format: image
+            label: Web UI image
+            required: true
+            advanced: true
+            description: Keep its version the same as the API image.
+          - path: ui.resources
+            type: resources
+            label: Web UI resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 128Mi }
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: The web UI, when on, is always allowed. Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            unique: true
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.type]
+            message: Choose None, Same GVC, Same org or Specific workloads.
+          - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.workloads]
+            message: List at least one workload, or choose another option.
+          - rule: self.internalAccess.type != 'none' || !self.ui.enabled
+            mirrors: hindsight.validateInternalAccess
+            paths: [internalAccess.type]
+            message: '"None" also blocks the web UI, which calls the API inside the GVC; choose another option or turn the web UI off.'
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  # Root rules without paths: the Database choice writes pgvector.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.pgvector.enabled
+    mirrors: hindsight.validateDatabase
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: hindsight.validateDatabase
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Hindsight's database endpoint.
+  - when: self.pgvector.enabled
+    rule: self.pgvector.internalAccess.type != 'none'
+    paths: [pgvector.internalAccess.type]
+    message: '"None" also blocks Hindsight, which connects to its database like any other workload.'
+  - when: self.pgvector.enabled && self.pgvector.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight') in self.pgvector.internalAccess.workloads &&
+      (!self.worker.enabled ||
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight-worker') in self.pgvector.internalAccess.workloads)
+    severity: warning
+    paths: [pgvector.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight' +
+      (self.worker.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight-worker' : '') +
+      ', or Hindsight cannot reach its database.'
+    message: Add the Hindsight API (and worker) workloads to the list, or Hindsight cannot reach its database.
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: >-
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight') in self.postgresHA.internal_access.workloads &&
+      (!self.worker.enabled ||
+      ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight-worker') in self.postgresHA.internal_access.workloads)
+    severity: warning
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight' +
+      (self.worker.enabled ? ' and //gvc/' + context.gvc + '/workload/' + context.releaseName + '-hindsight-worker' : '') +
+      ', or Hindsight cannot reach its database.'
+    message: Add the Hindsight API (and worker) workloads to the list, or Hindsight cannot reach its database.
+
+yamlOnly:
+  - path: pgvector.pgbouncer
+    reason: Hindsight connects to <release>-pgvector directly, so a PgBouncer in front of it would sit unused.
+  - path: pgvector.publicAccess
+    reason: Hindsight connects inside the GVC; the database stays private.
+  - path: postgresHA.pgbouncer
+    reason: Hindsight connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.

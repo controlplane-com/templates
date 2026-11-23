@@ -98,3 +98,56 @@ checks:
     # (~4 min in), so wait out the whole rollout.
     retries: 20
     retryDelaySeconds: 30
+
+  - id: postgres-major-matches-cluster
+    description: >-
+      A cluster created on 3.0.0 or later runs PostgreSQL 18; a cluster created on an earlier version keeps
+      running PostgreSQL 17 after the upgrade, on every member (the data directory's version decides).
+    since: 3.0.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 3.0.0 | sort -V | head -1)" = 3.0.0 ]; then want=18; else want=17; fi
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: synchronous-setting-applied
+    description: >-
+      The cluster's shared Patroni configuration carries the chart's synchronous replication setting, also on
+      a cluster created before 3.0.0 (whose configuration has no such keys until the start script writes them).
+    since: 3.0.0
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/config > /tmp/sync-config.json
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, os, sys
+        want = json.loads(os.environ["PG_HA_SYNCHRONOUS"])
+        have = json.load(open("/tmp/sync-config.json"))
+        roles = [m["role"] for m in json.load(sys.stdin)["members"]]
+        bad = [k for k in want if have.get(k) != want[k]]
+        # A cluster created before 3.0.0 has none of these keys until the start script writes them.
+        if want["synchronous_mode"] != ("sync_standby" in roles):
+            bad.append("roles")
+        print(("APPLIED " if not bad else "DIFFERS ") + " ".join("%s=%s" % (k, have.get(k)) for k in sorted(want)) + " roles=%s" % sorted(roles))
+        '
+    expect:
+      stdout: "^APPLIED synchronous_mode=(True|False) synchronous_mode_strict=False synchronous_node_count=1 "
+    retries: 8
+    retryDelaySeconds: 15

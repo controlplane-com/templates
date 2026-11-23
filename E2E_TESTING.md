@@ -104,8 +104,13 @@ upgradeFrom:
 
 The scenario (`upgrade 3.4.2 → 4.0.0 (refused, then pinned)`) installs 3.4.2 and runs its checks, then
 runs a plain `cpln helm upgrade` with no `--wait`, as a user would. That must exit 0, and the release must
-never become ready for the whole window while a replica of the new workload version is held (not ready),
-so slowness does not count as a refusal. Next it runs the `phase: refused` checks, which prove why it was
+never become ready for the whole window, and the window must end with the new version HELD for at least
+3 polls over 60 s: in every location, every replica reports the workload version the upgrade set, none is
+ready, and none carries the platform's "will be restarted shortly (version transition N -> N+1)" message.
+After a stateful upgrade the old replica keeps serving under that message for ~90 s before the new one
+starts, so slowness and that transition do not count as a refusal, and the checks below run on the new
+replica. Size `timeoutSeconds` to cover the transition, the new replica's start and that minute. On a failed
+watch or refused check the log shows every deployment's version entries and messages. Next it runs the `phase: refused` checks, which prove why it was
 refused: the guard's message, the old data untouched, nothing running on it. The scenario fails if no such
 check covers the version, since never becoming ready proves nothing on its own. Last, it upgrades again
 with `then.set` and continues like any upgrade: every replica ready, drift, then the normal checks (so a

@@ -476,33 +476,84 @@ def wait_all_replicas(t, timeout_s):
     return False
 
 
+REFUSED_HELD_POLLS, REFUSED_HELD_S = 3, 60
+TRANSITION_RE = re.compile(r"transition|restarted shortly", re.I)
+
+
+def held_workloads(t, targets):
+    """The release's workloads whose new version is held: in every location that wants replicas, every
+    version entry reports the workload version the upgrade set (targets[name]) or later, none is ready, and
+    none carries the platform's "Replica 0 will be restarted shortly (version transition 2 -> 3)" message.
+
+    Measured (postgres 3.2.0 -> 4.0.0): after a stateful upgrade the OLD replica keeps serving, ready, for
+    ~90 s under that message before the new replica starts and the guard holds it, so an entry merely
+    being new-version-and-not-ready is not proof the new replica exists."""
+    held = []
+    for w in release_workloads(t):
+        if w.get("spec", {}).get("type") == "cron" or w["name"] not in targets:
+            continue
+        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc)
+        if d is None:
+            continue
+        deps = [dep for dep in d.get("items", []) if (dep.get("status", {}).get("desiredScale") or 0) > 0]
+        if not deps:
+            continue
+        ok = True
+        for dep in deps:
+            st = dep.get("status", {})
+            vers = st.get("versions") or []
+            if (st.get("ready") or not vers
+                    or any((v.get("workload") or 0) < targets[w["name"]] or v.get("ready")
+                           or TRANSITION_RE.search(v.get("message") or "") for v in vers)):
+                ok = False
+                break
+        if ok:
+            held.append(w["name"])
+    return held
+
+
 def watch_refused(t, timeout_s):
     """After a no-wait upgrade the chart must refuse to start: for the whole window the release never reads
-    ready, and at the end some replica of the new workload version exists and is not ready (so it is held,
-    not just lagging behind).
+    ready, and the window ends with a workload's new version HELD (held_workloads) on at least
+    REFUSED_HELD_POLLS consecutive polls spanning REFUSED_HELD_S seconds, so the `phase: refused` checks
+    then run on the new replica, not the old one still serving through the platform's version transition.
     Returns (ok, detail)."""
+    targets = {w["name"]: w.get("version") or 0 for w in release_workloads(t)}  # spec versions the upgrade set
     deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    streak, since, held = 0, None, []
+    while True:
         if all_replicas_ready(t):  # lag_ok=False: the old version still serving does not count as ready
             return False, "the upgrade became ready: nothing refused it"
+        held = held_workloads(t, targets)
+        if held:
+            streak, since = streak + 1, since or time.time()
+        else:
+            streak, since = 0, None
+        if time.time() >= deadline:
+            break
         time.sleep(10)
-    for w in release_workloads(t):
-        d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
-        for dep in d.get("items", []):
-            if any((v.get("workload") or 0) >= (w.get("version") or 0) and not v.get("ready")
-                   for v in dep.get("status", {}).get("versions") or []):
-                return True, f"never ready in {timeout_s}s; {w['name']}@{dep.get('name')} holds a new-version replica"
-    return False, f"never ready in {timeout_s}s, but no new-version replica is held (lag, not a refusal)"
+    if streak >= REFUSED_HELD_POLLS and time.time() - since >= REFUSED_HELD_S:
+        return True, (f"never ready in {timeout_s}s; new version held by {', '.join(held)} "
+                      f"for the last {int(time.time() - since)}s ({streak} polls)")
+    if streak:
+        return False, (f"never ready in {timeout_s}s, but the new version was held only for the last "
+                       f"{int(time.time() - since)}s ({streak} polls; need {REFUSED_HELD_POLLS} over "
+                       f"{REFUSED_HELD_S}s): raise refused.timeoutSeconds if the transition is slow")
+    return False, (f"never ready in {timeout_s}s, but no workload's new version was ever held at the end "
+                   "(the old replica still serving, or still in its version transition: lag, not a refusal)")
 
 
 def deployments_summary(t):
+    """One line per deployment, with every version entry's workload version, readiness and message."""
     lines = []
     for w in release_workloads(t):
         d = cpln_json("workload", "get-deployments", w["name"], "--gvc", t.gvc) or {}
         for dep in d.get("items", []):
             st = dep.get("status", {})
-            msgs = [v.get("message") for v in st.get("versions", []) if v.get("message")]
-            lines.append(f"{w['name']}@{dep.get('name')}: ready={st.get('ready')} {'; '.join(msgs)[:200]}")
+            vers = "; ".join(f"v{v.get('workload')} ready={v.get('ready')}" + (f" {v['message']}" if v.get("message") else "")
+                             for v in st.get("versions") or [])
+            lines.append(f"{w['name']}@{dep.get('name')} (spec v{w.get('version')}): ready={st.get('ready')} "
+                         f"{vers[:300]}")
     return lines
 
 
@@ -729,7 +780,10 @@ def upgrade_refused(t, sc, vfile, window_s, ctx):
     if not any(c.get("phase") == "refused" and in_range(t.version, c) for c in t.checks):
         t.record(sc, "phase: refused checks", False, "no `phase: refused` check covers this version: "
                  "a refusal must be proven by its message, not only by never becoming ready")
+    before = sum(r["status"] == "fail" for r in t.results)
     run_checks(t, sc + " [refused]", t.version, ctx, t.version, phase="refused")
+    if sum(r["status"] == "fail" for r in t.results) > before:
+        log("  deployments when the refused checks failed: " + " | ".join(deployments_summary(t))[:1500])
     return True
 
 

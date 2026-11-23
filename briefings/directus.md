@@ -17,9 +17,9 @@
 |---|---|
 | `{rel}-directus` (standard, 1-10 replicas, :8055) | API + Studio. A `node -e` boot wrapper (location guard, GVC location report, Postgres `SELECT 1` gate, `directus bootstrap` under `pg_advisory_lock`) then hands off to the image's own entrypoint |
 | `{rel}-directus-uploads` (shared volumeset, `storage.type: local`) | uploaded files at `/directus/uploads`, RWX across replicas, `filesystemGroupId: 1000`; S3 bucket instead with `storage.type: s3` |
-| `postgres` 3.4.1 (default, `postgres:18`) or `postgresHA` 2.8.1 | all data: schema, items, users, settings, flows, the Studio-entered license |
-| `redis` 3.9.0, `mode: dev` (opt-in) | shared cache, locks, message bus, rate limits, scheduled-flow clock; required for 2+ replicas |
-| identity + 2 policies | `reveal` on exactly the named secrets; `view` on its own GVC only (`targetKind: gvc`) |
+| `postgres` 4.0.0 (default, `postgres:19`, boot guard) or `postgresHA` 2.8.1 (PostgreSQL 17, unchanged) | all data: schema, items, users, settings, flows, the Studio-entered license |
+| `redis` 3.9.1, `mode: dev` (opt-in) | shared cache, locks, message bus, rate limits, scheduled-flow clock; required for 2+ replicas |
+| identity + 2 policies | `reveal` on exactly the named secrets; `view` on its own GVC only (`targetKind: gvc`); keyless S3 attaches only the bucket-scoped policy (no `cpln-connector` since 2.0.0) |
 
 - Pinned to one GVC location (`location`): `defaultOptions` min/max 0, one `localOptions` entry. The wizard requires a 1-location GVC.
 - Availability: replicas roll surge-first (`maxSurge 1`, `maxUnavailable 0`). The single postgres is still a short outage on DB restarts; HA postgres is one flag. Default is single everything (ruling 2026-08-06: a CMS fails the cascade test).
@@ -32,6 +32,7 @@
 `location` · `secrets.name` (secret/adminEmail/adminPassword) · `license.secretName` · `directus.replicas` · `directus.publicUrl` · `storage.type` local|s3 · `cache.enabled` · `email.enabled` · `redis.enabled` (+ `redis.redis.auth.fromSecret`) · `postgresHA.enabled` · `publicAccess.enabled` · `internalAccess`
 
 ## Troubleshooting / considerations
+- **Upgrading a 1.x release on the single-instance database (2.0.0 is a major):** its data is PostgreSQL 18, and the postgres 4.0.0 boot guard refuses to start PostgreSQL 19 on it (`{rel}-postgres` not ready, `[pg-guard] REFUSING TO START` every 30 s, volume untouched; Directus waits for its database). Fix: `--set postgres.image=postgres:18` and keep it in values. The guard's own log line says `--set image=...` (the subchart's path); NOTES.txt and the README name the parent path. The Console wizard carries the installed image (a parent migration) and warns when a different major is picked. Moving to 19 = side-by-side new release with the same secrets, `pg_dump --clean --if-exists` from the old server, `cpln cp` of local uploads, force-redeployment (README "Upgrading from 1.x"). HA releases upgrade normally.
 - **A missing prerequisite secret wedges silently.** `cpln logs` is empty; read `status.versions[].message` from `cpln workload get-deployments`.
 - **The admin password is first-boot only.** Reset in Studio, or `node /directus/cli.js users passwd --email … --password …` in the container (argv is the only input form the v12.6.1 CLI has).
 - **Never change `secret`** after install: every session and token becomes invalid. Rotating any secret needs `cpln workload force-redeployment`.
@@ -43,3 +44,6 @@
 - **2+ replicas without Redis is refused at render** (caches and scheduled flows would diverge per replica). Redis `mode` other than dev, a plaintext Redis password and Redis public access are refused too.
 - **Extensions** are not persisted; bake them into a custom image (`directus.image`).
 - **Boot window:** startup probe ≈ 10 + 30 × 15 = 460 s. One clock from wrapper start: GVC read ≤ 22 s, DB gate gives up at 150 s, the lock must be held by 300 s, leaving ≥ 160 s for bootstrap plus server start. Directus migrations are NOT re-runnable after an interruption (a half-applied one fails `42701 already exists` on every later start), so the bootstrap runs WITHOUT Redis (a Redis blip mid-migration killed it in testing), then `directus cache clear` flushes the Redis caches, retried until 400 s. Cache clear runs on every start, so a replica restart empties the shared data cache.
+
+## Status
+2.0.0: single-instance PostgreSQL 19 (postgres 4.0.0, backup image 19.1.0), HA unchanged, `cpln-connector` dropped from the identity, NOTES.txt upgrade warning, wizard image carry-over + cross-major warning, README "Upgrading from 1.x". CI: `fresh-is-19`, refused-then-pinned upgrade from 1.0.0 (`guard-holds`, `pinned-stays-18`, `item-persists`).

@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.2
+    version: 4.0.0
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # Right after the Database settings step, which holds the server, storage and network of the same database.
@@ -262,7 +262,6 @@ steps:
             paths: [directus.publicUrl]
             message: Use a full URL with the scheme and no trailing slash, such as https://cms.example.com.
       - title: License key
-        docs: "#prerequisites"
         fields:
           - type: note
             text: >-
@@ -366,14 +365,24 @@ steps:
     sections:
       - title: Server
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its data was created
+              with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
           - path: postgres.image
             type: string
             format: image
             label: Postgres image
             required: true
             help: >-
-              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
-              different major on an existing volume does not start.
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
           - path: postgres.resources
             type: resources
             label: Postgres resources
@@ -383,13 +392,19 @@ steps:
             memory: { min: 32Mi }
         rules:
           - rule: >-
-              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
-              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
             severity: warning
             paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
             message: >-
-              The data directory belongs to the installed Postgres major version; a different major version does
-              not start on it. Upgrade with a dump and restore instead.
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
       - title: Storage
         docs: "/reference/volumeset#capacity-and-billing"
         fields:
@@ -678,7 +693,6 @@ steps:
       - id: redis
         title: Redis
         toggle: redis.enabled
-        docs: "#scaling-and-cache"
         description: >-
           One Redis node for the shared cache, locks, message bus, rate limits and scheduled-flow clock. It holds no
           data of record: a Redis restart only empties the cache, and API requests briefly fail with 503 until
@@ -800,7 +814,6 @@ steps:
             paths: [redis.redis.firewall.inboundAllowWorkload]
             message: Same org already lets every workload of the org connect, so these Redis entries add nothing.
       - title: Response cache
-        docs: "#scaling-and-cache"
         fields:
           - path: cache.enabled
             type: boolean
@@ -1028,6 +1041,17 @@ yamlOnly:
 # redis keys this import excludes that the redis chart's own migrations touch (written for redis 3.7.0 and older
 # releases), so those migrations never run here.
 migrations:
+  # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+  # `image` and binds it in Database settings).
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database's data directory keeps the PostgreSQL major it was created with, so the installed image is
+      kept (Database settings, Postgres image). To move to PostgreSQL 19, dump and restore into a new release
+      (README, Upgrading from 1.x).
   - fromVersions: "<1.0.0"
     assume: { redis.engine: redis, redis.backup.enabled: false, redis.redis.replicaDirect: false, redis.redis.image: "redis:8" }
   - fromVersions: "<1.0.0"

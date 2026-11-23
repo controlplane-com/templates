@@ -68,7 +68,7 @@ internalAccess:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:18
+  image: postgres:19     # new installs; a release upgraded from 1.x keeps postgres:18, its data's major (README, "Upgrading from 1.x")
   config:
     # REQUIRED — MUST EXIST BEFORE INSTALL, or the deployment WEDGES silently. A `dictionary` with the
     # keys username, password, database (see README Prerequisites).
@@ -83,7 +83,7 @@ postgres:
 
   backup:                # pass-through to the postgres template's backup feature
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # tag must match the postgres major
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0   # PostgreSQL 19 client; also backs up a server pinned to 17 or 18
     schedule: "0 2 * * *"   # daily at 02:00 UTC
     resources:
       cpu: 100m

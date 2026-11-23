@@ -1,0 +1,182 @@
+{{- $mongo := .Values.mongodb.config.credentialsSecretName }}
+{{- $keys := .Values.keys.secretName }}
+kind: workload
+name: {{ include "librechat.name" . }}
+description: LibreChat chat UI and API
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "librechat.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "librechat.identity.name" . }}
+  containers:
+    - name: librechat
+      image: {{ .Values.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.resources.minCpu | quote }}
+      minMemory: {{ .Values.resources.minMemory | quote }}
+      cpu: {{ .Values.resources.maxCpu | quote }}
+      memory: {{ .Values.resources.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - "-c"
+        - {{- include "librechat.inlineScript" (include "librechat.script.start" .) | nindent 10 }}
+      env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "3080"
+        - name: NODE_ENV
+          value: production
+        - name: CONFIG_PATH
+          value: /tmp/librechat.yaml
+        - name: NO_INDEX
+          value: "true"
+        - name: TRUST_PROXY
+          value: "1"
+        # Database (mongodb template; its root user authenticates against admin)
+        - name: MONGO_USER
+          value: 'cpln://secret/{{ $mongo }}.username'
+        - name: MONGO_PASSWORD
+          value: 'cpln://secret/{{ $mongo }}.password'
+        - name: MONGO_DB
+          value: 'cpln://secret/{{ $mongo }}.database'
+        - name: MONGO_URI
+          value: 'mongodb://$(MONGO_USER):$(MONGO_PASSWORD)@{{ include "librechat.mongo.host" . }}:27017/$(MONGO_DB)?authSource=admin'
+        # Encryption and signing keys (prerequisite dictionary secret)
+        - name: CREDS_KEY
+          value: 'cpln://secret/{{ $keys }}.CREDS_KEY'
+        - name: CREDS_IV
+          value: 'cpln://secret/{{ $keys }}.CREDS_IV'
+        - name: JWT_SECRET
+          value: 'cpln://secret/{{ $keys }}.JWT_SECRET'
+        - name: JWT_REFRESH_SECRET
+          value: 'cpln://secret/{{ $keys }}.JWT_REFRESH_SECRET'
+        # Admin account created on first boot (prerequisite dictionary secret)
+        - name: LIBRECHAT_ADMIN_EMAIL
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.email'
+        - name: LIBRECHAT_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.secretName }}.password'
+        # Sign-in
+        - name: ALLOW_EMAIL_LOGIN
+          value: "true"
+        - name: ALLOW_REGISTRATION
+          value: {{ .Values.auth.allowRegistration | toString | quote }}
+        - name: ALLOW_SOCIAL_LOGIN
+          value: "false"
+        - name: ALLOW_SOCIAL_REGISTRATION
+          value: "false"
+        - name: ALLOW_PASSWORD_RESET
+          value: "false"
+        - name: ALLOW_UNVERIFIED_EMAIL_LOGIN
+          value: "true"
+        # Conversation search (meilisearch template)
+        - name: SEARCH
+          value: {{ .Values.search.enabled | toString | quote }}
+        {{- if .Values.search.enabled }}
+        - name: MEILI_HOST
+          value: {{ include "librechat.meili.url" . }}
+        - name: MEILI_MASTER_KEY
+          value: 'cpln://secret/{{ .Values.meilisearch.auth.secretName }}.payload'
+        - name: MEILI_NO_ANALYTICS
+          value: "true"
+        {{- end }}
+        {{- if .Values.redis.enabled }}
+        # Shared cache, sessions and resumable streams (redis template, dev mode)
+        - name: USE_REDIS
+          value: "true"
+        - name: REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "librechat.redis.secretName" . }}.{{ include "librechat.redis.secretKey" . }}'
+        - name: REDIS_URI
+          value: 'redis://:$(REDIS_PASSWORD)@{{ include "librechat.redis.host" . }}:6379'
+        {{- end }}
+        {{- if .Values.rag.enabled }}
+        # Document search (rag-api workload)
+        - name: RAG_API_URL
+          value: {{ include "librechat.rag.url" . }}
+        {{- end }}
+        # Model providers
+        {{- with include "librechat.providerKey" (dict "root" . "secret" .Values.providers.openai.apiKeySecretName) }}
+        - name: OPENAI_API_KEY
+          value: {{ . | squote }}
+        {{- end }}
+        {{- with include "librechat.providerKey" (dict "root" . "secret" .Values.providers.anthropic.apiKeySecretName) }}
+        - name: ANTHROPIC_API_KEY
+          value: {{ . | squote }}
+        {{- end }}
+        {{- with include "librechat.providerKey" (dict "root" . "secret" .Values.providers.google.apiKeySecretName) }}
+        - name: GOOGLE_KEY
+          value: {{ . | squote }}
+        {{- end }}
+        {{- range $i, $e := .Values.customEndpoints }}
+        - name: LIBRECHAT_CUSTOM_KEY_{{ $i }}
+          {{- if $e.apiKeySecretName }}
+          value: 'cpln://secret/{{ $e.apiKeySecretName }}.payload'
+          {{- else }}
+          value: not-needed
+          {{- end }}
+        {{- end }}
+      ports:
+        - number: 3080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 3080
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 3080
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /app/storage
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "librechat.files.volume.name" . }}
+  securityOptions:
+    # the image runs as node (uid/gid 1000); the shared volume mounts root-owned otherwise
+    filesystemGroupId: 1000
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas }}
+      metric: disabled
+      minScale: {{ .Values.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

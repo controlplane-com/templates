@@ -1,0 +1,10 @@
+kind: volumeset
+name: {{ include "librechat.files.volume.name" . }}
+description: LibreChat uploaded files and images (shared by every replica)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "librechat.tags" . | nindent 4 }}
+spec:
+  # shared = read-write-many, so every replica sees the same uploads; shared volumes take no snapshots
+  fileSystemType: shared
+  performanceClass: shared
+  initialCapacity: {{ .Values.files.volumeset.capacity }}

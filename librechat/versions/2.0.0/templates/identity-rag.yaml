@@ -1,0 +1,7 @@
+{{- if .Values.rag.enabled }}
+kind: identity
+name: {{ include "librechat.rag.identity.name" . }}
+description: LibreChat document search (rag-api) identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "librechat.tags" . | nindent 4 }}
+{{- end }}

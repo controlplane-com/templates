@@ -28,7 +28,7 @@ values:
 # refused by the boot guard with the data untouched; the upgrade pinned to -pg18 then recovers it.
 # 1.0.0 is the oldest version; it installs its own default image (pgvector 0.8.6 on PostgreSQL 18).
 upgradeFrom:
-  - version: 1.0.2
+  - version: 1.0.3
     refused: {timeoutSeconds: 420}
     then: {set: {image: "pgvector/pgvector:0.8.7-pg18"}}
   - version: 1.0.0

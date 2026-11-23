@@ -98,7 +98,7 @@ pgvector:
     capacity: 10                # GiB (minimum 10)
   backup: # pass-through to the pgvector template's backup feature
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PG19 client; also backs up a server pinned to -pg18
     schedule: "0 2 * * *"       # daily at 2am UTC
     resources:
       cpu: 100m

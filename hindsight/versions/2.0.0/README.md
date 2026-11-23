@@ -7,7 +7,7 @@ This app deploys [Hindsight](https://github.com/vectorize-io/hindsight), an open
 - **API** (`RELEASE_NAME-hindsight`): standard workload serving REST (`/v1/...`) and MCP (`/mcp/BANK_ID/`) on port 8888, 1 replica by default. Replicas share PostgreSQL, so they are interchangeable. Without dedicated workers each replica also runs retain, consolidation and other background tasks. The default image (about 1 GB compressed) bundles the local embedding model (`BAAI/bge-small-en-v1.5`) and reranker (`hs-rerank-1`), so recall makes no external call.
 - **Web UI** (`RELEASE_NAME-hindsight-ui`, on by default): Hindsight's web UI (called Hindsight Control Plane upstream) on port 9999, behind an access key you type to log in. It calls the API inside the GVC with the API key.
 - **Dedicated workers** (`RELEASE_NAME-hindsight-worker`, optional): stateful workload that takes background tasks off the API. Each replica keeps a stable worker id, so a restarted worker picks up its own unfinished tasks.
-- **PostgreSQL**: the `pgvector` template (single instance, default) or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint). Holds every bank, fact, entity and document.
+- **PostgreSQL**: the `pgvector` template (single instance, default; PostgreSQL 19 with pgvector 0.8.7) or the `postgres-highly-available` template (PostgreSQL 17: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint). Holds every bank, fact, entity and document. The single instance refuses to start on a data directory from another PostgreSQL major version and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Identities + policies**: `reveal` on exactly the secrets you name. The template creates no secrets.
 
 The API and the web UI are private by default: reach them from the same GVC or with `cpln port-forward`.
@@ -78,7 +78,7 @@ internalAccess:                 # who in Control Plane may call the API
   type: same-gvc                # none | same-gvc | same-org | workload-list (none needs ui.enabled: false)
   workloads: []                 # used with workload-list
 
-pgvector:
+pgvector:                       # PostgreSQL 19; a release upgraded from 1.x keeps 18 (Upgrading from 1.x)
   enabled: true
   config:
     credentialsSecretName: my-hindsight-db-credentials
@@ -202,6 +202,43 @@ cpln port-forward RELEASE_NAME-hindsight-ui 9999:9999 --gvc GVC_NAME
 ```
 A forwarded web UI can stop responding in a browser after a while; restart the forward (or fully quit the browser), or use `publicAccess.ui: true` for regular use. Firewall changes take 30 seconds to a few minutes to take effect.
 
+## Upgrading from 1.x
+
+The single-instance database of 2.0.0 runs PostgreSQL 19. A 1.x release's data directory is PostgreSQL 18, and a data directory only starts under the major version that created it: on a PostgreSQL 19 image the database container does not start PostgreSQL and changes nothing on the volume. `RELEASE_NAME-pgvector` stays not ready, Hindsight waits for it, and the database logs repeat a `[pg-guard] REFUSING TO START` message. That message names the key `image`; in this chart the key is `pgvector.image`. A release on `postgresHA` is not affected: the highly available database keeps its own image.
+
+**Stay on PostgreSQL 18.** Pin the image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does not reuse the release's values):
+
+```yaml
+pgvector:
+  image: pgvector/pgvector:0.8.7-pg18
+```
+
+If an upgrade ran without the pin, run the same upgrade again with `--set pgvector.image=pgvector/pgvector:0.8.7-pg18`; the database comes back on its data. The Console wizard keeps the installed image on upgrade and warns before a change to another major version.
+
+**Move to PostgreSQL 19** (dump and restore into a new release in the same GVC):
+
+1. Install 2.0.0 as a **new release** with the **same database credentials secret** (and the same API key, LLM key and UI access key secrets). Wait until `NEW_RELEASE-hindsight` is ready: it creates an empty schema.
+2. Stop writes on both releases (add the `-worker` workloads if `worker.enabled`):
+
+   ```bash
+   cpln workload stop OLD_RELEASE-hindsight NEW_RELEASE-hindsight --gvc GVC_NAME
+   ```
+
+3. Stream the old database into the new one, inside the new database container (`--clean` replaces the empty schema; nothing binary crosses `cpln workload exec`):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"; pg_dump -h OLD_RELEASE-pgvector.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+4. Compare `SELECT count(*) FROM memory_units;` on both databases, then start the new API and point your agents at `NEW_RELEASE-hindsight`:
+
+   ```bash
+   cpln workload start NEW_RELEASE-hindsight --gvc GVC_NAME
+   ```
+
+5. Uninstall the old release.
+
 ## Important Notes
 
 - **One API key opens every bank.** Give each agent its own bank id, but anyone holding the key (or the web UI access key) can read and change all of them. Updating a secret restarts nothing: run `cpln workload force-redeployment` on the API, the workers and the web UI. The database password is read only when PostgreSQL first initializes; run `ALTER ROLE` before updating its secret.
@@ -217,6 +254,7 @@ A forwarded web UI can stop responding in a browser after a while; restart the f
   Between the first and second command, retains to the old servers return `503`; recall keeps working. The install wizard refuses this change, so make it with the CLI.
 - **Webhooks and mental models.** Webhooks deliver only to public addresses by default; to reach a receiver inside Control Plane (`*.cpln.local`), list its exact hostname (comma-separated, no wildcards, e.g. `my-receiver.my-gvc.cpln.local`) in `HINDSIGHT_API_WEBHOOK_ALLOWED_HOSTS` through `hindsight.extraEnv`. Mental models and pages are written by an agentic reflect loop that needs a capable LLM: a small local model on CPU may not finish before `HINDSIGHT_API_REFLECT_WALL_TIMEOUT` (300 s), so use a hosted or GPU-served model, or raise that timeout through `hindsight.extraEnv`.
 - **Stuck background tasks.** A task claimed by a process that was hard-killed (an out-of-memory kill, a lost node) stays claimed under that process's id. List them with `hindsight-admin worker-status` and hand them back with `hindsight-admin decommission-worker WORKER_ID`, through `cpln workload exec RELEASE_NAME-hindsight --gvc GVC_NAME --container hindsight -- ...`.
+- **PostgreSQL 19 for new installs only.** A release upgraded from 1.x keeps PostgreSQL 18 only with `pgvector.image: pgvector/pgvector:0.8.7-pg18` in its values; without it the database refuses to start (data untouched). See [Upgrading from 1.x](#upgrading-from-1x).
 - **One location; uninstall deletes the data.** The bundled database runs in one location, so install into a GVC with a single location. Uninstalling deletes the database volume and every memory bank with it.
 
 ## Links

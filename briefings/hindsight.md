@@ -16,11 +16,13 @@
 | `{rel}-hindsight` (standard, :8888, 1-10 replicas, default 1) | REST + MCP; in-process task worker unless `worker.enabled`; bundled `bge-small-en-v1.5` embeddings and `hs-rerank-1` reranker (full image) |
 | `{rel}-hindsight-ui` (standard, :9999, default on) | web UI (upstream calls it "Control Plane"; we never do) behind its own access key; calls the API server-side with the API key |
 | `{rel}-hindsight-worker` (stateful, :8889, optional, off) | dedicated task workers, `--worker-id $(hostname)` = `{rel}-hindsight-worker-{i}` (verified live) |
-| `pgvector` 1.0.2 (default) or `postgresHA` 2.8.1 | ALL data; the API runs migrations at boot under an advisory lock |
+| `pgvector` 2.0.0 (default, PostgreSQL 19) or `postgresHA` 2.8.1 (PostgreSQL 17, unchanged) | ALL data; the API runs migrations at boot under an advisory lock |
 | identities + policies | `reveal` on exactly the named secrets; the chart creates none |
 
 - The chart bypasses upstream's `start-all.sh`: an inline `bash -c` start script gates on a real PostgreSQL SSLRequest answer (240 s), then `exec`s `hindsight-api` / `hindsight-worker` as PID 1.
 - Auth is upstream's `ApiKeyTenantExtension` with `HINDSIGHT_API_TENANT_API_KEY` from the secret, always on; MCP is forced stateless and uses the same key. `/health`, `/metrics`, `/docs` answer without a key.
+- **2.0.0 = PostgreSQL 19 in single-instance mode only** (pgvector 2.0.0, backup image `postgres-backup:19.1.0`); HA mode keeps postgres-highly-available 2.8.1 and its images. pgvector's boot guard refuses a data directory of another major (replica not ready, volume untouched, `[pg-guard] REFUSING TO START`). A 1.x release upgrades only with `pgvector.image: pgvector/pgvector:0.8.7-pg18` (the guard's log line says `--set image=`, which is the subchart's own path; the chart's NOTES and README give `pgvector.image`). The wizard's pgvector import carries the installed 18 image on upgrade and warns on a cross-major change. Moving data to 19 = new release + `pg_dump --clean | psql` with the API stopped (README "Upgrading from 1.x"); no in-house upgrade image.
+- `cpln-connector`: none in hindsight's own identities or the pgvector 2.0.0 backup identity (bucket-scoped). The HA backup identity (postgres-highly-available 2.8.1, left unchanged) still attaches it; it goes when HA is bumped.
 - One location; private by default (API and UI); `internalAccess` defaults to `same-gvc`, and with `workload-list` the UI workload is appended automatically.
 - Availability: `hindsight.replicas: 2` + `worker.enabled` + `postgresHA.enabled`. The default single replica upgrades with a surge.
 
@@ -40,6 +42,6 @@
 - **Env names refused at render** (compared upper-cased): everything the chart sets, every `HINDSIGHT_API_TENANT_*` setting and `HINDSIGHT_API_MCP_AUTH_TOKEN` (either could switch off the API-key check), `CPLN_*`, invalid names and duplicates.
 - **Keyless self-hosted servers:** Hindsight refuses to start the `openai` embeddings provider, or any LLM provider other than ollama/lmstudio/mock/none, with no key (found live). With no key secret the chart renders the placeholder `unused`, so vLLM / LiteLLM / Ollama-embeddings URLs without auth work.
 - **Drift:** default and worker shapes clean (`minReadySeconds: 0` declared on the stateful worker; `workload-list` entries rendered sorted).
-- **CI:** upstream's `mock` LLM + bundled models, $0 and no network; checks prove auth, retain/recall isolation, the local reranker, MCP, extraEnv/extraSecrets, the DB pool size, the UI access key and data surviving.
+- **CI:** 2.0.0 adds `fresh-is-19` (install only) and `guard-holds` (`phase: refused`: upgrade from 1.0.0 held on 18 data, then pinned to -pg18, data survives). Upstream's `mock` LLM + bundled models, $0 and no network; checks prove auth, retain/recall isolation, the local reranker, MCP, extraEnv/extraSecrets, the DB pool size, the UI access key and data surviving.
 - **Version bumps:** upstream ships every 1-3 weeks. Bump the API and UI image tags + `appVersion` together; migrations run automatically; check release notes for renamed `HINDSIGHT_API_*` vars.
-- **Not in 1.0.0:** per-user API keys (StaticKeysTenantExtension is not in the official image), a read replica, S3/GCS file storage, multi-location, GPU embedding.
+- **Not in 2.0.0:** per-user API keys (StaticKeysTenantExtension is not in the official image), a read replica, S3/GCS file storage, multi-location, GPU embedding.

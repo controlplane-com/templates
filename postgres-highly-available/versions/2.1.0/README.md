@@ -230,18 +230,17 @@ unset PGPASSWORD
 
 ### WAL-G
 
-Restore these backups into a new release of **postgres-highly-available 3.0.0 or later** with
-`backup.walg.restore` (see "Restoring Backup" in that version's README): it fetches a base backup from this
-release's prefix, replays the archived WAL to the end or to a point in time, and the restored cluster runs
-PostgreSQL 17, as this one does. Give the new release:
+Because a point-in-time restore from WAL-G requires an empty data directory, follow the steps below.
 
-- a `config.credentialsSecretName` secret holding this cluster's username and password (the restored data
-  keeps them),
-- the same bucket and backup settings, with a **different** `prefix` for its own backups, and
-  `backup.walg.restore.fromPrefix` set to this release's prefix.
-
-A restore needs at least one base backup: check that `wal-g backup-list` (in the `wal-g-backup` container)
-lists one.
+1. Run `wal-g backup-list` to get desired backup.
+2. Stop the postgres workload.
+3. Create a new volume set to restore to.
+4. Run a one-off restore workload with the new volume set mounted at `/var/lib/postgresql/data` and run the following command:
+```SH
+wal-g backup-fetch /var/lib/postgresql/data/pgdata <backup_name>
+```
+5. Re-point the postgres workload to the restored volume set and restart the workload.
+6. **After restore**: Change the WAL-G prefix before re-enabling backups to avoid system identifier conflicts.
 
 ## Supported External Services
 

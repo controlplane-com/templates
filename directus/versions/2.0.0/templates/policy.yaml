@@ -1,0 +1,25 @@
+kind: policy
+name: {{ include "directus.policy.name" . }}
+description: Directus secret access
+tags: {{- include "directus.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "directus.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "directus.secret.db.name" . }}
+  - //secret/{{ .Values.secrets.name }}
+  {{- if .Values.license.secretName }}
+  - //secret/{{ .Values.license.secretName }}
+  {{- end }}
+  {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.auth.secretName }}
+  - //secret/{{ .Values.storage.s3.auth.secretName }}
+  {{- end }}
+  {{- if and .Values.email.enabled .Values.email.auth.secretName }}
+  - //secret/{{ .Values.email.auth.secretName }}
+  {{- end }}
+  {{- if include "directus.redis.authEnabled" . }}
+  - //secret/{{ include "directus.redis.secretName" . }}
+  {{- end }}

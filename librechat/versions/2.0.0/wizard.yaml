@@ -44,7 +44,7 @@ imports:
       # Chosen in Access > Bundled datastores, so the Network step (which held nothing else) goes.
       - internalAccess
   - template: pgvector
-    version: 1.0.2
+    version: 2.0.0
     when: self.rag.enabled
     title: pgvector
     after: advanced
@@ -89,7 +89,6 @@ steps:
   - id: keys
     title: Keys and admin
     description: The prerequisite secrets every install needs — encryption keys, the admin account and the database credentials — and who may sign up.
-    docs: "#prerequisites"
     sections:
       - fields:
           - type: note
@@ -191,9 +190,9 @@ steps:
   - id: models
     title: Models
     description: Which AI providers and OpenAI-compatible servers LibreChat offers in its model menu.
-    docs: "#configuration"
     sections:
       - title: Providers
+        docs: "#model-providers"
         fields:
           - path: providers.openai.apiKeySecretName
             type: ref
@@ -352,7 +351,6 @@ steps:
       - id: rag
         title: Chat over uploaded files
         toggle: rag.enabled
-        docs: "#configuration"
         description: >-
           On, files users attach for file search are split, embedded and stored in pgvector, and answers draw on
           them. Embedding needs an OpenAI key or an OpenAI-compatible embeddings server.

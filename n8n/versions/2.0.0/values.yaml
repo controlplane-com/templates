@@ -93,6 +93,9 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
+  # PostgreSQL 19 for new installs. A release installed with an earlier version of this chart
+  # has PostgreSQL 18 data: keep image: postgres:18 in your values (README, "Upgrading from 1.x").
+  image: postgres:19
   config:
     # REQUIRED PREREQUISITE SECRET (single-instance mode) — CREATE IT BEFORE YOU
     # INSTALL. Same shape as the HA one above: a `dictionary` secret holding
@@ -103,7 +106,7 @@ postgres:
 
   backup: # optional database backups (Postgres 17+) — see README storage setup
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 18
     schedule: "0 2 * * *"
     resources:
       cpu: 100m

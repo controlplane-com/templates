@@ -3,12 +3,14 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (owner_email,
 # owner_password, pg_user, pg_password, pg_db).
 #
-# Every check runs in the HA database's patroni-postgres container, which has curl and psql and reaches
-# n8n over the GVC (internalAccess same-gvc). Database checks go through the HAProxy endpoint, the
-# address n8n itself uses.
+# The default-install checks run in the HA database's patroni-postgres container, which has curl and psql and
+# reaches n8n over the GVC (internalAccess same-gvc). Database checks go through the HAProxy endpoint, the
+# address n8n itself uses. They are kept off the [single] variant (single-instance PostgreSQL, no HA
+# workload), whose own checks run in the postgres container and in the n8n container (node, no curl).
 checks:
   - id: owner-login
     description: The owner from the prerequisite secret logs in to n8n's REST API (the password matches the stored bcrypt hash).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -24,6 +26,7 @@ checks:
 
   - id: rejects-bad-password
     description: A wrong owner password is refused (the control for the check above).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -38,6 +41,7 @@ checks:
 
   - id: owner-in-database
     description: n8n's schema and the owner account are in the HA database, read through the HAProxy endpoint.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -55,6 +59,7 @@ checks:
     description: >-
       Writes a row tagged with the running version into n8n's database, then reads the row written on the
       version this scenario installed first. After an upgrade that proves the HA database carried over.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -76,6 +81,7 @@ checks:
     description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.0 moved to.
     issue: "#5376"
     since: 1.5.0
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -102,6 +108,7 @@ checks:
       17 min) goes unseen.
     issue: "#5376"
     since: 1.5.0
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -124,3 +131,81 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.0 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-owner-in-database
+    description: n8n migrated its schema into the single-instance PostgreSQL 19 database and the owner account is there.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'OWNER ' || email from \"user\" where email = '{owner_email}'" 2>&1
+    expect:
+      stdout: "^OWNER e2e@example\\.com$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: single-owner-login
+    description: >-
+      The owner logs in to n8n's REST API in single-instance mode, and a wrong password is refused, from the
+      n8n container (node's fetch; the image has no curl).
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-n8n"
+      container: n8n
+      shell: sh
+      script: |
+        cat > /tmp/e2e-login.js <<'EOF'
+        const login = (pw) => fetch(process.argv[2], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'browser-id': 'e2e' },
+          body: JSON.stringify({ emailOrLdapLoginId: process.argv[3], password: pw }),
+        }).then((r) => r.text()).catch((e) => 'ERR ' + e);
+        (async () => {
+          console.log('GOOD ' + (await login(process.argv[4])));
+          console.log('BAD ' + (await login('wrong-password')));
+        })();
+        EOF
+        node /tmp/e2e-login.js http://{release}-n8n.{gvc}.cpln.local:5678/rest/login '{owner_email}' '{owner_password}'
+    expect:
+      stdout: '(?s)^GOOD .*"email":"e2e@example\.com".*^BAD .*Wrong username or password'
+    retries: 8
+    retryDelaySeconds: 15

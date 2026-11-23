@@ -6,8 +6,8 @@ This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair
 
 - **n8n**: Stateful workload (single replica) serving the editor, API, and webhooks on port 5678; public URLs are derived from the canonical endpoint at start.
 - **Volumeset**: 10 GiB persistent storage for instance config and binary execution data (`/home/node/.n8n`).
-- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
-- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 17) — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
+- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template (PostgreSQL 19) instead, for lighter deployments.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and n8n connects with it, in either database mode.
 - **Secrets, identity, and policy**: a start-script secret, and a least-privilege policy granting the n8n identity `reveal` on exactly the secrets it uses — including the three prerequisite secrets you create.
 - **Optional database backups** (subchart): logical dumps or WAL-G archiving to S3, GCS, or an S3-compatible endpoint.
@@ -122,6 +122,7 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
+  image: postgres:19          # a release from an earlier version of this chart keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-n8n-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -141,6 +142,42 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 | Login | the `email` and the password behind `passwordHash` in your `owner.secretName` secret |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
+
+## Upgrading from 1.x
+
+**HA mode (the default) is unchanged:** the highly available database keeps its version and image, and the upgrade runs like any other.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+The log names the bundled chart's own key, `image`; in this chart that key is `postgres.image`.
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (n8n gets a new endpoint; the editor and webhooks are down during the copy):
+
+1. Stop the old n8n, so nothing writes to its database: `cpln workload stop OLD_RELEASE-n8n --gvc GVC_NAME`.
+2. Install this version as a NEW release in single-instance mode with the **same three prerequisite secrets**. The encryption key must be the same, or the copied credentials cannot be decrypted, and the copied database role keeps the old password.
+3. Once `NEW_RELEASE-n8n` is ready, stop it (`cpln workload stop NEW_RELEASE-n8n --gvc GVC_NAME`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+4. Start the new n8n (`cpln workload start NEW_RELEASE-n8n --gvc GVC_NAME`), log in, and check your workflows and credentials. Binary data of past executions stays on the old release's volume.
+5. Point webhook callers at the new endpoint, then uninstall the old release (this deletes its volumes).
 
 ## Upgrading from 1.3.1
 
@@ -263,6 +300,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
+- **Single-instance mode moves to PostgreSQL 19 in 2.0.0; HA mode (the default) is unchanged.** A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
 - **Create all three secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Rotating any prerequisite secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with.

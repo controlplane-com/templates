@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.0
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     after: database
@@ -35,7 +35,6 @@ steps:
   - id: n8n
     title: n8n
     description: The n8n image, its compute, and the encryption key and owner secrets.
-    docs: "#n8n-instance"
     sections:
       - fields:
           - type: note
@@ -56,6 +55,7 @@ steps:
             type: string
             format: image
             label: n8n image
+            docs: "#n8n-instance"
             required: true
             rules:
               - rule: >-
@@ -115,7 +115,6 @@ steps:
                   The new secret must hold the same key as the installed one, or n8n does not start and stored
                   credentials cannot be decrypted.
       - title: Instance owner
-        docs: "#prerequisites"
         fields:
           - path: owner.secretName
             type: ref
@@ -149,7 +148,6 @@ steps:
   - id: storage
     title: Storage
     description: The volume set with n8n's instance config and binary execution data.
-    docs: "#n8n-instance"
     fields:
       - path: volumeset.capacity
         type: integer
@@ -167,9 +165,9 @@ steps:
   - id: access
     title: Access
     description: Who reaches the editor and webhooks, from the internet and from inside the GVC.
-    docs: "#access"
     sections:
       - title: Public access
+        docs: "#access"
         fields:
           - path: publicAccess.enabled
             type: boolean
@@ -207,7 +205,6 @@ steps:
   - id: database
     title: Database
     description: The bundled PostgreSQL and its prerequisite credentials secret.
-    docs: "#database"
     sections:
       - fields:
           - id: dbMode
@@ -215,6 +212,7 @@ steps:
             type: enum
             label: Database
             widget: cards
+            docs: "#database"
             required: true
             init: "self.postgres.enabled && !self.postgresHA.enabled ? 'single' : 'ha'"
             options:
@@ -362,12 +360,12 @@ steps:
   - id: backups
     title: Database backups
     description: Optional backups of the highly available PostgreSQL to object storage.
-    docs: "#database-backups"
     when: self.postgresHA.enabled
     sections:
       - id: backup
         title: Scheduled backups
         toggle: postgresHA.backup.enabled
+        docs: "#database-backups"
         description: >-
           Logical dumps on a schedule, or continuous WAL-G archiving with periodic base backups. Uninstalling
           the release deletes the database volumes, so turn this on if your workflows and credentials matter.
@@ -422,7 +420,6 @@ steps:
             description: Used by whichever mode is on.
       - title: AWS S3
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-        docs: "#database-backups"
         fields:
           - path: postgresHA.backup.aws.bucket
             type: string
@@ -461,7 +458,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
-        docs: "#database-backups"
         fields:
           - path: postgresHA.backup.gcp.bucket
             type: string
@@ -485,7 +481,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: MinIO or S3-compatible
         when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
-        docs: "#database-backups"
         fields:
           - path: postgresHA.backup.minio.endpoint
             type: string

@@ -608,7 +608,7 @@ steps:
             patternMessage: Leave out line breaks and control characters.
             help: >-
               Create it with the action list under [Backing up](#backing-up). The chart attaches it to the
-              release's identity together with `cpln-connector`.
+              release's identity, and it is the only AWS policy the identity carries.
           - path: backup.aws.prefix
             type: string
             label: Folder prefix

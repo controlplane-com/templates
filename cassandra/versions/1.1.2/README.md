@@ -181,6 +181,9 @@ so it was never carrying the backup itself — but it <i>was</i> silently supply
 bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
 upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
+<b>Upgrading from 1.1.1:</b> this version also removes the <code>cpln-connector</code> policy from the backup
+identity, which now carries only your bucket-scoped policy. No action is needed.
+
 
 
 1. Create your S3 bucket. Set `aws.bucket` and `aws.region` to match.
@@ -311,6 +314,7 @@ ends with `Physical restore complete.`.
 
 - **Upgrading from 1.1.1 or earlier with backups on:** the backup image those versions used (`cassandra-backup:5.0`) uploaded nothing, so check your bucket rather than assuming you have backups. Make sure your values file does not still set `backup.image` to that tag, and after the upgrade confirm the first scheduled run wrote objects under the prefix. The upgrade also moves Cassandra to the pinned `cassandra:5.0.9`, restarting the nodes one at a time.
 - **Never turn `multiZone.enabled` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
+- **The keyspace and application user are created on first boot, once every replica has joined.** Replica 0 waits for all replicas to be Up/Normal, because every node is a seed and a seed takes over its share of the data without copying it when it joins, so anything written before the last replica joins could become unreadable. If the ring is still incomplete after 10 minutes, replica 0 logs an `ERROR` every 5 minutes with `nodetool status` and keeps waiting; the application user cannot log in until it finishes. Check with `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-cassandra"} |~ "ERROR|Bootstrap complete"' --since 1h`.
 - **Minimum replicas for production**: Use at least 3 replicas with a replication factor of 3 so the cluster can survive a node failure while still achieving quorum
 - **JVM heap**: Set `jvmHeapSize` to approximately 50% of `memory` — Cassandra relies heavily on off-heap memory for bloom filters, row cache, and OS page cache
 - **gc_grace_seconds**: The default is 10 days. Ensure repair runs at least once within this window on all nodes, or deleted data may reappear after a node recovers from downtime

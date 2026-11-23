@@ -27,12 +27,18 @@ spec:
           # The namespace hash is extracted from the pod's DNS search domain.
           K8S_NAMESPACE=$(awk '/^search/{print $2}' /etc/resolv.conf | cut -d'.' -f1)
 
+          # The JMX password goes in a 0600 file for nodetool -pwf, never on a command line.
+          PWF=$(mktemp)
+          chmod 600 "${PWF}"
+          printf 'cassandra %s\n' "${CASS_SUPERUSER_PASSWORD}" > "${PWF}"
+          trap 'rm -f "${PWF}"' EXIT
+
           echo "Starting full repair on all {{ .Values.replicas | int }} replicas..."
           FAILED=0
           for i in $(seq 0 $(( {{ .Values.replicas | int }} - 1 ))); do
             HOST="${CASSANDRA_WORKLOAD}-${i}.${CASSANDRA_WORKLOAD}.${K8S_NAMESPACE}.svc.cluster.local"
             echo "--- Repairing replica ${i} (${HOST}) ---"
-            nodetool -u cassandra -pw "${CASS_SUPERUSER_PASSWORD}" -h "${HOST}" -p 7199 repair \
+            nodetool -u cassandra -pwf "${PWF}" -h "${HOST}" -p 7199 repair \
               && echo "Replica ${i} repair complete." \
               || { echo "WARN: Replica ${i} repair failed."; FAILED=$(( FAILED + 1 )); }
           done
@@ -55,6 +61,7 @@ spec:
     capacityAI: false
     debug: false
     suspend: false
+    timeoutSeconds: 5
   firewallConfig:
     internal:
       inboundAllowType: {{ .Values.internal_access.type }}

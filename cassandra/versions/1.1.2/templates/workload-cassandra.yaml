@@ -33,7 +33,8 @@ spec:
             command:
               - bash
               - '-c'
-              - nodetool drain
+              # JMX authentication is on (LOCAL_JMX=no); the init writes this password file
+              - nodetool -u cassandra -pwf /etc/cassandra/jmxremote.password drain
       image: {{ .Values.image }}
       cpu: {{ .Values.cpu | quote }}
       memory: {{ .Values.memory | quote }}
@@ -136,9 +137,9 @@ spec:
     replicaDirect: true
   rolloutOptions:
     maxSurgeReplicas: 0%
-    maxUnavailableReplicas: '1'
     minReadySeconds: 60
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   securityOptions:
     filesystemGroupId: 999
   supportDynamicTags: false

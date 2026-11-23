@@ -5,7 +5,7 @@
 #
 # Every connection goes to the replica's own IP, not 127.0.0.1: the image trusts loopback without a
 # password, so a loopback connection would pass the auth checks whatever the password was.
-# No drift left on a default install (postgres 3.4.2 / redis 3.9.1): drift fails the run, not warns.
+# No drift left on a default install (postgres 3.4.3 / redis 3.9.1): drift fails the run, not warns.
 driftBlocks: true
 
 checks:
@@ -58,3 +58,51 @@ checks:
         [ "${n:-0}" -ge 1 ] && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
     expect:
       stdout: "^PERSISTED$"
+
+  - id: fresh-is-19
+    description: A fresh install runs PostgreSQL 19 (an upgrade pinned to an older major keeps that major).
+    since: 4.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: guard-passes
+    description: >-
+      On a matching data directory the major-version guard hands over to PostgreSQL: no guard file, and
+      postgres is PID 1 (the guard exec'd the stock entrypoint). The control for guard-holds.
+    since: 4.0.0
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade onto PostgreSQL 18 data is held by the guard: the data directory is still 18, no
+      postgres process runs, and the guard file names the exact pin.
+    since: 4.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set image=postgres:18"
+    retries: 8

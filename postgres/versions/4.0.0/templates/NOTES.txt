@@ -1,0 +1,23 @@
+PostgreSQL ({{ .Values.image }}) is deploying as {{ include "postgres.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+
+  Connect:     {{ include "postgres.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432
+{{- if .Values.pgbouncer.enabled }}
+  Pooled:      {{ include "postgres.pgbouncer.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:5432
+{{- end }}
+  Credentials: the dictionary secret {{ .Values.config.credentialsSecretName }}
+
+UPGRADING A 3.x RELEASE? This chart defaults to PostgreSQL 19, and a 3.x data directory is
+PostgreSQL 18 (or the major of the image it ran). A PostgreSQL 19 server REFUSES to start on it,
+and your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" .Values.image }}
+  If `cpln workload get-deployments {{ include "postgres.name" . }} --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with --set image=postgres:18
+  (the major the logs name), and keep that image in your values for every later upgrade.
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.image }}
+  This release runs {{ .Values.image }}: the server stays on that major. Keep the image in
+  your values for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.image }}. If the server stays not ready and the logs say
+  "REFUSING TO START", set the image the logs name and keep it in your values.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 3.x" (dump and restore).

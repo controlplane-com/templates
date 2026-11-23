@@ -7,7 +7,7 @@ category: database
 topology: single
 
 summary: >-
-  A single PostgreSQL server on a persistent, snapshotted volume, with an optional PgBouncer
+  A single PostgreSQL server on a persistent volume, with an optional PgBouncer
   connection pooler and optional scheduled pg_dump backups to S3, GCS or an S3-compatible
   endpoint such as MinIO. It is reachable only from inside the org, with no public endpoint.
   The default relational database for an app in one location.

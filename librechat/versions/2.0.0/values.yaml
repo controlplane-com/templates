@@ -129,6 +129,11 @@ pgvector:
     credentialsSecretName: my-librechat-pgvector-credentials
   volumeset:
     capacity: 10 # GiB
+  # Where pgvector's major-version guard points you when it refuses an older data directory.
+  upgradeHint:
+    imageKey: pgvector.image
+    consoleField: "Upgrade > Vector store server > pgvector image"
+    readme: 'README, "Upgrading from 1.x"'
 
 # ─── Redis (redis template, dev mode) — REQUIRED for replicas > 1 ─────────────
 redis:

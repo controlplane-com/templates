@@ -165,38 +165,15 @@ pgvector:
   image: pgvector/pgvector:0.8.7-pg18
 ```
 
-If an upgrade ran without the pin, run the same upgrade again with `--set pgvector.image=pgvector/pgvector:0.8.7-pg18`; the server comes back on its data. The guard's log line names the pgvector chart's own key, `image`; in this chart it is `pgvector.image`. The Console wizard keeps the installed image on upgrade and warns on a change to another major.
+If an upgrade ran without the pin, run the same upgrade again with `--set pgvector.image=pgvector/pgvector:0.8.7-pg18`; the server comes back on its data. The Console wizard keeps the installed image on upgrade and warns on a change to another major.
 
 ### Move document search to PostgreSQL 19
 
-The embeddings are copied through a temporary pgvector release in the same GVC, so MongoDB and the rest of LibreChat stay as they are. File uploads to document search fail while the copy runs.
+Moving to 19 drops the existing file embeddings and rebuilds them: chats, users and settings live in MongoDB and stay as they are.
 
-1. Upgrade to 2.0.0 with the PostgreSQL 18 pin above.
-2. Install a temporary pgvector 2.0.0 release with the **same credentials secret** (the copy carries the role's password hash):
-
-   ```bash
-   cpln helm install TEMP_RELEASE oci://ghcr.io/controlplane-com/templates/pgvector \
-     --version 2.0.0 --gvc GVC_NAME --set config.credentialsSecretName=my-librechat-pgvector-credentials
-   ```
-
-3. Copy the database into it (the PostgreSQL 19 `pg_dump` reads the 18 server):
-
-   ```bash
-   cpln workload exec TEMP_RELEASE-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
-     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists -h RELEASE_NAME-pgvector.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
-   ```
-
-4. Compare row counts on both servers (`select count(*) from langchain_pg_embedding;`).
-5. Upgrade the LibreChat release with `--set rag.enabled=false` and without the pin. This **deletes** `RELEASE_NAME-pgvector` and its volume set; the copy from step 3 is now the only one.
-6. Upgrade again with `rag.enabled: true` and without the pin: `RELEASE_NAME-pgvector` starts empty on PostgreSQL 19.
-7. Copy the data back, then compare row counts again:
-
-   ```bash
-   cpln workload exec RELEASE_NAME-pgvector --gvc GVC_NAME --container pgvector -- bash -c \
-     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists -h TEMP_RELEASE-pgvector.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
-   ```
-
-8. Remove the pin from your values file and uninstall the temporary release: `cpln helm uninstall TEMP_RELEASE --gvc GVC_NAME`.
+1. Upgrade with `--set rag.enabled=false` (and without the pin). This deletes `{release}-pgvector` and its PostgreSQL 18 volume set, with every file embedding in it.
+2. Upgrade again with `rag.enabled: true` and the default image: `{release}-pgvector` starts empty on PostgreSQL 19.
+3. Upload the files again to rebuild their embeddings. Until then, file search finds nothing for files uploaded before the move.
 
 ## Connecting
 

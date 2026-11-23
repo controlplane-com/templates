@@ -44,7 +44,7 @@ imports:
       # Chosen in Access > Bundled datastores, so the Network step (which held nothing else) goes.
       - internalAccess
   - template: pgvector
-    version: 2.0.0
+    version: 2.0.1
     when: self.rag.enabled
     title: pgvector
     after: advanced

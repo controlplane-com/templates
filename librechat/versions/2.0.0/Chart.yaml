@@ -22,7 +22,7 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: search.enabled
   - name: pgvector
-    version: 2.0.0
+    version: 2.0.1
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: rag.enabled
   - name: redis

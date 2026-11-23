@@ -214,11 +214,10 @@ The cluster ships a fixed Patroni consensus configuration:
 | `retry_timeout` | 15s | how long the primary tolerates losing etcd before it demotes itself |
 | `loop_wait` | 10s | how often the HA loop runs |
 
-**What that means in practice, measured on a 3-member cluster:** a *planned* failover — a rolling restart,
-or anything that shuts Patroni down cleanly — releases the leader lock immediately and costs a few seconds
-of refused writes. Patroni's own handover took 185 milliseconds; what clients actually wait on is the
-HAProxy health check noticing the change. An *abrupt* loss, where the lock has to expire on its own, took
-about a minute to recover in testing. Lowering `ttl` did not measurably shorten that, so treat it as the
+**What that means in practice:** a *planned* failover — a rolling restart, or anything that shuts Patroni
+down cleanly — releases the leader lock immediately, so writes are refused for a few seconds, mostly while
+the HAProxy health check notices the new leader. After an *abrupt* loss the lock has to expire on its own,
+so recovery takes up to about a minute. Lowering `ttl` does not noticeably shorten that, so treat it as the
 lock-expiry bound rather than a dial for failover speed.
 
 These are not values you set at install, because Patroni reads them only while the data directory is empty
@@ -252,11 +251,10 @@ a replica, the primary demotes as it would have before.
 three move together: raising `ttl` on its own leaves `retry_timeout` clamped, and raising `retry_timeout`
 on its own does nothing at all.
 
-**2.6.0 corrects a defect here.** Versions through 2.5.x shipped `ttl: 30` alongside `retry_timeout: 30`,
-which breaks the rule above, so Patroni ran those clusters at `loop_wait: 1` and `retry_timeout: 14`. The
-chart asked for a 30-second tolerance and delivered 14. An etcd outage longer than that demoted a healthy
-primary, and the shutdown, restart-as-standby and re-promote that followed cost roughly 12 seconds of
-refused writes.
+**Clusters created by 2.5.x or earlier run with a shorter etcd tolerance than they asked for.** Those
+versions shipped `ttl: 30` alongside `retry_timeout: 30`, which breaks the rule above, so Patroni runs them
+at `loop_wait: 1` and `retry_timeout: 14`: an etcd outage longer than 14 seconds can demote a healthy
+primary, and the restart as a standby and re-promotion that follow refuse writes for several seconds.
 
 **Upgrading does not fix a cluster that already exists** — its configuration was written to etcd when it
 was created, and the chart is never consulted again. Run the `edit-config` command above to move an

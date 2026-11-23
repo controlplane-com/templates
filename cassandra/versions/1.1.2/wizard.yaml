@@ -455,8 +455,7 @@ steps:
         toggle: backup.enabled
         description: >-
           Backs up the application keyspace (logical) or every node's SSTables (physical) to S3 or GCS.
-          Neither restore path has been verified end to end with this template: rehearse a restore on a
-          scratch install before you rely on it.
+          Rehearse a restore on a scratch install before you rely on it.
         docs: "#backup"
         fields:
           - path: backup.type
@@ -503,6 +502,14 @@ steps:
             advanced: true
             description: For the logical backup job, or for the sidecar on each node with physical backups.
         rules:
+          # cassandra-backup:5.0 (the 1.1.1 default) uploads nothing on a schedule (work item 5586).
+          - rule: >-
+              !self.backup.image.endsWith('/cassandra-backup:5.0')
+            severity: warning
+            paths: [backup.image]
+            message: >-
+              The `cassandra-backup:5.0` image uploads nothing on a schedule, in either backup type. Use the
+              default image of this version.
           # With physical backups the sidecar runs in every node's pod (workload-cassandra.yaml:74-100):
           # a change to its image, schedule, resources, provider or prefix rolls every node.
           - when: >-

@@ -53,7 +53,7 @@ replicationFactor: 1  # Copies of each partition stored across the cluster
 
 credentialsSecretName: my-cassandra-credentials  # see Prerequisites — must exist before install
 
-image: cassandra:5.0
+image: cassandra:5.0.9
 cpu: 1
 memory: 4Gi
 jvmHeapSize: 2G       # Set to ~50% of memory — Cassandra needs the rest for off-heap cache
@@ -151,7 +151,7 @@ Set `backup.enabled: true`, choose a `type`, set `backup.provider`, and fill in 
 backup:
   enabled: true
   type: logical     # logical or physical
-  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0
+  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0.9
   schedule: "0 2 * * *"  # daily at 2am UTC
 
   resources:
@@ -226,44 +226,90 @@ upgrading</b>; if it already matches, no action is needed. Nothing else changes.
 
 **Important**: Add the `Storage Admin` role to the GCP service account created for the Cloud Account.
 
+### Backup retention
+
+The backup job only uploads; it never deletes old backups. To keep a fixed window, add a lifecycle rule on the bucket that expires objects under the backup prefix. Each backup is a complete, standalone copy, so expiring old ones never affects restoring a newer one. Set the window to at least your retention plus one backup interval, and note that an age rule keeps no minimum: if backups stop running, the last ones expire too. Each run writes its own timestamped folder (logical: one `TABLE.csv.gz` per table under `TIMESTAMP/KEYSPACE/`; physical: each node's SSTable snapshot under `TIMESTAMP/HOSTNAME/`), and all of them sit under the prefix and expire together.
+
+The rules below use the default prefix `cassandra/backups/`; change it if you changed `backup.aws.prefix` or `backup.gcp.prefix`.
+
+**AWS S3.** `put-bucket-lifecycle-configuration` **replaces every existing rule on the bucket**, so check for existing rules first and add them to the file:
+
+```bash
+aws s3api get-bucket-lifecycle-configuration --bucket BUCKET_NAME
+cat > lifecycle.json <<'EOF'
+{"Rules":[{"ID":"expire-db-backups","Filter":{"Prefix":"cassandra/backups/"},"Status":"Enabled",
+  "Expiration":{"Days":30},"NoncurrentVersionExpiration":{"NoncurrentDays":1}}]}
+EOF
+aws s3api put-bucket-lifecycle-configuration --bucket BUCKET_NAME --lifecycle-configuration file://lifecycle.json
+```
+
+**Google Cloud Storage.** `--lifecycle-file` also **replaces the bucket's existing rules**; check with `gcloud storage buckets describe gs://BUCKET_NAME --format='json(lifecycle_config)'` first:
+
+```bash
+cat > lifecycle.json <<'EOF'
+{"rule":[
+  {"action":{"type":"Delete"},"condition":{"age":30,"matchesPrefix":["cassandra/backups/"]}},
+  {"action":{"type":"Delete"},"condition":{"daysSinceNoncurrentTime":1,"isLive":false,"matchesPrefix":["cassandra/backups/"]}}]}
+EOF
+gcloud storage buckets update gs://BUCKET_NAME --lifecycle-file=lifecycle.json
+```
+
+Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
+
 ## Restoring a Backup
 
-**Neither restore path has been verified end to end against this template** — rehearse on a scratch install
-before you need one. Both are driven by `/usr/local/bin/restore.sh` in the backup image, which takes
-`RESTORE_TIMESTAMP` (the timestamp directory in your bucket, e.g. `cassandra/backups/2026-05-15T02-00-00Z/`)
-and reads the same `BACKUP_*` environment the backup job has.
+Both restore paths run `/usr/local/bin/restore.sh` from the backup image. It takes `RESTORE_TIMESTAMP` (a
+timestamp folder under your prefix, e.g. `2026-05-15T02-00-00Z`) and reads the same `BACKUP_*` settings the
+backup uses. Rehearse a restore on a scratch install before you rely on one.
 
 ### Logical Restore
 
-The backup is one gzip-compressed CSV per table, written by `cqlsh COPY TO`, at
-`PREFIX/TIMESTAMP/KEYSPACE/TABLE.csv.gz`. `restore.sh` downloads them and replays each with `cqlsh COPY FROM`:
-rows with matching primary keys are overwritten; rows not in the backup are left in place.
+The backup is one gzip-compressed CSV per table at `PREFIX/TIMESTAMP/KEYSPACE/TABLE.csv.gz`. `restore.sh`
+downloads them and replays each with `cqlsh COPY FROM`: rows with matching primary keys are overwritten, and
+rows not in the backup are left in place. The tables must exist.
 
-There is nothing to exec into: the logical backup workload (`RELEASE_NAME-cassandra-backup`) is a `cron`
-workload whose container runs `backup.sh` and exits, so it has no running replica between runs. Run
-`restore.sh` from a one-off workload built on the backup image, with the backup job's environment
-(`BACKUP_PROVIDER`, `BACKUP_BUCKET`, `BACKUP_PREFIX`, `AWS_REGION` on S3, `CASSANDRA_HOST`, `CASSANDRA_PORT`,
-`CASSANDRA_USER`, `CASSANDRA_PASSWORD`, `CASSANDRA_KEYSPACE`) plus `RESTORE_TIMESTAMP`, under the same identity
-so it can read the bucket.
+The logical backup workload is a cron job with no running replica to exec into, so run the restore as a
+one-off job on the backup image, under the release's identity so it can read the bucket:
+
+```bash
+cpln workload cron run --gvc GVC_NAME \
+  --image ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0.9 \
+  --identity RELEASE_NAME-cassandra-identity --timeout 900 \
+  --env BACKUP_TYPE=logical --env BACKUP_PROVIDER=aws \
+  --env BACKUP_BUCKET=my-backup-bucket --env AWS_REGION=us-east-1 --env BACKUP_PREFIX=cassandra/backups \
+  --env CASSANDRA_HOST=RELEASE_NAME-cassandra.GVC_NAME.cpln.local --env CASSANDRA_USER=cassandra \
+  --env CASSANDRA_PASSWORD=cpln://secret/YOUR_CREDENTIALS_SECRET.superuserPassword \
+  --env CASSANDRA_KEYSPACE=cpln://secret/YOUR_CREDENTIALS_SECRET.keyspace \
+  --env RESTORE_TIMESTAMP=2026-05-15T02-00-00Z -- /usr/local/bin/restore.sh
+```
+
+On GCS, use `--env BACKUP_PROVIDER=gcp` and drop `AWS_REGION`. The restore's log ends with
+`Logical restore complete.` (`cpln logs` on the runner workload). The command leaves a `cpln-run-…` runner
+workload in the GVC; delete it with `cpln workload delete` when you are done.
 
 ### Physical Restore
 
-Physical backups are per-node — each replica uploaded its own SSTable snapshot to `PREFIX/TIMESTAMP/HOSTNAME/`.
-The `backup` sidecar on each replica stays running, mounts the data volume and has `nodetool`, so the restore
-runs there; `restore.sh` downloads that replica's snapshot files and calls `nodetool import` for each table,
-loading the SSTables into the live node without a restart:
+Each replica uploads its own SSTable snapshot to `PREFIX/TIMESTAMP/HOSTNAME/`, where `HOSTNAME` is the replica
+name (`RELEASE_NAME-cassandra-0`, `-1`, …). The replicas' timestamps usually match, but each one is set when
+that replica's run starts, so list the bucket and pick, for every replica, its own folder from the same run.
+
+The `backup` sidecar on each replica stays running and has `nodetool`, so the restore runs there.
+`restore.sh` downloads that replica's snapshot and loads each application table into the live node with
+`nodetool import`, without a restart. System keyspaces (schema, roles and passwords, node state) are skipped,
+so the tables must exist:
 
 ```bash
-cpln workload exec RELEASE_NAME-cassandra --gvc GVC_NAME --container backup -- \
+cpln workload exec RELEASE_NAME-cassandra --gvc GVC_NAME --replica RELEASE_NAME-cassandra-0 --container backup -- \
   sh -c 'RESTORE_TIMESTAMP=2026-05-15T02-00-00Z /usr/local/bin/restore.sh'
 ```
 
-**Repeat this on every replica** — `cpln workload exec` takes `--location` and `--replica` to pick one; see
-`cpln workload exec --help`. Each node owns a different token range, so restoring only one replica leaves the
-cluster with incomplete data.
+**Repeat this on every replica**, changing `--replica` (and `--location` on a multi-location GVC). Each node
+owns a different token range, so restoring only one replica leaves the cluster with incomplete data. The output
+ends with `Physical restore complete.`.
 
 ## Important Notes
 
+- **Upgrading from 1.1.1 or earlier with backups on:** the backup image those versions used (`cassandra-backup:5.0`) uploaded nothing, so check your bucket rather than assuming you have backups. Make sure your values file does not still set `backup.image` to that tag, and after the upgrade confirm the first scheduled run wrote objects under the prefix. The upgrade also moves Cassandra to the pinned `cassandra:5.0.9`, restarting the nodes one at a time.
 - **Never turn `multiZone.enabled` off once it has been on.** Each replica's volume stays in the zone it was created in, so with multi-zone off a replica whose volume is in another zone cannot be scheduled and the rollout stops at it. Turning it on later is safe. `cpln helm upgrade` does not reuse earlier values, so keep the setting in your values file on every upgrade. To recover, upgrade again with it on, then force a redeployment of the affected workload.
 - **Minimum replicas for production**: Use at least 3 replicas with a replication factor of 3 so the cluster can survive a node failure while still achieving quorum
 - **JVM heap**: Set `jvmHeapSize` to approximately 50% of `memory` — Cassandra relies heavily on off-heap memory for bloom filters, row cache, and OS page cache

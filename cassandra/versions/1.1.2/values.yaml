@@ -10,7 +10,7 @@ replicationFactor: 1
 # the exact `cpln secret create-dictionary` command.
 credentialsSecretName: my-cassandra-credentials
 
-image: cassandra:5.0
+image: cassandra:5.0.9
 cpu: 1
 memory: 4Gi
 # JVM heap: leave ~50% of container memory for off-heap (bloom filters, page cache, etc.)
@@ -35,7 +35,7 @@ internal_access:
 backup:
   enabled: false
   type: logical   # options: logical, physical
-  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0
+  image: ghcr.io/controlplane-com/backup-images/cassandra-backup:5.0.9
   schedule: "0 2 * * *"   # daily at 2am UTC
 
   resources:

@@ -479,6 +479,11 @@ backup:
 
   walg:
     intervalSeconds: 21600
+    restore: # create a NEW cluster from another release's WAL-G backups (see Restoring Backup)
+      enabled: false
+      fromPrefix: ""
+      backupName: LATEST
+      targetTime: ""
 
   aws:
     bucket: pg-ha-backup-bucket
@@ -682,17 +687,39 @@ unset PGPASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 ### WAL-G
 
-Because a point-in-time restore from WAL-G requires an empty data directory, follow the steps below.
+A WAL-G restore creates a new cluster from the backups: install a second release that fetches a base backup from the old release's prefix, replays the WAL archived after it, and promotes. The old release keeps running until you remove it.
 
-1. Run `wal-g backup-list` to get desired backup.
-2. Stop the postgres workload.
-3. Create a new volume set to restore to.
-4. Run a one-off restore workload with the new volume set mounted at `/var/lib/postgresql/data` and run the following command:
-```SH
-wal-g backup-fetch /var/lib/postgresql/data/pgdata <backup_name>
-```
-5. Re-point the postgres workload to the restored volume set and restart the workload.
-6. **After restore**: Change the WAL-G prefix before re-enabling backups to avoid system identifier conflicts.
+1. List the base backups, from any member of the backed-up release:
+   ```sh
+   cpln workload exec RELEASE_NAME-postgres-ha --gvc GVC_NAME --container wal-g-backup -- wal-g backup-list
+   ```
+2. Install a new release with the same backup settings, the same `config.credentialsSecretName`, a **different** `prefix` for its own backups, and `backup.walg.restore` pointing at the old prefix:
+   ```yaml
+   backup:
+     enabled: true
+     mode: wal-g
+     provider: aws
+     aws:
+       # bucket, region, cloudAccountName, policyName as on the old release
+       prefix: postgres/backups-restored # new backups go here
+     walg:
+       restore:
+         enabled: true
+         fromPrefix: postgres/backups # the old release's prefix
+         backupName: LATEST # or a name from step 1
+         targetTime: "" # optional, e.g. "2026-11-23 15:30:00+00"; empty replays all archived WAL
+   ```
+   ```sh
+   cpln helm install NEW_RELEASE ./postgres-highly-available/versions/3.0.0 --gvc GVC_NAME --dependency-update -f restore-values.yaml
+   ```
+   The first member restores and promotes (on the PostgreSQL major the backup was taken on); the others copy it from that member. The restore setting is used only when the cluster is created, so later upgrades of the new release ignore it.
+3. Wait for one leader and two streaming replicas:
+   ```sh
+   cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres -- patronictl -c /tmp/patroni_config.yml list
+   ```
+4. Check the data, then point applications at `NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local` and uninstall the old release when you no longer need it.
+
+Transactions committed after `targetTime`, or not yet archived when the restore ran (WAL is archived at least every 60 seconds), are not in the restored cluster. Logical replication slots are not restored.
 
 ## Supported External Services
 

@@ -544,6 +544,32 @@ steps:
             required: true
             when: self.backup.mode == 'wal-g'
             suggestions: [3600, 21600, 86400]
+          - path: backup.walg.restore.enabled
+            type: boolean
+            label: Create from a WAL-G backup
+            advanced: true
+            when: self.backup.mode == 'wal-g' && context.mode == 'install'
+            description: Start the new cluster from another release's WAL-G backups in the same bucket instead of an empty database.
+            docs: "#restoring-backup"
+          - path: backup.walg.restore.fromPrefix
+            type: string
+            label: Source prefix
+            required: true
+            when: self.backup.mode == 'wal-g' && context.mode == 'install' && self.backup.walg.restore.enabled
+            description: The prefix the backed-up release wrote to. New backups go to this release's own prefix, which must be different.
+            placeholder: postgres/backups-old
+          - path: backup.walg.restore.backupName
+            type: string
+            label: Base backup
+            required: true
+            when: self.backup.mode == 'wal-g' && context.mode == 'install' && self.backup.walg.restore.enabled
+            description: A name from `wal-g backup-list`, or LATEST.
+            suggestions: [LATEST]
+          - path: backup.walg.restore.targetTime
+            type: string
+            label: Recover to time
+            when: self.backup.mode == 'wal-g' && context.mode == 'install' && self.backup.walg.restore.enabled
+            description: Optional. Replay WAL up to this moment instead of to the end, for example 2026-11-23 15:30:00+00.
           - path: backup.logical.image
             type: string
             format: image
@@ -567,6 +593,14 @@ steps:
             mirrors: pg-ha.validateBackupConfig
             paths: [backup.provider]
             message: Choose aws, gcp or minio as the backup destination.
+          - when: self.backup.mode == 'wal-g' && self.backup.walg.restore.enabled
+            rule: >-
+              self.backup.walg.restore.fromPrefix != '' &&
+              self.backup.walg.restore.fromPrefix != (self.backup.provider == 'gcp' ? self.backup.gcp.prefix :
+              (self.backup.provider == 'minio' ? self.backup.minio.prefix : self.backup.aws.prefix))
+            mirrors: pg-ha.validate
+            paths: [backup.walg.restore.fromPrefix]
+            message: Enter the source release's prefix. It must differ from this release's backup prefix.
           - when: self.backup.mode == 'logical'
             rule: self.proxy.enabled || self.pgbouncer.enabled
             severity: warning

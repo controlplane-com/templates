@@ -170,6 +170,18 @@ before anything is applied.
 {{- fail (printf "postgres-highly-available: synchronous.nodeCount must be at least 1 and lower than replicas (%d), got %v. Each commit waits for that many replicas, and the leader is not one of them." (int .Values.replicas) $sync.nodeCount) -}}
 {{- end -}}
 {{- end -}}
+{{- $restore := (.Values.backup.walg | default dict).restore | default dict -}}
+{{- if $restore.enabled -}}
+{{- if not (and .Values.backup.enabled (eq .Values.backup.mode "wal-g")) -}}
+{{- fail "postgres-highly-available: backup.walg.restore.enabled needs backup.enabled: true and backup.mode: wal-g, which give the cluster access to the bucket the backups are in." -}}
+{{- end -}}
+{{- if not $restore.fromPrefix -}}
+{{- fail "postgres-highly-available: backup.walg.restore.fromPrefix is required: the prefix the backed-up release wrote its WAL-G backups to, in the same bucket." -}}
+{{- end -}}
+{{- if eq (trimSuffix "/" $restore.fromPrefix) (trimSuffix "/" (include "pg-ha.walgPrefix" .)) -}}
+{{- fail "postgres-highly-available: backup.walg.restore.fromPrefix must differ from this release's backup prefix. The restored cluster writes new backups to its own prefix; sharing one mixes two clusters' WAL." -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "minio") -}}
 {{- if or (hasKey .Values.backup.minio "accessKey") (hasKey .Values.backup.minio "secretKey") -}}
 {{- fail "postgres-highly-available: backup.minio.accessKey and backup.minio.secretKey were REMOVED in 2.5.0. Create a `dictionary` secret holding the keys `accessKey` and `secretKey`, and set backup.minio.credentialsSecretName to its name. See Backup setup in the README." -}}
@@ -205,4 +217,23 @@ shared configuration on every start, so a running cluster follows the chart valu
 {{- $sync := .Values.synchronous | default dict -}}
 {{- $on := $sync.enabled | default false -}}
 {{- dict "synchronous_mode" $on "synchronous_mode_strict" (and $on ($sync.strict | default false)) "synchronous_node_count" (int ($sync.nodeCount | default 1)) | toJson -}}
+{{- end }}
+
+{{/*
+WAL-G: this release's backup prefix, the env var WAL-G reads it from, and the URL of the
+prefix a restore reads from (backup.walg.restore.fromPrefix, same bucket).
+*/}}
+{{- define "pg-ha.walgPrefix" -}}
+{{- if eq .Values.backup.provider "gcp" -}}{{ .Values.backup.gcp.prefix }}
+{{- else if eq .Values.backup.provider "minio" -}}{{ .Values.backup.minio.prefix }}
+{{- else -}}{{ .Values.backup.aws.prefix }}{{- end -}}
+{{- end }}
+{{- define "pg-ha.walgPrefixEnv" -}}
+{{- if eq .Values.backup.provider "gcp" -}}WALG_GS_PREFIX{{- else -}}WALG_S3_PREFIX{{- end -}}
+{{- end }}
+{{- define "pg-ha.walgRestoreSource" -}}
+{{- $from := trimSuffix "/" .Values.backup.walg.restore.fromPrefix -}}
+{{- if eq .Values.backup.provider "gcp" -}}gs://{{ .Values.backup.gcp.bucket }}/{{ $from }}
+{{- else if eq .Values.backup.provider "minio" -}}s3://{{ .Values.backup.minio.bucket }}/{{ $from }}
+{{- else -}}s3://{{ .Values.backup.aws.bucket }}/{{ $from }}{{- end -}}
 {{- end }}

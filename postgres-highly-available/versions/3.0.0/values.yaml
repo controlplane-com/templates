@@ -103,6 +103,13 @@ backup:
 
   walg: # wal-g backup settings
     intervalSeconds: 21600 # interval in seconds between backups, default is every 6 hours
+    # Create this cluster from another release's WAL-G backups instead of an empty database (README:
+    # Restoring Backup). Applies only when the cluster is first created, so install a NEW release with it.
+    restore:
+      enabled: false
+      fromPrefix: "" # the backed-up release's prefix in the same bucket; must differ from this release's prefix
+      backupName: LATEST # a base backup name from `wal-g backup-list`, or LATEST
+      targetTime: "" # optional point in time to stop at, e.g. "2026-11-23 15:30:00+00"; empty replays all WAL
 
   # storage settings are applied to whichever mode is enabled
   provider: aws # Options: aws, gcp, or minio

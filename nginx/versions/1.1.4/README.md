@@ -22,8 +22,8 @@ To proxy to your own services, set `enableExample: false` and add each target to
 **Proxy workload** — configure the nginx container image and timeout:
 ```yaml
 proxyWorkload:
-  image: nginx:1.31.7 # pinned: `latest` makes installs non-reproducible
-  port: 80 # leave at 80: nginx.conf and the health probes are fixed to port 80
+  image: nginx:1.31.9 # pinned: `latest` makes installs non-reproducible
+  port: 80 # nginx listens here and the health probes check it
   timeoutSeconds: 5
 ```
 
@@ -62,7 +62,7 @@ locations:
 
 The `regexModifier` field maps to nginx location modifiers (e.g., `~` for case-sensitive regex, `~*` for case-insensitive). Leave it empty for prefix matching.
 
-**Custom nginx.conf** — to run your own configuration instead of the generated one, put the whole file in `nginxConf`. Helm template syntax in it is rendered, so it can still use `.Values.locations` and `.Values.global.cpln.gvc`. Keep `listen 80` and a `location /health` that returns 200, because the health probes check them:
+**Custom nginx.conf** — to run your own configuration instead of the generated one, put the whole file in `nginxConf`. Helm template syntax in it is rendered, so it can still use `.Values.locations` and `.Values.global.cpln.gvc`. Keep a `listen` on `proxyWorkload.port` and a `location /health` that returns 200, because the health probes check them:
 ```yaml
 nginxConf: "" # a full nginx.conf replacing the generated one (Helm template syntax is rendered); empty = generated from the settings above
 ```
@@ -81,7 +81,7 @@ A 500, 502, 503 or 504 from an upstream workload is answered with the `/fail` bo
 | What | Address |
 |---|---|
 | Public endpoint | `https://` + `status.canonicalEndpoint` of `RELEASE_NAME-nginx` (always open to the internet) |
-| Private tunnel | `cpln port-forward RELEASE_NAME-nginx 8080:80 --gvc GVC_NAME`, then `http://localhost:8080` |
+| Private tunnel | `cpln port-forward RELEASE_NAME-nginx 8080:80 --gvc GVC_NAME` (the second number is `proxyWorkload.port`), then `http://localhost:8080` |
 | Credentials | None; any authentication is up to the services behind the proxy |
 
 Read the canonical endpoint:
@@ -96,7 +96,7 @@ cpln workload get RELEASE_NAME-nginx --gvc GVC_NAME -o yaml
 - **Put only the bare workload name in `locations[].workload`.** The chart appends `.GVC_NAME.cpln.local` itself, so typing a fully qualified name produces a doubled hostname.
 - **Each target's internal firewall must allow `RELEASE_NAME-nginx`**, or its route returns the `/fail` response.
 - **The proxy is always public.** The chart opens it to `0.0.0.0/0` and has no value to make it private.
-- **`proxyWorkload.port` does not move the listener.** nginx listens on 80 and the probes check 80 regardless, so leave it at `80`.
+- **Never set `proxyWorkload.port` to a port Control Plane reserves** (8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000); the install is rejected.
 - **A routing change rolls the proxy onto the new config by itself** after `helm upgrade`; with one replica, requests may fail for a few seconds during the swap.
 - **The example backend image is unpinned.** `gcr.io/knative-samples/helloworld-go` publishes only `:latest`, so the demo target can change under you. It does not affect the proxy itself, which is pinned.
 

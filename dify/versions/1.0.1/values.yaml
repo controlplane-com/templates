@@ -3,7 +3,7 @@ dify:
   # Official images; api, worker and beat share apiImage. Keep api and web on the same tag.
   apiImage: langgenius/dify-api:1.19.0
   webImage: langgenius/dify-web:1.19.0
-  gatewayImage: nginx:1.30.6-alpine
+  gatewayImage: nginx:1.30.7-alpine
   # Replicas of the gateway, web, API, code sandbox and SSRF proxy (1-3).
   # set dify.replicas: 2, worker.replicas: 2 and postgresHA.enabled: true for near-zero-downtime upgrades and failover
   replicas: 1

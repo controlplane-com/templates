@@ -1,0 +1,51 @@
+# Feature checks for the nginx template. Each runs after install (and after each upgrade) on every version in
+# its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (nginx_version).
+# The scripts run in the proxy's own nginx container (the image carries curl) against its loopback listener.
+checks:
+  - id: image-version
+    description: The proxy runs the baseline's nginx release.
+    exec:
+      workload: "{release}-nginx"
+      container: nginx
+      script: nginx -v 2>&1
+    expect:
+      stdout: "nginx/{nginx_version}$"
+
+  - id: routes-default-port
+    description: >-
+      On the default port 80, /health answers 200 with its body, /fail answers 500, and / reaches the example
+      backend.
+    scenarios: "^(?!.*\\[port\\])"
+    exec:
+      workload: "{release}-nginx"
+      container: nginx
+      script: |
+        st() { curl -s -i --max-time 20 "$1" | tr -d '\r' | awk 'NR==1{print $2} /^$/{b=1;next} b{print $0}' | tr '\n' ' '; }
+        echo "health $(st http://127.0.0.1:80/health)"
+        echo "fail $(st http://127.0.0.1:80/fail)"
+        echo "root $(st http://127.0.0.1:80/)"
+    expect:
+      stdout: '(?s)^health 200 \{"success":true,"message":"OK"\} \nfail 500 \{"success":false,"message":"Error"\} \nroot 200 Hello [^\n]*-example! *$'
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: routes-custom-port
+    description: >-
+      With proxyWorkload.port 8080, nginx listens on 8080 (and the install's readiness proves the probes
+      follow it): /health and / answer there, and nothing listens on 80.
+    since: 1.1.4
+    issue: "#5213"
+    scenarios: "\\[port\\]"
+    exec:
+      workload: "{release}-nginx"
+      container: nginx
+      script: |
+        st() { curl -s -i --max-time 20 "$1" | tr -d '\r' | awk 'NR==1{print $2} /^$/{b=1;next} b{print $0}' | tr '\n' ' '; }
+        echo "health $(st http://127.0.0.1:8080/health)"
+        echo "root $(st http://127.0.0.1:8080/)"
+        curl -s --max-time 5 http://127.0.0.1:80/health >/dev/null; echo "old exit $?"
+    expect:
+      stdout: '(?s)^health 200 \{"success":true,"message":"OK"\} \nroot 200 Hello [^\n]*-example! *\nold exit 7$'
+    retries: 10
+    retryDelaySeconds: 15

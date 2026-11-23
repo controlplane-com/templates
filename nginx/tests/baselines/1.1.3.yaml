@@ -1,0 +1,10 @@
+# nginx 1.1.3 — the default install: one proxy replica routing every path to the bundled example backend.
+# Used as the starting point of 1.1.4's upgrade run.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+vars:
+  nginx_version: "1.31.7"
+
+values:
+  enableExample: true

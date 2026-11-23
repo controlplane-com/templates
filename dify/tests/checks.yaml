@@ -9,6 +9,17 @@
 # API sets __Host- cookies (the public URL is https), which urllib's cookie jar drops over plain http, so
 # the scripts carry the cookies and the X-CSRF-Token header by hand.
 checks:
+  - id: gateway-nginx-version
+    description: The gateway runs the patched nginx release (CVE-2026-123633, CVE-2026-123007, CVE-2026-123634).
+    since: 1.0.1
+    issue: "#5638"
+    exec:
+      workload: "{release}-dify"
+      container: gateway
+      script: nginx -v 2>&1
+    expect:
+      stdout: "nginx/{gateway_nginx}$"
+
   - id: boot-version
     description: >-
       The API reports the baseline's dify_version, and the gateway's internal address routes /console/api to the

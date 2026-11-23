@@ -1,6 +1,6 @@
 proxyWorkload:
-  image: nginx:1.31.7 # pinned: `latest` makes installs non-reproducible
-  port: 80
+  image: nginx:1.31.9 # pinned: `latest` makes installs non-reproducible
+  port: 80 # nginx listens here and the health probes check it
   timeoutSeconds: 5
 
 resources:

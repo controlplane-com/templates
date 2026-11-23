@@ -254,18 +254,17 @@ steps:
         type: integer
         label: Container port
         required: true
-        readOnly: true
         advanced: true
         description: >-
-          Fixed at 80: the generated `nginx.conf` listens on 80 and the health probes check 80; neither
-          follows this value.
+          The port nginx listens on inside the container; the health probes check the same port. The
+          public endpoint is HTTPS on 443 whatever this is.
         min: 1
         max: 65535
         rules:
-          - rule: self.proxyWorkload.port == 80
+          - rule: >-
+              !(self.proxyWorkload.port in [8012, 8022, 9090, 9091, 15000, 15001, 15006, 15020, 15021, 15090, 41000])
             message: >-
-              Set the container port to 80. Nginx listens only on 80, so any other port sends the proxy's
-              traffic to a port nothing listens on.
+              Control Plane reserves this port for its own sidecars. Pick another, such as 80 or 8080.
 
   - id: scaling
     title: Scaling

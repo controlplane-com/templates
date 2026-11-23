@@ -34,11 +34,11 @@ spec:
       livenessProbe:
         httpGet:
           path: /health
-          port: 80
+          port: {{ .Values.proxyWorkload.port | int }}
       readinessProbe:
         httpGet:
           path: /health
-          port: 80
+          port: {{ .Values.proxyWorkload.port | int }}
       volumes:
         - path: /etc/nginx/nginx.conf
           recoveryPolicy: retain

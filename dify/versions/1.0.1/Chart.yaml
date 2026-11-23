@@ -2,12 +2,12 @@ apiVersion: v2
 name: dify
 description: Dify LLM app builder for workflows, agents, RAG knowledge bases and APIs
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "1.19.0"
 
 annotations:
   created: "2026-11-10"
-  lastModified: "2026-11-18"
+  lastModified: "2026-11-23"
   createsGvc: false
 
 dependencies:

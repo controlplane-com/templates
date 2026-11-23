@@ -7,7 +7,7 @@ events {
 
 http {
   server {
-    listen 80 default_server;
+    listen {{ .Values.proxyWorkload.port | int }} default_server;
 
     location /health {
       return 200 '{"success":true,"message":"OK"}';

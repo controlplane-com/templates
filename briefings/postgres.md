@@ -21,7 +21,7 @@
 | `{release}-pg-vs` | `PGDATA` on ext4 SSD; a final snapshot on delete, kept 7 d; **no scheduled snapshots** (work item 5219) |
 | `{release}-pgbouncer` (serverless, optional) | Connection pooler, same secret and identity |
 | `{release}-postgres-backup` (cron, optional) | `pg_dumpall` (19 client) gzip to S3/GCS/MinIO |
-| identity + policy | `reveal` on the credentials (+ MinIO) secret; AWS bucket policy only (`cpln-connector` removed in 4.0.0), GCP bucket `objectAdmin` |
+| identity + policy | `reveal` on the credentials (+ MinIO) secret; AWS bucket policy only (`cpln-connector` removed in 3.4.3), GCP bucket `objectAdmin` |
 
 - Readiness: fails while the guard holds, else `pg_isready -h 127.0.0.1` (TCP, so the socket-only
   first-boot server never counts). 15 / 10 / 6 → startup window ≈ 315 s.
@@ -59,4 +59,4 @@
 
 4.0.0: PostgreSQL 19 default, boot guard, TCP readiness probe, NOTES.txt, wizard image carry-over,
 README "Upgrading from 3.x". CI: `fresh-is-19`, `guard-passes`, refused-then-pinned upgrades from
-3.4.2 and 3.2.0 (`guard-holds`). Live test round pending.
+3.4.3 and 3.2.0 (`guard-holds`). Live round passed (fresh, drift, refused + pinned, README migration, AWS backup).

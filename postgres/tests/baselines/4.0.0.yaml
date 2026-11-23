@@ -28,7 +28,7 @@ values:
 # message says, then succeeds and the data survives. 3.2.0 is the version customers run most. Its plaintext
 # config.* keys are refused from 3.4.0 on, so that upgrade switches to this baseline's values.
 upgradeFrom:
-  - version: 3.4.2
+  - version: 3.4.3
     refused: {timeoutSeconds: 420}
     then: {set: {image: "postgres:18"}}
   - version: 3.2.0

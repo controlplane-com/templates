@@ -1,0 +1,617 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Plausible Analytics
+
+# The bundled PostgreSQL runs a separate, empty copy in every location of the GVC, and Plausible refuses to
+# start in a GVC with more than one location (plausible.script.boot); ClickHouse runs in one listed location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.2
+    title: Bundled PostgreSQL
+    after: database
+    steps:
+      - id: backup
+        title: Database backups
+        description: Scheduled backups of accounts, sites and goals. Analytics events live in ClickHouse and are not included.
+    exclude:
+      # A prerequisite Plausible reads too: chosen with the other secrets in the Plausible step.
+      - config.credentialsSecretName
+      # Plausible connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+      # Server, storage and network are rebound in the parent's Database step (one step instead of three); the
+      # child rules that went with them are restated there.
+      - image
+      - resources
+      - volumeset
+      - internalAccess
+
+  - template: clickhouse
+    version: 3.1.0
+    title: Bundled ClickHouse
+    after: database
+    steps:
+      - id: server
+        title: ClickHouse server
+        description: The ClickHouse node that stores every event and session on its own volume.
+    exclude:
+      # A prerequisite Plausible reads too: chosen with the other secrets in the Plausible step.
+      - database.credentialsSecretName
+      # Rebound in the Plausible step, so it is chosen early; the parent rules cover the
+      # child's location rules (one location, one replica, in the GVC).
+      - locations
+      # Plausible keeps its events on the server volume (provider local); object storage is YAML only.
+      - provider
+      - aws
+      - gcp
+      - azure
+      - hetzner
+      # Plausible runs one ClickHouse node, so there is no cluster or Keeper (plausible.validateClickhouse).
+      - clusterName
+      - keeper
+      - volumeset.keeper
+    override:
+      volumeset.server.capacity:
+        help: >-
+          Uninstalling the release deletes this volume with every event on it. It keeps one final snapshot for
+          7 days; after that the data is gone.
+      server.internalAccess.type:
+        description: >-
+          Plausible connects to ClickHouse like any other workload: keep Same GVC, or add the Plausible workload
+          under Allowed workloads.
+
+steps:
+  - id: plausible
+    title: Plausible
+    description: The Plausible image and compute, the three prerequisite secrets, and who may register.
+    sections:
+      - title: Server
+        fields:
+          - path: image
+            type: string
+            format: image
+            label: Plausible image
+            required: true
+            description: Tags of ghcr.io/plausible/community-edition before v3.2.1 are refused; they expose a remote code execution.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            cpu: { min: 100m }
+            memory: { min: 256Mi }
+        rules:
+          - rule: >-
+              !self.image.startsWith('ghcr.io/plausible/community-edition:') ||
+              !self.image.substring(size('ghcr.io/plausible/community-edition:')).matches('^v?[0-9]+[.][0-9]+[.][0-9]+') ||
+              semverCompare(
+                (self.image.substring(size('ghcr.io/plausible/community-edition:')).startsWith('v') ?
+                  self.image.substring(size('ghcr.io/plausible/community-edition:') + 1) :
+                  self.image.substring(size('ghcr.io/plausible/community-edition:'))).split('@')[0].split('-')[0],
+                '3.2.1') >= 0
+            mirrors: plausible.validateImage
+            paths: [image]
+            message: >-
+              Plausible CE before v3.2.1 exposes the /storybook endpoint, an unauthenticated remote code execution
+              (CVE-2026-8467). Use ghcr.io/plausible/community-edition:v3.2.1.
+      - title: Secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              All three secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all. After you create it, run `cpln workload force-redeployment` on
+              every workload whose deployment message names it (`RELEASE_NAME-plausible`, and
+              `RELEASE_NAME-clickhouse-server` for the ClickHouse secret): a deployment does not pick it up on
+              its own.
+          - path: app.secretKeyBaseSecretName
+            type: ref
+            label: Signing key secret
+            required: true
+            description: An opaque secret (plain encoding) of at least 32 bytes that signs sessions.
+            help: >-
+              Keep it for the life of the install: a new key logs every user out and breaks two-factor login for
+              every enrolled user, because the two-factor encryption key is derived from it.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-plausible-secret-key-base'"
+                hint: openssl rand -base64 48
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: PostgreSQL credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`, all URL-safe (letters,
+              digits, `-`, `_`). PostgreSQL initializes with them and Plausible connects with them.
+            help: PostgreSQL reads these values only when its data directory is first initialized.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-plausible-db-credentials'"
+          - path: clickhouse.database.credentialsSecretName
+            type: ref
+            label: ClickHouse credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `password` (URL-safe, no quotes) and `database` (a bare identifier
+              such as `plausible_events_db`). ClickHouse's `default` user takes the password.
+            help: ClickHouse and Plausible read it at every start, so a change applies after both restart.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password, database]
+              create:
+                suggestName: "context.releaseName + '-plausible-clickhouse-credentials'"
+        rules:
+          - rule: self.app.secretKeyBaseSecretName != null && self.app.secretKeyBaseSecretName != ''
+            mirrors: plausible.validateApp
+            paths: [app.secretKeyBaseSecretName]
+            message: The signing key secret is required.
+          - rule: >-
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != '' &&
+              self.clickhouse.database.credentialsSecretName != null && self.clickhouse.database.credentialsSecretName != ''
+            mirrors: plausible.validateSecrets
+            paths: [postgres.config.credentialsSecretName, clickhouse.database.credentialsSecretName]
+            message: The PostgreSQL and ClickHouse credentials secrets are required.
+          # Restated from the imports, whose rules went with the excluded secret fields; the subcharts still refuse these keys.
+          - rule: >-
+              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+              !has(self.postgres.config.database)
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              postgres.config.username, password and database are not used: put them in the PostgreSQL credentials
+              secret and remove them from the values.
+          - rule: "!has(self.clickhouse.database.password) && !has(self.clickhouse.database.name)"
+            paths: [clickhouse.database.credentialsSecretName]
+            message: >-
+              clickhouse.database.password and clickhouse.database.name are not used: put them in the ClickHouse
+              credentials secret as `password` and `database`, and remove them from the values.
+      - title: Registration
+        fields:
+          - path: app.registration
+            type: enum
+            label: Who can register
+            widget: cards
+            required: true
+            description: The first account can always register, whatever you choose.
+            options:
+              - value: invite_only
+                label: Invited users
+                description: After the first account, only users invited from the dashboard.
+              - value: "true"
+                label: Nobody
+                description: Registration is closed, invitations included.
+              - value: "false"
+                label: Anyone
+                description: Open registration; not recommended on a public install.
+          - path: app.baseUrl
+            type: string
+            label: Base URL
+            advanced: true
+            placeholder: https://stats.example.com
+            pattern: "^(https?://.*)?$"
+            patternMessage: Start the URL with https:// or http://.
+            description: >-
+              Leave empty for the canonical endpoint when public access is on, or http://localhost:8000 (the
+              port-forward address) when it is off. Set it when you serve Plausible on your own domain.
+        rules:
+          - rule: string(self.app.registration) in ['invite_only', 'true', 'false']
+            mirrors: plausible.validateApp
+            paths: [app.registration]
+            message: Registration must be invite_only, true or false.
+          - rule: self.app.baseUrl == null || self.app.baseUrl == '' || self.app.baseUrl.matches('^https?://')
+            mirrors: plausible.validateApp
+            paths: [app.baseUrl]
+            message: The base URL must start with https:// or http://, such as https://stats.example.com.
+      - title: ClickHouse location
+        description: Plausible's events live on one ClickHouse node, which must run in the location of your GVC.
+        fields:
+          - path: clickhouse.locations
+            type: list
+            label: ClickHouse location
+            required: true
+            minItems: 1
+            maxItems: 1
+            widget: table
+            newItem: { name: "", replicas: 1 }
+            itemLabel: "item.name"
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+                - path: replicas
+                  type: integer
+                  label: Server replicas
+                  required: true
+                  readOnly: true
+                  min: 1
+                  max: 1
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Plausible inside Control Plane.
+    fields:
+      - type: note
+        severity: warning
+        text: >-
+          Until the first account exists, anyone who can open Plausible can register as its owner. Install
+          privately, register over `cpln port-forward` at http://localhost:8000, then turn on public access.
+      - path: publicAccess.enabled
+        type: boolean
+        label: Serve on the public HTTPS endpoint
+        description: >-
+          The dashboard, the tracker script and the event API on the canonical endpoint. Tracking collects
+          nothing until visitors' browsers can reach it.
+        docs: "#first-run"
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect internally
+        widget: cards
+        required: true
+        description: Firewall changes take 30 seconds to a few minutes to take effect.
+        options:
+          - value: none
+            label: None
+            description: No workload can connect.
+          - value: same-gvc
+            label: Same GVC
+            description: Any workload in this GVC.
+          - value: same-org
+            label: Same org
+            description: Any workload in this org.
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        when: self.internalAccess.type == 'workload-list'
+        widget: tags
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+    rules:
+      - rule: self.internalAccess.type != 'workload-list' || size(self.internalAccess.workloads) > 0
+        severity: info
+        paths: [internalAccess.workloads]
+        message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
+
+  - id: email
+    title: Email
+    description: An SMTP relay for invitations, password resets and email reports.
+    sections:
+      - title: SMTP relay
+        toggle: smtp.enabled
+        docs: "#email"
+        description: Without it, Plausible sends no invitations, password resets or email reports.
+        fields:
+          - path: smtp.host
+            type: string
+            label: SMTP host
+            required: true
+            placeholder: smtp.example.com
+          - path: smtp.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+            description: 465 uses implicit TLS; other ports use STARTTLS when the relay offers it.
+          - path: smtp.fromEmail
+            type: string
+            label: Sender address
+            required: true
+            placeholder: analytics@example.com
+          - path: smtp.fromName
+            type: string
+            label: Sender name
+          - path: smtp.credentialsSecretName
+            type: ref
+            label: SMTP credentials secret
+            description: A dictionary secret with the keys `username` and `password`. Leave empty for a relay without authentication.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-plausible-smtp'"
+        rules:
+          - rule: self.smtp.host != null && self.smtp.host != '' && self.smtp.fromEmail != null && self.smtp.fromEmail != ''
+            mirrors: plausible.validateSmtp
+            paths: [smtp.host, smtp.fromEmail]
+            message: The SMTP host and the sender address are required while the relay is on.
+
+  # The bundled PostgreSQL's server, storage and network, rebound from the postgres import (excluded there) so they
+  # fit one step; the postgres rules that went with them are restated below.
+  - id: database
+    title: Database
+    description: The bundled PostgreSQL that holds Plausible's accounts, sites and goals.
+    sections:
+      - title: Server
+        fields:
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
+              different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: Resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed Postgres major version; a different major version
+              does not start on it. Upgrade with a dump and restore instead.
+      - title: Storage
+        fields:
+          - type: note
+            text: >-
+              Uninstalling the release deletes both volumes, this one and ClickHouse's. Each keeps one final
+              snapshot for 7 days; after that the data is gone.
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+            docs: "/reference/volumeset#capacity-and-billing"
+        rules:
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: autoscaling
+        title: Grow storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the initial capacity.
+      - title: Network access
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              Plausible connects to its database like any other workload: keep Same GVC, or add the Plausible
+              workload under Allowed workloads. Firewall changes take 30 to 150 seconds to take effect.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            description: Extra workloads allowed to connect, for example from another GVC.
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.postgres.internalAccess.type != 'none'
+            paths: [postgres.internalAccess.type]
+            message: '"None" also blocks Plausible, which connects to its database like any other workload.'
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible, or Plausible cannot reach its database.'"
+            message: Add the Plausible workload to the list, or Plausible cannot reach its database.
+          # Restated from the postgres import (its network step went with the rebound fields): the backup job
+          # connects through the same firewall, and the chart does not add it to the list.
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null && self.postgres.backup.enabled
+            rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup') in self.postgres.internalAccess.workloads
+            severity: warning
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-postgres-backup, or the backup job cannot reach the database.'"
+            message: Add the backup workload to the list, or the backup job cannot reach the database.
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.postgres.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+
+# Rules over the ClickHouse values: their issues show on the steps of the fields they name.
+rules:
+  - rule: >-
+      size(self.clickhouse.locations) == 1 && self.clickhouse.locations[0].replicas != null &&
+      self.clickhouse.locations[0].replicas == 1
+    mirrors: plausible.validateClickhouse
+    paths: [clickhouse.locations]
+    message: >-
+      Plausible runs on one ClickHouse node: list exactly one location, the location of your GVC, with
+      1 replica.
+  - when: context.gvcLocations != null && size(context.gvcLocations) == 1 && size(self.clickhouse.locations) == 1
+    rule: self.clickhouse.locations[0].name == '' || self.clickhouse.locations[0].name == context.gvcLocations[0]
+    paths: [clickhouse.locations]
+    messageExpression: "'Set the ClickHouse location to ' + context.gvcLocations[0] + ', the location of the GVC; Plausible refuses to start in another.'"
+    message: Set the ClickHouse location to the location of the GVC; Plausible refuses to start in another.
+  # Restated from the clickhouse import, whose storage rules went with the excluded provider field. Both keys are
+# YAML only, so the rules name no field and show as release-wide issues.
+  - rule: self.clickhouse.provider in ['aws', 'gcp', 'azure', 'hetzner', 'local']
+    message: clickhouse.provider must be local (the default), aws, gcp, azure or hetzner.
+  - rule: "!has(self.clickhouse.azure.accountKey)"
+    message: >-
+      clickhouse.azure.accountKey is refused by the ClickHouse chart: put the key in a dictionary secret as
+      `accountKey`, and remove it from the values.
+  - rule: self.clickhouse.server.internalAccess.type != 'none'
+    paths: [clickhouse.server.internalAccess.type]
+    message: '"None" also blocks Plausible, which connects to ClickHouse like any other workload.'
+  - when: self.clickhouse.server.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible') in self.clickhouse.server.internalAccess.workloads
+    severity: warning
+    paths: [clickhouse.server.internalAccess.workloads]
+    messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-plausible, or Plausible cannot reach ClickHouse.'"
+    message: Add the Plausible workload to the list, or Plausible cannot reach ClickHouse.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Plausible connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: clickhouse.provider
+    reason: Plausible keeps its events on the ClickHouse server volume (local); object storage needs a bucket and its credentials.
+  - path: clickhouse.aws
+    reason: Object storage for ClickHouse, used only with a provider other than local.
+  - path: clickhouse.gcp
+    reason: Object storage for ClickHouse, used only with a provider other than local.
+  - path: clickhouse.azure
+    reason: Object storage for ClickHouse, used only with a provider other than local.
+  - path: clickhouse.hetzner
+    reason: Object storage for ClickHouse, used only with a provider other than local.
+  - path: clickhouse.clusterName
+    reason: Plausible runs one ClickHouse node, which has no cluster name.
+  - path: clickhouse.keeper
+    reason: Plausible runs one ClickHouse node, which needs no Keeper.
+  - path: clickhouse.volumeset.keeper
+    reason: Plausible runs one ClickHouse node, which needs no Keeper.
+
+# No Plausible version precedes 1.0.0, and every Plausible release bundles clickhouse 3.1.0 or later. These claim the
+# object-storage, Keeper and location keys of the clickhouse chart's own migrations (written for clickhouse 2.x releases),
+# which this import excludes, so those migrations never run here.
+migrations:
+  - fromVersions: "<1.0.0"
+    to: clickhouse.provider
+    valueExpr: "'local'"
+    note: Plausible keeps its events on the ClickHouse server volume.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gvc.locations
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.aws.enabled
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.enabled
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.aws.s3.bucket
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.aws.s3.region
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.aws.s3.cloudAccountName
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.aws.s3.policyName
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.accessKeyId
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.secretAccessKey
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.gcs.bucket
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.gcs.accessKeyId
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.gcp.gcs.secretAccessKey
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.azure.accountKey
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.hetzner.accessKeyId
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.hetzner.secretAccessKey
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.keeper.internal_access.type
+    note: No Plausible release carried this ClickHouse key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: clickhouse.keeper.internal_access.workloads
+    note: No Plausible release carried this ClickHouse key; it is dropped.

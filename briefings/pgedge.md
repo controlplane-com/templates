@@ -70,8 +70,12 @@ transaction · `defaultPoolSize` 20 · `maxClientConn` 1000 · `pgbouncer.min/ma
   so a pooler restarted during a node outage is ready at once; a topology change clears it (node boot) and the pooler
   accepts only its own topology. Probe 20 + 30 × 40 = 1220 s startup window vs 3 × 310 + 60 = 990 s worst case at 3
   nodes/location. CI check `first-pooled-write-on-every-node` writes once and re-reads (retries cannot mask).
-  **3.x still has the window** (shipped; document only): CI saw a row written right after a 3.0.1 install missing on
-  one node for good. A 3.x user who wrote during the first minutes after install should compare row counts per node.
+  **Backported to 3.0.2** (PG 17 line: the marker, the gated pooler, the no-deadline daemon; not the guard, runtime
+  `PG_BIN` or node probe). ≤ 3.0.1 has the window (CI saw a row written right after a 3.0.1 install missing on one node
+  for good); upgrading does not repair a missed row, so the 3.0.2 README tells users who wrote in the first minutes
+  after install to compare row counts per node. Live (1 × 3): fresh mesh + pooler ready ~90 s; 3.0.1 → 3.0.2 in place
+  kept 100/100 rows on every node, each node wrote the marker as it restarted, old poolers served until the new ones
+  were ready.
 - **Backup 19.1.0 → a 17 node:** dumps fine; restoring that dump into a 17 server is not guaranteed — README and a
   wizard info rule say use `postgres-backup:17.1.0` on a release that stays on 17.
 - **2.x → 3.0.0:** client hostname changes (`-pgcat` → `-pgbouncer`); render refuses leftover `pgcat`,

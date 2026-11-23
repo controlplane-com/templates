@@ -8,8 +8,8 @@
 # password was. DDL does not replicate, so the table is created on every node before any row is written.
 # The node list is the baselines' shape: 2 locations x 2 nodes.
 #
-# driftBlocks is not set yet: 4.0.0 adds the node readiness probe, so drift is reported as a warning until
-# the first 4.0.0 install's drift-diff ends clean.
+# No drift left on a 4.0.0 install (drift-diff clean on two live installs): drift fails the run, not warns.
+driftBlocks: true
 
 checks:
   - id: pooled-write-replicates

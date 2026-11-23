@@ -46,6 +46,6 @@ values:
 # restarts were ~110 s apart in 3.0.0's measured rollouts) with margin; a held node is restarted by the
 # readiness-implied startup probe only after ~310 s, and stays held each time.
 upgradeFrom:
-  - version: 3.0.0
+  - version: 3.0.1
     refused: {timeoutSeconds: 420}
     then: {set: {image: "ghcr.io/pgedge/pgedge-postgres:17-spock5-standard"}}

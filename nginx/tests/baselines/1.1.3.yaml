@@ -3,8 +3,5 @@
 locations: [aws-us-east-1]
 timeoutSeconds: 600
 
-vars:
-  nginx_version: "1.31.7"
-
 values:
   enableExample: true

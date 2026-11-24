@@ -18,7 +18,7 @@ checks:
       container: gateway
       script: |
         v=$(nginx -v 2>&1)
-        [ "$v" = "nginx version: nginx/{gateway_nginx}" ] && echo VERSION_OK || echo "VERSION_BAD $v"
+        [ "$v" = "nginx version: nginx/1.30.7" ] && echo VERSION_OK || echo "VERSION_BAD $v"
     expect:
       stdout: "^VERSION_OK$"
 

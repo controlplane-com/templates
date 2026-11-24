@@ -39,7 +39,6 @@ secrets:
       password: "{gen.redispw}"
 
 vars:
-  gateway_nginx: "1.30.7"
   dify_version: "1.19.0"            # the version the API's /health reports; bump with the image tag
   admin_email: admin@example.com
   admin_password: "Dify1{gen.adminpw}"   # Dify requires a letter and a digit

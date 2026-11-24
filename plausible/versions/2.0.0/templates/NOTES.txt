@@ -1,0 +1,18 @@
+Plausible is deploying as {{ include "plausible.name" . }} in GVC {{ .Values.global.cpln.gvc }}, with the bundled
+PostgreSQL ({{ .Values.postgres.image }}) as {{ .Release.Name }}-postgres.
+
+UPGRADING A 1.x RELEASE? This chart defaults to PostgreSQL 19, and the database of a 1.x release is
+PostgreSQL 18 (or the major of the image it ran). A PostgreSQL 19 server REFUSES to start on it, and
+your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" .Values.postgres.image }}
+  If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with --set postgres.image=postgres:18
+  (the major the logs name), and keep that image in your values for every later upgrade.
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.postgres.image }}
+  This release runs {{ .Values.postgres.image }}: the database stays on that major. Keep
+  postgres.image in your values for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.postgres.image }}. If the database stays not ready and the logs say
+  "REFUSING TO START", set postgres.image to the image the logs name and keep it in your values.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 1.x" (dump and restore).

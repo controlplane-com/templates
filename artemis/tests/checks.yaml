@@ -25,8 +25,10 @@ checks:
           | grep -o 'Consumed: [0-9]* messages' | tail -1
     expect:
       stdout: "^Consumed: 10 messages$"
-    retries: 3
-    retryDelaySeconds: 15
+    # The first check after install/upgrade: readiness is on the mirror port, and the client ports open
+    # only once the catch-up gate passes (up to mirror.catchUpTimeoutSeconds, 180 s), so retry past that.
+    retries: 10
+    retryDelaySeconds: 20
     timeoutSeconds: 120
 
   - id: amqp-5672-to-core
@@ -243,3 +245,34 @@ checks:
     retries: 3
     retryDelaySeconds: 20
     timeoutSeconds: 120
+
+  - id: app-users-scoped
+    description: >-
+      Application users (1.1.0): the producer sends to app.* and the consumer reads it back; each is
+      refused the other's action, the producer is refused an address outside its pattern, and the
+      producer is refused by the web console's Jolokia (the admin is not).
+    since: 1.1.0
+    exec:
+      workload: "{release}-artemis"
+      container: artemis
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        cd /var/lib/artemis-instance || exit 1
+        U=tcp://127.0.0.1:61616; Q="app.e2e$(date +%s%N)"
+        r(){ grep -o 'Produced: [0-9]* messages\|Consumed: [0-9]* messages\|SECURITY_EXCEPTION' | sort -u | tr '\n' ' '; }
+        echo "send=$(./bin/artemis producer --url $U --user e2e-producer --password '{producer_password}' --destination queue://$Q --message-count 3 2>&1 | r)"
+        echo "psub=$(./bin/artemis consumer --url $U --user e2e-producer --password '{producer_password}' --destination queue://$Q --message-count 1 --receive-timeout 3000 --break-on-null 2>&1 | r)"
+        echo "other=$(./bin/artemis producer --url $U --user e2e-producer --password '{producer_password}' --destination queue://other.e2e --message-count 1 2>&1 | r)"
+        echo "csend=$(./bin/artemis producer --url $U --user e2e-consumer --password '{consumer_password}' --destination queue://$Q --message-count 1 2>&1 | r)"
+        echo "recv=$(./bin/artemis consumer --url $U --user e2e-consumer --password '{consumer_password}' --destination queue://$Q --message-count 3 --receive-timeout 10000 --break-on-null 2>&1 | r)"
+        j(){ B='{"type":"version"}'; A=$(printf '%s:%s' "$1" "$2" | base64 -w0)
+          exec 4<>/dev/tcp/127.0.0.1/8161
+          printf 'POST /console/jolokia/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nOrigin: http://localhost\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' "$A" "${#B}" "$B" >&4
+          timeout 10 head -1 <&4 | grep -o ' [0-9][0-9][0-9] ' | tr -d ' '; exec 4<&-; }
+        echo "jolokia=$(j e2e-producer '{producer_password}')/$(j '{user}' '{password}')"
+    expect:
+      stdout: "(?s)send=Produced: 3 messages \npsub=SECURITY_EXCEPTION \nother=SECURITY_EXCEPTION \ncsend=SECURITY_EXCEPTION \nrecv=Consumed: 3 messages \njolokia=403/200"
+    retries: 3
+    retryDelaySeconds: 15
+    timeoutSeconds: 180

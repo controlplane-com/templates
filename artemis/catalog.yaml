@@ -67,7 +67,14 @@ prerequisites:
     keys: [username, password]
     valuesPath: credentialsSecretName
     required: true
-    description: Broker admin, console and client login, also used by the mirror. Create it before installing; when missing the workload waits with no logs.
+    description: Broker admin and console login, also used by the mirror and usable by clients. Create it before installing; when missing the workload waits with no logs.
+  - kind: secret
+    secretType: dictionary
+    keys: [username, password]
+    valuesPath: applicationUsers
+    required: false
+    when: applicationUsers lists entries
+    description: One per application user (1.1.0+), each limited to the address patterns it may send to or consume from.
   - kind: other
     valuesPath: locations
     required: true

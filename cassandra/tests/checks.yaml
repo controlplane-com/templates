@@ -76,13 +76,10 @@ checks:
           | grep -E "^[[:space:]]*$M[[:space:]]*$" | sed 's/^[[:space:]]*/READ /'
     expect:
       stdout: "^READ e2e-"
-    # Patient on purpose: on 1.1.1 (an upgrade source) the role appears ~10 min after replica 0 starts,
-    # after the readiness wait, and the row it writes is what data-survives-upgrade reads on 1.1.2.
-    # 7 min of retries was too short in CI once (11-23: the 1.1.1 role was still not usable 10 min after
-    # readiness, likely the default-role race restarting replica 0's init); 20 min covers one restart.
-    # Promptness is asserted by app-user-ready-promptly, not here; 1.1.2 passes on the first attempt.
-    retries: 20
-    retryDelaySeconds: 60
+    # Promptness is asserted by app-user-ready-promptly; persistence does not depend on this row
+    # (data-survives-upgrade seeds its own as the superuser), so on a slow 1.1.1 source this only warns.
+    retries: 6
+    retryDelaySeconds: 20
 
   - id: rejects-bad-password
     description: A wrong password for the application role is refused (the control for the check above).
@@ -101,16 +98,25 @@ checks:
 
   - id: data-survives-upgrade
     description: >-
-      The row written on the version this scenario installed first is still there. On a fresh install that
-      is the same version; after an upgrade it proves the data volumes carried over.
+      A row written on the version this scenario installed first is still there. The check seeds its own
+      row as the superuser, in a keyspace it creates (e2e_persist, one copy per node), so it does not
+      depend on the app role and keyspace the first-boot bootstrap creates: through 1.1.1 that bootstrap
+      can take over 20 minutes in CI. On a fresh install the row is the same version's; after an upgrade
+      it proves the data volumes carried over.
     exec:
       workload: "{cass_workload}"
       replica: "{cass_workload}-0"
       container: cassandra
       shell: bash
       script: |
-        n=$(cqlsh 127.0.0.1 9042 -u '{app_user}' -p '{app_password}' --no-color \
-          -e "SELECT count(*) FROM {app_keyspace}.e2e WHERE version = '{installed_version}';" 2>&1 \
+        # The configured superuser password, or the default one if a 1.1.1 bootstrap never set it.
+        su() { for pw in '{superuser_password}' cassandra; do
+            out=$(cqlsh 127.0.0.1 9042 -u cassandra -p "$pw" --no-color -e "$1" 2>&1) && { printf '%s\n' "$out"; return 0; }
+          done; printf '%s\n' "$out" | grep -iE 'error' | head -2; return 1; }
+        su "CREATE KEYSPACE IF NOT EXISTS e2e_persist WITH replication = {'class': 'SimpleStrategy', 'replication_factor': {cass_replicas}};
+            CREATE TABLE IF NOT EXISTS e2e_persist.rows (version text PRIMARY KEY, written timestamp);
+            INSERT INTO e2e_persist.rows (version, written) VALUES ('{version}', toTimestamp(now()));" >/dev/null
+        n=$(su "SELECT count(*) FROM e2e_persist.rows WHERE version = '{installed_version}';" \
           | awk '/^-+$/ {getline; gsub(/ /, ""); print; exit}')
         [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
     expect:

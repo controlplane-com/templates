@@ -87,8 +87,9 @@ backup:
 
 # How the major-version boot guard names the fix in its log. Leave these alone when you install this
 # template directly. A template that bundles this one as a subchart sets them to its own values path
-# (e.g. `pgvector.image`), its console field and its README section.
+# (e.g. `pgvector.image`), its console field, how its data moves to the new major, and its README section.
 upgradeHint:
   imageKey: image
   consoleField: "Upgrade > Server > pgvector image"
+  moveHow: dump and restore into a new release
   readme: 'README, "Upgrading from 1.x"'

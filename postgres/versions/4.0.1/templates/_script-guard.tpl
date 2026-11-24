@@ -28,7 +28,7 @@ elif [ -s "$PGDATA/PG_VERSION" ]; then
       echo "[pg-guard]   cpln helm upgrade {{ .Release.Name }} <chart> --gvc {{ .Values.global.cpln.gvc }} -f <your values> --set {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}=postgres:${data_major}"
       echo "[pg-guard]   (console: {{ .Values.upgradeHint.consoleField | replace "\"" "\\\"" }} = postgres:${data_major})"
       echo "[pg-guard] Keep {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}: postgres:${data_major} in your values for every later upgrade."
-      echo "[pg-guard] To move this data to PostgreSQL ${server_major}: dump and restore into a new release ({{ .Values.upgradeHint.readme | replace "\"" "\\\"" }})."
+      echo "[pg-guard] To move this data to PostgreSQL ${server_major}: {{ .Values.upgradeHint.moveHow | replace "\"" "\\\"" }} ({{ .Values.upgradeHint.readme | replace "\"" "\\\"" }})."
     } > "$G"
     trap 'exit 0' TERM INT
     while :; do cat "$G" >&2; sleep 30 & wait $!; done

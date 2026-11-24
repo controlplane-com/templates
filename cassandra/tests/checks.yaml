@@ -1,0 +1,125 @@
+# Feature checks for the cassandra template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (cass_workload, cass_replicas, app_user, app_password, app_keyspace, superuser_password).
+#
+# Checks run in replica 0, the node that runs the first-boot bootstrap (keyspace, role, grants).
+# Backups need a bucket and a cloud account, which the CI org does not have; they are proven in the
+# test round instead.
+
+checks:
+  - id: app-user-ready-promptly
+    description: >-
+      The application role can log in and sees its keyspace as soon as every node is ready. Through 1.1.1
+      the bootstrap's wait for the ring ran nodetool without JMX credentials, failed every poll and only
+      created the keyspace and role after its 10-minute timeout, so this check (a minute of retries right
+      after the install's readiness wait) fails on those versions.
+    issue: "#5586"
+    since: 1.1.2
+    exec:
+      workload: "{cass_workload}"
+      replica: "{cass_workload}-0"
+      container: cassandra
+      shell: bash
+      script: |
+        out=$(cqlsh 127.0.0.1 9042 -u '{app_user}' -p '{app_password}' --no-color \
+          -e "SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = '{app_keyspace}';" 2>&1)
+        if printf '%s\n' "$out" | grep -qE '^[[:space:]]*{app_keyspace}[[:space:]]*$'; then
+          echo "KEYSPACE_VISIBLE {app_keyspace}"
+        else
+          printf '%s\n' "$out" | grep -E 'Error|error|rows' | head -3
+          echo "NOT_READY"
+        fi
+        # Evidence for the report: seconds from the Cassandra process start to the bootstrap flag.
+        if [ -f /var/lib/cassandra/.bootstrapped ]; then
+          pid=$(pgrep -f CassandraDaemon | head -1)
+          start=$(( $(date +%s) - $(ps -o etimes= -p "$pid" | tr -d ' ') ))
+          echo "BOOTSTRAP_AFTER_START=$(( $(stat -c %Y /var/lib/cassandra/.bootstrapped) - start ))s"
+        fi
+    expect:
+      stdout: "^KEYSPACE_VISIBLE "
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: cluster-formed
+    description: >-
+      Every node is Up/Normal in the ring, read over authenticated JMX, and JMX refuses a request without
+      credentials.
+    exec:
+      workload: "{cass_workload}"
+      replica: "{cass_workload}-0"
+      container: cassandra
+      shell: bash
+      script: |
+        un=$(nodetool -u cassandra -pw '{superuser_password}' status 2>&1 | grep -c '^UN')
+        echo "UP_NORMAL=$un of {cass_replicas}"
+        [ "$un" -eq {cass_replicas} ] && echo "RING_COMPLETE"
+        nodetool status 2>&1 | grep -q 'Authentication failed' && echo "UNAUTHENTICATED_REFUSED"
+    expect:
+      stdout: "(?s)^RING_COMPLETE$.*^UNAUTHENTICATED_REFUSED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: write-read
+    description: A row written as the application role reads back.
+    exec:
+      workload: "{cass_workload}"
+      replica: "{cass_workload}-0"
+      container: cassandra
+      shell: bash
+      script: |
+        M="e2e-$(date +%s%N)"
+        cqlsh 127.0.0.1 9042 -u '{app_user}' -p '{app_password}' --no-color -e "
+          CREATE TABLE IF NOT EXISTS {app_keyspace}.e2e (version text, marker text, PRIMARY KEY (version, marker));
+          INSERT INTO {app_keyspace}.e2e (version, marker) VALUES ('{version}', '$M');
+          SELECT marker FROM {app_keyspace}.e2e WHERE version = '{version}' AND marker = '$M';" 2>&1 \
+          | grep -E "^[[:space:]]*$M[[:space:]]*$" | sed 's/^[[:space:]]*/READ /'
+    expect:
+      stdout: "^READ e2e-"
+    # Promptness is asserted by app-user-ready-promptly; persistence does not depend on this row
+    # (data-survives-upgrade seeds its own as the superuser), so on a slow 1.1.1 source this only warns.
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: rejects-bad-password
+    description: A wrong password for the application role is refused (the control for the check above).
+    exec:
+      workload: "{cass_workload}"
+      replica: "{cass_workload}-0"
+      container: cassandra
+      shell: bash
+      script: |
+        cqlsh 127.0.0.1 9042 -u '{app_user}' -p 'wrong-password' --no-color \
+          -e "SELECT now() FROM system.local;" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "Bad credentials"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      A row written on the version this scenario installed first is still there. The check seeds its own
+      row as the superuser, in a keyspace it creates (e2e_persist, one copy per node), so it does not
+      depend on the app role and keyspace the first-boot bootstrap creates: through 1.1.1 that bootstrap
+      can take over 20 minutes in CI. On a fresh install the row is the same version's; after an upgrade
+      it proves the data volumes carried over.
+    exec:
+      workload: "{cass_workload}"
+      replica: "{cass_workload}-0"
+      container: cassandra
+      shell: bash
+      script: |
+        # The configured superuser password, or the default one if a 1.1.1 bootstrap never set it.
+        su() { for pw in '{superuser_password}' cassandra; do
+            out=$(cqlsh 127.0.0.1 9042 -u cassandra -p "$pw" --no-color -e "$1" 2>&1) && { printf '%s\n' "$out"; return 0; }
+          done; printf '%s\n' "$out" | grep -iE 'error' | head -2; return 1; }
+        su "CREATE KEYSPACE IF NOT EXISTS e2e_persist WITH replication = {'class': 'SimpleStrategy', 'replication_factor': {cass_replicas}};
+            CREATE TABLE IF NOT EXISTS e2e_persist.rows (version text PRIMARY KEY, written timestamp);
+            INSERT INTO e2e_persist.rows (version, written) VALUES ('{version}', toTimestamp(now()));" >/dev/null
+        n=$(su "SELECT count(*) FROM e2e_persist.rows WHERE version = '{installed_version}';" \
+          | awk '/^-+$/ {getline; gsub(/ /, ""); print; exit}')
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

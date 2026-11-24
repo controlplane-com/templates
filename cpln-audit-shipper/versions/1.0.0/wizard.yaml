@@ -1,0 +1,747 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Audit Shipper
+# No location limit here: with S3 state the replicas in every location take turns through a lease. Volume set
+# state is per location, so a root rule limits it to a single-location GVC. The release's own service account
+# holds at most 10 keys, one per location, which caps that mode at 10 locations.
+gvc:
+  minLocations: 1
+
+steps:
+  - id: access
+    title: API access
+    description: The service account whose keys read the audit trail and the Kubernetes audit logs.
+    sections:
+      - fields:
+          - type: note
+            text: >-
+              The audit and logs APIs do not accept a workload's own token. The release creates its own service
+              account, `RELEASE-audit-shipper`, and grants it only what the enabled sources need. Each replica adds a
+              key of its own to it at startup, keeps the key in memory and removes it when it stops, so nothing has to
+              be created before installing. Uninstalling deletes the service account.
+            textExpression: >-
+              'The audit and logs APIs do not accept a workload\'s own token. The release creates its own service
+              account, `' + context.releaseName + '-audit-shipper`, and grants it only what the enabled sources need.
+              Each replica adds a key of its own to it at startup, keeps the key in memory and removes it when it
+              stops, so nothing has to be created before installing. Uninstalling deletes the service account.'
+      - id: existing-service-account
+        title: Existing service account
+        advanced: true
+        description: >-
+          Use a service account you manage instead, with a key you stored in an opaque secret. The release still
+          grants it `readAudit` on the audit contexts and, with the Kubernetes source on, `readLogs` on the org.
+          Keep it out of groups.
+        fields:
+          - path: serviceAccount.existingName
+            type: ref
+            label: Service account
+            ref: { kind: serviceaccount, format: name, mustExist: error }
+          - path: serviceAccount.existingKeySecret
+            type: ref
+            label: Key secret
+            description: >-
+              An opaque secret (encoding plain) whose payload is a key of that service account, from
+              `cpln serviceaccount add-key`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                secretType: opaque
+                encoding: plain
+                suggestName: "context.releaseName + '-key'"
+                hint: cpln serviceaccount add-key SERVICE_ACCOUNT --desc cpln-audit-shipper
+        rules:
+          - rule: (self.serviceAccount.existingName == '') == (self.serviceAccount.existingKeySecret == '')
+            mirrors: cas.validate
+            paths: [serviceAccount.existingName, serviceAccount.existingKeySecret]
+            message: Set the service account and its key secret together, or neither to let the release create one.
+
+  - id: sources
+    title: Sources
+    description: What to ship. Each audit context and each cluster is shipped on its own, with its own checkpoint.
+    sections:
+      - id: cpln-audit
+        title: Control Plane audit trail
+        toggle: sources.cplnAudit.enabled
+        description: Who did what to which resource in the org, through the API, the console or the CLI.
+        fields:
+          - path: sources.cplnAudit.contexts
+            type: list
+            label: Audit contexts
+            required: true
+            unique: true
+            description: >-
+              `cpln` holds every Control Plane platform event in the org. Add the custom contexts your workloads
+              write to.
+            item:
+              type: string
+              pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+              patternMessage: Use the audit context's name.
+          - path: sources.cplnAudit.initialLookback
+            type: string
+            format: duration
+            label: First run looks back
+            required: true
+            description: Where a new stream starts when no start time is set. Ignored once it has a checkpoint.
+          - path: sources.cplnAudit.startTime
+            type: string
+            label: Start time
+            advanced: true
+            description: First run only, in RFC 3339 (2026-01-01T00:00:00Z). Overrides the lookback.
+            pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+            patternMessage: Use an RFC 3339 time such as 2026-01-01T00:00:00Z.
+          - path: sources.cplnAudit.endTime
+            type: string
+            label: End time
+            advanced: true
+            description: Stops the stream at this RFC 3339 time, for a one-off backfill.
+            pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+            patternMessage: Use an RFC 3339 time such as 2026-11-01T00:00:00Z.
+          - path: sources.cplnAudit.settleDelay
+            type: string
+            format: duration
+            label: Settle delay
+            required: true
+            advanced: true
+            description: Events newer than this are left for the next cycle.
+          - path: sources.cplnAudit.overlap
+            type: string
+            format: duration
+            label: Overlap
+            required: true
+            advanced: true
+            description: >-
+              How far back each cycle re-reads, skipping events it already shipped. An event that becomes readable
+              later than overlap plus settle delay after it happened is missed.
+        rules:
+          - rule: >-
+              !self.sources.cplnAudit.enabled || self.sources.cplnAudit.startTime == '' || self.sources.cplnAudit.endTime == ''
+              || timestamp(self.sources.cplnAudit.endTime) > timestamp(self.sources.cplnAudit.startTime)
+            mirrors: cas.checkTimes
+            paths: [sources.cplnAudit.endTime]
+            message: The end time must be after the start time.
+          - rule: "!self.sources.cplnAudit.enabled || size(self.sources.cplnAudit.contexts) > 0"
+            mirrors: cas.checkNames
+            paths: [sources.cplnAudit.contexts]
+            message: List at least one audit context.
+      - id: k8s-audit
+        title: Kubernetes audit logs (mk8s)
+        toggle: sources.k8sAudit.enabled
+        description: >-
+          The API server audit log of mk8s clusters, read from the org's logs. The cluster needs the logs add-on
+          with audit logs on.
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              This grants the service account `readLogs` on the org, which cannot be narrowed: its keys can read
+              every log in the org, across all workloads and clusters.
+          - path: sources.k8sAudit.clusters
+            type: list
+            label: Clusters
+            required: true
+            unique: true
+            item:
+              type: string
+              pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+              patternMessage: Use the mk8s cluster's name.
+          - path: sources.k8sAudit.pipeline
+            type: string
+            label: LogQL filter
+            description: >-
+              Optional filter appended to the cluster's selector, such as `| verb != "get"`. Avoid parser stages
+              such as `| json`: every field they extract becomes a label on each entry, and labels are shipped.
+            pattern: '^(\s*\|.*)?$'
+            patternMessage: Start the filter with |.
+          - path: sources.k8sAudit.initialLookback
+            type: string
+            format: duration
+            label: First run looks back
+            required: true
+            description: Logs are kept for the org's log retention, so a start further back finds nothing.
+          - path: sources.k8sAudit.settleDelay
+            type: string
+            format: duration
+            label: Settle delay
+            required: true
+            description: >-
+              A watch request is logged when it ends, with the time it started, up to about an hour earlier. With
+              2m about 0.15% of entries (watch ends) are missed; 1h catches them and ships everything an hour late.
+          - path: sources.k8sAudit.startTime
+            type: string
+            label: Start time
+            advanced: true
+            pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+            patternMessage: Use an RFC 3339 time such as 2026-01-01T00:00:00Z.
+          - path: sources.k8sAudit.endTime
+            type: string
+            label: End time
+            advanced: true
+            pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+            patternMessage: Use an RFC 3339 time such as 2026-11-01T00:00:00Z.
+          - path: sources.k8sAudit.overlap
+            type: string
+            format: duration
+            label: Overlap
+            required: true
+            advanced: true
+            description: Re-read each cycle; every minute of overlap is read again on every cycle.
+        rules:
+          - rule: >-
+              !self.sources.k8sAudit.enabled || self.sources.k8sAudit.startTime == '' || self.sources.k8sAudit.endTime == ''
+              || timestamp(self.sources.k8sAudit.endTime) > timestamp(self.sources.k8sAudit.startTime)
+            mirrors: cas.checkTimes
+            paths: [sources.k8sAudit.endTime]
+            message: The end time must be after the start time.
+          - rule: "!self.sources.k8sAudit.enabled || size(self.sources.k8sAudit.clusters) > 0"
+            mirrors: cas.checkNames
+            paths: [sources.k8sAudit.clusters]
+            message: List at least one cluster.
+    rules:
+      - rule: self.sources.cplnAudit.enabled || self.sources.k8sAudit.enabled
+        mirrors: cas.validate
+        paths: [sources.cplnAudit.enabled]
+        message: Turn on at least one source.
+
+  - id: destination
+    title: Destination
+    description: Where the audit records go. Every record carries its event ID, so a consumer can drop duplicates.
+    sections:
+      - fields:
+          - path: sink.type
+            type: enum
+            label: Send to
+            widget: cards
+            required: true
+            options:
+              - value: s3
+                label: Amazon S3
+                description: JSON Lines objects by UTC hour. A replayed batch rewrites the same objects.
+              - value: syslog
+                label: Syslog
+                description: RFC 5424 over TCP or TLS, in the layout of Control Plane org logging.
+              - value: otlp
+                label: OpenTelemetry (OTLP)
+                description: OTLP/HTTP logs with JSON encoding, acknowledged per request.
+      - id: s3
+        title: Amazon S3
+        when: self.sink.type == 's3'
+        fields:
+          - path: sink.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+            patternMessage: Use the bucket's name, without s3:// or a path.
+          - path: sink.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d+$'
+            suggestions: [us-east-1, us-east-2, us-west-2, eu-west-1, eu-central-1, ap-southeast-2]
+          - path: sink.s3.prefix
+            type: string
+            label: Prefix
+            description: Records go under `PREFIX/data/`; with S3 state, checkpoints go under `PREFIX/state/`.
+            pattern: "^[A-Za-z0-9!_.*'()=/-]*$"
+            patternMessage: Use letters, digits, / and !_.*'()=- only.
+          - path: sink.s3.gzip
+            type: boolean
+            label: Gzip objects
+          - path: sink.s3.kmsKeyId
+            type: string
+            label: SSE-KMS key
+            advanced: true
+            description: A KMS key ID, ARN or alias. Empty uses the bucket's default encryption.
+        rules:
+          - rule: self.sink.type != 's3' || self.sink.s3.bucket != ''
+            mirrors: cas.checkBucket
+            paths: [sink.s3.bucket]
+            message: The bucket is required.
+      - id: syslog
+        title: Syslog
+        when: self.sink.type == 'syslog'
+        description: >-
+          Delivery is confirmed when the listener closes the connection after reading a batch; a crash can resend
+          up to one batch. Messages are 1.5 to 3 KB and are cut at the maximum size below, which the listener must
+          accept.
+        fields:
+          - type: note
+            text: >-
+              Hostname firewall rules open only ports 80, 443 and 445. For a listener on another port, allow its
+              address or 0.0.0.0/0 under Outbound access.
+          - path: sink.syslog.host
+            type: string
+            label: Host
+            required: true
+            pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'
+            patternMessage: Use a host name or IP address, without a port.
+          - path: sink.syslog.port
+            type: integer
+            label: Port
+            required: true
+            min: 1
+            max: 65535
+          - path: sink.syslog.tls
+            type: boolean
+            label: TLS
+            description: TLS 1.2 or later; the certificate is checked against the host name.
+          - path: sink.syslog.caSecret
+            type: ref
+            label: Private CA bundle
+            when: self.sink.syslog.tls
+            description: An opaque secret holding the listener's CA certificate (PEM). Empty trusts public CAs.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create: { secretType: opaque, encoding: plain }
+          - path: sink.syslog.framing
+            type: enum
+            label: Framing
+            required: true
+            options:
+              - { value: newline, label: Newline (what fluent-bit sends) }
+              - { value: octet-counting, label: Octet counting (RFC 6587) }
+          - path: sink.syslog.maxMessageBytes
+            type: integer
+            label: Maximum message size
+            unit: bytes
+            required: true
+            advanced: true
+            min: 480
+            max: 1048576
+          - path: sink.syslog.facility
+            type: integer
+            label: Facility
+            required: true
+            advanced: true
+            min: 0
+            max: 23
+          - path: sink.syslog.severity
+            type: integer
+            label: Severity
+            required: true
+            advanced: true
+            min: 0
+            max: 7
+          - path: sink.syslog.timeout
+            type: string
+            format: duration
+            label: Network timeout
+            required: true
+            advanced: true
+            description: For connecting, each write, and waiting for the listener to close.
+      - id: otlp
+        title: OpenTelemetry (OTLP)
+        when: self.sink.type == 'otlp'
+        fields:
+          - path: sink.otlp.endpoint
+            type: string
+            label: Endpoint
+            required: true
+            description: The collector's base URL; `/v1/logs` is appended.
+            pattern: '^https?://[^/ ]+'
+            patternMessage: Use an http(s) URL such as https://otlp.example.com:4318.
+          - path: sink.otlp.authHeader.name
+            type: string
+            label: Auth header
+            pattern: "^([!#$%&'*+.^_`|~0-9A-Za-z-]+)?$"
+            patternMessage: Use an HTTP header name, such as Authorization.
+            description: Optional, such as `Authorization`. Its value comes from the secret below.
+          - path: sink.otlp.authHeader.secret
+            type: ref
+            label: Auth header value secret
+            when: self.sink.otlp.authHeader.name != ''
+            required: true
+            description: An opaque secret whose payload is the whole header value, such as `Bearer TOKEN`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create: { secretType: opaque, encoding: plain }
+          - path: sink.otlp.headers
+            type: map
+            label: Other headers
+            advanced: true
+            values: { type: string }
+          - path: sink.otlp.caSecret
+            type: ref
+            label: Private CA bundle
+            advanced: true
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create: { secretType: opaque, encoding: plain }
+          - path: sink.otlp.gzip
+            type: boolean
+            label: Gzip requests
+            advanced: true
+          - path: sink.otlp.timeout
+            type: string
+            format: duration
+            label: Request timeout
+            required: true
+            advanced: true
+
+  - id: state
+    title: Checkpoints
+    description: Where each stream keeps its checkpoint, which survives restarts, upgrades and crashes.
+    sections:
+      - fields:
+          - path: state.backend
+            type: enum
+            label: Keep checkpoints in
+            widget: cards
+            required: true
+            options:
+              - value: s3
+                label: S3 bucket
+                description: Works in a GVC with any number of locations; replicas take turns through a lease.
+              - value: volumeSet
+                label: Volume set
+                description: No bucket needed. A GVC with exactly one location only.
+      - id: state-s3
+        title: State bucket
+        when: self.state.backend == 's3'
+        description: >-
+          With the S3 destination, leave the bucket empty to keep checkpoints next to the records. A lost or
+          wiped checkpoint restarts the stream at its start time or lookback.
+        fields:
+          - path: state.s3.bucket
+            type: string
+            label: Bucket
+            description: Required unless the destination is S3.
+            pattern: '^([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])?$'
+            patternMessage: Use the bucket's name, without s3:// or a path.
+          - path: state.s3.region
+            type: string
+            label: Bucket region
+            when: self.state.s3.bucket != ''
+            required: true
+            pattern: '^[a-z]{2}(-[a-z]+)+-\d+$'
+          - path: state.s3.prefix
+            type: string
+            label: Prefix
+            when: self.state.s3.bucket != ''
+            pattern: "^[A-Za-z0-9!_.*'()=/-]*$"
+          - path: state.s3.kmsKeyId
+            type: string
+            label: SSE-KMS key
+            advanced: true
+            when: self.state.s3.bucket != ''
+        rules:
+          - rule: self.state.backend != 's3' || self.sink.type == 's3' || self.state.s3.bucket != ''
+            mirrors: cas.validate
+            paths: [state.s3.bucket]
+            message: Set a bucket for the checkpoints, or keep them in a volume set.
+      - id: state-volumeset
+        title: Volume set
+        when: self.state.backend == 'volumeSet'
+        description: >-
+          A shared volume set mounted at /state. The shipper refuses to start in a GVC with several locations, and
+          a file lock keeps a second replica out during rollouts.
+        fields:
+          - path: state.volumeSet.existingName
+            type: ref
+            label: Existing volume set
+            description: Leave empty to create one. An existing one must have the shared file system type.
+            ref: { kind: volumeset, format: name, mustExist: error }
+          - path: state.volumeSet.capacity
+            type: integer
+            label: Capacity
+            unit: GiB
+            required: true
+            when: self.state.volumeSet.existingName == ''
+            min: 10
+        rules:
+          - rule: >-
+              self.state.backend != 'volumeSet' || context.gvcLocations == null || size(context.gvcLocations) == 1
+            paths: [state.backend]
+            message: >-
+              Volume set state needs a GVC with exactly one location. Keep checkpoints in an S3 bucket instead.
+
+  - id: aws
+    title: AWS access
+    when: self.sink.type == 's3' || self.state.backend == 's3'
+    description: How the shipper authenticates to S3 for the records or the checkpoints.
+    sections:
+      - fields:
+          - path: aws.authMode
+            type: enum
+            label: Authentication
+            widget: segmented
+            required: true
+            options:
+              - { value: identity, label: Cloud account identity }
+              - { value: secret, label: Access keys in a secret }
+      - id: cloud-access
+        title: Cloud access
+        when: self.aws.authMode == 'identity' && self.identity.existingName == ''
+        description: >-
+          Control Plane gives the workload identity a role in the bucket's AWS account, so no keys are stored. The
+          README has the bucket-scoped IAM policy.
+        docs: "/reference/identity"
+        fields:
+          - path: aws.identity.cloudAccountName
+            type: ref
+            label: AWS cloud account
+            required: true
+            ref: { kind: cloudaccount, format: name, filter: { provider: [aws] }, mustExist: error }
+          - path: aws.identity.policyRefs
+            type: list
+            label: IAM policies
+            description: Customer-managed policy names in the cloud account's AWS account. Leave empty to use a role.
+            item: { type: string }
+          - path: aws.identity.roleName
+            type: string
+            label: Existing IAM role
+            description: A role Control Plane may use, instead of the policies above.
+        rules:
+          - rule: (size(self.aws.identity.policyRefs) > 0) != (self.aws.identity.roleName != '')
+            mirrors: cas.validate
+            paths: [aws.identity.policyRefs, aws.identity.roleName]
+            message: Set IAM policies or an existing IAM role, one of the two.
+      - id: access-keys
+        title: Access keys
+        when: self.aws.authMode == 'secret'
+        description: >-
+          An IAM user's access keys, used directly or to assume a role. The role ARN and external ID stored in an
+          `aws` secret are not read; set them here.
+        fields:
+          - path: aws.secret.name
+            type: ref
+            label: AWS credentials secret
+            required: true
+            description: An `aws` secret, or a dictionary secret holding the keys named below.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [aws, dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "[self.aws.secret.accessKeyIdKey, self.aws.secret.secretAccessKeyKey, self.aws.secret.sessionTokenKey]"
+          - path: aws.secret.sessionTokenKey
+            type: string
+            label: Session token key
+            description: For temporary credentials in a dictionary secret. Rotate the secret before they expire.
+          - path: aws.secret.accessKeyIdKey
+            type: string
+            label: Access key ID key
+            required: true
+            advanced: true
+            description: The defaults match an `aws` secret.
+          - path: aws.secret.secretAccessKeyKey
+            type: string
+            label: Secret access key key
+            required: true
+            advanced: true
+          - path: aws.secret.assumeRole.roleArn
+            type: string
+            label: Role to assume
+            description: >-
+              Leave empty to use the keys directly. The keys then only need `sts:AssumeRole` on this role, and the
+              role's trust policy must admit them.
+            pattern: '^arn:aws[a-z-]*:iam::\d{12}:role/.+$'
+            patternMessage: Use an IAM role ARN, arn:aws:iam::ACCOUNT:role/NAME.
+          - path: aws.secret.assumeRole.externalId
+            type: string
+            label: External ID
+            when: self.aws.secret.assumeRole.roleArn != ''
+            pattern: '^([A-Za-z0-9_+=,.@:/-]{2,1000})?$'
+            patternMessage: Use 2 to 1000 letters, digits and _+=,.@:/- characters.
+          - path: aws.secret.assumeRole.durationSeconds
+            type: integer
+            label: Session duration
+            unit: seconds
+            required: true
+            when: self.aws.secret.assumeRole.roleArn != ''
+            description: Renewed automatically before it expires. Keep it within the role's maximum session duration.
+            min: 900
+            max: 43200
+          - path: aws.secret.assumeRole.sessionName
+            type: string
+            label: Session name
+            advanced: true
+            when: self.aws.secret.assumeRole.roleArn != ''
+            description: Empty uses cpln-audit-shipper.
+            pattern: '^([A-Za-z0-9_+=,.@-]{2,64})?$'
+            patternMessage: Use 2 to 64 letters, digits and _+=,.@- characters.
+    rules:
+      - rule: >-
+          self.aws.authMode != 'identity' || (self.aws.secret.name == '' && self.aws.secret.sessionTokenKey == ''
+          && self.aws.secret.assumeRole.roleArn == '' && self.aws.secret.assumeRole.externalId == '')
+        mirrors: cas.validate
+        paths: [aws.authMode]
+        message: Access key settings are only used with access keys. Clear them, or choose Access keys in a secret.
+
+  - id: runtime
+    title: Schedule and resources
+    description: How often each source is read, and the shipper's container.
+    sections:
+      - fields:
+          - path: interval
+            type: string
+            format: duration
+            label: Interval
+            required: true
+            description: >-
+              Time between the starts of two cycles of each source; 60s works. A cycle that runs longer is followed
+              at once, so a backlog is worked off without overlapping cycles.
+          - path: stream
+            type: string
+            label: Stream name
+            required: true
+            description: >-
+              Part of the checkpoint and object names. A second release with the same sources and checkpoint store,
+              such as a backfill or a second syslog destination, needs its own stream name.
+            pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+            patternMessage: Use lowercase letters, digits and dashes.
+          - path: resources
+            type: resources
+            label: Resources
+            required: true
+            description: One long-running replica. Reserved in full, since Capacity AI is off.
+            cpu: { min: 50m }
+            memory: { min: 128Mi }
+          - path: image
+            type: string
+            format: image
+            label: Shipper image
+            required: true
+            advanced: true
+            description: Pinned to the shipper release this chart was built for.
+        rules:
+          - rule: >-
+              self.interval.endsWith('d') ||
+              (duration(self.interval) >= duration('10s') && duration(self.interval) <= duration('24h'))
+            mirrors: cas.validate
+            paths: [interval]
+            message: The interval must be between 10s and 24h.
+      - id: identity
+        title: Existing identity
+        advanced: true
+        description: Reuse an identity you manage instead of creating one.
+        fields:
+          - path: identity.existingName
+            type: ref
+            label: Identity
+            description: >-
+              With S3 and cloud account identity it must already have AWS access to the buckets. The release grants
+              it `reveal` on the secrets, `addKey`, `edit` and `view` on the release's service account, and `view` on
+              the GVC with volume set state.
+            ref: { kind: identity, format: name, mustExist: error }
+      - id: tuning
+        title: Batching, lease and shutdown
+        advanced: true
+        fields:
+          - path: tuning.maxBatchEvents
+            type: integer
+            label: Events per batch
+            required: true
+            description: New records held in memory before they are delivered and checkpointed.
+            min: 1
+            max: 1000000
+          - path: tuning.maxBatchBytes
+            type: integer
+            label: Bytes per batch
+            unit: bytes
+            required: true
+            min: 1048576
+            max: 1073741824
+          - path: tuning.maxObjectEvents
+            type: integer
+            label: Events per S3 object
+            required: true
+            min: 1
+            max: 1000000
+          - path: tuning.maxObjectBytes
+            type: integer
+            label: Bytes per S3 object
+            unit: bytes
+            required: true
+            description: Before compression.
+            min: 1048576
+            max: 1073741824
+          - path: tuning.leaseTTL
+            type: string
+            format: duration
+            label: Lease expiry
+            required: true
+            description: How long a replica that stopped without releasing a checkpoint blocks the others.
+          - path: tuning.cycleBudget
+            type: string
+            format: duration
+            label: Cycle budget
+            required: true
+            description: A long backlog is worked off in cycles of about this length.
+          - path: tuning.drainTimeout
+            type: string
+            format: duration
+            label: Drain on shutdown
+            required: true
+            description: >-
+              How long a delivery under way may finish after the replica is told to stop. The platform waits half the
+              grace period before it signals the replica, so this plus 15s must fit in the other half.
+          - path: tuning.terminationGracePeriodSeconds
+            type: integer
+            label: Termination grace period
+            unit: seconds
+            required: true
+            min: 10
+            max: 900
+          - path: tuning.heartbeatMaxAge
+            type: string
+            format: duration
+            label: Restart when stuck for
+            required: true
+            description: The liveness probe restarts the shipper when a source has made no progress for this long.
+          - path: tuning.logLevel
+            type: enum
+            label: Log level
+            required: true
+            options:
+              - { value: debug, label: Debug }
+              - { value: info, label: Info }
+              - { value: warn, label: Warning }
+              - { value: error, label: Error }
+        rules:
+          - rule: self.tuning.leaseTTL.endsWith('d') || duration(self.tuning.leaseTTL) >= duration('1m')
+            mirrors: cas.validate
+            paths: [tuning.leaseTTL]
+            message: The lease expiry must be at least 1m.
+          - rule: >-
+              self.tuning.drainTimeout.endsWith('d') ||
+              duration(self.tuning.drainTimeout) + duration('15s') <= duration(string(int(self.tuning.terminationGracePeriodSeconds) / 2) + 's')
+            mirrors: cas.validate
+            paths: [tuning.drainTimeout]
+            message: >-
+              Keep the drain time plus 15s within half the termination grace period: the platform waits the other
+              half before it signals the replica, or a delivery under way is cut off at shutdown.
+      - id: firewall
+        title: Outbound access
+        advanced: true
+        description: >-
+          The shipper needs HTTPS to api.cpln.io, audit.cpln.io and logs.cpln.io, to S3 and STS when used, and the
+          destination. Hostname rules open only ports 80, 443 and 445.
+        fields:
+          - path: firewall.outboundAllowCIDR
+            type: list
+            label: Allowed CIDRs
+            item: { type: string, format: cidr }
+          - path: firewall.outboundAllowHostname
+            type: list
+            label: Allowed hostnames
+            item: { type: string }

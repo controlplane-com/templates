@@ -134,6 +134,7 @@ pgvector:
     imageKey: pgvector.image
     consoleField: "Upgrade > Vector store server > pgvector image"
     readme: 'README, "Upgrading from 1.x"'
+    moveHow: "turn RAG off and on again, then re-upload your files"
 
 # ─── Redis (redis template, dev mode) — REQUIRED for replicas > 1 ─────────────
 redis:

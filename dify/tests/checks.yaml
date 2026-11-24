@@ -16,9 +16,11 @@ checks:
     exec:
       workload: "{release}-dify"
       container: gateway
-      script: nginx -v 2>&1
+      script: |
+        v=$(nginx -v 2>&1)
+        [ "$v" = "nginx version: nginx/{gateway_nginx}" ] && echo VERSION_OK || echo "VERSION_BAD $v"
     expect:
-      stdout: "nginx/{gateway_nginx}$"
+      stdout: "^VERSION_OK$"
 
   - id: boot-version
     description: >-

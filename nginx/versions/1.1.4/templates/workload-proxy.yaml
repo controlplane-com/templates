@@ -35,10 +35,22 @@ spec:
         httpGet:
           path: /health
           port: {{ .Values.proxyWorkload.port | int }}
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 1
+        successThreshold: 1
+        failureThreshold: 3
       readinessProbe:
         httpGet:
           path: /health
           port: {{ .Values.proxyWorkload.port | int }}
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 1
+        successThreshold: 1
+        failureThreshold: 3
       volumes:
         - path: /etc/nginx/nginx.conf
           recoveryPolicy: retain

@@ -8,9 +8,11 @@ checks:
     exec:
       workload: "{release}-nginx"
       container: nginx
-      script: nginx -v 2>&1
+      script: |
+        v=$(nginx -v 2>&1)
+        [ "$v" = "nginx version: nginx/{nginx_version}" ] && echo VERSION_OK || echo "VERSION_BAD $v"
     expect:
-      stdout: "nginx/{nginx_version}$"
+      stdout: "^VERSION_OK$"
 
   - id: routes-default-port
     description: >-

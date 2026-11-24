@@ -1,0 +1,17 @@
+# nginx 1.1.4 — the default install: one proxy replica routing every path to the bundled example backend
+# (no credentials; the template takes none). The `port` variant moves the listener to 8080, which 1.1.4
+# makes work (#5213).
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+values:
+  enableExample: true
+
+variants:
+  - name: port
+    values:
+      proxyWorkload:
+        port: 8080
+
+upgradeFrom:
+  - version: 1.1.3

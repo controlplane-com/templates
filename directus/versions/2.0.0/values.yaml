@@ -80,6 +80,12 @@ postgres:
     maxMemory: 1Gi
   volumeset:
     capacity: 10         # GiB (minimum 10)
+  # How the database's major-version guard names its fix in the logs: this chart's values path, wizard field and
+  # README section. Leave as is.
+  upgradeHint:
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database settings > Server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
 
   backup:                # pass-through to the postgres template's backup feature
     enabled: false
@@ -107,6 +113,7 @@ postgres:
 
 # ─── Database: highly available PostgreSQL (opt-in) ───────────────────────────
 # 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint; enable exactly one of postgres / postgresHA.
+# New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on 17 (README, "Upgrading from 1.x").
 postgresHA:
   enabled: false
   config:
@@ -128,7 +135,7 @@ postgresHA:
       cpu: 100m
       memory: 512Mi      # wal-g backups need at least 512Mi
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0   # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"   # daily at 02:00 UTC
     walg:
       intervalSeconds: 21600  # every 6 hours

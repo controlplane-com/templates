@@ -255,7 +255,7 @@ checks:
   - id: fresh-is-19
     description: A fresh install runs the single-instance PostgreSQL on 19 (an upgrade pinned to an older major keeps that major).
     since: 2.0.0
-    scenarios: "^install "
+    scenarios: "^install (?!.*\\[ha\\])"
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -300,6 +300,26 @@ checks:
         grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
         cat /tmp/pg-major-guard
     expect:
-      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set image=postgres:18"
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:18"
     retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      and Directus's own tables are in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "DIRECTUS_TABLES=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from information_schema.tables where table_name like 'directus\\_%'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^DIRECTUS_TABLES=[1-9][0-9]*$"
+    retries: 4
     retryDelaySeconds: 15

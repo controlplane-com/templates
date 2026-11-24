@@ -9,7 +9,7 @@ Directus 12 is licensed MSCL-1.0-GPL. **Without a license key it runs on the fre
 - **`{release}-directus`** — a `standard` workload on HTTP :8055 serving the API and the Data Studio. On boot it waits for PostgreSQL to answer a query, then installs or migrates the database under a PostgreSQL advisory lock, so replicas never migrate at once. Pinned to `location`.
 - **`{release}-directus-uploads`** — a shared (read-write-many) volume set at `/directus/uploads` that every replica mounts, with `storage.type: local` (default). With `storage.type: s3` files go to your bucket instead.
 - **`{release}-postgres`** — the bundled `postgres` template (default), PostgreSQL 19, holding every collection, item, user, setting and flow. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
-- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)* — the `postgres-highly-available` template instead: PostgreSQL 17 on 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint.
+- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)* — the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **`{release}-redis`** *(optional)* — the `redis` template as one node: shared cache, locks, message bus, rate limits and the scheduled-flow clock. Required for 2 or more replicas. It holds no data of record.
 - **Identity and policies** — `reveal` on exactly the secrets Directus reads, `view` on its own GVC (a boot-time check that reports GVC locations it does not use), and the AWS cloud-account link in keyless S3 mode.
 
@@ -96,7 +96,7 @@ postgres:
 postgresHA:
   enabled: false
   config: { credentialsSecretName: my-directus-db-credentials }   # same shape, in HA mode
-  replicas: 3                   # PostgreSQL 17
+  replicas: 3                   # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   backup: { enabled: false }    # mode logical (logical.schedule) | wal-g (walg.intervalSeconds)
 ```
 
@@ -170,9 +170,9 @@ Lifecycle rules run in the background; objects are removed within about a day of
 
 ## Upgrading from 1.x
 
-Only the single-instance database (`postgres.enabled: true`, the default) is affected; a release on `postgresHA` upgrades as usual and stays on PostgreSQL 17.
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: see [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template.
 
-New installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `{release}-postgres` then stays not ready, Directus waits for its database, and the logs repeat `[pg-guard] REFUSING TO START` with the major to pin. The log line says `--set image=...`; in this chart that value is `postgres.image`.
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `{release}-postgres` then stays not ready, Directus waits for its database, and the logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
 
 ```bash
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m

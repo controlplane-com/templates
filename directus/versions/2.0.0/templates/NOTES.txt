@@ -11,8 +11,7 @@ server REFUSES to start on it, and your data stays untouched.
 {{- if regexMatch ":19([.-]|$)" .Values.postgres.image }}
   If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
   the logs say "REFUSING TO START", run this upgrade again with --set postgres.image=postgres:18
-  (the major the logs name; the log line says --set image=..., which is postgres.image in this chart),
-  and keep that image in your values for every later upgrade.
+  (the major the logs name), and keep that image in your values for every later upgrade.
 {{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.postgres.image }}
   This release runs {{ .Values.postgres.image }}: the server stays on that major. Keep postgres.image in
   your values for every later upgrade.

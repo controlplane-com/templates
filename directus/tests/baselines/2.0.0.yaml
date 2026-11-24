@@ -56,6 +56,19 @@ values:
           enabled: true
           name: "{secrets.redis.name}"
 
+# The highly available database (postgres-highly-available 3.0.0): a fresh HA install, where every Directus
+# check runs against the HAProxy leader endpoint and ha-is-18 proves the new cluster's major.
+variants:
+  - name: ha
+    values:
+      postgres:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1200
+
 # 2.0.0 runs the single-instance PostgreSQL on 19, so a plain upgrade of a 1.0.0 release (data on PostgreSQL
 # 18) must be REFUSED by the postgres boot guard with the data untouched; the upgrade pinned to postgres:18,
 # as the guard says, then succeeds and the item written on 1.0.0 survives.

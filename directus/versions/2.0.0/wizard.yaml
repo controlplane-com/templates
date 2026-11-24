@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 4.0.0
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # Right after the Database settings step, which holds the server, storage and network of the same database.
@@ -34,7 +34,7 @@ imports:
       - volumeset
       - internalAccess
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL

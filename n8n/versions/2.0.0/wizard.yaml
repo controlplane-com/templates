@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 4.0.0
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     after: database
@@ -30,6 +30,33 @@ imports:
         description: >-
           n8n connects to its database like any other workload: keep Same GVC, or add the n8n workload under
           Allowed workloads.
+
+  - template: postgres-highly-available
+    version: 3.0.0
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: database
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members n8n stores its workflows and credentials in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional backups to object storage. Uninstalling the release deletes the database volumes, so turn
+          this on if your workflows and credentials matter.
+    exclude:
+      # Named in the Database step, next to the single-instance mode's secret, so both modes ask for it in one place.
+      - config.credentialsSecretName
+      # n8n connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      internal_access.type:
+        description: >-
+          n8n connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the n8n
+          workload under Allowed workloads.
 
 steps:
   - id: n8n
@@ -228,10 +255,16 @@ steps:
               - rule: self.postgresHA.enabled != self.postgres.enabled
                 mirrors: n8n.validate
                 message: Enable exactly one database, highly available or single-instance.
-          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          # Declared so the imports' conditions are fields; the chooser above writes them.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
             description: Set by the database choice above.
@@ -304,223 +337,25 @@ steps:
             message: >-
               The previous version created the database secret itself, and this upgrade deletes it. Create a
               secret under a NEW name holding the same username, password and database, and name it here.
-      - id: postgres-ha
-        title: Highly available PostgreSQL
-        when: self.postgresHA.enabled
-        fields:
-          - type: note
-            severity: warning
-            when: context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '1.5.0') < 0
-            text: >-
-              1.5.0 moves the HA database to `controlplanecorporation/patroni-postgres:0.8` (pgvector 0.8.7,
-              CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief
-              interruption of writes while the leader changes; upgrade in a quiet window. If a PGVector Vector Store
-              node created the `vector` extension in this database, run `ALTER EXTENSION vector UPDATE;` there after
-              the upgrade. Image tags `0.1` to `0.7` are refused.
-          - path: postgresHA.replicas
-            type: integer
-            label: PostgreSQL replicas
-            required: true
-            min: 1
-            suggestions: [3, 5]
-          - path: postgresHA.image
-            type: string
-            format: image
-            label: Patroni PostgreSQL image
-            required: true
-            advanced: true
-            description: The HA database image; keep the chart default unless you mirror it to your own registry.
-            rules:
-              - rule: >-
-                  !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
-                  !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
-                  size(self.postgresHA.image.split(':')) < 2 ||
-                  !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
-                mirrors: n8n.validatePostgresHAImage
-                message: >-
-                  This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
-                  create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
-          - path: postgresHA.volumeset.capacity
-            type: integer
-            label: Initial capacity
-            unit: GiB
-            min: 10
-            required: true
-            description: Per replica.
-            suggestions: [10, 20, 50, 100, 250, 500, 1000]
-        rules:
-          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
-            paths: [postgresHA.volumeset.capacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
-          - rule: self.postgresHA.replicas >= 3
-            severity: info
-            paths: [postgresHA.replicas]
-            message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
-
-  - id: backups
-    title: Database backups
-    description: Optional backups of the highly available PostgreSQL to object storage.
-    when: self.postgresHA.enabled
-    sections:
-      - id: backup
-        title: Scheduled backups
-        toggle: postgresHA.backup.enabled
-        docs: "#database-backups"
-        description: >-
-          Logical dumps on a schedule, or continuous WAL-G archiving with periodic base backups. Uninstalling
-          the release deletes the database volumes, so turn this on if your workflows and credentials matter.
-        fields:
-          - path: postgresHA.backup.mode
-            type: enum
-            label: Backup mode
-            widget: segmented
-            required: true
-            options:
-              - { value: logical, label: Logical dumps, description: A scheduled pg_dump of every database. }
-              - { value: wal-g, label: WAL-G, description: Continuous WAL archiving plus periodic base backups. }
-          - path: postgresHA.backup.provider
-            type: enum
-            label: Destination
-            widget: cards
-            required: true
-            options:
-              - { value: aws, label: AWS S3 }
-              - { value: gcp, label: Google Cloud Storage }
-              - { value: minio, label: MinIO or S3-compatible }
-          - path: postgresHA.backup.logical.schedule
-            type: string
-            format: cron
-            label: Schedule (UTC)
-            required: true
-            when: self.postgresHA.backup.mode == 'logical'
-          - path: postgresHA.backup.walg.intervalSeconds
-            type: integer
-            label: Base backup interval
-            unit: s
-            required: true
-            min: 1
-            when: self.postgresHA.backup.mode == 'wal-g'
-            suggestions:
-              - { value: 3600, label: "3600 (hourly)" }
-              - { value: 21600, label: "21600 (6 hours, default)" }
-              - { value: 86400, label: "86400 (daily)" }
-          - path: postgresHA.backup.logical.image
-            type: string
-            format: image
-            label: Logical backup image
-            required: true
-            advanced: true
-            when: self.postgresHA.backup.mode == 'logical'
-            description: Tag 17.x.x for the bundled PostgreSQL 17.
-          - path: postgresHA.backup.resources
-            type: resources
-            label: Backup resources
-            required: true
-            advanced: true
-            description: Used by whichever mode is on.
-      - title: AWS S3
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-        fields:
-          - path: postgresHA.backup.aws.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
-            patternMessage: Use lowercase letters, digits, dots and hyphens (3 to 63 characters).
-          - path: postgresHA.backup.aws.region
-            type: string
-            label: Bucket region
-            required: true
-            placeholder: us-east-1
-            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
-            patternMessage: Use an AWS region name, such as us-east-1.
-          - path: postgresHA.backup.aws.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [aws] }
-              mustExist: error
-          - path: postgresHA.backup.aws.policyName
-            type: string
-            label: IAM policy name
-            required: true
-            example: true
-            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-          - path: postgresHA.backup.aws.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: Google Cloud Storage
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
-        fields:
-          - path: postgresHA.backup.gcp.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.gcp.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: "A GCP [cloud account](/guides/create-cloud-account) for the project that owns the bucket."
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [gcp] }
-              mustExist: error
-          - path: postgresHA.backup.gcp.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: MinIO or S3-compatible
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
-        fields:
-          - path: postgresHA.backup.minio.endpoint
-            type: string
-            format: url
-            label: S3 endpoint
-            required: true
-            example: true
-            placeholder: http://my-minio-workload:9000
-            description: The URL including the port.
-          - path: postgresHA.backup.minio.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.minio.credentialsSecretName
-            type: ref
-            label: MinIO credentials secret
-            required: true
-            description: A dictionary secret with the keys `accessKey` and `secretKey`.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [accessKey, secretKey]
-          - path: postgresHA.backup.minio.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-        rules:
-          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
-            paths: [postgresHA.backup.minio.credentialsSecretName]
-            message: >-
-              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
-              credentials secret and remove them from the values.
-
 # Rules over values outside the steps: their issues show on the fields named in paths.
 rules:
+  # Restated from the removed HA backup section: 1.3.1 moved the MinIO keys into a secret.
+  - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+    paths: [postgresHA.backup.minio.credentialsSecretName]
+    message: >-
+      postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
+      credentials secret and remove them from the values.
+  # n8n's own check on the HA image (the import's field has the same rule for the chart's own check).
+  - rule: >-
+      !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
+      !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
+      size(self.postgresHA.image.split(':')) < 2 ||
+      !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
+    mirrors: n8n.validatePostgresHAImage
+    paths: [postgresHA.image]
+    message: >-
+      This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
+      create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.9.
   # The postgres import's own rule for these keys is dropped with the excluded secret field, so it is repeated here.
   - rule: >-
       !self.postgres.enabled || (!has(self.postgres.config.username) && !has(self.postgres.config.password) &&
@@ -568,6 +403,8 @@ rules:
 yamlOnly:
   - path: postgres.pgbouncer
     reason: n8n connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: n8n connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
   - fromVersions: "<1.4.0"

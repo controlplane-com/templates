@@ -6,7 +6,7 @@ This app deploys [n8n](https://n8n.io/) — a workflow automation platform (fair
 
 - **n8n**: Stateful workload (single replica) serving the editor, API, and webhooks on port 5678; public URLs are derived from the canonical endpoint at start.
 - **Volumeset**: 10 GiB persistent storage for instance config and binary execution data (`/home/node/.n8n`).
-- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 17) — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 18 for new clusters) — 3× Patroni Postgres, 3× etcd, and a 2-replica HAProxy leader endpoint n8n connects through.
 - **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template (PostgreSQL 19) instead, for lighter deployments.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. Postgres initializes from it and n8n connects with it, in either database mode.
 - **Secrets, identity, and policy**: a start-script secret, and a least-privilege policy granting the n8n identity `reveal` on exactly the secrets it uses — including the three prerequisite secrets you create.
@@ -110,7 +110,7 @@ postgresHA:                   # default: highly available PostgreSQL
   config:
     credentialsSecretName: my-n8n-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   volumeset:
     capacity: 10              # GiB per replica
   backup:
@@ -145,15 +145,20 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 ## Upgrading from 1.x
 
-**HA mode (the default) is unchanged:** the highly available database keeps its version and image, and the upgrade runs like any other.
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `cpln-connector` or `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [AWS S3](#aws-s3) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new n8n release (same three prerequisite secrets) in place of the second database release, and both n8n workloads stopped during the copy.
 
 **Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
 
 ```bash
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
 ```
-
-The log names the bundled chart's own key, `image`; in this chart that key is `postgres.image`.
 
 **Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
 
@@ -210,7 +215,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
   "Statement": [{
     "Effect": "Allow",
     "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:PutObject",
-               "s3:DeleteObject", "s3:AbortMultipartUpload"],
+               "s3:DeleteObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion",
+               "s3:AbortMultipartUpload", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
   }]
 }
@@ -300,14 +306,14 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
-- **Single-instance mode moves to PostgreSQL 19 in 2.0.0; HA mode (the default) is unchanged.** A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
+- **2.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - **Back up the encryption-key secret** — losing it permanently bricks every credential n8n has stored; never change it after first boot (n8n fails to start on a key mismatch).
 - **Create all three secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Rotating any prerequisite secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with.
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect about two minutes of editor/webhook downtime per `helm upgrade` while the replica is recreated and its volume reattaches; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.
 - **Upgrading from 1.4.0**: n8n moves from 2.29.8 to 2.45.4 and migrates its database on the first start. Rolling back to 1.4.0 is not supported, so back up the database first. Schedule Triggers set to "every N seconds/minutes" now run N apart from when the workflow was activated, instead of on clock boundaries.
-- **Upgrading from 1.4.0 (HA mode)**: the database moves to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief interruption of writes while the leader changes; n8n itself restarts as on any upgrade, which is the longer interruption, because its single replica stops before the new one serves. Upgrade in a quiet window. n8n's own tables do not use the `vector` extension, but a PGVector Vector Store node pointed at this database creates it: if it exists, run `ALTER EXTENSION vector UPDATE;` in that database after the upgrade. If your values set `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render.
+- **Upgrading from 1.4.0 (HA mode)**: the database moves to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief interruption of writes while the leader changes; n8n itself restarts as on any upgrade, which is the longer interruption, because its single replica stops before the new one serves. Upgrade in a quiet window. n8n's own tables do not use the `vector` extension, but a PGVector Vector Store node pointed at this database creates it: if it exists, run `ALTER EXTENSION vector UPDATE;` in that database after the upgrade. If your values set `postgresHA.image`, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render.
 - **Upgrading from 1.2.0 (HA mode)**: `postgresHA.postgres.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgresHA.config.credentialsSecretName`. `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).
 - **Upgrading from 1.1.0**: `postgres.config.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgres.config.credentialsSecretName`. `postgres.backup.minio.accessKey`/`secretKey` were removed the same way (see Backup storage setup).
 - **Upgrading from 1.0.x**: `owner.email` and `owner.password` were removed, and the render fails naming the replacement if either is still set. Put the email and a bcrypt hash of **the password you use today** into the prerequisite dictionary secret — the owner is re-applied from it at the next start, so a different password there silently becomes the new login.

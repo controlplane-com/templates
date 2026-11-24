@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: pgvector
-    version: 2.0.0
+    version: 2.0.1
     when: self.pgvector.enabled
     title: Single-instance PostgreSQL
     after: access
@@ -34,7 +34,7 @@ imports:
           Hindsight connects to its database like any other workload: keep Same GVC, or add the Hindsight
           workloads under Allowed workloads.
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL

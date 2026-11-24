@@ -7,7 +7,7 @@ This app deploys [Hindsight](https://github.com/vectorize-io/hindsight), an open
 - **API** (`RELEASE_NAME-hindsight`): standard workload serving REST (`/v1/...`) and MCP (`/mcp/BANK_ID/`) on port 8888, 1 replica by default. Replicas share PostgreSQL, so they are interchangeable. Without dedicated workers each replica also runs retain, consolidation and other background tasks. The default image (about 1 GB compressed) bundles the local embedding model (`BAAI/bge-small-en-v1.5`) and reranker (`hs-rerank-1`), so recall makes no external call.
 - **Web UI** (`RELEASE_NAME-hindsight-ui`, on by default): Hindsight's web UI (called Hindsight Control Plane upstream) on port 9999, behind an access key you type to log in. It calls the API inside the GVC with the API key.
 - **Dedicated workers** (`RELEASE_NAME-hindsight-worker`, optional): stateful workload that takes background tasks off the API. Each replica keeps a stable worker id, so a restarted worker picks up its own unfinished tasks.
-- **PostgreSQL**: the `pgvector` template (single instance, default; PostgreSQL 19 with pgvector 0.8.7) or the `postgres-highly-available` template (PostgreSQL 17: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint). Holds every bank, fact, entity and document. The single instance refuses to start on a data directory from another PostgreSQL major version and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
+- **PostgreSQL**: the `pgvector` template (single instance, default; PostgreSQL 19 with pgvector 0.8.7) or the `postgres-highly-available` template (PostgreSQL 18 for a new cluster: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint). Holds every bank, fact, entity and document. The single instance refuses to start on a data directory from another PostgreSQL major version and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Identities + policies**: `reveal` on exactly the secrets you name. The template creates no secrets.
 
 The API and the web UI are private by default: reach them from the same GVC or with `cpln port-forward`.
@@ -204,7 +204,7 @@ A forwarded web UI can stop responding in a browser after a while; restart the f
 
 ## Upgrading from 1.x
 
-The single-instance database of 2.0.0 runs PostgreSQL 19. A 1.x release's data directory is PostgreSQL 18, and a data directory only starts under the major version that created it: on a PostgreSQL 19 image the database container does not start PostgreSQL and changes nothing on the volume. `RELEASE_NAME-pgvector` stays not ready, Hindsight waits for it, and the database logs repeat a `[pg-guard] REFUSING TO START` message. That message names the key `image`; in this chart the key is `pgvector.image`. A release on `postgresHA` is not affected: the highly available database keeps its own image.
+The single-instance database of 2.0.0 runs PostgreSQL 19. A 1.x release's data directory is PostgreSQL 18, and a data directory only starts under the major version that created it: on a PostgreSQL 19 image the database container does not start PostgreSQL and changes nothing on the volume. `RELEASE_NAME-pgvector` stays not ready, Hindsight waits for it, and the database logs repeat a `[pg-guard] REFUSING TO START` message naming the pin.
 
 **Stay on PostgreSQL 18.** Pin the image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does not reuse the release's values):
 
@@ -238,6 +238,8 @@ If an upgrade ran without the pin, run the same upgrade again with `--set pgvect
    ```
 
 5. Uninstall the old release.
+
+**Highly available mode (`postgresHA`).** The upgrade is in place: an existing cluster keeps the PostgreSQL major it was created with (17 for a 1.x release) on the new `patroni-postgres:0.9` image, and only a new cluster starts on PostgreSQL 18. To move an existing cluster to 18, follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template. The second release there is a new Hindsight 2.0.0 release with `postgresHA.enabled: true` and the same secrets; this chart names its database workloads `RELEASE_NAME-postgres-ha` and `RELEASE_NAME-postgres-ha-proxy`, so the commands apply as written. Stop both releases' `-hindsight` workloads while the copy runs.
 
 ## Important Notes
 

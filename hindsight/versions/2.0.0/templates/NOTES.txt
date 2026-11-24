@@ -14,8 +14,8 @@ UPGRADING A 1.x RELEASE? The single-instance database now defaults to PostgreSQL
 earlier version of this chart is PostgreSQL 18, and the server REFUSES to start on it (your data is
 untouched). If `cpln workload get-deployments {{ .Release.Name }}-pgvector --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
 the logs say "REFUSING TO START", run this upgrade again with
---set pgvector.image=pgvector/pgvector:0.8.7-pg18 (the log line names `image`; in this chart the
-key is pgvector.image), and keep that image in your values for every later upgrade. To move existing data to PostgreSQL 19: README, "Upgrading from 1.x".
+--set pgvector.image=pgvector/pgvector:0.8.7-pg18, and keep that image in your values for every
+later upgrade. To move existing data to PostgreSQL 19: README, "Upgrading from 1.x".
 A new install needs nothing: it starts on PostgreSQL 19.
 {{- end }}
 {{- end }}

@@ -55,6 +55,19 @@ values:
       secretName: "{secrets.extra.name}"
       keys: [E2E_PROBE]
 
+# The highly available database mode as its own fresh install: Hindsight on a new postgres-highly-available
+# cluster (PostgreSQL 18) through its HAProxy endpoint, the same API checks proving data written and read back.
+variants:
+  - name: ha
+    values:
+      pgvector:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1500
+
 # Every 1.x release runs its single pgvector database on PostgreSQL 18, so a plain upgrade to 2.0.0 (default
 # PostgreSQL 19) must be refused by the boot guard with the data untouched; the upgrade pinned to -pg18 then
 # recovers it, and memory-persists proves the 1.0.0 memory survived.

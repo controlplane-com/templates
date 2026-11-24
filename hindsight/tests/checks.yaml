@@ -38,6 +38,7 @@ checks:
 
   - id: db-extension
     description: The bundled database runs pgvector 0.8 or later and holds Hindsight's tables, created by its migrations.
+    scenarios: "^(?!.*\\[ha\\])"
     exec:
       workload: "{release}-pgvector"
       container: pgvector
@@ -273,7 +274,7 @@ checks:
   - id: fresh-is-19
     description: A fresh install runs its single-instance database on PostgreSQL 19.
     since: 2.0.0
-    scenarios: "^install "
+    scenarios: "^install (?!.*\\[ha\\])"
     exec:
       workload: "{release}-pgvector"
       container: pgvector
@@ -289,7 +290,7 @@ checks:
     description: >-
       A plain upgrade of a 1.x release (PostgreSQL 18 data) to the PostgreSQL 19 default is refused by the
       database's boot guard: the data directory is still 18, PostgreSQL is not running, and the guard names
-      the 18 image.
+      this chart's pin (pgvector.image).
     since: 2.0.0
     phase: refused
     exec:
@@ -301,6 +302,31 @@ checks:
         grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
         cat /tmp/pg-major-guard
     expect:
-      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*pgvector/pgvector:0\\.8\\.7-pg18"
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set pgvector\\.image=pgvector/pgvector:0\\.8\\.7-pg18"
     # an exec can land on the held container's restart
     retries: 8
+
+  - id: ha-postgres-18
+    description: >-
+      With postgresHA.enabled (the ha variant) Hindsight runs on a new postgres-highly-available cluster on
+      PostgreSQL 18, every member answering with one leader; the API checks above prove data is written and
+      read back through its HAProxy endpoint.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        curl -s localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        ms = json.load(sys.stdin)["members"]
+        majors = [json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0) // 10000 for m in ms]
+        leaders = [m["name"] for m in ms if m.get("role") == "leader"]
+        ok = len(majors) == 3 and all(x == 18 for x in majors) and len(leaders) == 1
+        print(("HA_OK " if ok else "HA_BAD ") + "majors=%s leaders=%d" % (majors, len(leaders)))
+        '
+    expect:
+      stdout: "^HA_OK "
+    retries: 20
+    retryDelaySeconds: 30

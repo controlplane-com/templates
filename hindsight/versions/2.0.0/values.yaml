@@ -96,6 +96,12 @@ pgvector:
     maxMemory: 2048Mi
   volumeset:
     capacity: 10                # GiB (minimum 10)
+  # What the database's start-up guard prints when it refuses a data directory of another PostgreSQL major:
+  # this chart's values path, its wizard field and its README section.
+  upgradeHint:
+    imageKey: pgvector.image
+    consoleField: "Upgrade > Database server > pgvector image"
+    readme: 'README, "Upgrading from 1.x"'
   backup: # pass-through to the pgvector template's backup feature
     enabled: false
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PG19 client; also backs up a server pinned to -pg18
@@ -127,7 +133,7 @@ pgvector:
 # `postgres-highly-available` template is available under this key.
 postgresHA:
   enabled: false
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters, pgvector 0.8.7; an existing cluster keeps its major (17); tags 0.1-0.7 are refused
   config:
     # REQUIRED PREREQUISITE SECRET when enabled — same keys and letters-and-digits rule as pgvector.config above.
     credentialsSecretName: my-hindsight-db-credentials
@@ -146,7 +152,7 @@ postgresHA:
       cpu: 100m
       memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0 # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"     # daily at 2am UTC
     walg:
       intervalSeconds: 21600    # every 6 hours

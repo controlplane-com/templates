@@ -11,6 +11,19 @@ image: apache/artemis:2.57.0  # official image; runs as uid 1001
 # empty. See Prerequisites in the README for the `cpln secret create-dictionary` command.
 credentialsSecretName: my-artemis-credentials
 
+# ─── Application users ────────────────────────────────────────────────────────
+# Optional. Give each application its own login instead of the admin's. Each entry
+# names a `dictionary` secret (keys `username` and `password`, created before you
+# install) and the address patterns its user may send to and/or consume from.
+# Patterns: words separated by dots; `*` matches one word, `#` any number (orders.#).
+# Application users cannot log in to the web console, manage the broker, or
+# delete queues, and are refused on every address their patterns do not match.
+applicationUsers: []
+#  - secretName: my-orders-producer
+#    send: [orders.#]
+#  - secretName: my-orders-worker
+#    consume: [orders.#]
+
 # ─── Locations ────────────────────────────────────────────────────────────────
 # REQUIRED — list the location(s) of the GVC you install into (this chart never creates a GVC).
 # One entry: one broker. Two entries: one broker per location, kept in sync by a two-way

@@ -184,6 +184,45 @@ awk -v u="${ARTEMIS_USER}" '
   && mv etc/artemis-roles.properties.new etc/artemis-roles.properties
 log "admin user '${ARTEMIS_USER}' applied from the credentials secret"
 
+# --- Every boot: application users (applicationUsers) -----------------------
+# Each entry's secret is a user in role app<i> (i = its index); what the role may do is
+# set per address pattern in broker.properties below. Users and roles from the
+# previous boot's list are removed first, so taking an entry out of the values
+# revokes its login. The admin keeps role amq; app roles never get the console
+# (hawtio.role=amq) or management.
+APPS_FILE=etc/.application-users
+prev=""; [ -f "${APPS_FILE}" ] && prev=$(cat "${APPS_FILE}")
+awk -v drop=" ${prev} " -v admin="${ARTEMIS_USER}" '
+  { k = $0; sub(/[ \t]*=.*/, "", k); gsub(/^[ \t]+/, "", k) }
+  k != "" && k != admin && index(drop, " " k " ") { next }
+  { print }' etc/artemis-users.properties > etc/artemis-users.properties.new \
+  && mv etc/artemis-users.properties.new etc/artemis-users.properties
+grep -Ev '^[[:space:]]*app[0-9]+[[:space:]]*=' etc/artemis-roles.properties > etc/artemis-roles.properties.new
+mv etc/artemis-roles.properties.new etc/artemis-roles.properties
+now=""
+for i in $(seq 0 $(( ${ARTEMIS_APP_COUNT:-0} - 1 ))); do
+  uv="ARTEMIS_APP_${i}_USER"; pv="ARTEMIS_APP_${i}_PASSWORD"; u="${!uv}"; p="${!pv}"
+  if [ -z "${u}" ] || [ -z "${p}" ]; then
+    log "ERROR: applicationUsers[${i}]: its secret has no username or password -- this application cannot log in"; continue
+  fi
+  case "${u}" in *[!A-Za-z0-9._@-]*)
+    log "ERROR: applicationUsers[${i}]: username '${u}' may only contain letters, digits and . _ @ - -- this application cannot log in"; continue ;;
+  esac
+  if [ "${u}" = "${ARTEMIS_USER}" ]; then
+    log "ERROR: applicationUsers[${i}]: username '${u}' is the admin's -- give the application its own username; skipped"; continue
+  fi
+  case " ${now} " in *" ${u} "*)
+    log "ERROR: applicationUsers[${i}]: username '${u}' is used by another application user; skipped"; continue ;;
+  esac
+  h=$("${HOME_BIN}" mask --hash "${p}" 2>/dev/null | sed -n 's/^result: //p')
+  [ -z "${h}" ] && { log "ERROR: applicationUsers[${i}]: could not hash its password; skipped"; continue; }
+  printf '%s = ENC(%s)\n' "${u}" "${h}" >> etc/artemis-users.properties
+  printf 'app%s = %s\n' "${i}" "${u}" >> etc/artemis-roles.properties
+  now="${now} ${u}"
+  log "application user '${u}' applied (role app${i})"
+done
+printf '%s\n' "${now# }" > "${APPS_FILE}"
+
 # --- Every boot: heap from resources.memory ---------------------------------
 sed -i -E "s/-Xmx[0-9]+[GgMmKk]?/-Xmx${ARTEMIS_HEAP_MB}M/; s/-Xms[0-9]+[GgMmKk]?/-Xms$((ARTEMIS_HEAP_MB / 2))M/" etc/artemis.profile
 
@@ -231,6 +270,11 @@ AMQPConnections.${C}.connectionElements.mirror.queueCreation=true
 AMQPConnections.${C}.connectionElements.mirror.queueRemoval=true
 PROPS_EOF
 fi
+fi
+
+# Address permissions of the application users (rendered by the chart).
+if [ -n "${ARTEMIS_APP_SECURITY:-}" ]; then
+  printf '%s\n' "${ARTEMIS_APP_SECURITY}" >> "${PROPS}"
 fi
 
 # --- Gate: open the client acceptors ----------------------------------------

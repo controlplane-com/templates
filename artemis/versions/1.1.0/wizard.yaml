@@ -39,11 +39,78 @@ steps:
           requiredKeys: [username, password]
           create:
             suggestName: "context.releaseName + '-artemis-credentials'"
+      - path: applicationUsers
+        type: list
+        label: Application users
+        docs: "#application-users"
+        widget: cards
+        newItem: { secretName: "", send: [], consume: [] }
+        itemLabel: item.secretName
+        description: >-
+          Optional: give each application its own login, limited to the addresses it uses, instead of
+          the admin's. Application users cannot open the web console, manage the broker or delete queues.
+        help: >-
+          Each entry is a dictionary secret with `username` and `password` (its own username, not the
+          admin's) and the address patterns its user may send to and consume from. Patterns are words
+          separated by dots: `*` matches one word and `#` any number, so `orders.#` covers `orders.east`
+          and `orders.eu.paris`. Sending or consuming anywhere else is refused. Removing an entry revokes
+          that login at the next broker start.
+        item:
+          type: object
+          fields:
+            - path: secretName
+              type: ref
+              label: Secret
+              required: true
+              ref:
+                kind: secret
+                format: name
+                filter: { secretType: [dictionary] }
+                mustExist: error
+                allowCreate: true
+                requiredKeys: [username, password]
+                create:
+                  suggestName: "context.releaseName + '-artemis-app'"
+            - path: send
+              type: list
+              label: May send to
+              widget: tags
+              description: Address patterns, e.g. `orders.#`.
+              item: { type: string }
+            - path: consume
+              type: list
+              label: May consume from
+              widget: tags
+              description: Address patterns, e.g. `orders.#`.
+              item: { type: string }
+          rules:
+            - rule: size(item.send) + size(item.consume) > 0
+              paths: [send]
+              message: Give at least one address pattern to send to or consume from.
+            - rule: >-
+                (item.send + item.consume).all(p,
+                p.matches('^[A-Za-z0-9_*#-]+([.][A-Za-z0-9_*#-]+)*$'))
+              paths: [send]
+              message: >-
+                Use address patterns of letters, digits, `_` and `-` separated by dots, with `*` and `#`
+                as wildcards, e.g. `orders.#`.
     rules:
       - rule: self.credentialsSecretName != ''
         mirrors: artemis.validateCredentials
         paths: [credentialsSecretName]
         message: The credentials secret is required.
+      - rule: self.applicationUsers.all(a, a.secretName != self.credentialsSecretName)
+        mirrors: artemis.validateApplicationUsers
+        paths: [applicationUsers]
+        message: Give each application its own secret, not the admin's credentials secret.
+      - rule: isUnique(self.applicationUsers.filter(a, a.secretName != '').map(a, a.secretName))
+        mirrors: artemis.validateApplicationUsers
+        paths: [applicationUsers]
+        message: List each application secret once, with all its patterns.
+      - rule: self.applicationUsers.all(a, size(a.send) + size(a.consume) > 0)
+        mirrors: artemis.validateApplicationUsers
+        paths: [applicationUsers]
+        message: Every application user needs at least one address pattern to send to or consume from.
 
   - id: brokers
     title: Brokers and locations

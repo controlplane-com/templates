@@ -12,3 +12,7 @@ targetKind: secret
 targetLinks:
   {{- /* the user's prerequisite credentials secret */}}
   - //secret/{{ .Values.credentialsSecretName }}
+  {{- /* each application user's prerequisite secret */}}
+  {{- range .Values.applicationUsers | default list }}
+  - //secret/{{ .secretName }}
+  {{- end }}

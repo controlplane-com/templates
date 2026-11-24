@@ -7,14 +7,14 @@ Apache Artemis, the successor to ActiveMQ Classic, is a message broker for JMS, 
 - **Workload** — a `stateful` workload running the official `apache/artemis` image, one broker in each location listed in `locations` (nothing runs in the GVC's other locations). Each broker gets a stable per-location address (`replica-0.…`).
 - **Volume set** — one volume per broker at `/var/lib/artemis-instance`, holding the broker configuration and the message journal, with daily snapshots.
 - **High availability (`ha.enabled`, one location)** — two brokers, `replica-0` (primary) and `replica-1` (backup), share one `shared` volume at `/var/lib/artemis-data` holding the journal, bindings, paging and large messages. The broker holding the lock on it serves clients; the other waits and takes it over within seconds when the active broker stops. No snapshots (shared volumes take none).
-- **Identity + policies** — `reveal` on exactly your credentials secret; with two locations, also `view` on the install GVC, so each broker can check at start that its peer's location exists.
+- **Identity + policies** — `reveal` on exactly your credentials secret and each application user's secret; with two locations, also `view` on the install GVC, so each broker can check at start that its peer's location exists.
 - **Mirror (two locations)** — each broker copies every message, acknowledgement and queue creation or deletion to the other over port 61617. A restarted broker refuses clients until it has caught up from its peer.
 - **Mirror mode** — `active-passive` (default): the primary location serves clients; the other broker keeps its client ports closed, opens them when the primary broker has been unreachable for `mirror.takeoverSeconds`, and closes them again once the primary is back and caught up. `active-active`: both brokers serve clients.
 - **Web console** (optional public access) — the Artemis console on port 8161, published over HTTPS only when `publicAccess.enabled` is `true`.
 
 ## Prerequisites
 
-**A `dictionary` secret with the broker's admin login.** It is the web console login, the login your clients use and, with two locations, the login the mirror uses between them. Create it **before you install**, with a hex password (no spaces, quotes or backslashes):
+**A `dictionary` secret with the broker's admin login.** It is the web console login and, with two locations, the login the mirror uses between them. Clients can use it too, but give each application its own login with `applicationUsers` (below). Create it **before you install**, with a hex password (no spaces, quotes or backslashes):
 
 ```bash
 cpln secret create-dictionary \
@@ -47,6 +47,25 @@ locations:
 ```yaml
 # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL.
 credentialsSecretName: my-artemis-credentials
+```
+
+### Application users
+
+```yaml
+applicationUsers: []
+#  - secretName: my-orders-producer
+#    send: [orders.#]
+#  - secretName: my-orders-worker
+#    consume: [orders.#]
+```
+
+Each entry is a `dictionary` secret with `username` and `password` (created before you install, like the admin secret, with its own username) and the address patterns its user may send to and consume from. Patterns are words separated by dots: `*` matches one word and `#` any number, so `orders.#` covers `orders.east` and `orders.eu.paris`. An application user may create the queues it sends to or consumes from, and is refused everything else: other addresses, deleting queues, the web console and management. Removing an entry revokes that login at the next broker start.
+
+```bash
+cpln secret create-dictionary \
+  --name my-orders-producer \
+  --entry username=orders-producer \
+  --entry password="$(openssl rand -hex 24)"
 ```
 
 ### High availability
@@ -107,7 +126,7 @@ publicAccess:
 
 ## Connecting
 
-Log in with the `username` and `password` from your credentials secret. `RELEASE` is your release name, `GVC` your GVC and `LOCATION` a listed location.
+Log in with the `username` and `password` from an application user's secret (or the admin credentials secret). `RELEASE` is your release name, `GVC` your GVC and `LOCATION` a listed location.
 
 | What | Address |
 |---|---|
@@ -176,6 +195,8 @@ A returning location made the primary instead also starts empty: it keeps its cl
 - **Changing `volumeset.capacity` does not resize an existing volume**; it only sizes new ones. Grow a live volume with `cpln volumeset expand RELEASE-artemis-vs --gvc GVC --location LOCATION --volume-index 0 --new-size 20`.
 - While one location is down, the other broker keeps every message to copy to it, so its volume grows with traffic for as long as the outage lasts; consider `volumeset.autoscaling`.
 - Adding a second location later does not copy existing messages; only messages sent after the upgrade are mirrored. In active-passive mode, make the installed location the primary (see [Losing a location for good](#losing-a-location-for-good)).
+- Every pattern in `applicationUsers` also gives the admin full access to the addresses it matches, so the admin, the web console and the mirror keep working on them.
+- Application user secrets are applied on every start too: after rotating one, or adding or removing an entry, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC` if the upgrade did not restart the brokers. A secret whose username is the admin's, or another application's, is skipped and logged as `ERROR`.
 - The brokers apply the secret on every start. After rotating it, run `cpln workload force-redeployment RELEASE-artemis --gvc GVC`. Rotate the password and keep the username: a new username adds a second admin, and the old one keeps working.
 - **A message sent to an address with no queue is dropped.** Clients that send to a queue name create it automatically; when you create an address in the web console, also create its queue (Create queue) before sending to it.
 - Changes to `internalAccess` and `publicAccess` take a few minutes to apply and restart the brokers.

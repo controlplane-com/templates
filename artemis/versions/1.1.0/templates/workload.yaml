@@ -23,6 +23,18 @@ spec:
           value: cpln://secret/{{ .Values.credentialsSecretName }}.username
         - name: ARTEMIS_PASSWORD
           value: cpln://secret/{{ .Values.credentialsSecretName }}.password
+        {{- range $i, $a := .Values.applicationUsers | default list }}
+        - name: ARTEMIS_APP_{{ $i }}_USER
+          value: cpln://secret/{{ $a.secretName }}.username
+        - name: ARTEMIS_APP_{{ $i }}_PASSWORD
+          value: cpln://secret/{{ $a.secretName }}.password
+        {{- end }}
+        - name: ARTEMIS_APP_COUNT
+          value: {{ len (.Values.applicationUsers | default list) | toString | quote }}
+        {{- with include "artemis.appSecurity" . | trim }}
+        - name: ARTEMIS_APP_SECURITY
+          value: {{ . | quote }}
+        {{- end }}
         - name: ARTEMIS_HEAP_MB
           value: {{ include "artemis.heapMb" . | quote }}
         - name: ARTEMIS_CATCHUP_TIMEOUT

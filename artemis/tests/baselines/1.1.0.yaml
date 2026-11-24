@@ -1,0 +1,41 @@
+# artemis 1.1.0 — the default two-location shape: one broker in each of two nearby regions,
+# active-passive (the first location is the primary), the admin login in a prerequisite secret,
+# at the 1Gi floor (heap 512M), plus two application users (1.1.0):
+# a producer that may only send to app.#, a consumer that may only consume from it. Cross-region checks move a handful of small messages only.
+locations: [aws-us-east-1, aws-us-east-2]
+timeoutSeconds: 900
+
+secrets:
+  creds:
+    type: dictionary
+    keys: [password]
+    entries: {username: admin}
+  producer:
+    type: dictionary
+    keys: [password]
+    entries: {username: e2e-producer}
+  consumer:
+    type: dictionary
+    keys: [password]
+    entries: {username: e2e-consumer}
+
+vars:
+  user: admin
+  password: "{secrets.creds.password}"
+  producer_password: "{secrets.producer.password}"
+  consumer_password: "{secrets.consumer.password}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  locations:
+    - name: aws-us-east-1               # primary (mirror.primary "" = the first entry)
+    - name: aws-us-east-2               # standby
+  resources: {cpu: 500m, memory: 1Gi}   # the smallest supported size
+  applicationUsers:
+    - secretName: "{secrets.producer.name}"
+      send: [app.#]
+    - secretName: "{secrets.consumer.name}"
+      consume: [app.#]
+
+upgradeFrom:
+  - version: 1.0.0

@@ -148,6 +148,82 @@ The credentials secret name is required.
 {{- end -}}
 
 {{/*
+applicationUsers: each entry names a prerequisite dictionary secret (username, password)
+and the address patterns its user may send to and/or consume from.
+*/}}
+{{- define "artemis.validateApplicationUsers" -}}
+{{- $apps := .Values.applicationUsers | default list -}}
+{{- if not (kindIs "slice" $apps) -}}
+{{- fail (printf "artemis: applicationUsers must be a list, e.g. `applicationUsers: [{secretName: my-orders-app, send: [orders.#], consume: [orders.#]}]` (got %v)." $apps) -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range $i, $a := $apps -}}
+{{- if not (kindIs "map" $a) -}}
+{{- fail (printf "artemis: applicationUsers[%d] must be an object with secretName, send and/or consume (got %v)." $i $a) -}}
+{{- end -}}
+{{- if not $a.secretName -}}
+{{- fail (printf "artemis: applicationUsers[%d].secretName is required: the dictionary secret holding this application's username and password." $i) -}}
+{{- end -}}
+{{- if eq $a.secretName $.Values.credentialsSecretName -}}
+{{- fail (printf "artemis: applicationUsers[%d] uses the admin credentials secret %q; give each application its own secret." $i $a.secretName) -}}
+{{- end -}}
+{{- if hasKey $seen $a.secretName -}}
+{{- fail (printf "artemis: the secret %q is listed in applicationUsers more than once; list each application once, with all its patterns." $a.secretName) -}}
+{{- end -}}
+{{- $_ := set $seen $a.secretName true -}}
+{{- if and (not $a.send) (not $a.consume) -}}
+{{- fail (printf "artemis: applicationUsers[%d] (%s) needs at least one address pattern under send or consume, e.g. send: [orders.#]." $i $a.secretName) -}}
+{{- end -}}
+{{- range $k := list "send" "consume" -}}
+{{- $ps := get $a $k | default list -}}
+{{- if not (kindIs "slice" $ps) -}}
+{{- fail (printf "artemis: applicationUsers[%d].%s must be a list of address patterns, e.g. [orders.#] (got %v)." $i $k $ps) -}}
+{{- end -}}
+{{- range $ps -}}
+{{- if not (regexMatch "^[A-Za-z0-9_*#-]+([.][A-Za-z0-9_*#-]+)*$" (toString .)) -}}
+{{- fail (printf "artemis: applicationUsers[%d].%s pattern %q is not a valid address pattern: words of letters, digits, _ and - separated by dots, with * (one word) and # (any words) as wildcards, e.g. orders.#." $i $k (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+broker.properties lines for applicationUsers: role app<i> for the i-th entry.
+Artemis applies only the MOST SPECIFIC security match to an address (roles are
+not merged with the broker.xml "#" match), so every pattern also grants the
+admin role amq everything; otherwise the admin, the console and the mirror
+(which logs in as the admin) would lose access to those addresses.
+send    = send + create the address and its durable queue (auto-create on first send)
+consume = consume + browse + create the address and its queue, and the
+          subscription queues a topic consumer needs
+*/}}
+{{- define "artemis.appSecurity" -}}
+{{- $all := list "send" "consume" "browse" "createAddress" "deleteAddress" "createDurableQueue" "deleteDurableQueue" "createNonDurableQueue" "deleteNonDurableQueue" "manage" "view" "edit" -}}
+{{- $grants := dict -}}
+{{- range $i, $a := .Values.applicationUsers | default list -}}
+{{- range ($a.send | default list) -}}
+{{- $g := get $grants (toString .) | default dict -}}
+{{- range list "send" "createAddress" "createDurableQueue" -}}{{- $_ := set $g (printf "app%d.%s" $i .) true -}}{{- end -}}
+{{- $_ := set $grants (toString .) $g -}}
+{{- end -}}
+{{- range ($a.consume | default list) -}}
+{{- $g := get $grants (toString .) | default dict -}}
+{{- range list "consume" "browse" "createAddress" "createDurableQueue" "createNonDurableQueue" "deleteNonDurableQueue" -}}{{- $_ := set $g (printf "app%d.%s" $i .) true -}}{{- end -}}
+{{- $_ := set $grants (toString .) $g -}}
+{{- end -}}
+{{- end -}}
+{{- range $pat := keys $grants | sortAlpha -}}
+{{- range $all }}
+securityRoles."{{ $pat }}".amq.{{ . }}=true
+{{- end }}
+{{- range $rp := keys (get $grants $pat) | sortAlpha }}
+securityRoles."{{ $pat }}".{{ $rp }}=true
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Memory in Mi or Gi, at least 1Gi: the JVM heap is half of it.
 */}}
 {{- define "artemis.validateResources" -}}
@@ -234,6 +310,7 @@ unconditionally rendered -- so `is validation still wired up?` is one grep.
 {{- include "artemis.validateNoGvcKey" . -}}
 {{- include "artemis.validateLocations" . -}}
 {{- include "artemis.validateCredentials" . -}}
+{{- include "artemis.validateApplicationUsers" . -}}
 {{- include "artemis.validateResources" . -}}
 {{- include "artemis.validateHa" . -}}
 {{- include "artemis.validateMirror" . -}}

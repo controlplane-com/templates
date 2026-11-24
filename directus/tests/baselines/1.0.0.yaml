@@ -35,6 +35,9 @@ vars:
   admin_password: "{gen.adminpw}"
   redis_password: "{gen.redispw}"
   directus_version: "12.6.1"       # the version /server/info reports; bump with the image tag
+  pg_user: directus
+  pg_password: "{gen.pgpw}"
+  pg_db: directus
 
 values:
   location: aws-us-east-1

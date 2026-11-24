@@ -34,6 +34,7 @@ vars:
   ch_db: plausible_events_db
   owner_password: "{gen.ownerpw}"
   app_version: v3.2.1
+  pg_password: "{gen.pgpw}"
 
 values:
   app:

@@ -56,6 +56,7 @@ secrets:
 vars:
   admin_email: e2e-admin@example.com
   admin_password: "{gen.adminpw}"
+  pg_password: "{gen.pgpw}"
 
 values:
   keys:

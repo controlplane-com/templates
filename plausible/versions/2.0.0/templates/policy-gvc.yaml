@@ -1,0 +1,17 @@
+{{- /*
+  The app reads its own GVC at boot and refuses to start when the GVC has more
+  than one location (the bundled PostgreSQL runs a separate copy in each).
+  Scoped to the ONE install GVC; never `target: all`.
+*/}}
+kind: policy
+name: {{ include "plausible.policy.gvc.name" . }}
+description: Plausible GVC read policy
+tags: {{- include "plausible.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plausible.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}

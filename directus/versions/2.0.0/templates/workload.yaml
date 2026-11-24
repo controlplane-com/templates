@@ -1,0 +1,277 @@
+kind: workload
+name: {{ include "directus.name" . }}
+description: Directus — REST and GraphQL API plus the Data Studio admin app, HTTP :8055
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "directus.tags" . | nindent 4 }}
+spec:
+  {{- /*
+    `standard`, not `stateful`: Directus instances are interchangeable peers that
+    coordinate only through PostgreSQL (and Redis with 2+ replicas). The uploads
+    volumeset is `shared` (read-write-many), which standard workloads can mount.
+    rolloutOptions.maxUnavailableReplicas is retained on `standard` (dropped on
+    `stateful`), and the cpu:minCpu 4:1 cap does not apply. The bare short DNS
+    name is NXDOMAIN on a standard workload, so every hostname here is fully
+    qualified.
+  */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "directus.identity.name" . }}
+  containers:
+    - name: directus
+      image: {{ .Values.directus.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.directus.resources.minCpu | quote }}
+      cpu: {{ .Values.directus.resources.maxCpu | quote }}
+      minMemory: {{ .Values.directus.resources.minMemory | quote }}
+      memory: {{ .Values.directus.resources.maxMemory | quote }}
+      {{- /* Boot wrapper (location guard, GVC report, database gate, bootstrap
+             under an advisory lock, then the image's own entrypoint): see
+             _script-start.tpl. Inline, so no secret or reveal grant is needed. */}}
+      command: node
+      args:
+        - "-e"
+        - {{- include "directus.inlineScript" (include "directus.script.start" .) | nindent 10 }}
+      env:
+        # ── Server ──
+        # HOST/PORT are upstream's defaults, pinned so a future default cannot
+        # move the listener off loopback (cpln port-forward reaches loopback).
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8055"
+        # The browser-facing origin: reset and invite links, OAuth redirects,
+        # and license activation are all bound to it. See directus.publicUrl.
+        - name: PUBLIC_URL
+          value: {{ include "directus.publicUrl" . | quote }}
+        # Secure cookies exactly when the origin is https; a browser on
+        # http://localhost (port-forward) would refuse them otherwise.
+        - name: SESSION_COOKIE_SECURE
+          value: {{ include "directus.secureCookies" . | quote }}
+        - name: REFRESH_TOKEN_COOKIE_SECURE
+          value: {{ include "directus.secureCookies" . | quote }}
+        # Envoy fronts every request: trust its X-Forwarded-For so the activity
+        # log and rate limits see real client IPs.
+        - name: IP_TRUST_PROXY
+          value: "true"
+        # ── Signing secret and first admin (prerequisite dictionary secret) ──
+        # ADMIN_* are read only by the first bootstrap (install); later changes
+        # do nothing (api/src/cli/commands/bootstrap).
+        - name: SECRET
+          value: cpln://secret/{{ .Values.secrets.name }}.secret
+        - name: ADMIN_EMAIL
+          value: cpln://secret/{{ .Values.secrets.name }}.adminEmail
+        - name: ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.secrets.name }}.adminPassword
+        {{- if .Values.license.secretName }}
+        # ── License key (optional opaque secret) ──
+        - name: LICENSE_KEY
+          value: cpln://secret/{{ .Values.license.secretName }}.payload
+        {{- end }}
+        # ── Database ──
+        # Separate variables, so the credentials need no URL-safety.
+        - name: DB_CLIENT
+          value: pg
+        - name: DB_HOST
+          value: {{ include "directus.postgres.host" . | quote }}
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: cpln://secret/{{ include "directus.secret.db.name" . }}.username
+        - name: DB_PASSWORD
+          value: cpln://secret/{{ include "directus.secret.db.name" . }}.password
+        - name: DB_DATABASE
+          value: cpln://secret/{{ include "directus.secret.db.name" . }}.database
+        # ── Health ──
+        # Email is left out so an unset relay never marks a replica unready, and
+        # the result is cached 10 s (upstream 5 m) so a recovered replica returns
+        # to rotation promptly.
+        - name: HEALTHCHECK_SERVICES
+          value: {{ include "directus.healthServices" . | quote }}
+        - name: HEALTHCHECK_CACHE_TTL
+          value: 10s
+        # ── File storage ──
+        {{- if eq .Values.storage.type "local" }}
+        - name: STORAGE_LOCATIONS
+          value: local
+        - name: STORAGE_LOCAL_DRIVER
+          value: local
+        - name: STORAGE_LOCAL_ROOT
+          value: /directus/uploads
+        {{- else }}
+        - name: STORAGE_LOCATIONS
+          value: s3
+        - name: STORAGE_S3_DRIVER
+          value: s3
+        - name: STORAGE_S3_BUCKET
+          value: {{ .Values.storage.s3.bucket | quote }}
+        - name: STORAGE_S3_REGION
+          value: {{ .Values.storage.s3.region | quote }}
+        {{- if .Values.storage.s3.endpoint }}
+        - name: STORAGE_S3_ENDPOINT
+          value: {{ .Values.storage.s3.endpoint | quote }}
+        {{- end }}
+        - name: STORAGE_S3_FORCE_PATH_STYLE
+          value: {{ .Values.storage.s3.forcePathStyle | quote }}
+        {{- if .Values.storage.s3.auth.secretName }}
+        # Static keys (S3-compatible servers only). Without them the S3 driver
+        # passes no credentials and the AWS SDK default chain uses the keyless
+        # cloud-account identity (storage-driver-s3: credentials only when key
+        # and secret are both set).
+        - name: STORAGE_S3_KEY
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.accessKeyId
+        - name: STORAGE_S3_SECRET
+          value: cpln://secret/{{ .Values.storage.s3.auth.secretName }}.secretAccessKey
+        {{- end }}
+        {{- end }}
+        {{- if .Values.redis.enabled }}
+        # ── Redis: shared cache, locks, message bus, rate limits, scheduled-flow clock ──
+        # Any REDIS_* variable turns Redis on (redisConfigAvailable), which also
+        # moves the message bus and the health-check cache to Redis. None is
+        # rendered when redis.enabled is false.
+        - name: REDIS_HOST
+          value: {{ include "directus.redis.host" . | quote }}
+        - name: REDIS_PORT
+          value: "6379"
+        {{- if include "directus.redis.authEnabled" . }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ include "directus.redis.secretName" . }}.{{ include "directus.redis.secretKey" . }}
+        {{- end }}
+        - name: SYNCHRONIZATION_STORE
+          value: redis
+        - name: CACHE_STORE
+          value: redis
+        - name: RATE_LIMITER_STORE
+          value: redis
+        {{- end }}
+        {{- if .Values.cache.enabled }}
+        # ── Response cache ──
+        - name: CACHE_ENABLED
+          value: "true"
+        - name: CACHE_AUTO_PURGE
+          value: "true"
+        - name: CACHE_STATUS_HEADER
+          value: Cache-Status
+        {{- end }}
+        # ── Email ──
+        {{- if .Values.email.enabled }}
+        - name: EMAIL_TRANSPORT
+          value: smtp
+        - name: EMAIL_FROM
+          value: {{ .Values.email.fromAddress | quote }}
+        - name: EMAIL_SMTP_HOST
+          value: {{ .Values.email.host | quote }}
+        - name: EMAIL_SMTP_PORT
+          value: {{ .Values.email.port | quote }}
+        - name: EMAIL_SMTP_SECURE
+          value: {{ .Values.email.secure | quote }}
+        {{- if .Values.email.auth.secretName }}
+        - name: EMAIL_SMTP_USER
+          value: cpln://secret/{{ .Values.email.auth.secretName }}.username
+        - name: EMAIL_SMTP_PASSWORD
+          value: cpln://secret/{{ .Values.email.auth.secretName }}.password
+        {{- end }}
+        {{- else }}
+        # No relay: skip the boot-time transport check (the image has no sendmail).
+        - name: EMAIL_VERIFY_SETUP
+          value: "false"
+        {{- end }}
+      ports:
+        - number: 8055
+          protocol: http
+      readinessProbe:
+        # /server/info needs no sign-in and reads the project settings from
+        # the database, so it fails while the database is unreachable.
+        # (/server/health refuses anonymous callers with 403 since Directus 12.)
+        # Startup window ~ 10 + 30 x 15 = 460 s, inside which the boot gates
+        # give up (_script-start.tpl).
+        httpGet:
+          path: /server/info
+          port: 8055
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # /server/ping touches nothing, so a database blip never restarts a
+        # healthy app.
+        httpGet:
+          path: /server/ping
+          port: 8055
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+      {{- if eq .Values.storage.type "local" }}
+      volumes:
+        - path: /directus/uploads
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "directus.volume.name" . }}
+      {{- end }}
+  {{- if eq .Values.storage.type "local" }}
+  # The image runs as node (uid/gid 1000) and a volumeset mounts root-owned.
+  securityOptions:
+    filesystemGroupId: 1000
+  {{- end }}
+  {{- /*
+    Scale 0 EVERYWHERE by default, with the real replica count supplied for the
+    one configured location only. See `directus.autoscaling` in _helpers.tpl.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "directus.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 300   # headroom for large uploads and imports
+  localOptions:
+    {{- include "directus.localOptions" (dict "root" . "scale" .Values.directus.replicas) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      Surge-first: a new replica becomes ready before an old one stops, even at
+      replicas: 1. maxUnavailableReplicas is retained on `standard` (verify in
+      the stored spec on first install). terminationGracePeriodSeconds is
+      declared because the API backfills 90.
+    */}}
+    minReadySeconds: 0
+    maxUnavailableReplicas: "0"
+    maxSurgeReplicas: "1"
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /* Every field is declared: the API backfills the empty lists. */}}
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- $own := splitList "\n" (trim (include "directus.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "directus.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

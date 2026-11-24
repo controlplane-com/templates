@@ -302,3 +302,38 @@ checks:
       stdout: "^RAG_OK$"
     retries: 6
     retryDelaySeconds: 15
+
+  - id: pgvector-fresh-is-19
+    description: A fresh 2.0.0 install runs the bundled pgvector on PostgreSQL 19 with the vector extension.
+    since: 2.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-pgvector"
+      container: pgvector
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | cut -d' ' -f1)
+        psql -h "$H" -U rag -d rag -qtA -c "show server_version_num" \
+          -c "select 'EXT ' || extversion from pg_extension where extname = 'vector'" 2>&1
+    expect:
+      stdout: "(?s)^19[0-9]{4}$.*^EXT 0\\.8\\.7$"
+
+  - id: pgvector-guard-holds
+    description: >-
+      A plain upgrade of a 1.x release (pgvector data on PostgreSQL 18) is refused by pgvector's boot
+      guard: the data directory is still 18, PostgreSQL is not running, and the guard names the pin.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-pgvector"
+      container: pgvector
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set pgvector\\.image=pgvector/pgvector:0\\.8\\.7-pg18"
+    # an exec can land on the held container's restart
+    retries: 8

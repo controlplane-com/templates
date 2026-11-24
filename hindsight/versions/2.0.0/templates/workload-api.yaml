@@ -1,0 +1,90 @@
+{{- include "hindsight.validate" . }}
+kind: workload
+name: {{ include "hindsight.name" . }}
+description: Hindsight API (REST and MCP)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "hindsight.identity.name" . }}
+  containers:
+    - name: hindsight
+      image: {{ .Values.hindsight.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.hindsight.resources.minCpu | quote }}
+      minMemory: {{ .Values.hindsight.resources.minMemory | quote }}
+      cpu: {{ .Values.hindsight.resources.maxCpu | quote }}
+      memory: {{ .Values.hindsight.resources.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{ include "hindsight.inlineScript" (include "hindsight.script.start" (dict "ctx" . "exec" "hindsight-api")) | toJson }}
+      env:
+        - name: HINDSIGHT_API_HOST
+          value: "0.0.0.0"
+        - name: HINDSIGHT_API_PORT
+          value: "8888"
+        - name: HINDSIGHT_API_WORKER_ENABLED
+          value: {{ ternary "false" "true" .Values.worker.enabled | quote }}
+        {{- include "hindsight.env.common" . | nindent 8 }}
+      ports:
+        - number: 8888
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8888
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health/live
+          port: 8888
+          scheme: HTTP
+        initialDelaySeconds: 600
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.hindsight.replicas }}
+      metric: disabled
+      minScale: {{ .Values.hindsight.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.hindsight.requestTimeoutSeconds }}
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.api }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- $allow := list }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- $allow = concat .Values.internalAccess.workloads (ternary (list (printf "//gvc/%s/workload/%s" .Values.global.cpln.gvc (include "hindsight.ui.name" .))) list .Values.ui.enabled) | uniq | sortAlpha }}
+      {{- end }}
+      inboundAllowWorkload: {{- if $allow }}{{ $allow | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

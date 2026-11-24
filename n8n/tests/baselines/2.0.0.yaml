@@ -1,0 +1,67 @@
+# n8n 2.0.0 — the default install: one n8n replica (single by upstream design) on the bundled
+# postgres-highly-available database (three Patroni members, three etcd members, HAProxy), one location,
+# at the chart's default sizes. The encryption key, owner and database credentials are prerequisite
+# secrets CI creates.
+#
+# The owner secret must hold a bcrypt HASH, which CI cannot generate, so the hash below is fixed: it is of
+# the CI-only password in vars.owner_password. Because that password is in this public repo, the baseline
+# keeps public access off; every check reaches n8n from inside the GVC.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  enckey: hex
+  pgpw: hex
+
+secrets:
+  enckey:
+    type: opaque
+    payload: "{gen.enckey}"
+  owner:
+    type: dictionary
+    entries:
+      email: e2e@example.com
+      passwordHash: "$2y$10$3hEAIq4ak458AV6ES.I3l.L//nDxIGBNyMHL1LhQR/BrRIxoo5LHW"
+  db:
+    type: dictionary
+    entries:
+      username: n8n
+      password: "{gen.pgpw}"
+      database: n8n
+
+vars:
+  owner_email: e2e@example.com
+  owner_password: E2e-ci-owner-Passw0rd
+  pg_user: n8n
+  pg_password: "{gen.pgpw}"
+  pg_db: n8n
+
+values:
+  encryptionKey:
+    secretName: "{secrets.enckey.name}"
+  owner:
+    secretName: "{secrets.owner.name}"
+  publicAccess:
+    enabled: false
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# Single-instance PostgreSQL (the opt-in mode), which 2.0.0 moves to PostgreSQL 19: one more fresh install.
+variants:
+  - name: single
+    values:
+      postgresHA:
+        enabled: false
+      postgres:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 900
+
+# 1.5.0 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade
+# moves postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain
+# upgrade. A refused single-instance upgrade from 1.5.0 is not expressible: the starting install always
+# uses 1.5.0's own (HA) baseline.
+upgradeFrom:
+  - version: 1.5.0

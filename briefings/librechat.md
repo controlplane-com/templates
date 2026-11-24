@@ -1,5 +1,7 @@
 # LibreChat — Maintainer Briefing
 
+Chart 2.0.0 (2026-11-23): document search's bundled pgvector moves to PostgreSQL 19 (pgvector 2.0.1); MAJOR because a 1.x release with `rag.enabled` is refused by pgvector's boot guard until pinned back to 18.
+
 ## What it is
 - LibreChat 0.8.8: an open-source ChatGPT-style chat UI over many AI providers at once (OpenAI, Anthropic, Google, and any OpenAI-compatible server such as ollama, vllm, litellm). MIT (permissive: free to use, modify and host).
 - Official image `ghcr.io/librechat-ai/librechat:v0.8.8` (USER `node`, uid 1000); rag-api `ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0`.
@@ -16,7 +18,7 @@
 | `{release}-librechat-files` (shared volume set, 10 GiB) | uploads, images, avatars at `/app/storage`, seen by every replica; no snapshots |
 | `{release}-mongo` (`mongodb` 1.4.2, always) | chats, users, presets, settings |
 | `{release}-meilisearch` (`meilisearch` 1.0.0, default on) | conversation search index |
-| `{release}-librechat-rag` + `{release}-pgvector` (`pgvector` 1.0.2, opt-in `rag.enabled`) | file search: embeddings + vector store; rag-api internal only |
+| `{release}-librechat-rag` + `{release}-pgvector` (`pgvector` 2.0.1 on PostgreSQL 19, opt-in `rag.enabled`) | file search: embeddings + vector store; rag-api internal only |
 | `{release}-redis` (`redis` 3.9.1, `mode: dev`, opt-in) | shared cache, sessions, resumable streams; required for 2+ replicas |
 | identities + policies | `reveal` on exactly the named secrets; the chart creates no secrets of its own |
 
@@ -36,8 +38,9 @@
 - Never put an API key in `config:`: the generated `librechat.yaml` is visible in the workload spec; use `${VAR}`.
 - Answers longer than 10 minutes hit the 600 s request cap (`timeoutSeconds`).
 - Changing `rag.embeddings.model` after indexing breaks search over already-indexed files.
+- **PostgreSQL 19 / upgrading from 1.x:** no HA mode (single pgvector only); a release with `rag.enabled: false` upgrades with nothing to do. With RAG on, the 1.x data directory is PostgreSQL 18 and pgvector's guard holds `{release}-pgvector` not ready (`[pg-guard] REFUSING TO START`, volume untouched) until `pgvector.image=pgvector/pgvector:0.8.7-pg18` is pinned (keep it in values every upgrade). The guard's FIX lines name `pgvector.image` and the wizard field (pgvector 2.0.1 `upgradeHint`, set in values). The wizard carries the installed 18 image (pgvector's own migration) and warns on a major change. Move to 19 = re-index (ruled): upgrade with `rag.enabled=false` (drops the 18 volume and its embeddings; MongoDB untouched), then `rag.enabled=true` on the default 19 image, then users re-upload files. NOTES.txt prints the pin warning on every install/upgrade with RAG on. No identity in this chart ever carried `cpln-connector`.
 - rag-api `/health` answers 200 even when its database is down, so its readiness probe cannot detect a lost pgvector.
 - **Refused at render:** replicas outside 1-4 or >1 without Redis; `redis.mode` other than `dev`; a plaintext `redis.redis.auth.password`; Redis public access; a custom endpoint named after a built-in one, duplicate names, a non-http(s) `baseURL` or no models; `customDomain` with a path; RAG without an embeddings key or base URL.
 - **Wizard:** imports mongodb, meilisearch, pgvector and redis; their credential secrets are redeclared on the parent's steps; root rules keep the subcharts' firewalls open to the LibreChat workloads.
-- **Status:** live-tested 2026-11-10 in test-gvc-3 (test-report-librechat.md): admin bootstrap, registration, providers, custom endpoints, RAG, shared-volume uploads, port-forward sign-in, Redis resume, availability, validation and uninstall pass. Open: none (subcharts drift-free: redis 3.9.1, mongodb 1.4.2, pgvector 1.0.2).
+- **Status:** live-tested 2026-11-10 in test-gvc-3 (test-report-librechat.md): admin bootstrap, registration, providers, custom endpoints, RAG, shared-volume uploads, port-forward sign-in, Redis resume, availability, validation and uninstall pass. Open: none (subcharts drift-free: redis 3.9.1, mongodb 1.4.2, pgvector 1.0.2). 2.0.0 is not yet tested live.
 - **MCP (maintainer-tested 2026-11-11):** `config.mcpServers` with the Control Plane MCP server (streamable-http, `requiresOAuth: true`) connects per user via OAuth against auth.cpln.io. `toolsets=full` (~95 tools) can exceed the context budget; maintainer ruled: don't restrict the toolset, document raising Max Context Tokens. README section added; docs must carry it.

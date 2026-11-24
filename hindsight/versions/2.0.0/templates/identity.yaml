@@ -1,0 +1,11 @@
+kind: identity
+name: {{ include "hindsight.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+{{- if .Values.ui.enabled }}
+---
+kind: identity
+name: {{ include "hindsight.ui.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "hindsight.tags" . | nindent 4 }}
+{{- end }}

@@ -187,19 +187,21 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
 **Move to PostgreSQL 19, side by side** (Directus gets a new endpoint; writes pause during the copy):
 
 1. Install this version as a NEW release in the same GVC with the **same** `secrets.name` and `postgres.config.credentialsSecretName` (and the same `storage` settings with `storage.type: s3`). Directus initializes an empty project in it.
-2. Stop writes to the old release, for example by stopping its Directus workload (`cpln workload stop OLD_RELEASE-directus --gvc GVC_NAME`; the database keeps running).
-3. Replace the new project's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Directus created:
+2. With `storage.type: local`, copy the uploaded files through your machine while the old Directus is still running (do this in a quiet window: a file uploaded after this step is not copied):
+
+   ```bash
+   mkdir -p ./directus-uploads
+   cpln workload exec OLD_RELEASE-directus --gvc GVC_NAME --container directus -- \
+     sh -c 'cd /directus/uploads && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./directus-uploads
+   cpln cp ./directus-uploads/. NEW_RELEASE-directus:/directus/uploads --gvc GVC_NAME --container directus
+   ```
+
+3. Stop writes to the old release, for example by stopping its Directus workload (`cpln workload stop OLD_RELEASE-directus --gvc GVC_NAME`; the database keeps running).
+4. Replace the new project's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Directus created:
 
    ```bash
    cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
      'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
-   ```
-
-4. With `storage.type: local`, copy the uploaded files through your machine:
-
-   ```bash
-   cpln cp OLD_RELEASE-directus:/directus/uploads ./directus-uploads --gvc GVC_NAME --container directus
-   cpln cp ./directus-uploads/. NEW_RELEASE-directus:/directus/uploads --gvc GVC_NAME --container directus
    ```
 
 5. Run `cpln workload force-redeployment NEW_RELEASE-directus --gvc GVC_NAME` so Directus reloads the copied schema, sign in to check your collections and files, point your front ends at the new endpoint (or move your custom domain), then uninstall the old release.

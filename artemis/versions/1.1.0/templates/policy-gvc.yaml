@@ -1,0 +1,23 @@
+{{- /*
+  Two locations only: each broker reads its own GVC at boot to confirm that its
+  mirror PEER's location exists. The platform does not validate localOptions
+  locations, so a missing peer location is otherwise accepted silently, and the
+  present broker would queue every mirror event for a peer that never appears.
+  Scoped to the ONE install GVC; never `target: all`, which would grant view on
+  every GVC in the org.
+*/}}
+{{- if eq (len .Values.locations) 2 }}
+---
+kind: policy
+name: {{ include "artemis.policy.gvc.name" . }}
+description: Apache Artemis GVC read policy
+tags: {{- include "artemis.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - view
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "artemis.identity.name" . }}
+targetKind: gvc
+targetLinks:
+  - //gvc/{{ .Values.global.cpln.gvc }}
+{{- end }}

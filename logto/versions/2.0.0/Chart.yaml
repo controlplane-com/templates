@@ -1,0 +1,25 @@
+apiVersion: v2
+name: logto
+description: Logto open-source auth platform for OIDC sign-in, user management and an admin console
+type: application
+version: 2.0.0
+appVersion: "1.45.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+  - name: postgres-highly-available
+    alias: postgresHA
+    version: 3.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgresHA.enabled
+  - name: postgres
+    version: 4.0.2
+    repository: "oci://ghcr.io/controlplane-com/templates"
+    condition: postgres.enabled
+
+annotations:
+  created: "2026-10-29"
+  lastModified: "2026-11-25"
+  createsGvc: false

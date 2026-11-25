@@ -1,0 +1,80 @@
+# Feature checks for the hermes-agent template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (api_server_key, dashboard_user, dashboard_password).
+#
+# The checks run in the hermes container (it carries curl) against its own ports on 127.0.0.1: the
+# gateway API on 8642 and the dashboard on 9119. No check runs an agent turn, so the baseline's LLM key
+# is a dummy. The runner reads any brace-wrapped word as a placeholder, so the scripts use $VAR, never
+# the braced shell form, and split curl's write-out variable with ''.
+checks:
+  - id: api-key-auth
+    description: >-
+      The gateway API lists its model to the API server key from the prerequisite secret, and refuses a
+      wrong key with HTTP 401.
+    exec:
+      workload: "{release}-hermes-agent"
+      container: hermes
+      script: |
+        B=http://127.0.0.1:8642
+        body=$(curl -s -H 'Authorization: Bearer {api_server_key}' "$B/v1/models")
+        echo "$body" | grep -q '"id": *"hermes-agent"' && echo API_OK || echo "API_BAD $body"
+        code=$(curl -s -o /dev/null -w '%{''http_code}' -H 'Authorization: Bearer wrong-key-0123456789abcdef' "$B/v1/models")
+        [ "$code" = 401 ] && echo WRONG_REFUSED || echo "WRONG_ACCEPTED $code"
+    expect:
+      stdout: "(?s)^API_OK\nWRONG_REFUSED$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: dashboard-login
+    description: >-
+      The dashboard password from the prerequisite secret signs in and the session reads the protected
+      /api/config (HTTP 200); a wrong password is refused with HTTP 401 and its cookie jar reads nothing.
+    exec:
+      workload: "{release}-hermes-agent"
+      container: hermes
+      script: |
+        B=http://127.0.0.1:9119
+        J=$(mktemp -d)
+        login() { curl -s -o /dev/null -w '%{''http_code}' -c "$J/$2" -H 'content-type: application/json' \
+          -X POST "$B/auth/password-login" -d '{"provider":"basic","username":"{dashboard_user}","password":"'"$1"'"}'; }
+        cfg() { curl -s -o /dev/null -w '%{''http_code}' -b "$J/$1" "$B/api/config"; }
+        ok=$(login '{dashboard_password}' good); okc=$(cfg good)
+        [ "$ok" = 200 ] && [ "$okc" = 200 ] && echo LOGIN_OK || echo "LOGIN_BAD $ok $okc"
+        bad=$(login wrong-password bad); badc=$(cfg bad)
+        [ "$bad" = 401 ] && [ "$badc" = 401 ] && echo WRONG_REFUSED || echo "WRONG_ACCEPTED $bad $badc"
+        rm -rf "$J"
+    expect:
+      stdout: "(?s)^LOGIN_OK\nWRONG_REFUSED$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: state-volume-write
+    description: >-
+      A marker for the running version is written to the agent's state volume (/opt/data) and reads back,
+      next to the config the chart seeds there.
+    exec:
+      workload: "{release}-hermes-agent"
+      container: hermes
+      script: |
+        set -e
+        mkdir -p /opt/data/e2e
+        M="e2e-$(date +%s)"
+        echo "$M" > /opt/data/e2e/{version}.txt
+        [ -s /opt/data/config.yaml ] || echo NO_CONFIG
+        grep -qx "$M" /opt/data/e2e/{version}.txt && echo "WROTE $M"
+    expect:
+      stdout: "^WROTE e2e-"
+      notStdout: "NO_CONFIG"
+
+  - id: data-survives-upgrade
+    description: >-
+      The marker written on the version this scenario installed first is still on the state volume. On a
+      fresh install that is the same version; after an upgrade it proves the volume carried over.
+    exec:
+      workload: "{release}-hermes-agent"
+      container: hermes
+      script: |
+        grep -q '^e2e-' /opt/data/e2e/{installed_version}.txt 2>/dev/null && echo PERSISTED || echo "MISSING {installed_version}"
+    expect:
+      stdout: "^PERSISTED$"

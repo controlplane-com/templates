@@ -134,7 +134,14 @@ volumeset:
     maxCapacity: 100       # maximum capacity in GiB
     minFreePercentage: 10  # scale when free space drops below this percentage
     scalingFactor: 1.2     # multiply current capacity by this factor when scaling
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots of every node, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Internal Access
 
@@ -418,6 +425,7 @@ Running the second statement without the first fails with
 - **The cluster runs in insecure mode.** There are no SQL credentials, so access is governed by `internal_access` and the GVC boundary and nothing else.
 - **Surviving a region loss needs at least three locations.** The default of one location survives a node failure, not a region failure.
 - **A restore into the cluster you already have must use `RESTORE DATABASE ... WITH new_db_name`**, not a bare `RESTORE FROM LATEST IN` — see [Restoring a Backup](#restoring-a-backup).
+- **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **Access-knob changes take up to a few minutes to propagate.** After changing `internal_access`, re-test for several minutes before concluding it did not work.
 
 ## Links

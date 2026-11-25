@@ -1,0 +1,75 @@
+# Feature checks for the airflow template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (webserver_workload, admin_user, admin_password).
+#
+# Every check runs in the webserver's `airflow` container against its own API server on port 8080, with
+# the image's curl and python3. Tokens come from `POST /auth/token` (the simple auth manager); the data
+# checks store an Airflow Variable, which lives in the PostgreSQL metadata database on its volume set.
+checks:
+  - id: write-read-variable
+    description: >-
+      The admin logs in through the API and a Variable written through /api/v2 reads back, which needs the
+      API server, the auth manager and the metadata database all working.
+    exec:
+      workload: "{webserver_workload}"
+      container: airflow
+      shell: bash
+      script: |
+        B=http://127.0.0.1:8080
+        tok=$(curl -sS -X POST "$B/auth/token" -H 'Content-Type: application/json' \
+          -d '{"username":"{admin_user}","password":"{admin_password}"}' \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+        [ -n "$tok" ] || { echo "NO TOKEN"; exit 1; }
+        curl -sS -o /dev/null -X POST "$B/api/v2/variables" -H "Authorization: Bearer $tok" \
+          -H 'Content-Type: application/json' -d '{"key":"e2e-{version}","value":"v-{version}"}'
+        curl -sS "$B/api/v2/variables/e2e-{version}" -H "Authorization: Bearer $tok" \
+          | python3 -c 'import json,sys; print("READ " + str(json.load(sys.stdin).get("value")))' 2>/dev/null \
+          || echo "NOT FOUND"
+    expect:
+      stdout: "^READ v-{version}$"
+    retries: 8
+    retryDelaySeconds: 20
+    timeoutSeconds: 120
+
+  - id: rejects-wrong-password
+    description: >-
+      A wrong admin password gets no token (401) while the right one gets one, on the same endpoint (the
+      control for the check above).
+    exec:
+      workload: "{webserver_workload}"
+      container: airflow
+      shell: bash
+      script: |
+        B=http://127.0.0.1:8080
+        # the status line's code, read from the headers (curl's -w format would need braces the test
+        # runner treats as placeholders)
+        code() { curl -sS -o /dev/null -D - -X POST "$B/auth/token" -H 'Content-Type: application/json' -d "$1" | head -1 | awk '{print $2}'; }
+        echo "WRONG $(code '{"username":"{admin_user}","password":"wrong-password"}')"
+        echo "RIGHT $(code '{"username":"{admin_user}","password":"{admin_password}"}')"
+    expect:
+      stdout: "(?s)^WRONG 401$.*^RIGHT 20[01]$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The Variable written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the metadata database volume carried over (and
+      that the Fernet key still decrypts it).
+    exec:
+      workload: "{webserver_workload}"
+      container: airflow
+      shell: bash
+      script: |
+        B=http://127.0.0.1:8080
+        tok=$(curl -sS -X POST "$B/auth/token" -H 'Content-Type: application/json' \
+          -d '{"username":"{admin_user}","password":"{admin_password}"}' \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+        v=$(curl -sS "$B/api/v2/variables/e2e-{installed_version}" -H "Authorization: Bearer $tok" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value",""))' 2>/dev/null)
+        [ "$v" = "v-{installed_version}" ] && echo PERSISTED || echo "MISSING (e2e-{installed_version}: $v)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

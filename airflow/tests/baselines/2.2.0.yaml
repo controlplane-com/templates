@@ -1,0 +1,44 @@
+# airflow 2.2.0 — the default install: one location, CeleryExecutor with one fixed worker, PostgreSQL and the
+# Redis broker on their own volume sets, the auth and database credentials in prerequisite dictionary
+# secrets, default sizes. KEDA and git-sync stay off (KEDA is a GVC setting; git-sync needs a repository).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  jwt: hex
+  fernet: fernet
+  adminpw: hex
+  dbpw: hex
+
+secrets:
+  auth:
+    type: dictionary
+    entries:
+      jwtSecret: "{gen.jwt}"
+      fernetKey: "{gen.fernet}"
+      adminPassword: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: airflow
+      password: "{gen.dbpw}"
+      database: airflow
+
+vars:
+  webserver_workload: "{release}-airflow-webserver"
+  admin_user: admin
+  admin_password: "{gen.adminpw}"
+
+values:
+  location: aws-us-east-1
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  airflow:
+    auth:
+      secretName: "{secrets.auth.name}"
+
+# 2.1.0 is the previous release; it upgrades with its own values. 2.0.0 is left out: its upgrade needs a
+# newly named database credentials secret, as the README's "Upgrading from 2.0.0" describes.
+upgradeFrom:
+  - version: 2.1.0

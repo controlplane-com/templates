@@ -16,9 +16,9 @@ checks:
       script: |
         out=$(wget -q -O - --header "Authorization: Bearer {api_key}" http://127.0.0.1:8080/v1/nodes 2>&1)
         n=$(printf '%s' "$out" | grep -o '"status":"HEALTHY"' | wc -l | tr -d ' ')
-        echo "HEALTHY $n"
+        echo "HEALTHY $n WANT {nodes}"
     expect:
-      stdout: "^HEALTHY {nodes}$"
+      stdout: '^HEALTHY (\d+) WANT \1$'
     retries: 8
     retryDelaySeconds: 15
 

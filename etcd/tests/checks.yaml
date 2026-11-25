@@ -15,9 +15,9 @@ checks:
       script: |
         started=$(etcdctl member list | grep -c ', started, ')
         healthy=$(etcdctl endpoint health --cluster 2>&1 | grep -c ' is healthy: ')
-        echo "STARTED $started HEALTHY $healthy"
+        echo "STARTED $started HEALTHY $healthy WANT {members}"
     expect:
-      stdout: "^STARTED {members} HEALTHY {members}$"
+      stdout: '^STARTED (\d+) HEALTHY \1 WANT \1$'
     retries: 8
     retryDelaySeconds: 15
 
@@ -49,9 +49,10 @@ checks:
       replica: "{release}-etcd-2"
       shell: bash
       script: |
-        echo "GOT $(etcdctl get /e2e/v/{version} --consistency=s --print-value-only)"
+        v=$(etcdctl get /e2e/v/{version} --consistency=s --print-value-only)
+        case "$v" in "{version} e2e-"*) echo "GOT OK $v" ;; *) echo "GOT WRONG $v" ;; esac
     expect:
-      stdout: "^GOT {version} e2e-"
+      stdout: "^GOT OK "
     retries: 4
     retryDelaySeconds: 10
 

@@ -14,9 +14,9 @@ checks:
       shell: bash
       script: |
         n=$(cockroach node status --insecure --host=localhost:26257 --format=csv | awk -F, 'NR==1{for(i=1;i<=NF;i++)if($i=="is_live")c=i;next} $c=="true"' | wc -l | tr -d ' ')
-        echo "LIVE $n"
+        echo "LIVE $n WANT {nodes}"
     expect:
-      stdout: "^LIVE {nodes}$"
+      stdout: '^LIVE (\d+) WANT \1$'
     retries: 8
     retryDelaySeconds: 15
 

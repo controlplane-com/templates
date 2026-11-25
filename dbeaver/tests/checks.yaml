@@ -17,8 +17,9 @@ checks:
       script: |
         curl -s -m 10 -X POST http://localhost:8978/api/gql -H 'Content-Type: application/json' \
           -d '{"query":"{ serverConfig { name version } }"}' | tr -d ' \n'
+        echo; echo 'WANT {release}-dbeaver'
     expect:
-      stdout: '"name":"{release}-dbeaver"'
+      stdout: '(?s)"name":"([^"]+)".*^WANT \1$'
     retries: 12
     retryDelaySeconds: 15
 
@@ -32,8 +33,9 @@ checks:
         H=$(printf '%s' '{admin_password}' | md5sum | cut -d' ' -f1 | tr a-f A-F)
         curl -s -m 10 -X POST http://localhost:8978/api/gql -H 'Content-Type: application/json' \
           -d "{\"query\":\"query { authLogin(provider: \\\"local\\\", credentials: {user: \\\"{admin_user}\\\", password: \\\"$H\\\"}) { authStatus userTokens { userId } } }\"}" | tr -d ' \n'
+        echo; echo 'WANT {admin_user}'
     expect:
-      stdout: '"authStatus":"SUCCESS".*"userId":"{admin_user}"'
+      stdout: '(?s)"authStatus":"SUCCESS".*"userId":"([^"]+)".*^WANT \1$'
     retries: 6
     retryDelaySeconds: 20
 
@@ -68,5 +70,6 @@ checks:
         D=/opt/cloudbeaver/workspace/.e2e
         mkdir -p "$D" && [ -f "$D/{version}" ] || echo "written by {version}" > "$D/{version}"
         cat "$D/{installed_version}" 2>/dev/null || echo "MISSING {installed_version}"
+        echo "WANT written by {installed_version}"
     expect:
-      stdout: "^written by {installed_version}$"
+      stdout: '^(written by \S+)\nWANT \1$'

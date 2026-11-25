@@ -15,8 +15,9 @@ checks:
       shell: bash
       script: |
         curl -s -m 10 -u '{admin_user}:{admin_password}' http://localhost:8080/whoAmI/api/json 2>&1
+        echo; echo 'WANT {admin_user}'
     expect:
-      stdout: '"authenticated"\s*:\s*true.*"name"\s*:\s*"{admin_user}"'
+      stdout: '(?s)"authenticated"\s*:\s*true.*"name"\s*:\s*"([^"]+)".*^WANT \1$'
     retries: 12
     retryDelaySeconds: 15
 
@@ -51,8 +52,9 @@ checks:
             "$U/createItem?name=e2e-{version}"
         fi
         curl -s -m 10 -u "$A" "$U/job/e2e-{version}/api/json?tree=name,description"
+        echo; echo 'WANT e2e marker {version}'
     expect:
-      stdout: '"description"\s*:\s*"e2e marker {version}"'
+      stdout: '(?s)"description"\s*:\s*"([^"]+)".*^WANT \1$'
     retries: 6
     retryDelaySeconds: 15
 
@@ -68,7 +70,8 @@ checks:
         curl -s -m 10 -u '{admin_user}:{admin_password}' "http://localhost:8080/job/e2e-{installed_version}/api/json?tree=description"
         echo
         grep -q 'e2e marker {installed_version}' /var/jenkins_home/jobs/e2e-{installed_version}/config.xml && echo ON_VOLUME
+        echo 'WANT e2e marker {installed_version}'
     expect:
-      stdout: '(?s)"description"\s*:\s*"e2e marker {installed_version}".*^ON_VOLUME$'
+      stdout: '(?s)"description"\s*:\s*"([^"]+)".*^ON_VOLUME\nWANT \1$'
     retries: 6
     retryDelaySeconds: 15

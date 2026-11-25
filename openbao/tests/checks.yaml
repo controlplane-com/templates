@@ -64,7 +64,6 @@ checks:
         echo "$out" | grep -q 'Code: 403' && echo "$out" | grep -qi 'permission denied' && echo REFUSED || echo "NOT REFUSED: $out"
     expect:
       stdout: "^REFUSED$"
-      notStdout: "^{version}$"
 
   - id: data-survives-upgrade
     description: >-

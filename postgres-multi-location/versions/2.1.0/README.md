@@ -12,7 +12,7 @@ primary's location is lost. For a single-location cluster, use `postgres-highly-
 - **PgBouncer workload** (`{release}-postgres-pgbouncer`, standard) — one tier per location, pooling into HAProxy. Optional (`pgbouncer.enabled`).
 - **Logical backup workload** (`{release}-postgres-backup`, cron) — nightly `pg_dumpall` to object storage, in one location. Optional (`backup.mode: logical`).
 - **WAL-G sidecar** — continuous WAL archiving plus periodic base backups from whichever member is primary. Optional (`backup.mode: wal-g`).
-- **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`. No snapshots are scheduled; uninstalling keeps one final snapshot for 7 days.
+- **Volume set** (`{release}-postgres-vs`) — `PGDATA`, `ext4`. Snapshotted daily and kept 7 days by default (`volumeset.snapshots`); uninstalling takes one final snapshot.
 - **etcd** (`etcd-multi-location` subchart) — the consensus store, one member per location.
 - **Identity, policies and secrets** — `reveal` on exactly the secrets this release uses, `view` on exactly the one install GVC (for the boot-time location check), plus a bucket-scoped cloud binding when backups are on.
 
@@ -211,6 +211,9 @@ volumeset:
     maxCapacity: 100 # GiB, when autoscaling is enabled
     minFreePercentage: 10 # free-space trigger
     scalingFactor: 1.2 # growth multiplier
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 internalAccess:
   type: same-gvc # options: same-gvc, same-org, workload-list
@@ -222,6 +225,10 @@ internalAccess:
   workloads: []
     #- //gvc/GVC_NAME/workload/WORKLOAD_NAME
 ```
+
+The snapshot schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at
+most hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Leader-routing proxy
 
@@ -638,6 +645,7 @@ this is never needed — losing one location is an automatic failover.
 - **Never suspend a location.** Suspending and resuming one permanently withdraws its endpoints from the other locations' service discovery while every status surface still reads healthy. To remove a location, remove it from `global.locations` **and** from the GVC.
 - **Allow ~2 minutes after a cold install** before believing a member is unreachable — cross-region service discovery can take that long to converge. `internalAccess` changes take a further 30–150 s.
 - **Cost scales with write volume × members outside the primary's location**, because each receives a full copy of the WAL stream and cross-region traffic is billed.
+- **Upgrading from 2.0.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

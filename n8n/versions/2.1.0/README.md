@@ -87,7 +87,14 @@ timezone: UTC                 # IANA timezone for Schedule triggers and $now
 
 volumeset:
   capacity: 10                # GiB — instance config and binary execution data
+  snapshots:
+    schedule: "0 3 * * *"    # snapshots of the n8n volume, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -312,6 +319,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 - **Rotating any prerequisite secret needs a forced redeployment** (`cpln workload force-redeployment`) — a running workload keeps the values it started with.
 - **The n8n main instance is single-replica by upstream design** — the default HA Postgres backend removes the database as a failure point.
 - **Upgrades restart the single replica** — expect about two minutes of editor/webhook downtime per `helm upgrade` while the replica is recreated and its volume reattaches; the first upgrade after an install also re-applies the bundled database, which can add a couple of minutes.
+- **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **Upgrading from 1.4.0**: n8n moves from 2.29.8 to 2.45.4 and migrates its database on the first start. Rolling back to 1.4.0 is not supported, so back up the database first. Schedule Triggers set to "every N seconds/minutes" now run N apart from when the workflow was activated, instead of on clock boundaries.
 - **Upgrading from 1.4.0 (HA mode)**: the database moves to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The database members restart and nothing limits that rollout, so expect a brief interruption of writes while the leader changes; n8n itself restarts as on any upgrade, which is the longer interruption, because its single replica stops before the new one serves. Upgrade in a quiet window. n8n's own tables do not use the `vector` extension, but a PGVector Vector Store node pointed at this database creates it: if it exists, run `ALTER EXTENSION vector UPDATE;` in that database after the upgrade. If your values set `postgresHA.image`, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render.
 - **Upgrading from 1.2.0 (HA mode)**: `postgresHA.postgres.username/password/database` were removed. Put those values, **unchanged**, into the database credentials secret (Prerequisites) and name it in `postgresHA.config.credentialsSecretName`. `postgresHA.backup.minio.accessKey`/`secretKey` were replaced by `postgresHA.backup.minio.credentialsSecretName` (see Backup storage setup).

@@ -30,6 +30,9 @@ timezone: UTC # IANA timezone for Schedule triggers and $now (GENERIC_TIMEZONE)
 
 volumeset:
   capacity: 10 # GiB (minimum 10) — instance config and binary execution data
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:

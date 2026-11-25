@@ -313,6 +313,16 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
         psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
    ```
 
+   Logto connects each tenant through its own database role, and the new release created those roles with new passwords while the copied `tenants` table holds the old ones. Set the roles to the copied passwords:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA \
+        -c "select format('"'"'ALTER ROLE %I PASSWORD %L;'"'"', db_user, db_user_password) from tenants" |
+        psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q'
+   ```
+
 4. Start the new Logto, sign in to the new Admin Console with your existing admin password, and check your applications and users. Signing keys, users and applications come with the database.
 
    ```bash

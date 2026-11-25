@@ -297,12 +297,47 @@ steps:
             max: 65536
             suggestions: [10, 20, 50, 100, 250, 500, 1000]
             description: Each node has its own volume for its data, commit log and saved caches.
-            help: Uninstalling the release deletes the volume set with the data.
+            help: >-
+              Uninstalling the release deletes the volume set, after a final snapshot that is kept as long
+              as the snapshot retention below.
             docs: "/reference/volumeset#capacity-and-billing"
         rules:
           - rule: oldSelf == null || self.volumes.data.initialCapacity >= oldSelf.volumes.data.initialCapacity
             paths: [volumes.data.initialCapacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: snapshots
+        title: Volume snapshots
+        description: >-
+          Snapshots of every node's volume. A final snapshot is taken when the volume set is deleted, with or without
+          a schedule.
+        docs: "/reference/volumeset#snapshots"
+        fields:
+          - path: volumes.data.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: volumes.data.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.volumes.data.snapshots.schedule != null &&
+              (self.volumes.data.snapshots.schedule == '' ||
+              self.volumes.data.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: cassandra.validateSnapshots
+            paths: [volumes.data.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
       - title: Volume autoscaling
         description: Each volume grows by the scaling factor whenever its free space drops below the threshold.
         docs: "/reference/volumeset#autoscaling"

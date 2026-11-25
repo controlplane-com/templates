@@ -1,3 +1,4 @@
+{{- include "debezium.validateSnapshots" . }}
 {{- if eq (include "debezium.requiresVolumeset" .) "true" }}
 kind: volumeset
 name: {{ include "debezium.volumeset.name" . }}
@@ -11,5 +12,8 @@ spec:
   performanceClass: {{ .Values.volumeset.performanceClass }}
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}
 {{- end }}

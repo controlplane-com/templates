@@ -370,6 +370,7 @@ Check the object size before restoring from one.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
 - **Upgrading from 2.0.0 or earlier turns on daily snapshots of the ClickHouse volume.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `clickhouse.volumeset.snapshots.schedule: ""` to keep them off.
 - Upgrading from 1.3.0 is one-way and changes what older SDKs and the legacy APIs can do: read [Upgrading from 1.3.0](#upgrading-from-130) before you upgrade.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

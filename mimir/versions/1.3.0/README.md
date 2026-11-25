@@ -172,6 +172,7 @@ Point a Grafana Prometheus datasource at the PromQL URL. Collectors inside the G
 - **Retention is enforced by the compactor** — changing `retention.period` applies to existing blocks too.
 - **Install into a single-location GVC** (the console requires one). The replicas form one cluster over a single bucket, and that shape is the one tested.
 - **After uninstall, re-check your bucket**: the terminating replica can re-write a small cluster-seed file (`blocks/__mimir_cluster/`) minutes after teardown — delete it if you are emptying the bucket.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

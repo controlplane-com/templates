@@ -8,7 +8,6 @@ tags: {{- include "prometheus.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.thanos.objectStorage.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.thanos.objectStorage.aws.policyName | quote }}
 {{- end }}
 {{- if eq .Values.thanos.objectStorage.type "gcp" }}

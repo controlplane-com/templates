@@ -245,6 +245,7 @@ checks:
 
   - id: seal-job-completed
     description: The background "Seal Document" job for that document finished COMPLETED (not FAILED).
+    scenarios: "^(?!.*\\[ha\\])"   # psql in {release}-postgres, which the ha variant does not have
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -257,6 +258,7 @@ checks:
 
   - id: signed-document-survives
     description: The document sealed by the first installed version is still COMPLETED after every upgrade.
+    scenarios: "^(?!.*\\[ha\\])"   # psql in {release}-postgres, which the ha variant does not have
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -269,6 +271,7 @@ checks:
   - id: v2-22-migrations-applied
     description: The v2.22.0 schema migrations (envelope contents, lowercase emails) finished, on a fresh install and after the upgrade from 1.0.0.
     since: 1.1.0
+    scenarios: "^(?!.*\\[ha\\])"   # psql in {release}-postgres, which the ha variant does not have
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -278,3 +281,70 @@ checks:
       stdout: "^MIGRATED 3$"
     retries: 3
 
+  - id: fresh-is-19
+    description: A fresh install runs the single-instance PostgreSQL on 19 (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "SERVER_VERSION_NUM=$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: pinned-stays-18
+    description: >-
+      A 1.1.0 release upgraded with postgres.image pinned to postgres:18 (the guard's fix) runs PostgreSQL 18
+      on its original data directory. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.1\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        echo "SERVER_VERSION_NUM=$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$"
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.1.0 release (data on PostgreSQL 18) is held by the postgres boot guard: the data
+      directory is still 18, no postgres process runs, and the guard file names the pin.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:18"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      and Documenso's migrations are applied in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "MIGRATIONS=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'select count(*) from _prisma_migrations where finished_at is not null')"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^MIGRATIONS=[1-9][0-9]*$"
+    retries: 4
+    retryDelaySeconds: 15

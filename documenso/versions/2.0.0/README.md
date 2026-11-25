@@ -5,8 +5,8 @@ Open-source e-signature: upload a PDF, place signature fields, send it to recipi
 ## Architecture
 
 - **`{release}-documenso`** — a `standard` workload on HTTP :3000: UI, REST API, signing pages and background jobs in one image; applies database migrations on every start. Pinned to `location`.
-- **`{release}-postgres`** — the bundled `postgres` template (default), holding all data, and the PDFs too when `storage.type: database`.
-- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)* — the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint.
+- **`{release}-postgres`** — the bundled `postgres` template (default), PostgreSQL 19, holding all data, and the PDFs too when `storage.type: database`. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
+- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)* — the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **Identity and policy** — `reveal` on exactly the secrets Documenso reads, plus the AWS cloud-account link in keyless S3 mode.
 
 ## Prerequisites
@@ -83,14 +83,14 @@ internalAccess:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:18
+  image: postgres:19            # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
   config: { credentialsSecretName: my-documenso-db-credentials }   # Prerequisites 3
   volumeset: { capacity: 10 }   # GiB (minimum 10); raise it for `database` storage
   backup: { enabled: false }    # scheduled pg_dump; provider aws | gcp | minio, schedule "0 2 * * *"
 postgresHA:
   enabled: false
   config: { credentialsSecretName: my-documenso-db-credentials }   # same shape, in HA mode
-  replicas: 3
+  replicas: 3                   # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   backup: { enabled: false }    # mode logical (logical.schedule) | wal-g (walg.intervalSeconds)
 ```
 
@@ -159,6 +159,35 @@ mc ilm rule ls ALIAS/BUCKET_NAME
 
 Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: see [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `{release}-postgres` then stays not ready, Documenso stays not ready without its database, and the logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Documenso gets a new endpoint; signing pauses during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `secrets.name`, `signing.certificateSecretName` and `postgres.config.credentialsSecretName`, and the same `storage` settings. The same application keys matter: `encryptionKey` protects two-factor secrets and API tokens stored in the database. With `storage.type: s3` the documents stay in your bucket and the database holds their keys, so nothing else needs copying.
+2. Stop writes to the old release by stopping its Documenso workload (`cpln workload stop OLD_RELEASE-documenso --gvc GVC_NAME`; the database keeps running).
+3. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Documenso created. With `storage.type: database` this copies the documents too:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+4. Run `cpln workload force-redeployment NEW_RELEASE-documenso --gvc GVC_NAME`, sign in to check your documents, point signers and integrations at the new endpoint (or move your custom domain and `documenso.publicUrl`), then uninstall the old release. Signing links already sent carry the old endpoint, so resend open documents unless the domain moved with them.
+
 ## Connecting
 
 | Target | Address | Credentials |
@@ -186,6 +215,7 @@ In HA mode run the same `psql` in `{release}-postgres-ha`, container `patroni-po
 - **Close sign-up as soon as your account exists**: set `signup.disabled: true` or `signup.allowedDomains`.
 - **Check the certificate after installing**: `/api/certificate-status` must return `{"isAvailable":true}`. The boot line `Certificate not found or not readable` refers to a certificate file and can be ignored.
 - **Rotating a secret does not restart Documenso**: run `cpln workload force-redeployment {release}-documenso --gvc {gvc}` afterwards. Never replace `encryptionKey`; it protects two-factor secrets and API tokens.
+- **Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. See **Upgrading from 1.x**.
 - **The first `helm upgrade` can briefly restart the single-instance PostgreSQL**, and Documenso with it; use `postgresHA` when that matters.
 - **Install into a GVC with one location** and set `location` to it (the default is `aws-us-east-1`): if the GVC lacks that location, Documenso runs nothing and its deployments report `deactivated because maxScale is set to 0`. The bundled PostgreSQL starts in every GVC location.
 - **Without SMTP no mail is sent**: copy each signing link out of the UI and send it yourself.

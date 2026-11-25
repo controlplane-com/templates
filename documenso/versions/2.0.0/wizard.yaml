@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     after: email
@@ -45,7 +45,7 @@ imports:
           Optional with Same GVC: workloads in other GVCs that may also connect. Documenso itself needs no
           entry here.
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
@@ -615,3 +615,16 @@ yamlOnly:
     reason: Documenso connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
   - path: postgresHA.pgbouncer
     reason: Documenso connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
+
+migrations:
+  # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the path from the postgres import's own 3.x migration, so the
+  # note names this chart's README section.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database's data directory keeps the PostgreSQL major it was created with, so the installed image is
+      kept (Database server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release
+      (README, Upgrading from 1.x).

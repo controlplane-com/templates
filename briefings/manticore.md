@@ -37,7 +37,7 @@
 | `manticore.autoscaling.minScale` / `maxScale` | `3` / `4` | `minScale` is also the replica count the orchestrator coordinates across |
 | `manticore.resources.cpu` / `.memory` | `4` / `8Gi` | Limits only — bare names are correct per the 2026-08-06 ruling |
 | `manticore.volumeset.capacity` / `sharedVolumeset.capacity` | `200` / `100` (GB) | Sized for real datasets; shrink for a trial install |
-| `manticore.volumeset.snapshots.schedule` / `.retentionDuration` | `""` (off) / `7d` | 2.3.0; per-replica volume only |
+| `manticore.volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 2.3.0; per-replica volume only |
 | `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below). `buckets.awsRegion` is not read by any template |
 | `orchestrator.action` / `schedule` / `suspend` | `import` / hourly / `true` | The cron ships suspended; the schedule only matters once un-suspended |
 | `tables[]` | one `addresses` example | `segmentCount` must equal `len(csvPath)` — enforced by a render-time `fail` |

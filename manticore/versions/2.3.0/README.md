@@ -151,7 +151,7 @@ manticore:
   volumeset:
     capacity: 200                 # GB per replica
     snapshots:
-      schedule: ""              # volume snapshots; off by default; at most hourly, e.g. "0 3 * * *"
+      schedule: "0 3 * * *"  # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
       retentionDuration: 7d     # how long each snapshot is kept
   sharedVolumeset:
     capacity: 100                 # GB shared across replicas and orchestrator
@@ -172,9 +172,8 @@ manticore:
       workloads: []
 ```
 
-The per-replica volume holds tables built from the CSVs in the source bucket, which an `init` plus `import`
-rebuilds, so scheduled volume snapshots are off by default; turn them on with
-`manticore.volumeset.snapshots.schedule` when rebuilding would take too long. The schedule is a 5-field cron
+Each replica's data volume is snapshotted daily by default, so a lost volume comes back without a full
+re-import. The schedule is a 5-field cron
 in UTC with a single fixed minute: the platform takes snapshots at most hourly, and the chart refuses a more
 frequent schedule at render. Deleting the volume set (uninstall) takes a final snapshot whatever the schedule.
 The shared volume holds only import scratch files and is never snapshotted.
@@ -410,6 +409,7 @@ After restoring a main table, use the UI's **Rotate Main** control to swap the a
 
 ## Important Notes
 
+- **Upgrading from 2.2.0 or earlier turns on daily snapshots of each replica's data volume.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `manticore.volumeset.snapshots.schedule: ""` to keep them off. The shared import volume is never snapshotted.
 - Create the agent-token secret **before** installing; without it the deployment hangs waiting on a secret that does not exist.
 - Enabling `orchestrator.ui.publicAccess` puts an unauthenticated admin console on the public internet. Only do it behind your own authenticating proxy.
 - Manticore's 9306/9308 ports have no authentication — keep `manticore.firewall.internalAccess.type` at `same-gvc`, which Galera replication also requires.

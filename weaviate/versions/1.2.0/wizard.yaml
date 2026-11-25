@@ -374,8 +374,41 @@ steps:
             description: Fixed once created; it can only grow, through the setting below.
             help: >-
               Each node has its own volume. The data survives redeploys; uninstalling the release deletes
-              the volume set, and the data with it.
+              the volume set, after a final snapshot that is kept as long as the snapshot retention below.
             docs: "#storage"
+      - id: snapshots
+        title: Volume snapshots
+        description: >-
+          Snapshots of every node's volume. A final snapshot is taken when the volume set is deleted, with or without
+          a schedule.
+        docs: "/reference/volumeset#snapshots"
+        fields:
+          - path: volumes.data.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: volumes.data.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.volumes.data.snapshots.schedule != null &&
+              (self.volumes.data.snapshots.schedule == '' ||
+              self.volumes.data.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: weaviate.validateSnapshots
+            paths: [volumes.data.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
       - title: Grow storage automatically
         description: Each volume grows by the scaling factor whenever its free space falls below the threshold.
         docs: "/reference/volumeset#autoscaling"

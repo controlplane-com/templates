@@ -7,7 +7,7 @@ For a single-location cluster, use the **`etcd`** template instead — this one 
 ## Architecture
 
 - **etcd workload** — a `stateful` workload (`{release}-etcd`) with `replicaDirect` enabled and exactly one replica in each location listed in `global.locations`. Client API on 2379, raft peer traffic on 2380.
-- **Volumeset** — 10 GiB `ext4` per member at `/var/lib/etcd` (raft WAL and snapshots), with a final snapshot on uninstall and 7-day retention.
+- **Volumeset** — 10 GiB `ext4` per member at `/var/lib/etcd` (raft WAL and snapshots), with daily volume snapshots plus a final one on uninstall, kept 7 days.
 - **Identity** and two **policies** — `reveal` on exactly the startup secret, and `view` on exactly the one GVC this release installs into (used by the boot-time location check below).
 - **Secret** (opaque, plain) — the startup script, which computes each member's name, peer URL and full cluster list at container start from `CPLN_LOCATION` and `CPLN_GVC`.
 
@@ -108,7 +108,14 @@ Compaction frees pages for reuse *inside* the backend file, so `dbSize` plateaus
 ```yaml
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -244,6 +251,7 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 - **No TLS, no authentication.** Anything permitted by `internalAccess` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it; list only your clients, since the chart adds the etcd workload itself. Firewall changes take up to a couple of minutes to take effect.
 - **Every `helm upgrade` restarts all three locations together — a ~105 s rollout with roughly 20-30 s of lost quorum** (measured, 3 locations). This includes a **no-op** upgrade that changes nothing, so there is no "safe" upgrade to plan around. Writes time out while quorum is gone and the cluster recovers on its own; data survives. Nothing serializes the restart: the field that would limit it (`rolloutOptions.maxUnavailableReplicas`) is **not retained by the platform**, so the chart deliberately does not set it. Plan upgrades as a short planned outage. Whether more members per location would shorten it is untested — do not assume it helps.
 - **Auto-compaction cannot be turned off**, only retuned (`tuning.autoCompactionMode` / `.autoCompactionRetention`). Revisions accumulate with time alone, so an uncompacted cluster hits etcd's 2 GiB backend quota and goes read-only weeks after install, with no warning.
+- **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

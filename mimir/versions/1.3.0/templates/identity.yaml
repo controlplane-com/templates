@@ -1,0 +1,20 @@
+kind: identity
+name: {{ include "mimir.identity.name" . }}
+description: Mimir workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "mimir.tags" . | nindent 4 }}
+{{- if eq .Values.storage.type "aws" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.aws.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - {{ .Values.storage.aws.policyName | quote }}
+{{- end }}
+{{- if eq .Values.storage.type "gcp" }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.gcp.cloudAccountName }}
+  bindings:
+    - resource: //storage.googleapis.com/projects/_/buckets/{{ .Values.storage.gcp.bucket }}
+      roles:
+        - roles/storage.objectAdmin
+{{- end }}

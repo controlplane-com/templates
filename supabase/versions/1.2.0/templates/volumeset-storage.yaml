@@ -1,0 +1,21 @@
+{{- if and .Values.storage.enabled (eq .Values.storage.backend "local") }}
+---
+kind: volumeset
+name: {{ include "supabase.storage.volumeset.name" . }}
+description: Supabase Storage file volume (local backend)
+tags: {{- include "supabase.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.volumeset.capacity }}
+  {{- if .Values.storage.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.storage.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.storage.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.storage.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d
+{{- end }}

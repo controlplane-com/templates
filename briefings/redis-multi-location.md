@@ -22,7 +22,7 @@
 | `workload` (stateful) `{release}-redis` | `redis.replicasPerLocation` instances in every DECLARED location, `replicaDirect: true`. `defaultOptions.minScale/maxScale: 0` + full `localOptions` |
 | `workload` (stateful) `{release}-sentinel` | Exactly 1 per location — the count is not a knob |
 | `workload` (cron) `{release}-redis-backup` | Nightly RDB → S3/GCS, suspended everywhere except the FIRST location. Optional |
-| `volumeset` ×2 | `/data` (20 GiB, autoscalable) and `/etc/sentinel` (10 GiB — Sentinel's own rewritten config) |
+| `volumeset` ×2 | `/data` (20 GiB, autoscalable) and `/etc/sentinel` (10 GiB — Sentinel's own rewritten config); both snapshotted daily, kept 7 d, plus a final snapshot on delete, from 3.1.0 (no `snapshots` block through 3.0.0) |
 | `domain` ×2 | One TCP port per replica (`6380+i`, `26380+i`). Optional, needs a dedicated LB on the GVC |
 | `identity` + `policy` ×2 | `reveal` on exactly the config secret plus whichever password secrets are in use |
 | `policy` `{release}-redis-gvc-policy` | `view` on the ONE install GVC, for the Redis tier's boot-time location check. Never `target: all` |
@@ -30,7 +30,7 @@
 - No probes on either tier, deliberately — a readiness probe failing during an election would withdraw the instance from discovery exactly when Sentinel needs it. Nothing to declare for probe drift as a result.
 - Master election is resolved at container start: each Redis instance asks **any** Sentinel for the current master, and boots as master if that address is its own, else as `--replicaof`. Sentinel persists the elected master via `CONFIG REWRITE`, which is what the Sentinel volume set is for.
 
-## Key knobs (defaults as shipped in 3.0.0)
+## Key knobs (defaults as shipped in 3.1.0)
 
 | Knob | Default | Meaning |
 |---|---|---|
@@ -43,12 +43,22 @@
 | `redis.passwordSecretName` | `""` | OPTIONAL prerequisite **opaque** secret; payload IS the password |
 | `sentinel.passwordSecretName` | `""` | Same, independent — guards Sentinel itself |
 | `redis.publicAccess.enabled` / `.address` | `false` / `redis.my-domain.com` | Raw TCP per replica through a `domain`; needs a **dedicated LB** (paid) which **3.0.0 can no longer enable** — the user must turn it on for their GVC first |
+| `redis.volumeset.snapshots.schedule` / `sentinel.volumeset.snapshots.schedule` | `"0 3 * * *"` each, `retentionDuration: 7d` | Volume snapshots per tier, `""` = off. **3.1.0+** |
 | `firewall.internalAllowType` | `same-gvc` | Applies to both tiers |
 | `backup.*` | disabled, `aws` | Bucket + cloud account + bucket-scoped IAM policy; see the README's Storage setup |
 
 - `global.locations` sits under `global` **on purpose**: it is the only channel that reaches an aliased subchart, so this list and a parent's can never be edited apart. `.Chart.IsRoot` survives, but now gates ONLY the `replicas` guard below — there is no `gvc.yaml` any more, so the "Helm without IsRoot renders no GVC" trap is gone with it.
 - **Redis deliberately does NOT read `global.locations[].replicas`.** That shared field already means "Patroni members per location" to `postgres-multi-location`; letting Redis read it too would give one field two meanings in a single release. Standalone, setting it fails at render with that explanation; **nested, it is silently ignored** — `global` is release-wide, so a parent that also ships `postgres-multi-location` cannot scope a different locations list to one subchart, and failing there would abort the parent over a field its database tier requires. The guard is gated on `.Chart.IsRoot`, exactly as etcd's `replicas != 1` guard is.
 - **Helper names are prefixed `redis-ml.`, not `redis.`** — Helm's template namespace is release-global and the single-location `redis` chart defines `redis.name`, `redis.tags` and friends with different bodies. A release containing both would resolve to whichever parsed last.
+
+## What 3.1.0 changed
+
+- Both volume sets get a whole `snapshots` block for the first time (work item 5219): `createFinalSnapshot: true`
+  and a daily 03:00 UTC schedule kept 7d, one knob each — `redis.volumeset.snapshots` and the new
+  `sentinel.volumeset.snapshots` (Sentinel had no volumeset values before; its capacity stays a fixed 10 GiB).
+  `""` turns a schedule off; more often than hourly fails at render (`redis-ml.validateSnapshotsRedis` /
+  `…Sentinel`, mirrored in the wizard). Through 3.0.0 no snapshot was ever taken, not even on uninstall.
+- CI baseline 3.1.0 upgrades from 3.0.0.
 
 ## Troubleshooting / considerations
 

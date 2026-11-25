@@ -366,7 +366,7 @@ steps:
             description: Per Redis instance; each instance has its own volume.
             help: >-
               Data survives an upgrade but not an uninstall: uninstalling the release deletes the volume
-              sets.
+              sets, after a final snapshot of each volume that is kept as long as the snapshot retention.
             docs: "/reference/volumeset#capacity-and-billing"
           - type: note
             severity: warning
@@ -380,6 +380,39 @@ steps:
               self.redis.volumeset.initialCapacity >= oldSelf.redis.volumeset.initialCapacity
             paths: [redis.volumeset.initialCapacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: snapshots
+        title: Redis volume snapshots
+        description: >-
+          Snapshots of every Redis instance's volume. A final snapshot is taken when the volume set is
+          deleted, with or without a schedule.
+        docs: "/reference/volumeset#snapshots"
+        fields:
+          - path: redis.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: redis.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.redis.volumeset.snapshots.schedule != null &&
+              (self.redis.volumeset.snapshots.schedule == '' ||
+              self.redis.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: redis-ml.validateSnapshotsRedis
+            paths: [redis.volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
       - id: autoscaling
         title: Grow the volumes automatically
         toggle: redis.volumeset.autoscaling.enabled
@@ -431,6 +464,38 @@ steps:
             text: >-
               Extra Sentinel arguments (`sentinel.extraArgs` in YAML) are added to the `redis-sentinel`
               command line as written and are not checked. A wrong value stops Sentinel from starting.
+      - id: sentinel-snapshots
+        title: Sentinel volume snapshots
+        description: >-
+          Snapshots of every Sentinel's volume, which holds its rewritten configuration. A final snapshot
+          is taken when the volume set is deleted, with or without a schedule.
+        fields:
+          - path: sentinel.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: sentinel.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.sentinel.volumeset.snapshots.schedule != null &&
+              (self.sentinel.volumeset.snapshots.schedule == '' ||
+              self.sentinel.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: redis-ml.validateSnapshotsSentinel
+            paths: [sentinel.volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
 
   - id: network
     title: Network

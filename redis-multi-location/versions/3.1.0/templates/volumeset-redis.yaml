@@ -1,3 +1,4 @@
+{{- include "redis-ml.validateSnapshotsRedis" . }}
 {{- include "redis-ml.validate" . -}}
 kind: volumeset
 name: {{ include "redis-ml.volume.name" . }}
@@ -14,3 +15,9 @@ spec:
     scalingFactor: {{ .Values.redis.volumeset.autoscaling.scalingFactor }}
   {{- end }}
   performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.redis.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.redis.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.redis.volumeset.snapshots.schedule | quote }}
+    {{- end }}

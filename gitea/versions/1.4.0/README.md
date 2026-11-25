@@ -76,7 +76,14 @@ volumeset:
     maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # minimum free percentage that triggers scaling
     scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Gitea
 
@@ -216,6 +223,7 @@ Check the object size before restoring from one.
 - **Single replica only** — a rolling restart/upgrade incurs brief downtime. Do not raise the workload's scale above 1; replicas would each get separate repo volumes and corrupt state.
 - **The first `helm upgrade` after an install re-applies the bundled Postgres**, so expect Gitea to be briefly unreachable while the database restarts; later upgrades do not do this.
 - **Data lives on the volumeset** and survives redeploys under the same release name. Changing the admin password after first boot must be done in the Gitea UI — the data directory keeps the original account, so editing the secret does not change the login. To fully reset, `helm uninstall` (deletes the volumeset) then reinstall.
+- **Upgrading from 1.3.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

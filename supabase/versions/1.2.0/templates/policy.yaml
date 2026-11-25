@@ -1,0 +1,39 @@
+---
+kind: policy
+name: {{ include "supabase.policy.name" . }}
+description: Supabase policy — grants the shared identity access to all secrets
+tags: {{- include "supabase.tags" . | nindent 2 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "supabase.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Prerequisite secrets — created by you, never by this chart
+  - //secret/{{ .Values.jwt.secretName }}
+  - //secret/{{ .Values.postgres.credentialsSecretName }}
+  {{- if .Values.studio.enabled }}
+  - //secret/{{ .Values.studio.passwordSecretName }}
+  {{- end }}
+  {{- if and .Values.auth.smtp.enabled .Values.auth.smtp.passwordSecretName }}
+  - //secret/{{ .Values.auth.smtp.passwordSecretName }}
+  {{- end }}
+  {{- if and .Values.storage.enabled (eq .Values.storage.backend "gcs") }}
+  - //secret/{{ include "supabase.storage.gcs.secret.name" . }}
+  {{- end }}
+  {{- if and .Values.storage.enabled (eq .Values.storage.backend "s3") .Values.storage.s3.endpoint }}
+  - //secret/{{ .Values.storage.s3.credentialsSecretName }}
+  {{- end }}
+  {{- range $name, $cfg := (.Values.auth.providers | default dict) }}
+  {{- if $cfg.clientSecretName }}
+  - //secret/{{ $cfg.clientSecretName }}
+  {{- end }}
+  {{- end }}
+  # Chart-created secrets
+  - //secret/{{ include "supabase.kong.config.secret.name" . }}
+  - //secret/{{ include "supabase.preinit.secret.name" . }}
+  - //secret/{{ include "supabase.postinit.secret.name" . }}
+  {{- if and .Values.backup.enabled (eq .Values.backup.mode "walg") }}
+  - //secret/{{ include "supabase.walg.secret.name" . }}
+  {{- end }}

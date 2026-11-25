@@ -1,0 +1,19 @@
+kind: volumeset
+name: {{ include "gitea.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Gitea volumeset (repos, LFS, attachments, SSH host keys)
+tags:
+  {{- include "gitea.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

@@ -1,0 +1,6 @@
+kind: identity
+name: {{ include "gitea.identity.name" . }}
+description: Gitea identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "gitea.tags" . | nindent 4 }}

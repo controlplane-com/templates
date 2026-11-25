@@ -427,6 +427,7 @@ Running the second statement without the first fails with
 - **A restore into the cluster you already have must use `RESTORE DATABASE ... WITH new_db_name`**, not a bare `RESTORE FROM LATEST IN` — see [Restoring a Backup](#restoring-a-backup).
 - **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **Access-knob changes take up to a few minutes to propagate.** After changing `internal_access`, re-test for several minutes before concluding it did not work.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

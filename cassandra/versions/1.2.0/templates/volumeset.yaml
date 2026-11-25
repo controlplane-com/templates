@@ -1,0 +1,12 @@
+kind: volumeset
+name: {{ include "cassandra.volumeset.name" . }}
+description: {{ include "cassandra.workload.name" . }} data
+tags: {{- include "cassandra.tags" . | nindent 2 }}
+spec:
+  initialCapacity: {{ .Values.volumes.data.initialCapacity }}
+  performanceClass: general-purpose-ssd
+  fileSystemType: ext4
+  autoscaling:
+    maxCapacity: {{ .Values.volumes.data.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumes.data.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumes.data.autoscaling.scalingFactor }}

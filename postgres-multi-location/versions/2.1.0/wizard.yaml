@@ -319,8 +319,41 @@ steps:
             description: Per member.
             help: >-
               Uninstalling the release deletes the volume set and takes a final snapshot of each volume, kept
-              for 7 days.
+              as long as the snapshot retention below.
             docs: "/reference/volumeset#capacity-and-billing"
+      - id: snapshots
+        title: Volume snapshots
+        description: >-
+          Snapshots of every member's volume, in every location. A final snapshot is taken when the volume
+          set is deleted, with or without a schedule.
+        docs: "/reference/volumeset#snapshots"
+        fields:
+          - path: volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.volumeset.snapshots.schedule != null &&
+              (self.volumeset.snapshots.schedule == '' ||
+              self.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: pg-ml.validateSnapshots
+            paths: [volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
       - id: autoscaling
         title: Grow storage automatically
         toggle: volumeset.autoscaling.enabled

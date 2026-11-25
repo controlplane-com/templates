@@ -1,0 +1,33 @@
+# postgres-multi-location 2.0.1 — production shape at the smallest size that runs: three nearby locations
+# (three is what gives automatic failover), one Patroni member and one etcd member per location, HAProxy
+# 2 per location, the credentials in a prerequisite secret. Cross-location checks move a handful of rows.
+locations: [aws-us-east-1, aws-us-east-2, aws-us-west-2]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  global:
+    locations:
+      - name: aws-us-east-1
+        replicas: 1
+      - name: aws-us-east-2
+        replicas: 1
+      - name: aws-us-west-2
+        replicas: 1
+  postgres:
+    credentialsSecretName: "{secrets.creds.name}"

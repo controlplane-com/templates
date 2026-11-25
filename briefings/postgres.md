@@ -61,3 +61,4 @@
 README "Upgrading from 3.x". CI: `fresh-is-19`, `guard-passes`, refused-then-pinned upgrades from
 3.4.3 and 3.2.0 (`guard-holds`). Live round passed (fresh, drift, refused + pinned, README migration, AWS backup).
 4.0.1: `upgradeHint` (`imageKey`, `consoleField`, `moveHow`, `readme`; yamlOnly) lets a parent chart make the guard's log name its own values path (`postgres.image`), console field and README section; defaults render byte-identical to 4.0.0.
+4.0.2: `upgradeHint.pinImage` (default `postgres:{major}`, `{major}` = the data directory's major) is the image the guard tells the user to pin; a parent that runs a pgvector image on this chart sets `pgvector/pgvector:0.8.7-pg{major}`. Defaults render byte-identical to 4.0.1.

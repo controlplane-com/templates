@@ -464,7 +464,8 @@ steps:
             paths: [backup.image]
             message: MinIO needs ghcr.io/controlplane-com/backup-images/postgres-backup; this image has no MinIO support.
     rules:
-      - rule: "!self.backup.enabled || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
+      # A pgvector tag (0.8.7-pg18) reads as major 0, so a tag naming its PostgreSQL major with -pgNN is not judged here.
+      - rule: "!self.backup.enabled || self.image.contains('-pg') || imageMajor(self.image) < 0 || imageMajor(self.image) >= 17"
         severity: warning
         paths: [backup.enabled]
         message: Backups need Postgres 17 or later; the selected image is older.

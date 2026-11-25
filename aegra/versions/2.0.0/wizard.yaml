@@ -14,10 +14,10 @@ imports:
     version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    # The Database step comes first for its prerequisite secret; the server settings follow Access.
-    after: access
+    # The Database step comes first for its prerequisite secret; the server settings (the parent's Database
+    # server step) follow Access, and the imported storage, network and backup steps follow them.
+    after: dbserver
     steps:
-      - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
@@ -28,24 +28,23 @@ imports:
       - config.credentialsSecretName
       # Aegra connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # Bound in the parent's Database server step, so its upgrade note, image help and major-change warning
+      # name this chart's pgvector tags and README section. The postgres descriptor's checks on them are
+      # restated there.
+      - image
+      - resources
     override:
       internalAccess.type:
         description: >-
           Aegra connects to its database like any other workload: keep Same GVC, or add the Aegra workload under
           Allowed workloads.
-      # Aegra's database runs a pgvector image, so the child's postgres:N examples do not apply.
-      image:
-        help: >-
-          New installs run `pgvector/pgvector:0.8.7-pg19`; `pgvector/pgvector:0.8.7-pg18` also works. Aegra needs
-          an image with the pgvector extension. The data directory is specific to a major version: on an existing
-          volume, an image of another major does not start, and the database logs the image to set instead.
   - template: postgres-highly-available
     version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
     # The Database step comes first for its prerequisite secret; the server settings follow Access.
-    after: access
+    after: dbserver
     steps:
       - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold Aegra's threads, runs and checkpoints." }
       - { id: storage, title: Database storage }
@@ -66,7 +65,7 @@ imports:
   - template: redis
     version: 3.9.0
     title: Redis
-    after: access
+    after: dbserver
     steps:
       - { id: topology, title: Redis engine, description: "The server of the single Redis node that holds Aegra's job queue and run event streams; runs are recovered from PostgreSQL if it restarts." }
       - { id: resources, title: Redis resources }
@@ -532,6 +531,65 @@ steps:
           Redis public access is not supported: Aegra connects to Redis on port 6379 inside the GVC, and public
           access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
 
+  # The single-instance PostgreSQL's server, bound here instead of in the imported server step (the postgres
+  # import excludes image and resources), so the texts name this chart's pgvector tags and README section.
+  - id: dbserver
+    title: Database server
+    description: The bundled single-instance PostgreSQL's image and compute.
+    when: self.postgres.enabled
+    sections:
+      - title: Server
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the server. Nothing limits the rollout of a stateful workload, so plan a
+              short write outage.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its data was created
+              with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              New installs run `pgvector/pgvector:0.8.7-pg19`; `pgvector/pgvector:0.8.7-pg18` also works. Aegra
+              needs an image with the pgvector extension. The data directory is specific to a major version: on an
+              existing volume, an image of another major does not start, and the database logs the image to set
+              instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          # The major is the tag's -pgNN suffix (else the plain postgres:NN major), never imageMajor() alone, which
+          # reads a pgvector tag's leading digits (0.8.7 -> 0).
+          - when: oldSelf != null && has(oldSelf.postgres) && has(oldSelf.postgres.image)
+            rule: >-
+              (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == '' || (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) == '' ||
+              (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : ''))
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) +
+              '; a PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' image refuses to start on it. Keep the image at ' + oldSelf.postgres.image +
+              ', or move to PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+            message: >-
+              The data directory belongs to the installed PostgreSQL major version; an image of a different major refuses
+              to start on it. Keep the installed image, or move with a dump and restore into a new release (README,
+              Upgrading from 1.x).
+
 rules:
   # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
   # fields), so these only trip on YAML edits; they block Install and show on Review.
@@ -565,23 +623,6 @@ rules:
     paths: [redis.redis.firewall.inboundAllowWorkload]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra, or Aegra cannot reach Redis.'"
     message: Add the Aegra workload to the list, or Aegra cannot reach Redis.
-  # The postgres import's own major-change warning reads imageMajor(), which takes a pgvector tag's leading digits
-  # (0.8.7 -> 0) and so never fires on pgvector/pgvector:0.8.7-pgNN. This one reads the -pgNN suffix (else the
-  # plain postgres:NN major), so picking -pg19 over a release whose data is 18 warns before the guard refuses it.
-  - when: self.postgres.enabled && oldSelf != null && has(oldSelf.postgres) && has(oldSelf.postgres.image)
-    rule: >-
-      (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == '' || (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) == '' ||
-      (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : ''))
-    severity: warning
-    paths: [postgres.image]
-    messageExpression: >-
-      'This release\'s data directory is PostgreSQL ' + (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) +
-      '; a PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' image refuses to start on it. Keep the image at ' + oldSelf.postgres.image +
-      ', or move to PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
-    message: >-
-      The data directory belongs to the installed PostgreSQL major version; an image of a different major refuses
-      to start on it. Keep the installed image, or move with a dump and restore into a new release (README,
-      Upgrading from 1.x).
 
 # A 1.x release runs pgvector/pgvector:0.8.7-pg18 (1.x's default), and its data directory is PostgreSQL 18.
 # Carry-over would hand it the new default -pg19, which refuses to start on that data: keep the installed image.

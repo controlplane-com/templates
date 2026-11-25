@@ -1,0 +1,28 @@
+# cpln-jenkins 1.0.0 — the default install: one controller at the chart's default size, the Control Plane cloud
+# configured. The admin password is generated per run. CI has no real Control Plane API key to give the
+# cloud, so it gets a random one: Jenkins boots and configures the cloud with it, and only provisioning an
+# agent would need a working key (no check queues a build).
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  adminpw: hex
+  fakecplnkey: hex
+
+secrets:
+  admin:
+    type: opaque
+    payload: "{gen.adminpw}"
+  cplnkey:
+    type: opaque
+    payload: "{gen.fakecplnkey}"
+
+vars:
+  admin_user: admin
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    passwordSecretName: "{secrets.admin.name}"
+  cloud:
+    apiKeySecretName: "{secrets.cplnkey.name}"

@@ -153,6 +153,7 @@ External clients use `https://` (the platform edge terminates TLS); same-GVC cli
 
 ## Important Notes
 
+- **In `awskms` mode the identity no longer attaches the `cpln-connector` AWS policy.** Only your key-scoped policy is attached; it is all the unseal needs. No action is needed on upgrade.
 - **Static mode: the unseal-key secret must exist before install and is WRITE-ONCE** — a missing secret wedges the deployment; a lost or changed key makes all stored data unrecoverable. Back the key up securely.
 - **Run `bao operator init` once after install and save the output** — recovery keys and the root token are printed once, to your terminal only.
 - **Do not switch `seal.type` after initialization** — the seal wraps the existing data; changing modes requires an OpenBao seal migration, not a values change.

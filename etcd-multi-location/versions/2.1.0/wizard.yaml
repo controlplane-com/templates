@@ -1,0 +1,535 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: etcd Multi-Location
+# The chart fails below 2 listed locations, every listed location must be one of the GVC's, and GVC
+# locations it does not list run nothing (defaultOptions scale 0), so the GVC needs at least 2.
+gvc:
+  minLocations: 2
+
+steps:
+  - id: locations
+    title: Locations
+    description: The cluster roster, with one etcd member in each listed location.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              Every location you list must already be a location of the GVC you install into (check with
+              `cpln gvc get <gvc> -o yaml`, under `spec.staticPlacement.locationLinks`). A fresh member that
+              can read the GVC refuses to start while one is missing, rather than form a cluster with no fault
+              tolerance.
+              Look for `[etcd]` lines in `cpln logs` when a member does not come up, and after a fresh install
+              allow about two minutes first: service discovery across regions can lag a ready member by over a
+              minute.
+          - type: note
+            when: size(self.global.locations) >= 2
+            text: Each location runs one member, and a write needs a majority of the members.
+            textExpression: >-
+              string(size(self.global.locations)) + ' members: a write needs ' +
+              string(size(self.global.locations) / 2 + 1) + ' of them, and the cluster survives losing ' +
+              string((size(self.global.locations) - 1) / 2) +
+              ((size(self.global.locations) - 1) / 2 == 1 ? ' location.' : ' locations.')
+          - type: note
+            when: >-
+              context.gvcLocations != null && self.global.locations.exists(l, l.name != '') &&
+              context.gvcLocations.exists(g, !(g in self.global.locations.map(l, l.name)))
+            text: GVC locations not listed here run nothing.
+            textExpression: >-
+              'GVC locations not listed here run nothing: ' +
+              context.gvcLocations.filter(g, !(g in self.global.locations.map(l, l.name))).join(', ') + '.'
+          - type: note
+            severity: warning
+            when: context.mode == 'install'
+            text: >-
+              Migrating from an etcd-multi-location 1.x release? Install into an existing GVC other than the
+              one the 1.x release created: that GVC still belongs to the old release, and uninstalling the
+              old release deletes it with this release's workloads inside.
+          - path: global.locations
+            type: list
+            label: Locations
+            docs: "#locations-and-quorum"
+            required: true
+            minItems: 2
+            uniqueBy: [name]
+            widget: table
+            newItem: { name: "" }
+            itemLabel: "item.name == null ? '' : item.name"
+            description: One member per location, named `<release>-etcd-<location>`.
+            help: >-
+              On a running release, change the GVC's locations and this list together, in a maintenance
+              window: every member restarts with the new cluster list. For a single-location cluster, use
+              the etcd template instead.
+            item:
+              type: object
+              fields:
+                - path: name
+                  type: ref
+                  label: Location
+                  required: true
+                  ref: { kind: location, scope: gvc, format: name, mustExist: error }
+              rules:
+                - when: context.mode == 'install'
+                  rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  paths: [name]
+                  message: >-
+                    This location is not one of the target GVC's locations: no member can run there, and on a
+                    fresh install every member that can read the GVC then refuses to start. Add the location to
+                    the GVC, or pick another.
+                  messageExpression: >-
+                    item.name + ' is not one of the target GVC\'s locations: no member can run there, and on a fresh install every member that can read the GVC then refuses to start. Add the location to the GVC, or pick another.'
+                - when: context.mode == 'upgrade'
+                  rule: context.gvcLocations == null || item.name == '' || item.name in context.gvcLocations
+                  severity: info
+                  paths: [name]
+                  message: >-
+                    This location is not one of the GVC's locations, so no member runs there; the members
+                    already running keep running and log a warning, and writes stop if the missing locations
+                    cost the majority. Add the location to the GVC, or remove it from the list.
+                  messageExpression: >-
+                    item.name + ' is not one of the GVC\'s locations, so no member runs there; the members already running keep running and log a warning, and writes stop if the missing locations cost the majority. Add the location to the GVC, or remove it from the list.'
+                # `replicas` is no item field (a parent sets it for its own tier), and lint refuses any read
+                # of an undeclared item key outside has() (item.replicas, item['replicas'], item[k]), so the
+                # rule compares the whole entry; standalone, the chart accepts only 1 ("1" too),
+                # _helpers.tpl:102-108.
+                - rule: >-
+                    !has(item.replicas) || item == {'name': item.name, 'replicas': 1} ||
+                    item == {'name': item.name, 'replicas': '1'}
+                  mirrors: etcd-ml.validate
+                  paths: [name]
+                  message: >-
+                    etcd runs exactly one member per location, so an entry takes only `name` and, optionally,
+                    `replicas: 1`. A second member in a location makes that location's loss a quorum loss.
+            rules:
+              - rule: size(self.global.locations) < 2 || size(self.global.locations) % 2 == 1
+                severity: info
+                message: An even number of locations survives no more location losses than one location fewer.
+                messageExpression: >-
+                  size(self.global.locations) == 2 ?
+                  'Two locations survive no location loss: losing either stops writes until you recover by hand. Three locations survive one.' :
+                  string(size(self.global.locations)) + ' locations survive ' + string((size(self.global.locations) - 1) / 2) +
+                  ((size(self.global.locations) - 1) / 2 == 1 ? ' location loss' : ' location losses') + ', no more than ' +
+                  string(size(self.global.locations) - 1) + ' do; 3 is the recommended shape, and 5 survive two losses.'
+              - rule: >-
+                  oldSelf == null ||
+                  (size(self.global.locations) == size(oldSelf.global.locations) &&
+                  self.global.locations.all(l, oldSelf.global.locations.exists(o, o.name == l.name)))
+                severity: info
+                message: >-
+                  Changing the locations reprovisions the cluster: every member restarts with a new cluster
+                  list, which is not etcd's graceful `member add` or `member remove`. Plan a maintenance
+                  window, and change the GVC's locations together with this list.
+      - id: recovery
+        title: Disaster recovery
+        when: >-
+          context.mode == 'upgrade' ||
+          (self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != '')
+        description: >-
+          Emergency only, after quorum is lost for good: one surviving member restarts as a new
+          single-member cluster from its own write-ahead log.
+        docs: "#disaster-recovery"
+        fields:
+          - type: note
+            severity: warning
+            when: self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != ''
+            text: >-
+              Once the member serves writes again, clear this setting with the next upgrade: while it is set,
+              the member forces a new cluster on every restart. Before the lost location's member can rejoin,
+              reset its volume (uninstall and reinstall, or delete that member's volume), because it still
+              holds the old cluster ID.
+          - path: recovery.forceNewClusterInLocation
+            type: enum
+            label: Force a new cluster in
+            widget: select
+            optionsFrom: self.global.locations.filter(l, l.name != null && l.name != '').map(l, l.name)
+            description: The surviving location. Leave it empty in normal operation.
+            help: >-
+              Use it only when quorum is permanently gone (with two locations, the loss of either one). If the
+              lost location is coming back, wait: a member that returns with its volume intact rejoins on its
+              own. `etcdctl member remove` cannot help, because it needs quorum itself.
+            rules:
+              - when: >-
+                  context.gvcLocations != null &&
+                  self.recovery.forceNewClusterInLocation != null && self.recovery.forceNewClusterInLocation != ''
+                rule: self.recovery.forceNewClusterInLocation in context.gvcLocations
+                severity: warning
+                message: >-
+                  The GVC does not have this location, so no member runs there and the new cluster is never
+                  forced. Pick a location the GVC has.
+                messageExpression: >-
+                  'The GVC has no location ' + self.recovery.forceNewClusterInLocation +
+                  ', so no member runs there and the new cluster is never forced. Pick a location the GVC has.'
+              # README "Recovering from a lost location": an upgrade-time action after quorum is lost, never
+              # left set.
+              - when: context.mode == 'install'
+                rule: self.recovery.forceNewClusterInLocation == null || self.recovery.forceNewClusterInLocation == ''
+                severity: warning
+                message: >-
+                  Forcing a new cluster is an emergency step for a running release that lost quorum for good; a
+                  fresh install has nothing to recover, and the member would force a new cluster on every
+                  restart. Leave it empty.
+
+  - id: server
+    title: Server
+    description: The etcd image, the compute of each member and the Raft timers.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts all members roughly together, also one that changes nothing: about 105
+              seconds of rollout with 20 to 30 seconds of lost quorum (measured with three locations). Writes
+              time out until quorum returns, and the data survives. Plan the upgrade as a short outage.
+          - path: image
+            type: string
+            format: image
+            label: etcd image
+            required: true
+          - path: resources
+            type: resources
+            label: Resources per member
+            docs: "#image-and-resources"
+            required: true
+            # Limits only (`cpu`, `memory`): there is no minimum to compare, so no maxRatio (§18 item 17).
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            # Edge probe: workload.yaml:16,19 quote the values, but Helm reads a plain number from a values
+            # file as a float and prints 1000000 and more in exponent form (memory 536870912 renders
+            # "5.36870912e+08", cpu 1000000 "1e+06"); the platform's Memory and Cpu patterns
+            # (nodelibs/schema workload.ts) refuse both. Every memory above the 32Mi floor is that large.
+            rules:
+              - rule: self.resources.memory == null || type(self.resources.memory) == string
+                paths: [resources.memory]
+                message: >-
+                  Write the memory with a unit, such as `512Mi` or `1Gi`: Helm prints a plain byte count in
+                  exponent form (536870912 as `5.36870912e+08`), which the platform refuses.
+              - rule: >-
+                  self.resources.cpu == null || type(self.resources.cpu) == string ||
+                  self.resources.cpu < 1000000
+                paths: [resources.cpu]
+                message: >-
+                  Write the CPU in millicores, such as `500m`: Helm prints a plain number of 1000000 or more
+                  in exponent form (`1e+06`), which the platform refuses.
+      - id: raft
+        title: Raft timers
+        description: >-
+          The defaults suit locations up to about 250 ms apart. Raise both in proportion for locations
+          further apart (US to Asia-Pacific is 350 to 400 ms).
+        docs: "#raft-tuning"
+        fields:
+          - path: tuning.heartbeatIntervalMs
+            type: integer
+            label: Heartbeat interval
+            required: true
+            description: About 0.5 to 1.5 times the worst round trip between your locations.
+            unit: ms
+            # etcd 3.6 (the chart's appVersion) refuses --heartbeat-interval 0 ("must be >0"). The chart needs
+            # election <= 50000 and election >= 10 x heartbeat (_helpers.tpl:109-116), so no heartbeat above 5000
+            # renders; a huge one also overflows the chart's own `mul` and renders as 1e+18, which etcd cannot read.
+            min: 1
+            max: 5000
+          - path: tuning.electionTimeoutMs
+            type: integer
+            label: Election timeout
+            required: true
+            description: The defaults detect a dead leader in about 5 seconds across US and EU regions.
+            unit: ms
+            max: 50000
+        rules:
+          # Above 5000 the heartbeat's own MAX says it; no election timeout fits under 50000 then.
+          - when: self.tuning.heartbeatIntervalMs <= 5000
+            rule: self.tuning.electionTimeoutMs >= 10 * self.tuning.heartbeatIntervalMs
+            mirrors: etcd-ml.validate
+            paths: [tuning.electionTimeoutMs]
+            message: >-
+              The election timeout must be at least 10 times the heartbeat interval; a shorter one makes
+              members campaign over ordinary heartbeat jitter.
+            messageExpression: >-
+              'The election timeout must be at least ' + string(10 * self.tuning.heartbeatIntervalMs) +
+              ' ms, 10 times the heartbeat interval; a shorter one makes members campaign over ordinary heartbeat jitter.'
+
+  - id: storage
+    title: Storage
+    description: Each member's volume, and how etcd keeps its backend from growing.
+    sections:
+      - fields:
+          - path: volumeset.capacity
+            type: integer
+            label: Initial capacity per member
+            required: true
+            help: >-
+              Each member has its own ext4 volume for the Raft write-ahead log and snapshots. Uninstalling the
+              release takes a final snapshot, kept for 7 days.
+            docs: "/reference/volumeset#capacity-and-billing"
+            unit: GiB
+            # The chart fixes general-purpose-ssd (volumeset.yaml), which the platform allows from 10 to
+            # 65536 GiB (nodelibs/schema volumeSet.ts: minCapacity 10, maxCapacity 65536).
+            min: 10
+            max: 65536
+            suggestions: [10, 20, 50, 100, 250, 500, 1000]
+        rules:
+          - rule: oldSelf == null || self.volumeset.capacity >= oldSelf.volumeset.capacity
+            paths: [volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: compaction
+        title: Compaction and quota
+        description: >-
+          etcd keeps every superseded revision until a compaction removes it, and revisions pile up with
+          time alone, so compaction cannot be turned off.
+        docs: "#compaction-and-backend-growth"
+        fields:
+          - path: tuning.autoCompactionMode
+            type: enum
+            label: Compaction mode
+            widget: segmented
+            required: true
+            options:
+              - { value: periodic, label: Periodic, description: Keep a time window of history. }
+              - { value: revision, label: Revision, description: Keep a number of revisions. }
+          - path: tuning.autoCompactionRetention
+            type: string
+            label: Compaction retention
+            required: true
+            description: >-
+              How much history to keep: a duration in periodic mode (`1h`, `24h`), a number of revisions in
+              revision mode.
+            help: >-
+              The `1h` default keeps the backend flat. A longer window, such as `24h`, keeps more history at
+              the cost of a larger backend.
+            # The chart refuses ^0+[a-zA-Z]*$ (_helpers.tpl:158); a zero with decimals (0.0h) is zero too.
+            pattern: '^(?!0+([.]0+)?[a-zA-Z]*$)'
+            patternMessage: 'Use a retention above 0: a retention of 0 turns compaction off.'
+          # The quota is written as a quoted string from 1000000 up: from a values file Helm reads a plain
+          # number as a float, prints 1000000 and more as 1e+06, and `etcd-ml.validateCompaction`
+          # (_helpers.tpl:168-171) refuses that. The chart accepts a string of digits.
+          - id: quotaLimit
+            virtual: true
+            type: enum
+            label: Backend quota
+            widget: segmented
+            required: true
+            init: >-
+              type(self.tuning.quotaBackendBytes) == string ?
+              (self.tuning.quotaBackendBytes == '4294967296' ? 'gib4' :
+              self.tuning.quotaBackendBytes == '8589934592' ? 'gib8' : 'custom') :
+              (type(self.tuning.quotaBackendBytes) == int && self.tuning.quotaBackendBytes == 0 ? 'default' : 'custom')
+            description: etcd goes read-only when its backend reaches the quota.
+            help: >-
+              Leave it at the etcd default unless the keyspace outgrows 2 GiB; 8 GiB is etcd's own suggested
+              maximum, above which it warns at startup. Compaction does not shrink a backend that has already
+              reached its quota; see
+              [If the backend quota is already full](#if-the-backend-quota-is-already-full).
+            options:
+              - { value: default, label: 2 GiB (etcd default), set: { tuning.quotaBackendBytes: 0 } }
+              - { value: gib4, label: 4 GiB, set: { tuning.quotaBackendBytes: "4294967296" } }
+              - { value: gib8, label: 8 GiB, set: { tuning.quotaBackendBytes: "8589934592" } }
+              - { value: custom, label: Custom, description: "Another byte count, entered below." }
+          # Every value other than the three presets opens this field (the init above), so its rules see
+          # every quota the presets do not write.
+          - path: tuning.quotaBackendBytes
+            type: yaml
+            yamlType: any
+            label: Custom quota
+            required: true
+            when: ui.quotaLimit == 'custom'
+            description: 'A plain byte count in quotes, such as `"6442450944"` for 6 GiB.'
+            rules:
+              - rule: >-
+                  type(self.tuning.quotaBackendBytes) == int ||
+                  (type(self.tuning.quotaBackendBytes) == string && self.tuning.quotaBackendBytes.matches('^-?[0-9]+$'))
+                mirrors: etcd-ml.validateCompaction
+                message: >-
+                  The quota must be a plain byte count with no unit, such as `"8589934592"`: etcd takes no size
+                  suffix.
+              - rule: >-
+                  !(type(self.tuning.quotaBackendBytes) == int && self.tuning.quotaBackendBytes < 0) &&
+                  !(type(self.tuning.quotaBackendBytes) == string && self.tuning.quotaBackendBytes.matches('^-0*[1-9][0-9]*$'))
+                mirrors: etcd-ml.validateCompaction
+                message: >-
+                  The quota must not be negative: etcd reads a negative quota as no quota at all. Choose 2 GiB
+                  (etcd default) for etcd's own limit.
+              # Chart bug (edge probe): `quotaBackendBytes: 1000000` in a values file renders as 1e+06 and fails
+              # the chart's byte-count check; the quoted string "1000000" passes.
+              - rule: type(self.tuning.quotaBackendBytes) != int || self.tuning.quotaBackendBytes < 1000000
+                message: >-
+                  Write a quota of 1000000 or more as a quoted string, such as `"8589934592"`: Helm prints a
+                  plain number that large in exponent form (1000000 as `1e+06`), which this chart refuses.
+              # Chart bug (edge probe): Sprig `int64` turns "08589934592" and a 20-digit string into 0, so the
+              # chart passes them, and etcd's --quota-backend-bytes (a Go int64 flag, base prefixes honoured)
+              # then reads "010" as octal 8 and refuses "08589934592" and anything past 64 bits.
+              - rule: >-
+                  type(self.tuning.quotaBackendBytes) != string ||
+                  !self.tuning.quotaBackendBytes.matches('^-?[0-9]+$') ||
+                  self.tuning.quotaBackendBytes.matches('^-?(0|[1-9][0-9]{0,17})$')
+                message: >-
+                  Write the quota as a plain decimal count without leading zeros and with at most 18 digits: etcd
+                  reads a leading 0 as an octal number, and a count that long is far above any quota etcd can start
+                  with.
+              # The backend lives on the member's volume, which the platform caps at 65536 GiB = 2^46 bytes for the
+              # chart's general-purpose-ssd (nodelibs/schema volumeSet.ts:126-131), so no larger quota is reachable.
+              # It is also the safe side of etcd's mmap: etcd v3.6.5 maps quota + quota/10 bytes at startup
+              # (server/storage/backend.go:49-51, bbolt db.go:449-492) and panics when the map fails
+              # (backend/backend.go:203-205); Linux maps a hint-less mmap inside the 47-bit (128 TiB) user window,
+              # with the Go heap reserved near its top, so quotas from about 116 TiB fail on every member.
+              - when: >-
+                  type(self.tuning.quotaBackendBytes) == string &&
+                  self.tuning.quotaBackendBytes.matches('^[1-9][0-9]{0,17}$')
+                rule: int(self.tuning.quotaBackendBytes) <= 70368744177664
+                message: >-
+                  The quota cannot exceed 65536 GiB (`70368744177664`), the largest volume a member can have. Use a
+                  smaller quota, such as `"8589934592"`.
+              # README "Raft timers and storage growth": 8 GiB is etcd's suggested maximum.
+              - when: >-
+                  type(self.tuning.quotaBackendBytes) == string &&
+                  self.tuning.quotaBackendBytes.matches('^[1-9][0-9]{0,17}$') &&
+                  int(self.tuning.quotaBackendBytes) <= 70368744177664
+                rule: int(self.tuning.quotaBackendBytes) <= 8589934592
+                severity: info
+                message: >-
+                  The quota is above 8 GiB (`8589934592`), etcd's own suggested maximum; etcd warns about it at
+                  startup.
+              # README: leave it at 0 (etcd's 2 GiB) unless the keyspace outgrows 2 GiB.
+              - rule: >-
+                  !(type(self.tuning.quotaBackendBytes) == int && self.tuning.quotaBackendBytes > 0 &&
+                  self.tuning.quotaBackendBytes < 2147483648) &&
+                  !(type(self.tuning.quotaBackendBytes) == string &&
+                  self.tuning.quotaBackendBytes.matches('^[1-9][0-9]{0,17}$') &&
+                  int(self.tuning.quotaBackendBytes) < 2147483648)
+                severity: info
+                message: >-
+                  The quota is below etcd's default of 2 GiB, so the backend goes read-only sooner. Choose 2 GiB
+                  (etcd default) unless you mean to cap it lower.
+              # The backend lives in the data directory on each member's volume (workload.yaml:26-28,
+              # secret.yaml --data-dir /var/lib/etcd).
+              - when: >-
+                  self.volumeset.capacity != null && type(self.tuning.quotaBackendBytes) == string &&
+                  self.tuning.quotaBackendBytes.matches('^[1-9][0-9]{0,17}$')
+                rule: int(self.tuning.quotaBackendBytes) < self.volumeset.capacity * 1073741824
+                severity: info
+                message: >-
+                  The quota is not below each member's volume capacity, so the volume fills up before the quota
+                  stops writes. Raise the initial capacity, or lower the quota.
+                messageExpression: >-
+                  'The quota is not below each member\'s ' + string(self.volumeset.capacity) +
+                  ' GiB volume, so the volume fills up before the quota stops writes. Raise the initial capacity, or lower the quota.'
+        rules:
+          - when: self.tuning.autoCompactionMode == 'periodic'
+            rule: self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$')
+            mirrors: etcd-ml.validateCompaction
+            paths: [tuning.autoCompactionRetention]
+            message: >-
+              In periodic mode the retention is one number with one unit, such as `1h`, `30m` or `24h`; etcd
+              reads a bare number as hours.
+          - when: self.tuning.autoCompactionMode == 'revision'
+            rule: self.tuning.autoCompactionRetention.matches('^[0-9]+$')
+            mirrors: etcd-ml.validateCompaction
+            paths: [tuning.autoCompactionRetention]
+            message: In revision mode the retention is a plain revision count, such as `10000`.
+          # etcd 3.6 (v3compactor/periodic.go): a retention that rounds to 0 creates no compactor, and one
+          # below 10ns makes the compactor divide by a zero retry interval when it starts. The chart's own
+          # zero check (_helpers.tpl:158) misses both (0.5ns, 5ns).
+          - when: >-
+              self.tuning.autoCompactionMode == 'periodic' &&
+              self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$')
+            rule: duration(self.tuning.autoCompactionRetention) >= duration('10ns')
+            paths: [tuning.autoCompactionRetention]
+            message: >-
+              A periodic retention must be at least 10ns: etcd turns compaction off when the retention rounds
+              to 0, and crashes at startup below 10ns. Use a duration such as `1h`.
+          # etcd parses the retention with Go's time.ParseDuration, which refuses more than 2562047h.
+          - when: >-
+              self.tuning.autoCompactionMode == 'periodic' &&
+              self.tuning.autoCompactionRetention.matches('^[0-9]+([.][0-9]+)?(ns|us|ms|s|m|h)$')
+            rule: duration(self.tuning.autoCompactionRetention) <= duration('2562047h')
+            paths: [tuning.autoCompactionRetention]
+            message: >-
+              etcd cannot read a periodic retention above 2562047h (about 292 years). Use a duration such as
+              `24h`.
+          # etcd reads a revision count with strconv.Atoi (64 bits); a longer one fails to parse at startup.
+          - when: >-
+              self.tuning.autoCompactionMode == 'revision' &&
+              self.tuning.autoCompactionRetention.matches('^[0-9]+$')
+            rule: self.tuning.autoCompactionRetention.matches('^0*[0-9]{1,18}$')
+            paths: [tuning.autoCompactionRetention]
+            message: >-
+              Keep the revision count to 18 digits, which keeps it inside the 64-bit integer etcd reads; etcd
+              cannot start with a count past that integer.
+
+  - id: access
+    title: Access
+    description: Which workloads can reach the etcd client API.
+    fields:
+      - path: internalAccess.type
+        type: enum
+        label: Who can connect
+        widget: cards
+        required: true
+        description: >-
+          etcd here has no TLS and no authentication: every workload allowed here can read and write the
+          whole keyspace. Firewall changes take up to a couple of minutes to take effect.
+        options:
+          - { value: same-gvc, label: Same GVC, description: Any workload in this GVC. }
+          - { value: same-org, label: Same org, description: Any workload in this org. }
+          - value: workload-list
+            label: Specific workloads
+            description: Only the workloads listed below. The members can always reach each other.
+      # Shown for every type: workload.yaml:108-109 writes a non-empty list into the firewall under
+      # same-gvc and same-org too, so it must stay validated.
+      - path: internalAccess.workloads
+        type: list
+        label: Allowed workloads
+        widget: tags
+        unique: true
+        description: >-
+          Extra workloads allowed to connect, for example from another GVC. List only clients; the members
+          can always reach each other.
+        item:
+          type: ref
+          ref:
+            kind: workload
+            gvc: any
+            format: relativeLink
+            mustExist: warning
+            excludeTargetGvcWhen: self.internalAccess.type == 'same-gvc'
+        rules:
+          - when: self.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            messageExpression: >-
+              'Same GVC already allows every workload in this GVC: ' +
+              self.internalAccess.workloads.filter(w, w.startsWith('//gvc/' + context.gvc + '/workload/')).map(w, context.gvc + '/' + w.substring(size('//gvc/' + context.gvc + '/workload/'))).join(', ') +
+              ' can be removed from the list.'
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+          - when: self.internalAccess.type == 'same-org'
+            rule: size(self.internalAccess.workloads) == 0
+            severity: info
+            message: Same org already lets every workload of the org connect, so these entries add nothing.
+          - when: self.internalAccess.type == 'workload-list'
+            rule: size(self.internalAccess.workloads) > 0
+            severity: warning
+            message: With "Specific workloads" and an empty list, no client can connect.
+
+rules:
+  - rule: context.mode != 'upgrade' || context.fromVersion == null || semverCompare(context.fromVersion, '2.0.0') >= 0
+    message: >-
+      Do not upgrade an etcd-multi-location 1.x release to 2.0.0: the upgrade deletes the GVC that the 1.x
+      chart created, with every workload, volume set and identity in it. Install 2.0.0 as a new release in an
+      existing GVC (not the one the 1.x release created), copy the keyspace across
+      (`etcdctl get "" --prefix -w json`), then uninstall the old release.
+  - rule: "!has(self.global.gvc)"
+    mirrors: etcd-ml.validateNoLegacyGvc
+    paths: [global.locations]
+    message: >-
+      The `global.gvc` key was removed in etcd-multi-location 2.0.0: the chart deploys into the GVC you
+      install into, and `global.gvc.locations` moved to `global.locations`. Remove `global.gvc` from the
+      values.
+
+migrations:
+  - fromVersions: "<2.0.0"
+    from: global.gvc.locations
+    to: global.locations
+  - fromVersions: "<2.0.0"
+    from: global.gvc.name
+    note: 2.0.0 deploys into the GVC you install into and no longer creates one.

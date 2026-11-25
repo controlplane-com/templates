@@ -1,0 +1,11 @@
+kind: volumeset
+name: {{ include "dify.storage.name" . }}
+description: Dify storage (uploaded files and the keys that decrypt stored credentials), shared by api and worker
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  # shared = read-write-many, mountable by standard workloads. performanceClass is declared
+  # because the API stores `shared` for a shared volumeset either way.
+  fileSystemType: shared
+  performanceClass: shared
+  initialCapacity: {{ .Values.dify.volumeset.capacity }}

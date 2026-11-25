@@ -1,0 +1,11 @@
+kind: identity
+name: {{ include "dify.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+{{- if not .Values.codeExecution.endpoint }}
+---
+kind: identity
+name: {{ include "dify.sandbox.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+{{- end }}

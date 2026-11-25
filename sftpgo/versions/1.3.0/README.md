@@ -108,11 +108,18 @@ admin:
 
 volumeset:
   capacity: 10        # GiB — embedded database + SSH host keys
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 webAdmin:
   enabled: false      # declare the web admin/REST port 8080 (reach it with cpln port-forward;
                       # the public endpoint serves raw TCP 2022 only)
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Storage backend
 
@@ -270,6 +277,7 @@ Then delete those keys from your values, set `userPasswords.secretName` (and `st
 - **First install: the public endpoint's DNS takes a few minutes** to propagate after the load balancer is created.
 - **Switching modes moves the client-facing endpoint** (proxy ↔ SFTPGo) — plan a client cutover if you change modes on a live install.
 - **The dedicated load balancer is the dominant idle cost** in scale_to_zero mode, not the proxy's compute.
+- **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

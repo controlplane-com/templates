@@ -1,0 +1,38 @@
+# sftpgo 1.2.0 — one SFTPGo replica with its public SFTP endpoint, default sizes, one password user.
+# mode is always_warm, not the default scale_to_zero: the proxy suspends SFTPGo after idleHold with no
+# SFTP connection, which would suspend it under the checks (exec needs a running replica) and between
+# the no-op upgrades. Storage is the S3-compatible backend with static keys, because CI has no cloud
+# account for aws/gcp; no MinIO runs, and the checks never open a file, so the endpoint is never dialled
+# (SFTPGo reaches the bucket only when an SFTP session reads or writes).
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+secrets:
+  admin:
+    type: dictionary
+    keys: [password]
+    entries: {username: admin}
+  userpw:
+    type: dictionary
+    keys: [sftpuser]
+  s3:
+    type: dictionary
+    keys: [accessKey, secretKey]
+
+vars:
+  admin_user: admin
+  admin_password: "{secrets.admin.password}"
+  bucket: e2e-sftpgo-unused
+
+values:
+  mode: always_warm
+  admin:
+    secretName: "{secrets.admin.name}"
+  storage:
+    type: minio
+    minio:
+      endpoint: "http://{release}-no-minio.{gvc}.cpln.local:9000"
+      bucket: e2e-sftpgo-unused
+      credentialsSecretName: "{secrets.s3.name}"
+  userPasswords:
+    secretName: "{secrets.userpw.name}"

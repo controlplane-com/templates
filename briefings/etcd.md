@@ -17,7 +17,7 @@
 | Resource | Purpose |
 |---|---|
 | `workload` (stateful) `{release}-etcd` | The members; `replicas` replicas in `global.cpln.gvc`, `replicaDirect: true` |
-| `volumeset` `{release}-etcd-vs` | `/var/lib/etcd` — raft WAL and snapshots; `ext4`, `general-purpose-ssd`, 7-day snapshot retention, final snapshot on uninstall |
+| `volumeset` `{release}-etcd-vs` | `/var/lib/etcd` — raft WAL and snapshots; `ext4`, `general-purpose-ssd`, daily snapshots kept 7 d from 1.5.0 (none were ever taken through 1.4.2), final snapshot on uninstall |
 | `identity` + `policy` | `reveal` on exactly the startup secret, nothing else |
 | `secret` (opaque, plain) `{release}-etcd-startup` | `start.sh`, which derives the member name, peer URLs and full cluster list at boot |
 
@@ -36,6 +36,7 @@
 | `tuning.autoCompactionMode` / `.autoCompactionRetention` | `periodic` / `1h` | Added in **1.4.2**. Cannot be set to "off" |
 | `tuning.quotaBackendBytes` | `0` | Backend ceiling in bytes; `0` means etcd's own 2 GiB. Not rendered when `0` |
 | `volumeset.capacity` | `10` GiB | Platform minimum |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 1.5.0; `""` = off |
 | `internal_access.type` / `.workloads` | `same-gvc` / unset | Who may reach `:2379` |
 
 ## Troubleshooting / considerations
@@ -52,3 +53,8 @@
 - **`IS LEADER: true` is not proof of leadership** and writes time out rather than failing fast under quorum loss. Health-check with a linearizable read (`etcdctl get <key>`, no `--consistency=s`), and always give clients a short `--command-timeout`.
 - **No TLS, no authentication.** Anything permitted by `internal_access` has full read/write on the keyspace. Scope it with `workload-list` if the GVC holds workloads that should not have it, and allow up to ~2 minutes for a firewall change to take effect.
 - **The README predates the 7-section convention** and is a bullet list rather than the standard structure. 1.4.2 added the compaction and quota sections in the existing style rather than rewriting it; a conversion is an open item.
+
+## What 1.5.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.4.2 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`etcd.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`cluster-healthy`, `write-read`, `replicated-to-peer`, `data-survives-upgrade`; baseline 3 replicas at 500m / 512Mi; upgrade from 1.4.2).

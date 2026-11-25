@@ -546,6 +546,7 @@ A restore means `wal-g backup-fetch` into an **empty** data directory plus WAL r
 - **Upgrading from 1.1.1 or earlier turns on daily volume snapshots** of the Postgres volume and, with `backend: local`, the Storage volume. Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `postgres.volumeset.snapshots.schedule: ""` (and `storage.volumeset.snapshots.schedule: ""`) to keep them off.
 - **Switching `backup.mode` restarts Postgres.** `logical` and `walg` need different `archive_mode`/`wal_level` flags, so the change is not hot.
 - **Firewall changes take up to a couple of minutes** to propagate, so `studio.allowedCidrs` and `kong.publicAccess` edits are not visible immediately.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

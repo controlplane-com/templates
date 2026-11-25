@@ -391,8 +391,7 @@ Complete these before installing with `backup.enabled: true`.
    holding the bucket. Set `backup.aws.cloudAccountName` to its name.
 
 3. Create an AWS IAM policy scoped to exactly that bucket (replace `YOUR_BUCKET_NAME`), and set
-   `backup.aws.policyName` to the policy's name. The workload identity is granted this policy and
-   `cpln-connector` only — no broad managed policy.
+   `backup.aws.policyName` to the policy's name. The workload identity is granted this policy only — no broad managed policy.
 
 ```json
 {
@@ -646,6 +645,7 @@ this is never needed — losing one location is an automatic failover.
 - **Allow ~2 minutes after a cold install** before believing a member is unreachable — cross-region service discovery can take that long to converge. `internalAccess` changes take a further 30–150 s.
 - **Cost scales with write volume × members outside the primary's location**, because each receives a full copy of the WAL stream and cross-region traffic is billed.
 - **Upgrading from 2.0.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

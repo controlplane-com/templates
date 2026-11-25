@@ -396,3 +396,4 @@ The bundled etcd subchart must be pinned to **1.0.1 or later** (2.0.0 as of this
 
 - Side finding: switching `backup.provider` leaves **both** cloud blocks on the stored identity (`usable: true` for each) even though the render contains only the new one.
 - Still not run: a volumeset growth event (needs ~80-90 min of sustained load).
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

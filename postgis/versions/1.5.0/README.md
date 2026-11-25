@@ -101,6 +101,9 @@ Set your desired backup schedule in the values file and configure your AWS S3 or
 ### AWS S3
 
 
+<b>Upgrading from 1.4.1 or earlier:</b> the backup identity no longer attaches the <code>cpln-connector</code> AWS policy;
+only your bucket-scoped policy is attached, and it is all the backup needs. No action is needed.
+
 <b>Upgrading from 1.4.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
 That managed policy granted read access to every bucket in your AWS account and contained no write actions,
 so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your

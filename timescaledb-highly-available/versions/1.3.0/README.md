@@ -377,6 +377,7 @@ Lifecycle rules run in the background; objects are removed within about a day of
 - **Backups are logical-only** — a nightly `pg_dumpall` (every database plus roles); continuous WAL archiving / point-in-time restore is a planned follow-up.
 - **Restoring a TimescaleDB dump** requires the same extension version and `timescaledb_pre_restore()` / `timescaledb_post_restore()` around the replay — not the vanilla PostgreSQL procedure.
 - **Upgrading from 1.2.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

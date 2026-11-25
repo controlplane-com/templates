@@ -807,7 +807,7 @@ steps:
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
             help: >-
               The policy needs the S3 actions listed under [AWS S3](#aws-s3), on the bucket and on its
-              objects. The backup identity carries only `cpln-connector` and this policy, so an action missing
+              objects. The backup identity carries only this policy, so an action missing
               from it is missing for the backups.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."

@@ -268,6 +268,7 @@ For GCS replace the download with `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FIL
 - **The image's pgvector (0.8.1) is open to CVE-2026-103484** — a role that can build an IVFFlat index can run code on the server. The secret's user is a superuser, which can do that anyway; until the image ships pgvector 0.8.7, don't give roles you don't fully trust the right to create indexes on `vector` tables.
 - **Uninstall deletes the volumeset** — a final snapshot is kept for the snapshot retention (7 days by default); enable backups if the data matters long-term.
 - **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

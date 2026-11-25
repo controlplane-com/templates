@@ -10,7 +10,6 @@ gvc: {{ .Values.global.cpln.gvc }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.storage.s3.policyName | quote }}
     {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
     - {{ .Values.backup.aws.policyName | quote }}
@@ -19,7 +18,6 @@ aws:
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

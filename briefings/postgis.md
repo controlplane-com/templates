@@ -46,3 +46,4 @@ the app wants spatial types and indexes alongside ordinary relational tables.
 ## What 1.5.0 changed
 
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`postgis.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. The README carries the upgrade note under Warning (this README has no Important Notes section).
+- **1.5.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

@@ -21,6 +21,7 @@ checks:
 
   - id: schema-migrated
     description: Every Prisma migration finished, none failed or rolled back, and the users table exists.
+    scenarios: "^(?!.*\\[ha\\])"   # reads the single-instance postgres workload; the [ha] variant has none
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -32,6 +33,7 @@ checks:
 
   - id: app-store-seeded
     description: The boot script's app-store seed populated the App table.
+    scenarios: "^(?!.*\\[ha\\])"   # reads the single-instance postgres workload; the [ha] variant has none
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -68,6 +70,7 @@ checks:
 
   - id: data-written
     description: A marker row tagged with the running version is written to the Cal.com database and read back.
+    scenarios: "^(?!.*\\[ha\\])"   # reads the single-instance postgres workload; the [ha] variant has none
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -79,6 +82,7 @@ checks:
 
   - id: data-survives
     description: The marker row written by the first installed version is still there after every upgrade.
+    scenarios: "^(?!.*\\[ha\\])"   # reads the single-instance postgres workload; the [ha] variant has none
     exec:
       workload: "{release}-postgres"
       container: postgresql
@@ -87,3 +91,72 @@ checks:
     expect:
       stdout: "^SURVIVED e2e-[0-9.]+$"
     retries: 3
+
+  - id: fresh-is-19
+    description: A fresh install runs the single-instance PostgreSQL on 19 (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+    retries: 3
+
+  - id: pinned-stays-18
+    description: >-
+      A 1.0.0 release upgraded with postgres.image pinned to postgres:18 (the guard's fix) runs PostgreSQL 18
+      on its original data directory. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$"
+    retries: 3
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.0.0 release (data on PostgreSQL 18) is held by the postgres boot guard: the data
+      directory is still 18, no postgres process runs, and the guard file names this chart's pin.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:18.*Upgrade > Database server > Postgres image"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      and Cal.com's migrations finished in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U calcom -d calcom -qtA -c 'show server_version_num')"
+        echo "MIGRATIONS=$(psql -h "$P" -U calcom -d calcom -qtA -c 'select count(*) from _prisma_migrations where finished_at is not null and rolled_back_at is null')"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^MIGRATIONS=[1-9][0-9]{2,}$"
+    retries: 4
+    retryDelaySeconds: 15

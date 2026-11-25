@@ -1,0 +1,5 @@
+kind: identity
+name: {{ include "calcom.identity.name" . }}
+description: Cal.com workload identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "calcom.tags" . | nindent 4 }}

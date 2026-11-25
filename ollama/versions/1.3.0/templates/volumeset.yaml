@@ -1,3 +1,4 @@
+{{- include "ollama.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "ollama.volume.name" . }}
 tags: {{- include "ollama.tags" . | nindent 2 }}
@@ -14,4 +15,7 @@ spec:
   performanceClass: {{ .Values.volumeset.performanceClass }}
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration }}
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

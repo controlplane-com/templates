@@ -31,7 +31,8 @@ volumeset:
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
   performanceClass: general-purpose-ssd
   snapshots:
-    retentionDuration: 7d
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 firewall:
   external: # Change to restrict access to the workload if needed

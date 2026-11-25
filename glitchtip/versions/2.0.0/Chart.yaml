@@ -2,7 +2,7 @@ apiVersion: v2
 name: glitchtip
 description: GlitchTip Sentry-compatible error tracking with a background worker, backed by PostgreSQL and Redis
 type: application
-version: 1.4.1
+version: 2.0.0
 appVersion: "6.2.2"
 
 dependencies:
@@ -11,11 +11,11 @@ dependencies:
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.5.0
+    version: 3.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: postgres
-    version: 3.4.1
+    version: 4.0.2
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgres.enabled
   - name: redis
@@ -25,5 +25,5 @@ dependencies:
 
 annotations:
   created: "2026-07-24"
-  lastModified: "2026-11-18"
+  lastModified: "2026-11-25"
   createsGvc: false

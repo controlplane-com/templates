@@ -1,7 +1,8 @@
 # GlitchTip
 
-> **Upgrading from 1.3.x:** the database credentials and the Redis password are now secrets you create
-> before upgrading, under **new** names — see [Upgrading from 1.3.1](#upgrading-from-131).
+> **Upgrading from 1.x:** the default HA database upgrades in place and keeps PostgreSQL 17; a single-instance
+> database needs `postgres.image: postgres:18` in your values — see [Upgrading from 1.x](#upgrading-from-1x).
+> From 1.3.x, also create the database and Redis secrets first — see [Upgrading from 1.3.1](#upgrading-from-131).
 
 This app deploys [GlitchTip](https://glitchtip.com/) — Sentry-API-compatible error tracking, fully MIT-licensed with nothing feature-gated. Apps report crashes with standard Sentry SDKs pointed at a GlitchTip DSN; a stateless web tier serves the UI and event ingest, a background worker processes events and alerts, and all state lives in PostgreSQL and Redis.
 
@@ -9,8 +10,8 @@ This app deploys [GlitchTip](https://glitchtip.com/) — Sentry-API-compatible e
 
 - **GlitchTip web**: Standard workload (default 1 replica, `replicas` knob for more) serving the UI, API, and SDK event ingest on port 8000.
 - **GlitchTip worker**: Single-replica standard workload running the vtasks worker + scheduler; runs database migrations and superuser bootstrap at boot.
-- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint. Holds all issue/event data.
-- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 18 for new clusters) — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint. Holds all issue/event data.
+- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template (PostgreSQL 19) instead. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched.
 - **Redis + Sentinel (default, optional)** (subchart): the `redis` template — task queue, cache, and sessions; disable to run those on PostgreSQL instead.
 - **Auth secret** (dictionary): *not created by this template*; you create it before install and reference it by name. Holds the Django signing key and the initial superuser login.
 - **Database credentials secret** (dictionary): *not created by this template*; you create it before install. The database initializes from it and GlitchTip connects with it, in either database mode.
@@ -138,7 +139,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA: # default: highly available PostgreSQL
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-glitchtip-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -153,6 +154,7 @@ postgresHA:
   enabled: false
 postgres: # dev/lightweight: single-instance PostgreSQL
   enabled: true
+  image: postgres:19 # a release from an earlier version of this chart keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-glitchtip-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -174,14 +176,55 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret |
 
+## Upgrading from 1.x
+
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes. GlitchTip reconnects by itself.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [AWS S3](#aws-s3) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new GlitchTip release (same prerequisite secrets) in place of the second database release, and the old release's `-glitchtip` and `-glitchtip-worker` workloads stopped during the copy.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (GlitchTip gets a new endpoint, so the DSNs change; error ingest is down during the copy):
+
+1. Stop the old GlitchTip, so nothing writes to its database: `cpln workload stop OLD_RELEASE-glitchtip --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-glitchtip-worker --gvc GVC_NAME`.
+2. Install this version as a NEW release in single-instance mode with the **same prerequisite secrets**. The same auth secret keeps sessions and tokens valid, and the copied database role keeps the old password.
+3. Once `NEW_RELEASE-glitchtip` is ready, stop both of its workloads (`cpln workload stop NEW_RELEASE-glitchtip --gvc GVC_NAME` and `cpln workload stop NEW_RELEASE-glitchtip-worker --gvc GVC_NAME`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+4. Start the new worker, then the web tier (`cpln workload start NEW_RELEASE-glitchtip-worker --gvc GVC_NAME`, then `cpln workload start NEW_RELEASE-glitchtip --gvc GVC_NAME`), log in, and check your projects and issues.
+5. Point your apps at the new DSNs (project → Settings → DSN), or set `domain` to the URL they already use. Then uninstall the old release (this deletes its volumes).
+
 ## Upgrading from 1.4.0 or earlier
 
 1.4.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
 the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a
 brief interruption of writes while the leader changes. GlitchTip itself restarts without a gap: the new replica serves before the old one stops. Upgrade in a quiet window. If you pinned
-`postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. GlitchTip itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
-Single-instance mode (`postgres`) is unchanged.
+`postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. GlitchTip itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
+1.4.1 left single-instance mode (`postgres`) unchanged; for 2.0.0 see [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Upgrading from 1.3.1
 
@@ -247,7 +290,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
   "Statement": [{
     "Effect": "Allow",
     "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
-               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
+               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+               "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
   }]
 }
@@ -364,6 +408,7 @@ GlitchTip is briefly unavailable while it restarts. Redis and Sentinel need no r
 
 ## Important Notes
 
+- **2.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - **The default HA stack takes about six and a half minutes to converge**, and the worker crash-loops with `Connection reset by peer` for the first several minutes while Patroni elects a database leader. This is expected and self-correcting — do not treat it as a failed install.
 - **Create the prerequisite secrets before installing** (auth, database credentials and, with Redis enabled, the Redis password). A missing prerequisite secret leaves the workloads waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Never rotate `secretKey` on a live install unless you intend to** — it logs every user out and invalidates password-reset links in flight. Nothing is corrupted, but everyone has to sign in again.

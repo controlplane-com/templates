@@ -66,11 +66,18 @@ resources:            # single Go binary — light footprint
 
 volumeset:
   capacity: 10        # GiB — persistent media uploads at /listmonk/uploads
+  snapshots:
+    schedule: "0 3 * * *"    # snapshots of the uploads volume, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 timezone: Etc/UTC     # container TZ — governs campaign scheduling times
 
 rootUrl: ""           # public base URL for subscriber links and email; empty = the canonical endpoint
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Admin Bootstrap
 
@@ -310,6 +317,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 - **Keep `publicAccess` enabled for subscriber-facing pages to work** — subscription forms, unsubscribe links, and tracking pixels must be reachable from the internet.
 - **Database volumes survive restarts, redeploys, and upgrades; uninstalling deletes them** — all lists, subscribers, and campaigns are lost. Use `postgresHA` and/or enable the backup pass-through for durable production data.
 - **Rotating the database password in HA mode needs a leader switchover first** — follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode). A plain redeploy can promote a member still holding the old password and split the cluster.
+- **Upgrading from 1.6.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

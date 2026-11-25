@@ -1,0 +1,16 @@
+kind: policy
+name: {{ include "openbao.policy.name" . }}
+description: OpenBao policy
+tags:
+  {{- include "openbao.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "openbao.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "openbao.secret.config.name" . }}
+  {{- if eq .Values.seal.type "static" }}
+  - //secret/{{ .Values.seal.static.secretName }}
+  {{- end }}

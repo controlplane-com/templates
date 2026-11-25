@@ -20,6 +20,8 @@ imports:
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - { id: backup, title: Database backups }
     exclude:
+      # Asked in the Gitea step, next to the auth secret, so both prerequisites are in one place.
+      - config.credentialsSecretName
       # Gitea connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
     override:
@@ -37,8 +39,7 @@ imports:
 steps:
   - id: gitea
     title: Gitea
-    description: The Gitea image, its compute, and the prerequisite auth secret.
-    docs: "#configuration"
+    description: The Gitea image, its compute, and the prerequisite auth and database secrets.
     sections:
       - title: Server
         docs: "#image-and-resources"
@@ -56,7 +57,7 @@ steps:
             maxRatio: 4
             cpu: { min: 100m }
             memory: { min: 256Mi }
-      - title: Admin and signing keys
+      - title: Prerequisite secrets
         docs: "#prerequisites"
         fields:
           - type: note
@@ -87,6 +88,24 @@ steps:
                 hint: >-
                   secretKey and internalToken: openssl rand -hex 32. jwtSecret: openssl rand -base64 32 |
                   tr '+/' '-_' | tr -d '='
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Gitea connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
+              and force a redeployment of Gitea.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-gitea-db-credentials'"
           - path: gitea.disableRegistration
             type: boolean
             label: Invite-only registration
@@ -130,9 +149,10 @@ steps:
   - id: storage
     title: Storage
     description: The volume set with repositories, LFS objects, attachments and SSH host keys.
-    docs: "#storage"
     sections:
-      - fields:
+      - title: Volume
+        docs: "#storage"
+        fields:
           - path: volumeset.capacity
             type: integer
             label: Initial capacity

@@ -8,11 +8,11 @@ steps:
     title: Mode
     description: Whether SFTPGo sleeps when idle behind a small always-on proxy, or stays running.
     sections:
-      - docs: "#mode-and-scale-to-zero"
-        fields:
+      - fields:
           - path: mode
             type: enum
             label: Mode
+            docs: "#mode-and-scale-to-zero"
             widget: cards
             required: true
             options:
@@ -100,11 +100,11 @@ steps:
     title: Storage
     description: The bucket that holds the SFTP files.
     sections:
-      - docs: "#storage-backend"
-        fields:
+      - fields:
           - path: storage.type
             type: enum
             label: Storage backend
+            docs: "#storage-backend"
             widget: cards
             required: true
             options:

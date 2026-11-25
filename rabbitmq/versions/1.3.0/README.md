@@ -67,7 +67,14 @@ volumeset:
       initialCapacity: 10 # In Gigabytes. For high-throughput-ssd minimum is '1000'
       fileSystemType: ext4 # ext4 / xfs
       performanceClass: general-purpose-ssd # high-throughput-ssd / general-purpose-ssd
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ## Connecting
 
@@ -115,6 +122,7 @@ cpln port-forward RELEASE_NAME-rabbitmq 15672:15672 --gvc GVC_NAME
 - Single node, single replica: an upgrade or a reschedule is a short outage for every connected client, so give your producers and consumers a reconnect policy.
 - Queue data lives on the volume set and survives redeploys; `cpln helm uninstall` deletes it.
 - **Do not `helm upgrade` from 1.0.0.** 1.1.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-rabbitmq` and `RELEASE_NAME-rabbitmq-vs`), so an in-place upgrade starts the broker on a new, empty volume and removes the old one, with every queued message. Install a new release of this version instead, move producers and consumers over once the old queues have drained, then remove the old release.
+- **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

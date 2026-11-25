@@ -36,3 +36,6 @@ volumeset:
       initialCapacity: 10 # In Gigabytes. For high-throughput-ssd minimum is '1000'
       fileSystemType: ext4 # ext4 / xfs
       performanceClass: general-purpose-ssd # high-throughput-ssd / general-purpose-ssd
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept

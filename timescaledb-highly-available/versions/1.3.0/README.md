@@ -76,7 +76,14 @@ volumeset:
     maxCapacity: 100 # maximum capacity in GiB
     minFreePercentage: 10 # free-space threshold that triggers scaling
     scalingFactor: 1.2 # how much to scale up by
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -369,6 +376,7 @@ Lifecycle rules run in the background; objects are removed within about a day of
 - **etcd is a hard dependency** — if the etcd members are unhealthy, Patroni loses its DCS and the cluster goes read-only; check `{release}-etcd` first if writes fail.
 - **Backups are logical-only** — a nightly `pg_dumpall` (every database plus roles); continuous WAL archiving / point-in-time restore is a planned follow-up.
 - **Restoring a TimescaleDB dump** requires the same extension version and `timescaledb_pre_restore()` / `timescaledb_post_restore()` around the replay — not the vanilla PostgreSQL procedure.
+- **Upgrading from 1.2.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

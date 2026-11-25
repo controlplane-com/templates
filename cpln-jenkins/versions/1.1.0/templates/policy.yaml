@@ -1,0 +1,16 @@
+{{- include "cpln-jenkins.validate" . -}}
+kind: policy
+name: {{ include "cpln-jenkins.policy.name" . }}
+tags: {{- include "cpln-jenkins.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "cpln-jenkins.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.admin.passwordSecretName }}
+{{- if .Values.cloud.enabled }}
+  - //secret/{{ .Values.cloud.apiKeySecretName }}
+  - //secret/{{ include "cpln-jenkins.secret.cloud.name" . }}
+{{- end }}

@@ -1,0 +1,12 @@
+{{- include "cpln-jenkins.validate" . -}}
+kind: volumeset
+name: {{ include "cpln-jenkins.volumeset.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-jenkins.tags" . | nindent 4 }}
+spec:
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  fileSystemType: ext4
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: 7d

@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-prometheus` (stateful, 1 replica) | Container `prometheus` (:9095 http — 9090 is a platform-reserved port) + optional container `thanos-sidecar` (:10901 gRPC Store API, :10902 http health) |
-| volumeset `{release}-prometheus-vs` (20 GiB default) | TSDB at `/prometheus`, mounted into BOTH containers |
+| volumeset `{release}-prometheus-vs` (20 GiB default) | TSDB at `/prometheus`, mounted into BOTH containers; daily snapshots kept 7 d from 1.3.0 (none were ever taken through 1.2.0) |
 | secret `-config` / `-objstore` (opaque, plain) | Rendered `prometheus.yml` / Thanos bucket config (objstore only when upload enabled) |
 | identity + policy | Secret reveal, least-privilege; keyless bucket access (AWS scoped IAM policy / GCP objectAdmin on the bucket) when upload enabled |
 - Internal-only — no public endpoint ever (Prometheus has no built-in auth). A Thanos Query in another GVC connects via service-level DNS (`{workload}.{gvc}.cpln.local:10901` — single-replica by design, so this reaches the one replica directly; live testing found the replica-direct form can 503) with the firewall set to `same-org` or `workload-list`.
@@ -28,6 +28,7 @@
 | `remoteWrite` | `[]` | Push targets (url + optional basic-auth via prerequisite secret name) |
 | `thanos.sidecar.enabled` | `true` | Store API (gRPC :10901 — the read interface Thanos Query fans out over) on/off |
 | `thanos.objectStorage.*` | off | Sidecar block upload to aws/gcp/minio; recommended for production |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 1.3.0 — scheduled TSDB volume snapshots; `""` = off; at most hourly |
 | `internalAccess.type` / `.workloads` | `same-gvc` | Which workloads may connect (workload-list allows cross-GVC callers) |
 
 ## Availability posture
@@ -39,7 +40,7 @@
 - **User says "my external labels don't show in queries"**: expected — external labels are attached only to data leaving the instance (remote-write, Store API, uploads), never to local query results. Check `/api/v1/status/config`.
 - **No blocks in the bucket yet**: blocks are cut every `blockDuration` (default 2h) — first upload can take up to ~3h after install. Not a bug before that.
 - **Never enable out-of-order ingestion** (accepting late-timestamped samples): it corrupts the sidecar's upload/compaction contract (prometheus issue #13112). Deliberately no knob.
-- **Data survives upgrades, not uninstall**: changing retention/labels via upgrade is safe; uninstall deletes the volumeset (only a final snapshot is kept, 7 days) — durable history needs object-storage upload.
+- **Data survives upgrades, not uninstall**: changing retention/labels via upgrade is safe; uninstall deletes the volumeset (its snapshots, the final one included, are kept for `volumeset.snapshots.retentionDuration`) — durable history needs object-storage upload.
 - **Multi-location GVC = one independent Prometheus per location** (stateful, min/maxScale 1, no `localOptions`): stored data is split across locations. The console wizard requires a single-location GVC; the CLI does not. Chart follow-up candidate.
 - **1.1.0 renamed `resources.cpu`/`memory` → `maxCpu`/`maxMemory`** (both blocks) with no render guard — old keys are silently ignored and the defaults apply.
 - **MinIO endpoint default `my-minio:9000` is a short-name placeholder** — users must supply the FQDN `{workload}.{gvc}.cpln.local:9000`. The policy also grants reveal on `minio.credentialsSecretName` whenever `type: minio`, even with object storage disabled.
@@ -55,3 +56,7 @@
   environment — verified against a live MinIO with negative controls before the design was settled, so
   no startup-script substitution is needed. AWS and GCP were already keyless via cloud identity and are
   unchanged.
+
+## 1.3.0 — scheduled volume snapshots (work item 5219)
+- The TSDB volumeset takes a snapshot daily at 03:00 UTC (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Through 1.2.0 it rendered `retentionDuration: 7d` with no schedule, so the platform never took one. Default ON because object-storage upload is off by default, so the local TSDB is the only copy of the data. A schedule more frequent than hourly fails at render (`prometheus.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded: `self-scrape`, `remote-write-read-back` (promtool push into the receiver), `thanos-sidecar-connected`, `data-survives-upgrade` (a pushed sample read back after the TSDB replays from the volume); upgrade from 1.2.0.

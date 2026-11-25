@@ -22,6 +22,11 @@ secrets:
     keys: [password]
     entries: {username: documenso, database: documenso}
 
+vars:
+  pg_user: documenso
+  pg_password: "{secrets.db.password}"
+  pg_db: documenso
+
 values:
   location: aws-us-east-1
   secrets:

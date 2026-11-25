@@ -131,6 +131,13 @@ mc alias set minio http://{release}-minio:9000 USERNAME PASSWORD
 Other templates in this catalog that back up to MinIO take the same two values as their access key
 and secret key.
 
+## Upgrading from 1.4.x
+
+1.5.0 adds readiness and liveness probes and starts every node at once instead of one after another.
+Upgrade with the values you already use: the workload and its volumes are kept, and so are your
+objects. The upgrade restarts the nodes one at a time, about two minutes each, and the pool keeps
+serving reads and writes throughout.
+
 ## Upgrading from 1.3.x
 
 MinIO's own images are no longer publicly pullable (Docker Hub removed them, and quay.io now refuses
@@ -151,8 +158,8 @@ the image contains.
 - **The credentials secret must exist before you install.** Without it the workload wedges with no
   log output at all; see Prerequisites for the one diagnostic that shows it.
 - **Rotating the root credentials takes about 11 minutes of split state — plan it as a maintenance
-  window.** MinIO reads the root credentials on every start and they are per-node environment, so an
-  `OrderedReady` rollout restarts one replica at a time. Measured mid-rollout over service DNS: the
+  window.** MinIO reads the root credentials on every start and they are per-node environment, so the
+  rollout restarts one replica at a time. Measured mid-rollout over service DNS: the
   new credential succeeded 15 times and failed auth 5 times, while the old one failed all 20 — so
   clients see intermittent failures with **both** keys until every replica has cycled. It does
   converge cleanly, and no re-encryption of internal IAM data is needed.
@@ -166,9 +173,12 @@ the image contains.
   GVC traffic, so cutting it off breaks the cluster rather than just isolating it.
 - **`helm uninstall` deletes the volume sets**, so stored objects do not survive a reinstall. The
   credentials secret is yours and is left alone.
-- **The first `helm upgrade` after an install re-applies resources even with identical values**,
-  restarting replicas. Nothing limits the rollout on a stateful workload, so treat it as a planned
-  restart of the pool.
+- **Any change to the workload restarts the nodes one at a time**, about two minutes each, waiting
+  for each to pass its readiness check before the next. Clients should retry: a request in flight to
+  the node being stopped can fail.
+- **Readiness is per node, not per pool.** A node reports ready as soon as its server answers, so it
+  can rejoin the pool (a quorum-gated check would stop a cold start). For pool health use
+  `/minio/health/cluster` on port 9000, which answers 200 only while the pool has write quorum.
 - **Firewall changes take 30–150 seconds to take effect.** After changing `internalAccess`, re-test
   rather than trusting the first response.
 

@@ -30,6 +30,36 @@ spec:
           protocol: http
         - number: 9001
           protocol: http
+      {{- /*
+      Readiness must NOT need cluster quorum: a not-ready replica is unreachable
+      on the mesh, so a quorum-gated probe would stop peers from ever reaching
+      each other on a cold start. /minio/health/ready answers per node (it does
+      not wait for the erasure sets); /minio/health/cluster is the quorum check
+      and is deliberately not used.
+      Startup window ≈ initialDelaySeconds + 30 × periodSeconds (~310 s) for a
+      cold start of the whole set; failureThreshold keeps a sick node in
+      rotation for only ~30 s.
+      */}}
+      readinessProbe:
+        httpGet:
+          path: /minio/health/ready
+          port: 9000
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        httpGet:
+          path: /minio/health/live
+          port: 9000
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 20
+        timeoutSeconds: 10
+        failureThreshold: 5
+        successThreshold: 1
       volumes:
         {{- /* recoveryPolicy is declared on both volumes because the API backfills `retain`. */}}
         - path: /data
@@ -62,10 +92,13 @@ spec:
     stateful workload, so sending it produces permanent drift AND implies a
     rolling-restart limit that is not in force.
     terminationGracePeriodSeconds is declared because the API backfills 90.
+    scalingPolicy is Parallel so every node starts at once and the pool can
+    reach quorum on a cold start; a rollout still replaces one replica at a
+    time and waits for its readiness probe before the next.
     */}}
     maxSurgeReplicas: 25%
     minReadySeconds: 0
-    scalingPolicy: OrderedReady
+    scalingPolicy: Parallel
     terminationGracePeriodSeconds: 90
   firewallConfig:
     {{- /* Every field is declared, empty lists included: the API backfills them,

@@ -1,0 +1,132 @@
+# Feature checks for the ghost template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (owner_email, owner_password).
+#
+# Every check runs node (the image has no curl) in the ghost container against Ghost on 127.0.0.1:2368.
+# `X-Forwarded-Proto: https` stands in for the platform edge, as the readiness probe does: the site URL
+# is https, so without it Ghost redirects and will not set its secure session cookie. The Admin API
+# refuses a session request whose Origin is not the site URL, so the scripts read `url` from the Ghost
+# process's environment (PID 1). The runner reads any {word} as a placeholder, so the scripts never
+# use JS template literals or shorthand object properties.
+checks:
+  - id: site-serves
+    description: The home page answers 200 and carries Ghost's generator tag (Ghost booted against MySQL).
+    exec:
+      workload: "{release}-ghost"
+      container: ghost
+      script: |
+        node <<'EOF'
+        fetch("http://127.0.0.1:2368/", { headers: { "X-Forwarded-Proto": "https" }, redirect: "manual" })
+          .then(function (r) { return r.text().then(function (b) {
+            console.log("HOME " + r.status + (/<meta name="generator" content="Ghost /.test(b) ? " GHOST" : " NOT-GHOST"));
+          }); })
+          .catch(function (e) { console.log("ERROR " + e.message); });
+        EOF
+    expect:
+      stdout: "^HOME 200 GHOST$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: owner-login
+    description: >-
+      The owner (created through the setup API on a fresh database) signs in to the Admin API and gets a
+      session cookie; the same user with a wrong password is refused.
+    exec:
+      workload: "{release}-ghost"
+      container: ghost
+      script: |
+        node <<'EOF'
+        const fs = require("fs");
+        let site = "";
+        try { site = fs.readFileSync("/proc/1/environ", "utf8").split("\0").filter(function (l) { return l.indexOf("url=") === 0; })[0].slice(4); } catch (e) {}
+        site = site || process.env.CPLN_GLOBAL_ENDPOINT || "";
+        const origin = new URL(site).origin;
+        const B = "http://127.0.0.1:2368/ghost/api/admin/";
+        const H = { "X-Forwarded-Proto": "https", "Origin": origin, "Content-Type": "application/json" };
+        const EMAIL = "{owner_email}", PW = "{owner_password}";
+        function login(pw) {
+          return fetch(B + "session/", { method: "POST", headers: H, redirect: "manual",
+            body: JSON.stringify({ username: EMAIL, password: pw }) })
+            .then(function (r) {
+              const c = r.headers.getSetCookie().filter(function (x) { return x.indexOf("ghost-admin-api-session=") === 0; });
+              return r.status < 300 && c.length > 0;
+            });
+        }
+        async function main() {
+          const s = await (await fetch(B + "authentication/setup/", { headers: H })).json();
+          if (!s.setup[0].status) {
+            const r = await fetch(B + "authentication/setup/", { method: "POST", headers: H,
+              body: JSON.stringify({ setup: [{ name: "E2E Owner", email: EMAIL, password: PW, blogTitle: "E2E Blog" }] }) });
+            console.log("SETUP " + r.status);
+          }
+          console.log((await login(PW)) ? "LOGIN OK" : "LOGIN FAILED");
+          console.log((await login(PW + "-wrong")) ? "NEGATIVE ACCEPTED" : "NEGATIVE REFUSED");
+        }
+        main().catch(function (e) { console.log("ERROR " + e.message); });
+        EOF
+    expect:
+      stdout: "(?s)^LOGIN OK$.*^NEGATIVE REFUSED$"
+      notStdout: "^(LOGIN FAILED|NEGATIVE ACCEPTED)$"
+    # Ghost rate-limits failed sign-ins (and then refuses the right password too), so few retries.
+    retries: 2
+    retryDelaySeconds: 20
+
+  - id: post-roundtrip
+    description: A post published for this version through the Admin API is served on its public URL.
+    exec:
+      workload: "{release}-ghost"
+      container: ghost
+      script: |
+        node <<'EOF'
+        const fs = require("fs");
+        let site = "";
+        try { site = fs.readFileSync("/proc/1/environ", "utf8").split("\0").filter(function (l) { return l.indexOf("url=") === 0; })[0].slice(4); } catch (e) {}
+        site = site || process.env.CPLN_GLOBAL_ENDPOINT || "";
+        const origin = new URL(site).origin;
+        const B = "http://127.0.0.1:2368/ghost/api/admin/";
+        const H = { "X-Forwarded-Proto": "https", "Origin": origin, "Content-Type": "application/json" };
+        const V = "{version}", SLUG = "e2e-post-" + V.replace(/\./g, "-"), TITLE = "E2E post " + V;
+        async function main() {
+          const r = await fetch(B + "session/", { method: "POST", headers: H, redirect: "manual",
+            body: JSON.stringify({ username: "{owner_email}", password: "{owner_password}" }) });
+          const c = r.headers.getSetCookie().filter(function (x) { return x.indexOf("ghost-admin-api-session=") === 0; });
+          if (!c.length) { console.log("LOGIN FAILED " + r.status); return; }
+          const A = Object.assign({ "Cookie": c[0].split(";")[0] }, H);
+          const g = await fetch(B + "posts/slug/" + SLUG + "/", { headers: A });
+          if (g.status === 404) {
+            const p = await fetch(B + "posts/", { method: "POST", headers: A,
+              body: JSON.stringify({ posts: [{ title: TITLE, slug: SLUG, status: "published" }] }) });
+            if (p.status !== 201) { console.log("CREATE FAILED " + p.status + " " + (await p.text())); return; }
+          }
+          const f = await fetch("http://127.0.0.1:2368/" + SLUG + "/", { headers: { "X-Forwarded-Proto": "https" }, redirect: "manual" });
+          const b = await f.text();
+          console.log(f.status === 200 && b.indexOf(TITLE) >= 0 ? "READ " + SLUG : "MISSING " + f.status);
+        }
+        main().catch(function (e) { console.log("ERROR " + e.message); });
+        EOF
+    expect:
+      stdout: "^READ e2e-post-"
+    retries: 3
+    retryDelaySeconds: 20
+
+  - id: data-survives-upgrade
+    description: >-
+      The post published on the version this scenario installed first is still served. On a fresh
+      install that is the same version; after an upgrade it proves MySQL and the content carried over.
+    exec:
+      workload: "{release}-ghost"
+      container: ghost
+      script: |
+        node <<'EOF'
+        const V = "{installed_version}", SLUG = "e2e-post-" + V.replace(/\./g, "-"), TITLE = "E2E post " + V;
+        fetch("http://127.0.0.1:2368/" + SLUG + "/", { headers: { "X-Forwarded-Proto": "https" }, redirect: "manual" })
+          .then(function (r) { return r.text().then(function (b) {
+            console.log(r.status === 200 && b.indexOf(TITLE) >= 0 ? "PERSISTED" : "MISSING " + r.status);
+          }); })
+          .catch(function (e) { console.log("ERROR " + e.message); });
+        EOF
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

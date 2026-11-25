@@ -10,6 +10,9 @@ resources: # Ghost (Node) app — single instance
 # Persistent content: uploaded images, themes, logs, adapters (mounted at /var/lib/ghost/content)
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Site URL ─────────────────────────────────────────────────────────────────
 # Public URL Ghost uses to build links and emails. Leave empty to auto-derive the

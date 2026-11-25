@@ -1,0 +1,27 @@
+# ghost 1.3.0 — the default install: one Ghost replica, bundled MySQL 8, public endpoint, no mail, no
+# backups. CI creates the two prerequisite database secrets. Ghost has no admin secret: the first check
+# creates the owner through Ghost's setup API with a generated password.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  ownerpw: hex
+  rootpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: ghost, database: ghost}
+  root:
+    type: opaque
+    payload: "{gen.rootpw}"
+
+vars:
+  owner_email: e2e-owner@example.com
+  owner_password: "{gen.ownerpw}"
+
+values:
+  mysql:
+    credentialsSecretName: "{secrets.db.name}"
+    rootPasswordSecretName: "{secrets.root.name}"

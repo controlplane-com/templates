@@ -103,8 +103,8 @@ steps:
       - type: note
         when: context.mode == 'upgrade'
         text: >-
-          Every upgrade restarts the pool's nodes, and the first upgrade after an install does so even with
-          unchanged values. Treat it as a planned restart of the pool.
+          An upgrade that changes the workload restarts the nodes one at a time, about two minutes each, and
+          clients should retry while it runs. An upgrade with unchanged values does not restart them.
       - type: note
         severity: warning
         when: >-

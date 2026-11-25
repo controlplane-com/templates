@@ -9,7 +9,7 @@ store, or, for a single node, with the data on the server volume itself (`provid
 
 - **ClickHouse Server** — stateful workload, the database itself, with configurable replicas per location.
 - **ClickHouse Keeper** *(cluster modes only)* — stateful workload providing Raft coordination, one replica in each of the first three locations.
-- **Volume sets** — server metadata and state, plus Keeper state in cluster modes. With a bucket provider, table data lives in object storage and the volume is metadata and read cache; with `provider: local`, the volume holds the table data.
+- **Volume sets** — server metadata and state, plus Keeper state in cluster modes, snapshotted daily. With a bucket provider, table data lives in object storage and the volume is metadata and read cache; with `provider: local`, the volume holds the table data.
 - **Scratch volumes** — local filesystem cache and temporary spill.
 - **Secrets** — startup scripts for Server and Keeper, plus one storage-configuration secret for the selected bucket provider (none with `local`).
 - **Identity + two policies** — `reveal` on this release's secrets and your credentials secret, plus `view` on the one GVC you install into so each container can confirm at boot that the GVC really has every location you listed.
@@ -220,7 +220,14 @@ volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
   keeper:
     capacity: 10 # initial capacity in GiB (minimum is 10) - cluster modes only
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Server and Keeper
 
@@ -260,9 +267,9 @@ with its built-in `default` storage policy, so there is no `s3_main` policy and 
 secret. Size the volume for all of your data with `volumeset.server.capacity`; raise it with `helm upgrade`
 when it fills (a volume cannot shrink). Use `local` for a single node: one location with one replica.
 
-**There is no scheduled snapshot or backup with `local`.** The server volume is the only copy of your data.
-The chart takes no snapshots while the release runs; uninstalling keeps one final snapshot of the volume
-for 7 days. Export or copy anything you cannot afford to lose.
+**The server volume is the only copy of your data with `local`.** The daily volume snapshots
+(`volumeset.snapshots`) are its only backup; the chart has no logical backup of its own. Keep the schedule
+on, and export or copy anything you cannot afford to lose.
 
 ### AWS S3
 
@@ -441,7 +448,7 @@ position in `locations`.
 - **Never `helm upgrade` a 2.x release onto 3.0.0** — it deletes the GVC the 2.x chart created and everything in it. See [Migrating from 2.x](#migrating-from-2x)
 - **The GVC must contain every location you list**, and may contain more. A missing one is not caught at install: the container exits with `FATAL: locations declared in values are not in GVC …`. An already-initialised node logs a `WARNING` instead and keeps serving, so this can never stop a running cluster
 - **2 locations is not supported.** Use 1 (single-node or single-shard) or 3 or more
-- **`provider: local` puts the data on the server volume**, so the volume must be sized for all of it, and that volume is the only copy: there is no scheduled snapshot or backup. Use it for a single node. The bucket providers keep only metadata and cache there
+- **`provider: local` puts the data on the server volume**, so the volume must be sized for all of it, and that volume is the only copy: the daily volume snapshots are its only backup. Use it for a single node. The bucket providers keep only metadata and cache there
 - **The credentials secret has no `username` key.** To rotate the password: update the secret's value, run `cpln workload force-redeployment RELEASE_NAME-clickhouse-server --gvc GVC_NAME`, then update your clients. The startup script rewrites `users.xml` from the secret on every start, so the new password takes effect at the redeploy — and because `default` is defined in `users.xml`, it cannot be changed with `ALTER USER`. Updating a `cpln://` secret does not restart the workload by itself
 - **Switch storage providers (including to or from `local`) with a fresh install, not an upgrade.** The data stays where it was written, and an identity's cloud binding is never removed once set, so an existing release keeps the old provider's binding attached
 - **Keeper is the availability floor.** Three members tolerate one loss; the single-shard shape has one member and tolerates none. If a majority of Keeper locations are missing from the GVC, the containers exit with a named error rather than waiting for an election that can never complete
@@ -451,6 +458,7 @@ position in `locations`.
 - **A `helm upgrade` of a cluster interrupts queries on every shard at once**, for over a minute, and changing a Keeper setting interrupts coordination for about a minute. Plan both as query interruptions
 - **Renaming `clusterName` orphans existing `Distributed` tables** — they keep pointing at the old cluster and fail with `Code: 701`. Recreate them after a rename
 - **With one replica per shard, losing a shard fails every distributed query** (~60 s to surface), not just the rows on that shard. Add replicas if partial results are not acceptable
+- **Upgrading from 3.1.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

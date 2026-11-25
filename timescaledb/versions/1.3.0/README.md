@@ -69,7 +69,14 @@ volumeset:
     maxCapacity: 100 # maximum capacity in GiB
     minFreePercentage: 10 # free-space threshold that triggers scaling
     scalingFactor: 1.2 # how much to scale up by
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -259,7 +266,8 @@ For GCS replace the download with `gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FIL
 - **Public access is unencrypted** — the image ships no TLS certificates; keep `publicAccess.enabled: false` unless you accept plaintext connections.
 - **Keep the image tag in the default (Community) series** — `-oss` tags remove compression, continuous aggregates, and retention policies; also match `backup.image` to the server major (18.1.0 for pg18, 17.1.0 for pg17).
 - **The image's pgvector (0.8.1) is open to CVE-2026-103484** — a role that can build an IVFFlat index can run code on the server. The secret's user is a superuser, which can do that anyway; until the image ships pgvector 0.8.7, don't give roles you don't fully trust the right to create indexes on `vector` tables.
-- **Uninstall deletes the volumeset** — a final snapshot is kept for 7 days; enable backups if the data matters long-term.
+- **Uninstall deletes the volumeset** — a final snapshot is kept for the snapshot retention (7 days by default); enable backups if the data matters long-term.
+- **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

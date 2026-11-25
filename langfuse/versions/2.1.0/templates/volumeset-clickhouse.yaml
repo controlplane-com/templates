@@ -1,3 +1,4 @@
+{{- include "langfuse.validateSnapshots" . }}
 ---
 kind: volumeset
 name: {{ include "langfuse.clickhouse.volumeset.name" . }}
@@ -10,4 +11,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.clickhouse.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.clickhouse.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.clickhouse.volumeset.snapshots.schedule | quote }}
+    {{- end }}

@@ -140,3 +140,6 @@ clickhouse:
   credentialsSecretName: my-langfuse-clickhouse
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept

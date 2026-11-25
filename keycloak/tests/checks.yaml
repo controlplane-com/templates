@@ -247,7 +247,7 @@ checks:
           local body="grant_type=password&client_id=admin-cli&username={admin_user}&password=$1"
           exec 3<>/dev/tcp/{release}-keycloak.{gvc}.cpln.local/8080 || { echo "CONNECT FAILED"; return; }
           printf 'POST /realms/master/protocol/openid-connect/token HTTP/1.1\r\nHost: {release}-keycloak.{gvc}.cpln.local:8080\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "${#body}" "$body" >&3
-          timeout 20 cat <&3 | tr -d '\r\n' | tail -c 4000
+          timeout 20 cat <&3 | tr -d '\r\n' | head -c 20000
           exec 3<&-
         }
         echo "GOOD $(token '{admin_password}')"

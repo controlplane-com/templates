@@ -14,9 +14,8 @@ imports:
     version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: email
+    after: dbserver
     steps:
-      - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
@@ -29,6 +28,11 @@ imports:
       - config.credentialsSecretName
       # Cal.com connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # The server step (image and compute) is bound in the parent's Database server step, so its upgrade note,
+      # cross-major warning and image migration name this chart's README section; the child's checks are
+      # restated there.
+      - image
+      - resources
     override:
       volumeset.capacity:
         help: >-
@@ -48,7 +52,7 @@ imports:
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    after: email
+    after: dbserver
     steps:
       - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Cal.com stores its data in. }
       - { id: storage, title: Database storage }
@@ -219,15 +223,6 @@ steps:
             advanced: true
             when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
-          - type: note
-            severity: warning
-            when: >-
-              context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '2.0.0') < 0 && self.postgres.enabled
-            text: >-
-              New installs of this version run PostgreSQL 19. This release keeps the major its database was
-              created with, so the Postgres image under Database server stays on it. Moving the data to 19 is a
-              dump and restore into a new release; see Upgrading from 1.x in the README.
           - type: note
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
@@ -446,6 +441,61 @@ steps:
             paths: [email.host, email.fromAddress]
             message: The SMTP host and the from address are required.
 
+  # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
+  # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: dbserver
+    title: Database server
+    description: The Postgres image and the compute of the single-instance database's stateful replica.
+    when: self.postgres.enabled
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short write outage.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its database was
+              created with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+            message: >-
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
+
 # Rules over the imported values: their issues show on the imported fields' steps.
 rules:
   # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
@@ -485,8 +535,8 @@ rules:
 
 # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
 # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
-# keep the installed image instead. Claims the path from the postgres import's own 3.x migration, so the note
-# names this chart's README section.
+# keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+# `image` and binds it in Database server), so the note names this chart's README section.
 migrations:
   - fromVersions: ">=1.0.0 <2.0.0"
     to: postgres.image

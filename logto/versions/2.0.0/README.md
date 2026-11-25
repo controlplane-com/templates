@@ -6,8 +6,8 @@ This app deploys [Logto](https://logto.io/), the open-source auth and identity p
 
 - **Logto** (`RELEASE_NAME-logto`): standard workload, 2 replicas by default, serving the sign-in pages, OIDC and the Management API on port 3001. Replicas share only the database, so they are interchangeable.
 - **Admin Console** (`RELEASE_NAME-logto-admin`, default on): a second workload that serves the Admin Console on its own public URL. It does not start serving until the admin account exists.
-- **PostgreSQL (HA, default)**: the `postgres-highly-available` template: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint Logto connects through.
-- **PostgreSQL (single instance, optional)**: the `postgres` template instead, for development or lighter installs.
+- **PostgreSQL (HA, default)**: the `postgres-highly-available` template (PostgreSQL 18 for new clusters): 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint Logto connects through.
+- **PostgreSQL (single instance, optional)**: the `postgres` template (PostgreSQL 19) instead, for development or lighter installs.
 - **Custom domains (optional)**: one `domain` resource per hostname you set, routed to the matching workload.
 - **Identity + policy**: `reveal` on exactly two secrets, your admin secret and your database credentials secret.
 
@@ -106,12 +106,14 @@ webhooks:
 
 ### Database
 
-Highly available PostgreSQL is the default. For a lighter install, set `postgresHA.enabled: false` and `postgres.enabled: true`. The `backup` blocks pass through to the [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available) and [postgres](https://docs.controlplane.com/template-catalog/templates/postgres) templates.
+Highly available PostgreSQL is the default; new clusters run PostgreSQL 18. For a lighter install, set `postgresHA.enabled: false` and `postgres.enabled: true` (PostgreSQL 19). The `backup` blocks pass through to the [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available) and [postgres](https://docs.controlplane.com/template-catalog/templates/postgres) templates.
 
 ```yaml
 # ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
-# replicas, and an HAProxy leader endpoint Logto connects to.
+# replicas, and an HAProxy leader endpoint Logto connects to. New clusters run
+# PostgreSQL 18; a cluster created by an earlier version of this chart keeps
+# PostgreSQL 17 (README, "Upgrading from 1.x").
 postgresHA:
   enabled: true
   config:
@@ -122,7 +124,7 @@ postgresHA:
     # Logto connects with the same keys. See README Prerequisites for the command.
     credentialsSecretName: my-logto-db-credentials
   replicas: 3
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused (CVE-2026-103484)
   volumeset:
     capacity: 10 # initial capacity in GiB per replica (minimum is 10)
 
@@ -133,7 +135,7 @@ postgresHA:
       cpu: 100m
       memory: 512Mi # 128Mi OOM-kills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0 # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *" # daily at 2am UTC
     walg:
       intervalSeconds: 21600 # every 6 hours
@@ -162,6 +164,13 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
+  # PostgreSQL 19 for new installs. A release installed with an earlier version of this chart
+  # has PostgreSQL 18 data: keep image: postgres:18 in your values (README, "Upgrading from 1.x").
+  image: postgres:19
+  upgradeHint: # how the PostgreSQL boot guard names the fix in its log; leave as is
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
   config:
     # REQUIRED PREREQUISITE SECRET (single-instance mode) — the same kind of
     # `dictionary` secret as postgresHA.config.credentialsSecretName above
@@ -172,7 +181,7 @@ postgres:
 
   backup: # pass-through to the postgres template's backup feature (Postgres 17+)
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 18
     schedule: "0 2 * * *" # daily at 2am UTC
     resources:
       cpu: 100m
@@ -250,8 +259,72 @@ Logto serves two URLs. Give each audience only its own:
 
 Find a canonical endpoint with `cpln workload get RELEASE_NAME-logto --gvc GVC_NAME -o yaml` (`status.canonicalEndpoint`).
 
+## Upgrading from 1.x
+
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so sign-in pauses briefly while the leader changes.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your bucket's IAM policy to the action list in the [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available) template docs before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Logto release (same two prerequisite secrets) in place of the second database release, and both Logto workloads stopped during the copy.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you (Database server, Postgres image).
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side.** Sign-in is down during the copy, and the new release gets new canonical URLs, so its OIDC issuer differs: apps configured against the old `*.cpln.app` URL need the new issuer. With custom domains the issuer stays, but a hostname belongs to one release at a time: install the new release without `customDomain`, and set it on the new release once the old one is uninstalled (step 5).
+
+1. Stop the old Logto, so nothing writes to its database:
+
+   ```bash
+   cpln workload stop OLD_RELEASE-logto --gvc GVC_NAME
+   cpln workload stop OLD_RELEASE-logto-admin --gvc GVC_NAME
+   ```
+
+2. Install this version as a NEW release in the same GVC, in single-instance mode, with the **same two prerequisite secrets** (the copy connects to the old database with the database credentials, and the copied tables keep the old admin account):
+
+   ```bash
+   cpln helm install NEW_RELEASE CHART --gvc GVC_NAME \
+     --set postgresHA.enabled=false --set postgres.enabled=true \
+     --set admin.secretName=my-logto-admin \
+     --set postgres.config.credentialsSecretName=my-logto-db-credentials
+   ```
+
+3. Once `NEW_RELEASE-logto` is ready, stop both new Logto workloads, then replace the new, empty database with a copy of the old one, from inside the new PostgreSQL container:
+
+   ```bash
+   cpln workload stop NEW_RELEASE-logto --gvc GVC_NAME
+   cpln workload stop NEW_RELEASE-logto-admin --gvc GVC_NAME
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+4. Start the new Logto, sign in to the new Admin Console with your existing admin password, and check your applications and users. Signing keys, users and applications come with the database.
+
+   ```bash
+   cpln workload start NEW_RELEASE-logto --gvc GVC_NAME
+   cpln workload start NEW_RELEASE-logto-admin --gvc GVC_NAME
+   ```
+
+5. Point your apps at the new issuer, then uninstall the old release (this deletes its volumes). With custom domains, upgrade the new release with the `customDomain` values the old one had instead; the issuer then stays the same.
+
 ## Important Notes
 
+- **2.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - The admin secret is read once, when the database is first initialized. Afterwards change the admin password in the Admin Console; editing the secret changes nothing. There is no supported reset for a lost admin password, so store it safely.
 - Choose `publicAccess` and the custom domains at install: the public URL is the OIDC issuer, and changing it later breaks every app configured against it.
 - First boot needs outbound HTTPS to `api.pwnedpasswords.com`: Logto checks the admin password against known breaches and refuses it if the check cannot run.

@@ -1,0 +1,71 @@
+kind: workload
+name: {{ include "dify.api.name" . }}
+description: Dify API (console API, service API, MCP, files); applies database migrations at start
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "dify.identity.name" . }}
+  containers:
+    - name: api
+      image: {{ .Values.dify.apiImage }}
+      inheritEnv: false
+      minCpu: {{ .Values.dify.resources.api.minCpu | quote }}
+      minMemory: {{ .Values.dify.resources.api.minMemory | quote }}
+      cpu: {{ .Values.dify.resources.api.maxCpu | quote }}
+      memory: {{ .Values.dify.resources.api.maxMemory | quote }}
+      command: /bin/bash
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.backendScript" (dict "root" . "self" (include "dify.api.name" .))) | quote }}
+      env:
+        - name: MODE
+          value: api
+        # Every replica tries; one takes the migration lock, the others skip and serve.
+        - name: MIGRATION_ENABLED
+          value: "true"
+        - name: DIFY_PORT
+          value: "5001"
+        - name: DIFY_BIND_ADDRESS
+          value: "0.0.0.0"
+        - name: SERVER_WORKER_AMOUNT
+          value: "1"
+        - name: SERVER_WORKER_CLASS
+          value: gevent
+        - name: GUNICORN_TIMEOUT
+          value: "360"
+        {{- include "dify.backendEnv" . | nindent 8 }}
+      ports:
+        - number: 5001
+          protocol: http
+      volumes:
+        - path: /app/api/storage
+          uri: cpln://volumeset/{{ include "dify.storage.name" . }}
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 5001
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 5001
+          scheme: HTTP
+        initialDelaySeconds: 300
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.dify.replicas "timeout" .Values.dify.requestTimeoutSeconds) | nindent 4 }}
+  firewallConfig:
+    {{- include "dify.backendFirewall" (dict "root" . "from" (list "dify.name" "dify.web.name" "dify.worker.name" "dify.plugin.name")) | nindent 4 }}
+  securityOptions:
+    filesystemGroupId: 1001
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}

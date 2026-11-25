@@ -1,0 +1,81 @@
+kind: workload
+name: {{ include "dify.web.name" . }}
+description: Dify web console and published web apps (Next.js)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: web
+      image: {{ .Values.dify.webImage }}
+      inheritEnv: false
+      minCpu: {{ .Values.dify.resources.web.minCpu | quote }}
+      minMemory: {{ .Values.dify.resources.web.minMemory | quote }}
+      cpu: {{ .Values.dify.resources.web.maxCpu | quote }}
+      memory: {{ .Values.dify.resources.web.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.webScript" .) | quote }}
+      env:
+        - name: DEPLOY_ENV
+          value: PRODUCTION
+        # Control Plane sets HOSTNAME to the replica name; Next.js standalone binds it.
+        - name: HOSTNAME
+          value: "0.0.0.0"
+        - name: PORT
+          value: "3000"
+        # Server-side rendering calls the API directly inside the GVC.
+        - name: SERVER_CONSOLE_API_URL
+          value: {{ include "dify.api.url" . | quote }}
+        - name: MARKETPLACE_API_URL
+          value: https://marketplace.dify.ai
+        - name: MARKETPLACE_URL
+          value: https://marketplace.dify.ai
+        - name: NEXT_TELEMETRY_DISABLED
+          value: "1"
+        - name: NEXT_PUBLIC_ENABLE_AGENT_V2
+          value: "false"
+        - name: TEXT_GENERATION_TIMEOUT_MS
+          value: "60000"
+        - name: LOOP_NODE_MAX_COUNT
+          value: "100"
+        - name: MAX_TOOLS_NUM
+          value: "10"
+        - name: MAX_PARALLEL_LIMIT
+          value: "10"
+        - name: MAX_ITERATIONS_NUM
+          value: "99"
+        - name: MAX_TREE_DEPTH
+          value: "50"
+        - name: TOP_K_MAX_VALUE
+          value: "10"
+        - name: INDEXING_MAX_SEGMENTATION_TOKENS_LENGTH
+          value: "4000"
+        - name: ALLOW_EMBED
+          value: "false"
+      ports:
+        - number: 3000
+          protocol: http
+      readinessProbe:
+        tcpSocket:
+          port: 3000
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 3000
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.dify.replicas "timeout" .Values.dify.requestTimeoutSeconds) | nindent 4 }}
+  firewallConfig:
+    {{- include "dify.backendFirewall" (dict "root" . "from" (list "dify.name")) | nindent 4 }}
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}

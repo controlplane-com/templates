@@ -1,0 +1,62 @@
+{{- include "dify.validate" . }}
+kind: workload
+name: {{ include "dify.name" . }}
+description: Dify gateway (routes the console, web apps, APIs and plugin endpoints)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "dify.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: gateway
+      image: {{ .Values.dify.gatewayImage }}
+      inheritEnv: false
+      minCpu: {{ .Values.dify.resources.gateway.minCpu | quote }}
+      minMemory: {{ .Values.dify.resources.gateway.minMemory | quote }}
+      cpu: {{ .Values.dify.resources.gateway.maxCpu | quote }}
+      memory: {{ .Values.dify.resources.gateway.maxMemory | quote }}
+      command: /bin/sh
+      args:
+        - -c
+        - {{ include "dify.inlineScript" (include "dify.gatewayScript" .) | quote }}
+      ports:
+        - number: 8080
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /gateway-health
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /gateway-health
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    {{- include "dify.defaultOptions" (dict "replicas" .Values.dify.replicas "timeout" .Values.dify.requestTimeoutSeconds) | nindent 4 }}
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    {{- include "dify.rolloutOptions" . | nindent 4 }}

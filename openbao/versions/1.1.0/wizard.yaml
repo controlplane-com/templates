@@ -121,8 +121,8 @@ steps:
         title: AWS KMS
         when: self.seal.type == 'awskms'
         description: >-
-          The workload identity reaches the key through your cloud account with only the platform's
-          cpln-connector policy and the IAM policy below, so no grant is needed after install.
+          The workload identity reaches the key through your cloud account with only the IAM policy
+          below, so no grant is needed after install.
         docs: "#kms-auto-unseal-setup"
         fields:
           - type: note
@@ -164,7 +164,7 @@ steps:
             description: An AWS IAM policy scoped to the key (an AWS object, not a Control Plane policy).
             help: >-
               The policy allows `kms:Encrypt`, `kms:Decrypt` and `kms:DescribeKey` on the key's ARN and
-              nothing else. The identity carries only `cpln-connector` and this policy.
+              nothing else. The identity carries only this policy.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
         rules:

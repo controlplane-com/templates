@@ -12,7 +12,7 @@ already written against the Elasticsearch API rather than OpenSearch's.
 |---|---|
 | workload `-elasticsearch` (stateful) | `replicas` nodes, **must be odd** for master quorum |
 | workload `-kibana` *(optional)* | the UI |
-| volumeset | per-node data directory |
+| volumeset | per-node data directory; daily volume snapshots kept 7 d from 1.1.0 (none were ever taken through 1.0.1) |
 | secret `-startup` | node startup script, including the snapshot repository plugin when backups are on |
 | workload `-backup-setup` *(optional)* | one-time job registering the snapshot repository and policy |
 | identity + policy | `reveal` on this release's secrets; bucket-scoped cloud binding when backups are on |
@@ -43,3 +43,9 @@ already written against the Elasticsearch API rather than OpenSearch's.
 - **Same snapshot caveats as opensearch:** the repository plugin installs at node startup, so enabling
   backups on a running cluster fails until every node has rolled; and the IAM policy needs **both** bucket
   ARNs, since `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself.
+
+## What 1.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.0.1 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`elasticsearch.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. These are platform volume snapshots, separate from the optional SLM backups to S3/GCS.
+- E2E baseline `1.1.0` added (upgrade from 1.0.1).
+- `tw lint` carries one pre-existing warning (`DOCS_DUPLICATE` on the backup step), unchanged from 1.0.1.

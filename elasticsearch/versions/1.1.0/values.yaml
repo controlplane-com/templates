@@ -20,6 +20,9 @@ volumeset:
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 multiZone:
   enabled: false # Set to true to schedule replicas across availability zones for higher durability

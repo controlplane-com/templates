@@ -61,6 +61,9 @@ manticore:
     memory: 8Gi
   volumeset:
     capacity: 200                 # GB per replica
+    snapshots:
+      schedule: ""              # volume snapshots; off by default (see README); at most hourly, e.g. "0 3 * * *"
+      retentionDuration: 7d     # how long each snapshot is kept
   sharedVolumeset:
     capacity: 100                 # GB shared across replicas and orchestrator
 

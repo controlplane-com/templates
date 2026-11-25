@@ -1,3 +1,4 @@
+{{- include "manticore.validateSnapshots" . }}
 # =============================================================================
 # Manticore Volumeset
 # =============================================================================
@@ -12,4 +13,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.manticore.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.manticore.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.manticore.volumeset.snapshots.schedule | quote }}
+    {{- end }}

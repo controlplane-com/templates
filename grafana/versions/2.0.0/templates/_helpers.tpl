@@ -158,24 +158,25 @@ Common tags
 {{- end }}
 
 {{/*
-The bundled postgres-highly-available subchart defaults to controlplanecorporation/patroni-postgres:0.7,
-whose pgvector (0.8.0) is open to CVE-2026-103484. This chart sets postgresHA.image to 0.8 (pgvector 0.8.7)
-and refuses patroni-postgres tags 0.1-0.7, matching pg-ha.validateImage in postgres-highly-available 2.8.1.
-A release's stored values carry the image forward on a helm upgrade -f, so an old pin would otherwise keep
-the vulnerable image. An empty value would fall back to the subchart's 0.7 default, so it is refused too.
-Other registries, digests and non-version tags pass.
+Refuse controlplanecorporation/patroni-postgres 0.1-0.7 for the HA database: they carry a pgvector
+older than 0.8.7 (CVE-2026-103484). Added in 1.5.1, when the vendored postgres-highly-available 2.5.0
+had no guard of its own; postgres-highly-available 3.0.0 (2.0.0) refuses them too, and this check is
+kept so the error names grafana's own key. A release's stored values carry the image forward on a helm
+upgrade -f, so an old pin would otherwise keep the vulnerable image. An empty value is refused as well,
+since it would hand the subchart an empty image. Same matching as pg-ha.validateImage: other registries,
+digests and non-version tags pass.
 */}}
 {{- define "grafana.validatePostgresHAImage" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- $raw := .Values.postgresHA.image | default "" | toString -}}
 {{- if not $raw -}}
-{{- fail "grafana: postgresHA.image is required — without it the database subchart falls back to controlplanecorporation/patroni-postgres:0.7, whose pgvector is open to CVE-2026-103484. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." -}}
+{{- fail "grafana: postgresHA.image is required — the HA database has no image without it. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from your values to use the chart default." -}}
 {{- end -}}
 {{- $image := trimPrefix "docker.io/" $raw -}}
 {{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
 {{- if hasPrefix $prefix $image -}}
 {{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
-{{- fail (printf "grafana: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- fail (printf "grafana: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from your values to use the chart default." $raw) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

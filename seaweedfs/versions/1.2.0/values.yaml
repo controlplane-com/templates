@@ -1,0 +1,52 @@
+# ─── Image ────────────────────────────────────────────────────────
+# Official upstream image. Runs `weed mini` — the image's own default command —
+# which starts the master, volume server, filer, S3 gateway and admin UI in one
+# process. Pin a concrete released tag; never latest.
+image: chrislusf/seaweedfs:4.40
+
+# ─── Resources ────────────────────────────────────────────────────
+resources:
+  minCpu: 250m
+  maxCpu: 1000m
+  minMemory: 512Mi
+  maxMemory: 2Gi # raise for stores holding tens of millions of objects (in-memory volume index)
+
+# ─── Storage (objects + filer metadata + master metadata, all at /data) ──
+volumeset:
+  capacity: 20 # initial capacity in GiB (minimum is 10)
+  autoscaling:
+    enabled: false # set to true to grow the volume automatically as it fills
+    maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
+    minFreePercentage: 10 # minimum free percentage that triggers scaling
+    scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+
+# ─── S3 API (port 8333) ───────────────────────────────────────────
+s3:
+  # PREREQUISITE dictionary secret — MUST EXIST BEFORE INSTALL, or the deployment
+  # waits on it forever and looks broken. These are the S3 credentials every client
+  # uses; SeaweedFS serves S3 with NO authentication if they are absent.
+  #   cpln secret create-dictionary --name my-seaweedfs-s3-credentials \
+  #     --entry AWS_ACCESS_KEY_ID=... --entry AWS_SECRET_ACCESS_KEY=...
+  credentialsSecretName: my-seaweedfs-s3-credentials
+  # Buckets created at startup if they do not already exist, e.g. [backups, uploads].
+  # Most backup tools require the bucket to exist before they run.
+  buckets: []
+
+# ─── Admin UI (port 23646, reachable inside the GVC only) ─────────
+adminUI:
+  enabled: true # cluster status, bucket browser, user and maintenance management
+  # REQUIRED PREREQUISITE SECRET when adminUI.enabled is true — CREATE IT BEFORE
+  # YOU INSTALL. A `dictionary` secret holding exactly two keys, `username` and
+  # `password`, guarding the admin login form. If it does not exist at install
+  # time the deployment WEDGES silently — `cpln logs` returns nothing at all.
+  # See Prerequisites in the README for the exact command.
+  credentialsSecretName: my-seaweedfs-admin-credentials
+
+# ─── Access ───────────────────────────────────────────────────────
+publicAccess:
+  enabled: false # true = S3 API on the auto *.cpln.app HTTPS endpoint (path-style addressing)
+internalAccess: # internal firewall scope
+  type: same-gvc # options: none, same-gvc, same-org, workload-list
+  workloads: [] # only used when type is workload-list
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

@@ -21,8 +21,8 @@ Self-hosted **Apache Airflow 3.x** with the CeleryExecutor. One webserver worklo
 |---|---|---|
 | `{rel}-airflow-webserver` | workload (`stateful`) | UI + REST API on :8080, plus scheduler/dag-processor/triggerer in one container. Pinned to **1 replica**. The only tier with external inbound, and the only one that runs the boot-time GVC checks. |
 | `{rel}-airflow-celery-worker` | workload (`stateful`) | Task execution. Fixed `airflow.celeryWorker.replicas`, or KEDA on Redis `listName: default`. |
-| `{rel}-airflow-postgres` | workload (`stateful`) + `-vs` volumeset (ext4) | Metadata DB. **The one thing that must be backed up.** |
-| `{rel}-airflow-redis` | workload (`stateful`) + `-vs` volumeset (ext4) | Celery broker. Transient. |
+| `{rel}-airflow-postgres` | workload (`stateful`) + `-vs` volumeset (ext4) | Metadata DB. **The one thing that must be backed up.** Daily volume snapshots kept 7 d from 2.2.0. |
+| `{rel}-airflow-redis` | workload (`stateful`) + `-vs` volumeset (ext4) | Celery broker. Transient: scheduled snapshots off by default (a restored broker would replay stale tasks); final snapshot on delete from 2.2.0. |
 | `{rel}-airflow-vs` | volumeset (**shared**) | Airflow home — DAGs and logs — mounted by the webserver AND every worker. A shared volumeset provisions **one volume per LOCATION**, which is why the release is single-location. |
 | *(user's)* `postgres.config.credentialsSecretName` | secret (dictionary, **prerequisite**) | Metadata DB `username`/`password`/`database`. Postgres reads it at initdb; webserver + workers build `SQL_ALCHEMY_CONN` and the Celery result backend from it with `$(VAR)` env expansion, never at render. Until 2.0.0 the chart created `{rel}-airflow-config` from plaintext values. |
 | `{rel}-airflow-webserver-startup` | secret (opaque, plain) | The webserver's startup script — the topology guards plus Airflow's own boot sequence. New in 2.0.0. |
@@ -30,7 +30,7 @@ Self-hosted **Apache Airflow 3.x** with the CeleryExecutor. One webserver worklo
 
 Every workload carries `defaultOptions.minScale/maxScale: 0` and a single complete `localOptions` entry for `location` — so a GVC location the values do not name runs **nothing**.
 
-## Key knobs (defaults as shipped in 2.1.0)
+## Key knobs (defaults as shipped in 2.2.0)
 
 | Knob | Default | Notes |
 |---|---|---|
@@ -39,6 +39,7 @@ Every workload carries `defaultOptions.minScale/maxScale: 0` and a single comple
 | `airflow.admin.username` | `admin` | Stays a value — interpolated into `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS` as `admin:ADMIN`, which cannot be a secret ref. |
 | `airflow.celeryWorker.replicas` | `1` | New in 2.0.0. Fixed worker count; ignored when `keda.enabled`. |
 | `postgres.config.credentialsSecretName` | `my-airflow-db-credentials` | **Required prerequisite** dictionary secret: `username`, `password`, `database`. New in 2.1.0; replaces the plaintext `postgres.config.username/password/database`. May not be `{rel}-airflow-config`. |
+| `postgres.volumeset.snapshots.schedule` / `redis.volumeset.snapshots.schedule` | `"0 3 * * *"` / `""` | `retentionDuration: 7d` each; more often than hourly fails at render (`airflow.validateSnapshotsPostgres` / `…Redis`, mirrored in the wizard). The shared Airflow home has no knob: `shared` volume sets take no snapshots. New in 2.2.0. |
 | `firewallConfig.inboundAllowCIDR` | `[]` | Closed by default since 1.5.0. |
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | New in 2.0.0. Under `workload-list` the release's own four workloads are merged in automatically, plus `cpln://internal/keda` on the Redis tier when KEDA is on. |
 | `keda.enabled` / `minScale` / `maxScale` | **`false`** / `1` / `3` | Was `true` in 1.x. Requires `spec.keda.enabled: true` on the GVC. |
@@ -62,6 +63,7 @@ Every workload carries `defaultOptions.minScale/maxScale: 0` and a single comple
 - **Missing prerequisite secret = zero log lines.** `cpln logs` returns nothing because the container never starts. Diagnose with `get-deployments` → `status.versions[].message`, not plain `get`. Self-heals in ~5.5–10.5 min, or ~90 s with a forced redeployment.
 - **A wide fan-out silently loses tasks** on `controlplanecorporation/celery:v1` — a concurrent-import race in `kombu/transport/redis.py`. Measured 7 failed / 9 success on a 24-task burst, failures never starting and nothing surfacing in the UI. Upstream, not this template.
 - **The UI is remote code execution.** It triggers DAGs and can decrypt every stored Connection, and auth is Airflow's `SimpleAuthManager` (no SSO/LDAP). Hence the closed default. Reach it with `cpln port-forward {rel}-airflow-webserver 8080:8080` — the container sets `AIRFLOW__API__HOST: 0.0.0.0`, so loopback is served and the tunnel works.
-- **All three volumesets ship with no `snapshots` block.** The `shared` one cannot take one; the Postgres and Redis ext4 ones could and do not. The metadata DB therefore has no snapshot schedule — flagged for the catalog-wide snapshots sweep, deliberately not fixed here.
+- **Volume snapshots (2.2.0, work item 5219).** Through 2.1.0 no volume set had a `snapshots` block, so nothing was ever snapshotted. 2.2.0 renders the whole block on the Postgres (daily) and Redis (schedule off, final snapshot only) volume sets; the `shared` Airflow home still has none, as shared volume sets do not support snapshots.
+- **CI:** `airflow/tests/` onboarded in 2.2.0 (`write-read-variable`, `rejects-wrong-password`, `data-survives-upgrade` via an Airflow Variable in the metadata DB; upgrade from 2.1.0). 2.0.0 is not an upgrade source (needs the renamed credentials secret).
 - **Old-values guards.** `gvc` (the whole 1.x key), `locations` (plural), `airflow.auth.jwtSecret`, `airflow.auth.fernetKey`, `airflow.admin.password`, `gitSync.auth.token`, `airflow.auth.jwtExpirationDelta`, `airflow.auth.jwtRefreshThreshold` and (2.1.0) `postgres.config.username/password/database` all `fail` at render with the replacement named. No compatibility shims — the version bump IS the migration.
 - **The 1.x → 2.0.0 data move (pg_dump/pg_restore, tar of the DAG folder) has NOT been executed end to end.** What is verified: `pg_dump`/`pg_restore`/`psql` exist in `postgres:18`, `tar` exists in `apache/airflow:3.0.3`, and `cpln workload exec --stdin` exists. The README's commands base64-encode both directions (exec UTF-8-mangles raw binary stdout and drops stdin without `--stdin` — the shipped raw-pipe version was unrestorable; fixed in place 2026-10-01) and read `$POSTGRES_USER`/`$POSTGRES_DB` inside each container rather than hardcoding them. The full migration is still a named test row.

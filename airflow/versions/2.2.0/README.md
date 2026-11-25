@@ -99,6 +99,9 @@ postgres:
     credentialsSecretName: my-airflow-db-credentials  # prerequisite dictionary secret: username, password, database
   volumeset:
     capacity: 10                    # GiB, minimum 10
+    snapshots:
+      schedule: "0 3 * * *"         # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d         # how long each snapshot is kept
 ```
 
 ### Redis (Celery broker)
@@ -111,7 +114,15 @@ redis:
     memory: 512Mi
   volumeset:
     capacity: 10                    # GiB, minimum 10
+    snapshots:
+      schedule: ""                  # volume snapshots; off by default; at most hourly, e.g. "0 3 * * *"
+      retentionDuration: 7d         # how long each snapshot is kept
 ```
+
+The broker volume holds only queued task messages, so scheduled snapshots are off by default: a restored
+broker snapshot would replay out-of-date tasks. A schedule is a 5-field cron in UTC with a single fixed
+minute: the platform takes snapshots at most hourly, and the chart refuses a more frequent schedule at
+render. Deleting a volume set (uninstall) takes a final snapshot whatever the schedule.
 
 ### Airflow
 
@@ -154,6 +165,9 @@ volumeset:
   airflow:
     capacity: 10                    # shared Airflow home (DAGs + logs), GiB, minimum 10
 ```
+
+The shared Airflow home has no snapshot settings: `shared` volume sets do not support snapshots. Keep
+your DAGs in git (see [DAG delivery](#dag-delivery-git-sync)).
 
 ### Access
 
@@ -324,7 +338,8 @@ Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves
 - **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of the webserver and workers** — see [Rotating the database password](#rotating-the-database-password).
 - **A firewall change takes 30 s to a few minutes to propagate** — a UI that still returns 403 right after an upgrade is not broken yet.
 - **The first upgrade after an install can re-apply resources even with identical values**, restarting the webserver and the database; expect a couple of minutes of unavailability.
-- **Uninstalling deletes all three volumesets** — the metadata database, the broker and the shared Airflow home. Export anything you need first.
+- **Uninstalling deletes all three volumesets** — the metadata database, the broker and the shared Airflow home. The database and broker volumes get a final snapshot, kept for their `retentionDuration`; the shared Airflow home gets none. Export anything you need first.
+- **Upgrading from 2.1.0 or earlier turns on daily snapshots of the metadata database volume, and uninstalling now takes a final snapshot of the database and broker volumes.** Earlier versions took no volume snapshots at all. Set `postgres.volumeset.snapshots.schedule: ""` to keep scheduled ones off.
 
 ## Links
 

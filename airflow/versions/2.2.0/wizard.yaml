@@ -355,7 +355,10 @@ steps:
             required: true
             suggestions: [10, 20, 50]
           - type: note
-            text: Uninstalling the release deletes all three volume sets, so export what you need first.
+            text: >-
+              Uninstalling the release deletes all three volume sets, so export what you need first. The
+              database and broker volumes get a final snapshot; the shared Airflow home cannot be
+              snapshotted.
         rules:
           - rule: oldSelf == null || self.volumeset.airflow.capacity >= oldSelf.volumeset.airflow.capacity
             paths: [volumeset.airflow.capacity]
@@ -366,6 +369,72 @@ steps:
           - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
             paths: [redis.volumeset.capacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: db-snapshots
+        title: Metadata database snapshots
+        description: >-
+          Snapshots of the PostgreSQL volume. A final snapshot is taken when the volume set is deleted, with or
+          without a schedule.
+        docs: "/reference/volumeset#snapshots"
+        fields:
+          - path: postgres.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Leave it empty to turn scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: postgres.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.postgres.volumeset.snapshots.schedule != null &&
+              (self.postgres.volumeset.snapshots.schedule == '' ||
+              self.postgres.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: airflow.validateSnapshotsPostgres
+            paths: [postgres.volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
+      - id: broker-snapshots
+        title: Broker snapshots
+        description: >-
+          Snapshots of the Redis broker volume. It holds only queued task messages, which a restored snapshot
+          would replay out of date, so scheduled snapshots are off by default. A final snapshot is still taken
+          when the volume set is deleted.
+        fields:
+          - path: redis.volumeset.snapshots.schedule
+            type: string
+            format: cron
+            label: Snapshot schedule (UTC)
+            description: Empty keeps scheduled snapshots off.
+            pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+            patternMessage: >-
+              Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+              accepted. Snapshots cannot run more often than hourly.
+          - path: redis.volumeset.snapshots.retentionDuration
+            type: string
+            label: Keep snapshots for
+            required: true
+            placeholder: 7d
+            pattern: '^\d+(\.\d+)?[dhm]$'
+            patternMessage: Use a number followed by d, h or m, such as 7d or 12h.
+        rules:
+          - rule: >-
+              self.redis.volumeset.snapshots.schedule != null &&
+              (self.redis.volumeset.snapshots.schedule == '' ||
+              self.redis.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+            mirrors: airflow.validateSnapshotsRedis
+            paths: [redis.volumeset.snapshots.schedule]
+            message: >-
+              Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+              empty string ("") to turn them off.
 
   - id: access
     title: Access and DAGs

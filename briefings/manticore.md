@@ -69,6 +69,6 @@
 
 ## What 2.3.0 changed
 
-- A volume snapshot schedule knob for the per-replica volume (`manticore.volumeset.snapshots.schedule`, `retentionDuration` 7d), **off by default** (`""`): the volume holds tables built from the source bucket's CSVs, which an `init` + `import` rebuilds, and the chart has its own S3 backup; daily snapshots of 3 × 200 GB would be the costlier default. 2.2.0 and earlier rendered `retentionDuration` with no schedule, so none were ever taken (work item 5219). A schedule more frequent than hourly fails at render (`manticore.validateSnapshots`, mirrored in the wizard).
+- A volume snapshot schedule knob for the per-replica volume (`manticore.volumeset.snapshots.schedule`, `retentionDuration` 7d), **daily by default** (03:00 UTC; maintainer ruling 2026-11-25: snapshot the data volume, never the import scratch volume). 2.2.0 and earlier rendered `retentionDuration` with no schedule, so none were ever taken (work item 5219). A schedule more frequent than hourly fails at render (`manticore.validateSnapshots`, mirrored in the wizard).
 - The `shared` volumeset (import scratch under `/mnt/shared`) still has no snapshots block: scratch, rebuilt by the next import.
 - No E2E tests: an install needs an S3 bucket and AWS cloud account the CI org does not have.

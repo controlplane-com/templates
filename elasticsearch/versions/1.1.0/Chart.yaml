@@ -1,0 +1,17 @@
+apiVersion: v2
+name: elasticsearch
+description: Elasticsearch distributed search and analytics engine
+
+type: application
+version: 1.0.1
+appVersion: "8.17.0"
+
+dependencies:
+  - name: cpln-common
+    version: 1.0.0
+    repository: "oci://ghcr.io/controlplane-com/templates"
+
+annotations:
+  created: "2026-05-19"
+  lastModified: "2026-11-11"
+  createsGvc: false

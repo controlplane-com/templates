@@ -1,3 +1,4 @@
+{{- include "vllm.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "vllm.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
@@ -7,7 +8,11 @@ spec:
   fileSystemType: ext4
   initialCapacity: {{ .Values.volumeset.capacity | int }}
   performanceClass: general-purpose-ssd
-  # A re-downloadable cache: no scheduled snapshots and no final snapshot on uninstall.
+  # A re-downloadable cache: no final snapshot on uninstall, and no scheduled snapshots unless
+  # volumeset.snapshots.schedule is set.
   snapshots:
     createFinalSnapshot: false
-    retentionDuration: 1d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

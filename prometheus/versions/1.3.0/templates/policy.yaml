@@ -1,0 +1,27 @@
+kind: policy
+name: {{ include "prometheus.policy.name" . }}
+description: Prometheus secret access
+tags: {{- include "prometheus.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "prometheus.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "prometheus.secret.config.name" . }}
+  {{- if eq .Values.thanos.objectStorage.type "minio" }}
+  - //secret/{{ .Values.thanos.objectStorage.minio.credentialsSecretName }}
+  {{- end }}
+  {{- if .Values.thanos.objectStorage.enabled }}
+  - //secret/{{ include "prometheus.secret.objstore.name" . }}
+  {{- end }}
+  {{- $seen := dict }}
+  {{- range .Values.remoteWrite }}
+  {{- if .basicAuth }}
+  {{- if not (hasKey $seen .basicAuth.passwordSecretName) }}
+  - //secret/{{ .basicAuth.passwordSecretName }}
+  {{- $_ := set $seen .basicAuth.passwordSecretName true }}
+  {{- end }}
+  {{- end }}
+  {{- end }}

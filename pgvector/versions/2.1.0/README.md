@@ -8,7 +8,7 @@ pooler and optional scheduled backups to object storage.
 ## Architecture
 
 - **pgvector workload** (`{release}-pgvector`, stateful) — one replica, PostgreSQL 19 with pgvector 0.8.7, port 5432. A start-up guard refuses to start PostgreSQL on a data directory from another major version (see [Upgrading from 1.x](#upgrading-from-1x)).
-- **Volume set** (`{release}-pgvector-vs`) — `PGDATA` on `ext4`, general-purpose SSD, final snapshot with 7-day retention.
+- **Volume set** (`{release}-pgvector-vs`) — `PGDATA` on `ext4`, general-purpose SSD, snapshotted daily and kept 7 days by default (`volumeset.snapshots`), plus a final snapshot on delete.
 - **First-boot SQL secret** (`{release}-pgvector-init`) — mounted at `/docker-entrypoint-initdb.d/00-pgvector.sql`; runs `CREATE EXTENSION vector`. Holds no credentials.
 - **PgBouncer workload** (`{release}-pgbouncer`, serverless) — connection pooler in front of the database. Optional (`pgbouncer.enabled`).
 - **Backup workload** (`{release}-pgvector-backup`, cron) — scheduled `pg_dumpall` to S3, GCS or MinIO. Optional (`backup.enabled`).
@@ -83,7 +83,14 @@ volumeset:
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Network access
 
@@ -404,6 +411,7 @@ and pgvector versions it runs, which can differ from this template's.
   client's session, or fail with `unrecognized configuration parameter "hnsw.ef_search"`. Direct
   connections and `poolMode: session` do not leak. `ef_search` controls recall, so set it per query
   inside a transaction:
+- **Upgrading from 2.0.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
   ```sql
   BEGIN; SET LOCAL hnsw.ef_search = 100; SELECT ...; COMMIT;

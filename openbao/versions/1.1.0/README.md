@@ -5,7 +5,7 @@ OpenBao is the Linux Foundation's open-source (MPL-2.0) fork of HashiCorp Vault 
 ## Architecture
 
 - **OpenBao server** — a `stateful` workload (`{release}-openbao`, HTTP API + web UI on port 8200) with integrated raft storage; auto-unseals itself on every boot.
-- **Volumeset** — persistent raft data (`/openbao/data`): all secrets, auth config, and cluster state. A final snapshot is kept 7 days on uninstall.
+- **Volumeset** — persistent raft data (`/openbao/data`): all secrets, auth config, and cluster state. Snapshotted daily, plus a final snapshot on uninstall, each kept 7 days.
 - **Config secret** — the rendered HCL server config, file-mounted.
 - **Identity + policy** — `reveal` on exactly the secrets the server mounts; in the KMS seal modes the identity carries keyless (credential-free) cloud access — in `awskms` scoped by your key-scoped IAM policy (`seal.aws.policyName`), in `gcpckms` with no permissions of its own until you grant it access on the one key after install (see Auto-unseal setup).
 
@@ -63,7 +63,14 @@ seal:
 ```yaml
 volumeset:
   capacity: 10                   # GiB (minimum 10) — raft data: all secrets, auth config, cluster state
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -152,6 +159,7 @@ External clients use `https://` (the platform edge terminates TLS); same-GVC cli
 - **`gcpckms` needs its key grant applied after install** (see the setup steps) — the workload crash-loops on `cloudkms.cryptoKeys.get` until then, and `cpln identity get {release}-openbao-identity --gvc {gvc} -o json` shows `status.gcp.usable` for diagnosis.
 - **Data survives restarts and upgrades; uninstall deletes the volumeset** (final snapshot kept 7 days). A reinstall starts uninitialized.
 - **Private by default** — set `publicAccess.enabled: true` to expose the API + web UI on the canonical endpoint.
+- **Upgrading from 1.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-openbao` (stateful, 1 replica, :8200) | `openbao/openbao:2.6.1` — HTTP API + web UI; runs non-root (`uid 100 openbao`, `filesystemGroupId: 1000`) |
-| `{release}-openbao-data` volumeset (10Gi) | raft data (integrated storage) at `/openbao/data`; final snapshot retained 7 days |
+| `{release}-openbao-data` volumeset (10Gi) | raft data (integrated storage) at `/openbao/data`; daily snapshots kept 7 d from 1.1.0 (none were ever taken in 1.0.0), final snapshot on uninstall |
 | `{release}-openbao-config` secret (opaque) | rendered HCL server config, file-mounted |
 | `{release}-openbao-identity` / `-policy` | `reveal` on exactly the config (+ unseal-key secret in static mode); carries the cloud-account link in KMS modes |
 
@@ -31,6 +31,7 @@
 | `seal.aws.{kmsKeyId,region,cloudAccountName,policyName}` | placeholder ARN / `us-east-1` / `my-aws-cloud-account` / `my-openbao-kms-policy` | keyless KMS via cloud account + a customer-managed key-scoped IAM policy |
 | `seal.gcp.{project,region,keyRing,cryptoKey,cloudAccountName}` | placeholders (`region: global`) | keyless Cloud KMS; needs the post-install key grant below |
 | `volumeset.capacity` | `10` | GiB of raft data (minimum 10) |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 1.1.0; `""` = off. A snapshot is readable only under the same seal key |
 | `publicAccess.enabled` / `internalAccess.type` | `false` / `same-gvc` | private by default; `workload-list` + `internalAccess.workloads` tested (allow AND deny) |
 
 Prerequisite secret (static mode), exact form:
@@ -49,5 +50,10 @@ Prerequisite secret (static mode), exact form:
 - **Keyless is genuine in both KMS modes** — the container has no `AWS_*`, `GOOGLE_*`, or `GCLOUD_*` variable and no `BAO_UNSEAL_KEY`; init/unseal reach KMS through the cloud-account identity.
 - **Pinned to 2.6.x on purpose**: OpenBao 2.7 moves the built-in KMS seal mechanisms — including AWS auto-unseal — into external plugins. Every KMS-mode boot logs the upstream `Support for this Auto Unseal mechanism has been moved into an external plugin` WARN; harmless on 2.6.1 and the reason for the pin. Never bump to 2.7 without wiring the external seal plugin.
 - **Do not switch `seal.type` after initialization** — the seal wraps existing data; changing modes needs an OpenBao seal migration, not a values change.
-- **Uninstall deletes the volumeset** (all stored secrets); the 7-day final snapshot is the only rollback for an accidental uninstall. A reinstall starts uninitialized.
+- **Uninstall deletes the volumeset** (all stored secrets); the final snapshot (kept `retentionDuration`, 7 d) and, from 1.1.0, the daily ones are the only rollback for an accidental uninstall. A reinstall starts uninitialized.
 - Cosmetic log noise that is not a fault: `raft FSM db file has wider permissions than needed` (setgid volumeset dir), and single-node-raft drain churn (`unlocking HA lock failed: cannot find peer`, `Raft RPC layer closed`) during replica replacement.
+
+## What 1.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.0.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`openbao.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. A snapshot restores only under the same seal key.
+- E2E tests onboarded (`initialized-unsealed`, `kv-write-read`, `bad-token-refused`, `data-survives-upgrade`; static seal with a CI-generated key; the first check runs `bao operator init` and keeps the CI root token on the data volume; upgrade from 1.0.0).

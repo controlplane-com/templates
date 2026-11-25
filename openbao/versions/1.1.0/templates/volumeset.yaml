@@ -1,3 +1,4 @@
+{{- include "openbao.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "openbao.volume.name" . }}
 gvc: {{ .Values.global.cpln.gvc }}
@@ -10,4 +11,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

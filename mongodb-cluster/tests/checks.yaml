@@ -1,0 +1,75 @@
+# Feature checks for the mongodb-cluster template. Each runs after install (and after each upgrade) on
+# every version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (mongo_user, mongo_password, mongo_db, members).
+#
+# Every check runs mongosh in a member's container. Writes go through the HAProxy endpoint, which routes to
+# the current primary; the replica-set check reads the member's own view of the set.
+checks:
+  - id: replica-set-formed
+    description: Every member of the baseline has joined the replica set, with exactly one primary.
+    exec:
+      workload: "{release}-mongo"
+      container: mongodb
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        mongosh --quiet "mongodb://{mongo_user}:{mongo_password}@$H:27017/admin?directConnection=true" --eval "
+          const s = rs.status().members;
+          print('MEMBERS ' + s.filter(m => m.health === 1).length + ' PRIMARY ' + s.filter(m => m.stateStr === 'PRIMARY').length);
+        "
+    expect:
+      stdout: "^MEMBERS {members} PRIMARY 1$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-read-via-proxy
+    description: A document written through the HAProxy endpoint reads back.
+    exec:
+      workload: "{release}-mongo"
+      container: mongodb
+      shell: bash
+      script: |
+        set -e
+        M="e2e-$(date +%s%N)"
+        mongosh --quiet "mongodb://{mongo_user}:{mongo_password}@{release}-mongo-proxy.{gvc}.cpln.local:27017/{mongo_db}?authSource=admin&directConnection=true" --eval "
+          db.e2e.insertOne({version: '{version}', marker: '$M'}, {writeConcern: {w: 'majority'}});
+          const d = db.e2e.findOne({marker: '$M'});
+          print(d ? 'READ ' + d.marker : 'NOT FOUND');
+        "
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: rejects-bad-password
+    description: A wrong password is refused through the proxy (the control for the check above).
+    exec:
+      workload: "{release}-mongo"
+      container: mongodb
+      shell: bash
+      script: |
+        mongosh --quiet "mongodb://{mongo_user}:wrong-password@{release}-mongo-proxy.{gvc}.cpln.local:27017/{mongo_db}?authSource=admin&directConnection=true" \
+          --eval "db.e2e.countDocuments()" 2>&1
+        echo "EXIT=$?"
+    expect:
+      stdout: "Authentication failed"
+      notStdout: "^EXIT=0$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The document written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volumes carried over.
+    exec:
+      workload: "{release}-mongo"
+      container: mongodb
+      shell: bash
+      script: |
+        n=$(mongosh --quiet "mongodb://{mongo_user}:{mongo_password}@{release}-mongo-proxy.{gvc}.cpln.local:27017/{mongo_db}?authSource=admin&directConnection=true" \
+          --eval "db.e2e.countDocuments({version: '{installed_version}'})")
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (documents for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

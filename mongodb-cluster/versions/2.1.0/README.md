@@ -5,7 +5,7 @@ A MongoDB replica set built on Percona Server for MongoDB, with automatic primar
 ## Architecture
 
 - **Stateful MongoDB workload** — the replica set members, one per replica in each configured location, with keyfile authentication and automatic replica-set registration at boot.
-- **Volume set** — per-member `/data/db` storage, with optional capacity autoscaling and daily snapshots.
+- **Volume set** — per-member `/data/db` storage, with optional capacity autoscaling, snapshotted daily (03:00 UTC) and kept 7 days by default.
 - **HAProxy workload** *(optional, on by default)* — one stable address that TCP-health-checks every member and routes to whichever one is primary.
 - **Backup workload** *(optional)* — a cron job running a logical `mongodump` to object storage.
 - **Secrets** — the MongoDB startup script, the HAProxy startup script, and the PBM agent script.
@@ -106,7 +106,14 @@ volumeset:
     maxCapacity: 100
     minFreePercentage: 10
     scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -363,6 +370,7 @@ Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves
 - **Scaling down needs manual preparation.** Before reducing a location's `replicas`, remove those members from the replica set config — connect to the primary and run `rs.remove("replica-N.RELEASE-mongo.LOCATION.GVC.cpln.local:27017")`. Otherwise the config keeps referencing hosts that no longer exist, which distorts elections and quorum.
 - **A firewall change takes up to ~10 minutes to propagate.** After changing `firewall.internalAllowType`, keep re-testing rather than concluding the knob is broken.
 - **Data lives on the volume set and survives redeployment, but `cpln helm uninstall` deletes it.**
+- **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

@@ -1,3 +1,4 @@
+{{- include "mysql.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "mysql.volume.name" . }}
 description: MySQL volumeset
@@ -14,3 +15,9 @@ spec:
     scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
   {{- end }}
   performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

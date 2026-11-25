@@ -13,7 +13,7 @@ drop-in MySQL for teams migrating off RDS; a scratch database for development GV
 | Resource | Kind | Notes |
 |---|---|---|
 | `{release}-mysql` | workload (`stateful`) | MySQL on tcp/3306, `minScale`/`maxScale` pinned to 1 |
-| `{release}-mysql-vs` | volumeset | `ext4`, mounted at `/var/lib/mysql`, `general-purpose-ssd` |
+| `{release}-mysql-vs` | volumeset | `ext4`, mounted at `/var/lib/mysql`, `general-purpose-ssd`; daily snapshots kept 7 d + a final snapshot on delete from 1.6.0 (no `snapshots` block through 1.5.2) |
 | `{release}-mysql-identity` | identity | carries the AWS/GCP cloud-account binding when backups are on |
 | `{release}-mysql-policy` | policy | `reveal` on exactly the two user-created credential secrets |
 | `{release}-mysql-phpmyadmin` | workload (`serverless`) | optional, OFF by default; no identity, reads no secret |
@@ -32,6 +32,7 @@ env values on the backup job — they are not credentials; bucket access comes f
 | `resources` | 100m/400m cpu, 128Mi/512Mi mem | `minCpu`/`maxCpu`/`minMemory`/`maxMemory`; 400m/100m is exactly the 4:1 cap |
 | `internalAccess.type` | `same-gvc` | governs the **database** only |
 | `volumeset.capacity` | `10` | GiB, minimum 10; optional autoscaling block |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | `""` = no scheduled snapshots; more often than hourly fails at render (`mysql.validateSnapshots`, mirrored in the wizard) |
 | `phpMyAdmin.enabled` | `false` | console is opt-in |
 | `phpMyAdmin.image` | `phpmyadmin:5.2.3-apache` | official Docker library image, pinned |
 | `phpMyAdmin.publicAccess.enabled` | `false` | true = login form on the public internet |
@@ -46,7 +47,7 @@ env values on the backup job — they are not credentials; bucket access comes f
   an unresolvable `cpln://secret/...` reference — it looks like a crash, it is a missing secret.
 - **Credentials are only honoured when the volume is first initialized.** Rotating the secret and
   redeploying does nothing; the data directory keeps the original passwords. Change them with
-  `ALTER USER`, or uninstall (which deletes the volumeset) and reinstall.
+  `ALTER USER`, or uninstall (which deletes the volumeset, after a final snapshot from 1.6.0) and reinstall.
 - **Two different `internalAccess` blocks.** `internalAccess` is the database; `phpMyAdmin.internalAccess`
   is the console. Before 1.5.0 the console had **no** access knob at all and was hardcoded public — that
   was the security defect 1.5.0 fixes.
@@ -68,6 +69,10 @@ env values on the backup job — they are not credentials; bucket access comes f
 
 ## History
 
+- **1.6.0** (2026-11-25) — the volume set gets a whole `snapshots` block for the first time (work item 5219):
+  `createFinalSnapshot: true` plus `volumeset.snapshots.schedule` (daily 03:00 UTC) and `retentionDuration` (7d).
+  Through 1.5.2 no snapshot was ever taken, not even on uninstall. CI baseline 1.6.0 upgrades from 1.5.2.
+  ghost still bundles 1.5.2.
 - **1.5.0** (2026-08-17) — credentials became two prerequisite secrets; phpMyAdmin defaults off, gains
   its own `publicAccess`/`internalAccess` knobs and a pinned image; template-created secret removed.
 - **1.4.3** — backup job passes `MYSQL_DATABASE`; schedule quoted.

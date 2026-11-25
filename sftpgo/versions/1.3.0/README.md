@@ -278,6 +278,7 @@ Then delete those keys from your values, set `userPasswords.secretName` (and `st
 - **Switching modes moves the client-facing endpoint** (proxy ↔ SFTPGo) — plan a client cutover if you change modes on a live install.
 - **The dedicated load balancer is the dominant idle cost** in scale_to_zero mode, not the proxy's compute.
 - **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

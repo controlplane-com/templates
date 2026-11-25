@@ -37,3 +37,4 @@
 
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`sftpgo.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
 - E2E tests onboarded (`admin-login`, `declared-user-loaded`, `write-read-user`, `data-survives-upgrade`; upgrade from 1.2.0). The baseline runs `always_warm` (scale-to-zero would suspend SFTPGo under the checks) and `storage.type: minio` pointed at a placeholder endpoint, since CI has no cloud account; no check transfers a file.
+- **1.3.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

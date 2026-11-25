@@ -76,7 +76,14 @@ volumeset:
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 **Security** — the two [prerequisite](#prerequisites) secrets:
 
@@ -290,7 +297,8 @@ If a node or Dashboards still waits about 5 minutes after the upgrade, run `cpln
 - **Switching `backup.provider` on an existing release leaves the old cloud binding attached.** The identity keeps both provider blocks; uninstall and reinstall if you need the old binding gone.
 - **Two Security Analytics forms do nothing in OpenSearch 3.8.0 Dashboards:** **Create correlation rule** and **Add threat intel source** with a local file. Create them through the API instead: `POST _plugins/_security_analytics/correlation/rules`, and `POST _plugins/_security_analytics/threat_intel/sources` with `"type": "IOC_UPLOAD"` and `"enabled": false` (an uploaded list is not refreshed on a schedule). Both then appear in Dashboards. An uploaded list matches nothing until a threat intel monitor scans for it: `POST _plugins/_security_analytics/threat_intel/monitors` with `per_ioc_type_scan_input_list` (for example `ioc_type: ipv4-addr` and `index_to_fields_map` from your index to its IP field) and a trigger whose `data_sources` names the source; matches appear under **Findings → Threat intel**.
 - **Restoring from Dashboards Snapshot Management:** pick specific indices, choose a prefix or regex rename (**Do not rename** still adds `restored_`), and uncheck **Restore cluster state** under **Advanced options**; with security on, restoring cluster state or system indices is refused. **Take snapshot** snapshots every index whatever you select; use a snapshot policy to snapshot chosen indices.
-- **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets. Enable snapshots if the data matters.
+- **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets; the node volume set keeps a final snapshot. Enable backups if the data matters.
+- **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

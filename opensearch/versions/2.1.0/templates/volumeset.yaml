@@ -1,3 +1,4 @@
+{{- include "opensearch.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "opensearch.volume.name" . }}
 description: OpenSearch volumeset
@@ -14,7 +15,10 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}
 
 {{- if .Values.demoLogs.enabled }}
 ---

@@ -3,12 +3,12 @@ name: opensearch
 description: OpenSearch cluster with Dashboards, login security, Security Analytics SIEM and optional snapshots
 
 type: application
-version: 2.0.0
+version: 2.1.0
 appVersion: "3.8.0"
 
 annotations:
   created: "2026-02-19"
-  lastModified: "2026-11-18"
+  lastModified: "2026-11-25"
   createsGvc: false
 
 dependencies:

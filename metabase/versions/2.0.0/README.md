@@ -1,5 +1,8 @@
 # Metabase
 
+> **Upgrading from 1.x:** single-instance mode now installs PostgreSQL 19 and refuses a 1.x database
+> unless you pin `postgres.image: postgres:18` — see [Upgrading from 1.x](#upgrading-from-1x).
+>
 > **Upgrading from 1.4.0:** the database credentials are now a secret you create before upgrading,
 > under a **new** name — see [Upgrading from 1.4.0](#upgrading-from-140).
 
@@ -8,8 +11,8 @@ This app deploys [Metabase](https://www.metabase.com/) open-source BI — dashbo
 ## Architecture
 
 - **Metabase**: Standard (stateless) workload, single replica, serving the UI and API on port 3000; all application state lives in the Postgres app database.
-- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint Metabase connects through.
-- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template instead, for lighter deployments.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 18 for new clusters) — 3× Patroni Postgres, 3× etcd, and an HAProxy leader endpoint Metabase connects through.
+- **PostgreSQL (dev/lightweight, optional)** (subchart): the single-instance `postgres` template (PostgreSQL 19) instead, for lighter deployments.
 - **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the admin login.
 - **Encryption-key secret** (opaque) — likewise user-created; encrypts saved database-connection details.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The app database initializes from it and Metabase connects with it, in either database mode.
@@ -104,7 +107,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA:                   # default: highly available PostgreSQL
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-metabase-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -119,6 +122,7 @@ postgresHA:
   enabled: false
 postgres:                     # dev/lightweight: single-instance PostgreSQL
   enabled: true
+  image: postgres:19          # a release from an earlier version of this chart keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-metabase-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -139,13 +143,54 @@ postgres:                     # dev/lightweight: single-instance PostgreSQL
 
 To analyze a database running on Control Plane, add it in Metabase (Admin → Databases) using its internal endpoint, e.g. `{workload}.{gvc}.cpln.local:5432` — any database Metabase can reach, inside or outside Control Plane, works as a data source.
 
+## Upgrading from 1.x
+
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `cpln-connector` or `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [AWS S3](#aws-s3) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Metabase release (same three prerequisite secrets) in place of the second database release, and both Metabase workloads stopped during the copy.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Metabase gets a new endpoint and is down during the copy):
+
+1. Stop the old Metabase, so nothing writes to its database: `cpln workload stop OLD_RELEASE-metabase --gvc GVC_NAME`.
+2. Install this version as a NEW release in single-instance mode with the **same three prerequisite secrets**. The encryption key must be the same, or the copied database connections cannot be decrypted, and the copied database role keeps the old password.
+3. Once `NEW_RELEASE-metabase` is ready, stop it (`cpln workload stop NEW_RELEASE-metabase --gvc GVC_NAME`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+4. Start the new Metabase (`cpln workload start NEW_RELEASE-metabase --gvc GVC_NAME`) and sign in with the old admin login; your questions, dashboards and saved connections are there. The first-boot setup is skipped, because the copied database already has its admin.
+5. Point users and embeds at the new endpoint, then uninstall the old release (this deletes its database volume).
+
 ## Upgrading from 1.5.0 or earlier
 
 1.5.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
 the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a
 brief interruption of writes while the leader changes. Metabase itself restarts without a gap: the new replica serves before the old one stops. Upgrade in a quiet window. If you pinned
-`postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Metabase itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
+`postgresHA.image` in your values, set it to the `0.9` tag (2.0.0's default): tags `0.1` to `0.7` are refused at render. Metabase itself does not need pgvector. If you created the `vector` extension in a database yourself, `\dx` keeps reporting the old version there until you run `ALTER EXTENSION vector UPDATE;`, which only updates that record.
 Single-instance mode (`postgres`) is unchanged.
 
 ## Upgrading from 1.4.0
@@ -220,7 +265,8 @@ Only needed when backups are enabled (`postgresHA.backup.enabled` or `postgres.b
   "Statement": [{
     "Effect": "Allow",
     "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
-               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
+               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+               "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
   }]
 }
@@ -306,6 +352,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
+- **2.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - **Create all three prerequisite secrets before installing.** A missing one leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Back up the encryption-key secret** — losing or changing it means re-entering every saved database connection; rotation is only possible offline via Metabase's `rotate-encryption-key` command.
 - **Changing the database password takes three steps, in order:** `ALTER ROLE <username> PASSWORD '…'` in the database first, then `cpln secret edit` the credentials secret, then right away force-redeploy `{release}-metabase` (single-instance; in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead). Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. Editing the secret alone changes nothing — a running workload keeps the values it started with, and PostgreSQL keeps the password it was initialized with.

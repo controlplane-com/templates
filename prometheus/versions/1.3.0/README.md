@@ -239,6 +239,7 @@ Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.re
 - **Upgrading from 1.0.0: `resources.cpu`/`memory` (and `thanos.sidecar.resources.*`) were renamed to `maxCpu`/`maxMemory` in 1.1.0** — the old keys are silently ignored, so rename them.
 - **After a restart, readiness can take minutes on a large TSDB** — WAL replay holds `/-/ready` at 503; this is normal recovery, not a failure.
 - **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

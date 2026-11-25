@@ -41,3 +41,4 @@
 ## 1.3.0 — volume snapshot schedule knob (work item 5219)
 - New `volumeset.snapshots.schedule` (default `""`, off) and `volumeset.snapshots.retentionDuration` (7d). Off by default per the maintainer ruling of 2026-11-25 on object-store-backed volumes: Mimir's durable data is the blocks in the required bucket; the volume holds only the ingester WAL and the compactor workspace. The rendered volumeset is unchanged apart from the quoted retention. A schedule more frequent than hourly fails at render (`mimir.validateSnapshots`, mirrored in the wizard).
 - No E2E onboarding: every install needs a real bucket (no bundled object store CI could stand up) and the image is distroless, so no exec check can run in it.
+- **1.3.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

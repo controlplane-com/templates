@@ -60,3 +60,4 @@
 ## 1.3.0 — scheduled volume snapshots (work item 5219)
 - The TSDB volumeset takes a snapshot daily at 03:00 UTC (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Through 1.2.0 it rendered `retentionDuration: 7d` with no schedule, so the platform never took one. Default ON because object-storage upload is off by default, so the local TSDB is the only copy of the data. A schedule more frequent than hourly fails at render (`prometheus.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
 - E2E tests onboarded: `self-scrape`, `remote-write-read-back` (promtool push into the receiver), `thanos-sidecar-connected`, `data-survives-upgrade` (a pushed sample read back after the TSDB replays from the volume); upgrade from 1.2.0.
+- **1.3.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

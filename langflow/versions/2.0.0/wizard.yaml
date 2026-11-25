@@ -14,10 +14,9 @@ imports:
     version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    # Right after the Database, login and keys step that picks it and names its secret.
-    after: database
+    # Right after the Database server step, which follows the Database, login and keys step that picks it.
+    after: database-server
     steps:
-      - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - id: backup
@@ -28,6 +27,10 @@ imports:
       - config.credentialsSecretName
       # Langflow connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # Bound in the Database server step below, so its upgrade note and cross-major warning name this chart's
+      # README section. The postgres chart's checks on them are restated there.
+      - image
+      - resources
     override:
       internalAccess.type:
         description: >-
@@ -364,6 +367,62 @@ steps:
         message: >-
           PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
           does not change the existing user or password.
+
+  # The single-instance PostgreSQL's image and compute, bound here instead of in the imported server step (the
+  # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: database-server
+    title: Database server
+    description: The image and compute of the bundled single-instance PostgreSQL.
+    when: self.postgres.enabled
+    sections:
+      - title: Server
+        fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short interruption of the editor and the API.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its data was created
+              with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+            message: >-
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
 
   - id: langflow
     title: Langflow
@@ -733,8 +792,8 @@ yamlOnly:
 migrations:
   # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
   # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
-  # keep the installed image instead. Claims the path from the postgres import's own 3.x migration, so the
-  # note names this chart's README section.
+  # keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+  # `image` and binds it in the Database server step), so the note names this chart's README section.
   - fromVersions: ">=1.0.0 <2.0.0"
     to: postgres.image
     valueExpr: self.postgres.image

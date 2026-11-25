@@ -23,7 +23,7 @@ This app deploys [Uptime Kuma](https://github.com/louislam/uptime-kuma), a self-
 ## Architecture
 
 - **Uptime Kuma**: stateful workload, single replica, serving the dashboard, monitoring engine, and status pages on port 3001 (HTTP + WebSocket).
-- **Volumeset**: 10 GiB persistent volume at `/app/data` — SQLite database, uploads, and generated keys; a final snapshot is kept for 7 days on delete.
+- **Volumeset**: 10 GiB persistent volume at `/app/data` — SQLite database, uploads, and generated keys; snapshotted daily (kept 7 days), plus a final snapshot on delete.
 - **Identity**: workload identity (no grants — this template creates no secrets or policies).
 
 ## Prerequisites
@@ -45,7 +45,14 @@ resources:
 
 volumeset:
   capacity: 10                # GiB (minimum 10) — SQLite database, uploads, and generated keys
+  snapshots:
+    schedule: "0 3 * * *"    # snapshots of the data volume, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -94,8 +101,9 @@ Monitors, notification providers, and status pages are all configured in the app
 - **Create the admin account over `cpln port-forward` before you turn on public access** (see First run). Upstream has no way to preset credentials, so until you complete the setup wizard, anyone who can reach the dashboard can create the admin account. Once one account exists the wizard is permanently disabled.
 - **TCP Port monitors cannot detect a closed or unreachable external port** — outbound connections pass through the platform's sidecar, which completes the TCP handshake itself, so such a monitor stays UP. Watch external services with HTTP(s), keyword or DNS monitors instead; HTTP monitors do report a dead port as DOWN.
 - **No HA / multi-replica** — upstream supports exactly one instance (no clustering), so the workload is pinned to 1 replica. A restart means a brief monitoring gap; monitors resume automatically on boot, and all data survives on the volumeset.
-- **No cloud backups in this version** — durability is the persistent volume plus a 7-day final snapshot on uninstall. Uninstalling and reinstalling starts a fresh instance.
+- **No cloud backups in this version** — durability is the persistent volume plus its daily snapshots and a final snapshot on uninstall. Uninstalling and reinstalling starts a fresh instance.
 - **Forgot the admin password?** `cpln workload exec RELEASE_NAME-uptime-kuma --gvc GVC_NAME --container uptime-kuma --stdin --tty -- npm run reset-password`, then enter the new password twice (upstream's documented recovery).
+- **Upgrading from 1.3.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

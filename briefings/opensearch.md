@@ -72,3 +72,4 @@ plugins (Maps, Search Relevance, Query Insights, Flow Framework, ML, Notebooks, 
 
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 2.0.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`opensearch.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. These are platform volume snapshots, separate from the optional snapshot backups to S3/GCS. The demo-logs `shared` volumeset still takes none (demo data).
 - E2E baseline `2.1.0` added (upgrade from 2.0.0).
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

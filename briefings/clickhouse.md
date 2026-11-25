@@ -102,3 +102,4 @@ read cache — or, **from 3.1.0, `provider: local`: all data on the server volum
 
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 3.1.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`clickhouse.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. One knob covers both volumesets (server and, in cluster modes, Keeper): with a bucket provider the server volume holds the object-storage disk metadata, without which the bucket's objects are unreadable, so it is real data, not cache.
 - E2E baseline `3.2.0` added (upgrade from 3.1.0, `provider: local`).
+- **3.2.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

@@ -299,6 +299,7 @@ If a node or Dashboards still waits about 5 minutes after the upgrade, run `cpln
 - **Restoring from Dashboards Snapshot Management:** pick specific indices, choose a prefix or regex rename (**Do not rename** still adds `restored_`), and uncheck **Restore cluster state** under **Advanced options**; with security on, restoring cluster state or system indices is refused. **Take snapshot** snapshots every index whatever you select; use a snapshot policy to snapshot chosen indices.
 - **Data survives a Helm upgrade but not an uninstall** — `cpln helm uninstall` deletes the volume sets; the node volume set keeps a final snapshot. Enable backups if the data matters.
 - **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

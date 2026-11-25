@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # The Database step comes first for its prerequisite secret; the server settings follow Access.
@@ -33,8 +33,14 @@ imports:
         description: >-
           Aegra connects to its database like any other workload: keep Same GVC, or add the Aegra workload under
           Allowed workloads.
+      # Aegra's database runs a pgvector image, so the child's postgres:N examples do not apply.
+      image:
+        help: >-
+          New installs run `pgvector/pgvector:0.8.7-pg19`; `pgvector/pgvector:0.8.7-pg18` also works. Aegra needs
+          an image with the pgvector extension. The data directory is specific to a major version: on an existing
+          volume, an image of another major does not start, and the database logs the image to set instead.
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
@@ -83,7 +89,6 @@ steps:
   - id: database
     title: Database
     description: Which PostgreSQL holds Aegra's threads, runs and checkpoints, and the prerequisite secret with its credentials.
-    docs: "#prerequisites"
     sections:
       - fields:
           - id: dbMode
@@ -184,7 +189,6 @@ steps:
               PostgreSQL reads these values only when its data is first initialized, and Aegra connects with them.
               Changing it later is a database operation: follow the postgres-highly-available template's password
               rotation steps, then update the secret and force a redeployment of Aegra.
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -294,7 +298,9 @@ steps:
 
   - id: secrets
     title: Agent secrets
-    description: Model provider keys and other secrets your agent reads as environment variables. Optional.
+    description: >-
+      Model provider keys and other secrets your agent reads as environment variables, and optional
+      OpenTelemetry tracing of every run to a Langfuse project. Both optional.
     sections:
       - title: Agent secrets
         docs: "#prerequisites"
@@ -331,6 +337,47 @@ steps:
             mirrors: aegra.validateAgentSecrets
             paths: [agentSecrets.keys]
             message: List at least one key of the agent secrets, or clear the secret.
+      - title: Langfuse
+        docs: "#configuration"
+        fields:
+          - path: langfuse.secretName
+            type: ref
+            label: Langfuse keys secret
+            description: >-
+              Optional. A dictionary secret with the keys `publicKey` and `secretKey` from a Langfuse project. Leave
+              empty to turn tracing off.
+            help: >-
+              Rotating the secret does not restart Aegra; run `cpln workload force-redeployment
+              <release>-aegra` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [publicKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-aegra-langfuse'"
+          - path: langfuse.baseUrl
+            type: string
+            format: url
+            label: Langfuse URL
+            required: true
+            when: self.langfuse.secretName != ''
+            placeholder: https://cloud.langfuse.com
+            description: >-
+              Your Langfuse server, for example the langfuse template in this org
+              (`http://<release>-langfuse-web.<gvc>.cpln.local:3000`) or `https://cloud.langfuse.com`.
+            help: >-
+              Langfuse in another GVC: set that Langfuse release's `internalAccess` to `same-org`, or Aegra cannot
+              reach it.
+        rules:
+          - rule: self.langfuse.secretName == '' || self.langfuse.baseUrl.matches('^https?://[^/\\s]+')
+            mirrors: aegra.validateLangfuse
+            paths: [langfuse.baseUrl]
+            message: Use a URL that starts with http:// or https://.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
     rules:
       - rule: >-
           (self.agentSecrets.keys + self.aegra.extraEnv.map(e, e.name)).all(n,
@@ -485,51 +532,6 @@ steps:
           Redis public access is not supported: Aegra connects to Redis on port 6379 inside the GVC, and public
           access moves Redis to other ports. Set redis.redis.publicAccess.enabled to false.
 
-  - id: tracing
-    title: Tracing
-    description: Optional OpenTelemetry tracing of every run to a Langfuse project.
-    sections:
-      - title: Langfuse
-        docs: "#configuration"
-        fields:
-          - path: langfuse.secretName
-            type: ref
-            label: Langfuse keys secret
-            description: >-
-              Optional. A dictionary secret with the keys `publicKey` and `secretKey` from a Langfuse project. Leave
-              empty to turn tracing off.
-            help: >-
-              Rotating the secret does not restart Aegra; run `cpln workload force-redeployment
-              <release>-aegra` afterwards.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [publicKey, secretKey]
-              create:
-                suggestName: "context.releaseName + '-aegra-langfuse'"
-          - path: langfuse.baseUrl
-            type: string
-            format: url
-            label: Langfuse URL
-            required: true
-            when: self.langfuse.secretName != ''
-            placeholder: https://cloud.langfuse.com
-            description: >-
-              Your Langfuse server, for example the langfuse template in this org
-              (`http://<release>-langfuse-web.<gvc>.cpln.local:3000`) or `https://cloud.langfuse.com`.
-            help: >-
-              Langfuse in another GVC: set that Langfuse release's `internalAccess` to `same-org`, or Aegra cannot
-              reach it.
-        rules:
-          - rule: self.langfuse.secretName == '' || self.langfuse.baseUrl.matches('^https?://[^/\\s]+')
-            mirrors: aegra.validateLangfuse
-            paths: [langfuse.baseUrl]
-            message: Use a URL that starts with http:// or https://.
-
-# Rules over the imported values: their issues show on the imported fields' steps.
 rules:
   # Root rules without paths: the Database choice writes postgres.enabled / postgresHA.enabled (hidden
   # fields), so these only trip on YAML edits; they block Install and show on Review.
@@ -563,6 +565,35 @@ rules:
     paths: [redis.redis.firewall.inboundAllowWorkload]
     messageExpression: "'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-aegra, or Aegra cannot reach Redis.'"
     message: Add the Aegra workload to the list, or Aegra cannot reach Redis.
+  # The postgres import's own major-change warning reads imageMajor(), which takes a pgvector tag's leading digits
+  # (0.8.7 -> 0) and so never fires on pgvector/pgvector:0.8.7-pgNN. This one reads the -pgNN suffix (else the
+  # plain postgres:NN major), so picking -pg19 over a release whose data is 18 warns before the guard refuses it.
+  - when: self.postgres.enabled && oldSelf != null && has(oldSelf.postgres) && has(oldSelf.postgres.image)
+    rule: >-
+      (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == '' || (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) == '' ||
+      (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) == (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : ''))
+    severity: warning
+    paths: [postgres.image]
+    messageExpression: >-
+      'This release\'s data directory is PostgreSQL ' + (size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(oldSelf.postgres.image) > 0 ? string(imageMajor(oldSelf.postgres.image)) : '')) +
+      '; a PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' image refuses to start on it. Keep the image at ' + oldSelf.postgres.image +
+      ', or move to PostgreSQL ' + (size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))) > 0 ? ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(t, t.matches('^[0-9]+(-|$)'))[0].split('-')[0] : (imageMajor(self.postgres.image) > 0 ? string(imageMajor(self.postgres.image)) : '')) + ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+    message: >-
+      The data directory belongs to the installed PostgreSQL major version; an image of a different major refuses
+      to start on it. Keep the installed image, or move with a dump and restore into a new release (README,
+      Upgrading from 1.x).
+
+# A 1.x release runs pgvector/pgvector:0.8.7-pg18 (1.x's default), and its data directory is PostgreSQL 18.
+# Carry-over would hand it the new default -pg19, which refuses to start on that data: keep the installed image.
+# Claims the postgres import's own image migration, whose note names the postgres template's README.
+migrations:
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database's data directory keeps the PostgreSQL major it was created with, so the installed image is
+      kept (Database server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release
+      (README, Upgrading from 1.x).
 
 yamlOnly:
   - path: redis.mode

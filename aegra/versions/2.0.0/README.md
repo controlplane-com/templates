@@ -5,8 +5,8 @@ This app deploys [Aegra](https://github.com/aegra/aegra), an open-source agent s
 ## Architecture
 
 - **Aegra** (`RELEASE_NAME-aegra`): standard workload serving the API on port 2026, 1 replica by default. Replicas share PostgreSQL and Redis, so they are interchangeable; a run on a lost replica is picked up by another.
-- **PostgreSQL (single instance, default)**: the `postgres` template with pgvector. Holds threads, runs, checkpoints and the store.
-- **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint.
+- **PostgreSQL (single instance, default)**: the `postgres` template running a pgvector image (PostgreSQL 19 with pgvector 0.8.7). Holds threads, runs, checkpoints and the store. It refuses to start on a data directory from another PostgreSQL major version and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
+- **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead (PostgreSQL 18 for a new cluster): 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint.
 - **Redis**: the `redis` template as one node, the job queue and run event streams. Runs are recovered from PostgreSQL if it restarts.
 - **Identity + policy**: `reveal` on exactly the secrets you name (database credentials, and the optional agent, Langfuse and Redis secrets). The template creates no secrets.
 
@@ -107,7 +107,7 @@ langfuse:
 ```yaml
 postgres:                       # every knob of the postgres template
   enabled: true
-  image: pgvector/pgvector:0.8.7-pg18
+  image: pgvector/pgvector:0.8.7-pg19   # a release upgraded from 1.x keeps -pg18 (Upgrading from 1.x)
   config:
     credentialsSecretName: my-aegra-db-credentials   # REQUIRED, create before install
   resources:
@@ -119,7 +119,7 @@ postgres:                       # every knob of the postgres template
     capacity: 10                # GiB (minimum 10)
   backup:                       # scheduled backups to object storage (postgres template)
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0   # also backs up a server pinned to -pg18
     schedule: "0 2 * * *"       # daily at 2am UTC
     resources:
       cpu: 100m
@@ -143,7 +143,7 @@ postgres:                       # every knob of the postgres template
 
 postgresHA:                     # every knob of the postgres-highly-available template
   enabled: false                # enable exactly one of postgres / postgresHA
-  image: controlplanecorporation/patroni-postgres:0.8
+  image: controlplanecorporation/patroni-postgres:0.9   # PostgreSQL 18 for new clusters; an existing cluster keeps 17
   config:
     credentialsSecretName: my-aegra-db-credentials
   replicas: 3
@@ -161,7 +161,7 @@ postgresHA:                     # every knob of the postgres-highly-available te
       cpu: 100m
       memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0   # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"     # daily at 2am UTC
     walg:
       intervalSeconds: 21600    # every 6 hours
@@ -238,6 +238,51 @@ Point the LangGraph SDK (`langgraph_sdk.get_client(url=...)`) or Agent Chat UI a
 
 Aegra has no UI of its own. To chat with an agent in a browser, open the hosted [Agent Chat UI](https://agentchat.vercel.app) with your public URL and a graph name, for example `https://agentchat.vercel.app/?apiUrl=PUBLIC_URL&assistantId=stress_test`. The browser calls Aegra directly, so it needs the public URL, and anyone with that URL can call your agents unless your image adds an auth handler.
 
+## Upgrading from 1.x
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19 (`pgvector/pgvector:0.8.7-pg19`). A 1.x release's data directory was created by PostgreSQL 18, and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, Aegra restarts until its database is back, and the logs repeat `[pg-guard] REFUSING TO START`.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the pgvector image pinned to 18, and keep it in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). Pin the pgvector image, not the `postgres:18` the guard's log suggests: Aegra needs the pgvector extension. The Console upgrade wizard keeps the installed image for you and warns before a change to another major.
+
+```yaml
+postgres:
+  image: pgvector/pgvector:0.8.7-pg18
+```
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=pgvector/pgvector:0.8.7-pg18
+```
+
+**Move to PostgreSQL 19** (dump and restore into a new release in the same GVC; runs pause during the copy):
+
+1. Install 2.0.0 as a **new release** with the **same** database credentials secret (and the same agent, Langfuse and Redis secrets). Wait until `NEW_RELEASE-aegra` is ready: it creates an empty schema.
+2. Stop Aegra on both releases (the databases keep running):
+
+   ```bash
+   cpln workload stop OLD_RELEASE-aegra NEW_RELEASE-aegra --gvc GVC_NAME
+   ```
+
+3. Stream the old database into the new one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Aegra created:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+4. Start the new Aegra, check that your threads are there (`POST /threads/search`), and point your clients at `NEW_RELEASE-aegra`:
+
+   ```bash
+   cpln workload start NEW_RELEASE-aegra --gvc GVC_NAME
+   ```
+
+5. Uninstall the old release.
+
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with, on the new `patroni-postgres:0.9` image; new HA releases start on PostgreSQL 18. To move an existing cluster to 18, follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template. The second release there is a new Aegra 2.0.0 release with `postgresHA.enabled: true`, `postgres.enabled: false` and the same secrets; this chart names its database workloads `RELEASE_NAME-postgres-ha` and `RELEASE_NAME-postgres-ha-proxy`, so the commands apply as written. Stop both releases' `-aegra` workloads while the copy runs.
+
 ## Important Notes
 
 - Aegra has no authentication unless your image configures an auth handler in `aegra.json`. Keep `publicAccess` off without one: anyone with the URL could run your agents and read every thread.
@@ -247,6 +292,7 @@ Aegra has no UI of its own. To chat with an agent in a browser, open the hosted 
 - Aegra does not drain runs on shutdown: a run on a replica that stops is picked up again by a live replica once its lease expires, and retried.
 - The first `helm upgrade` after an install can restart the bundled database and Redis, which briefly interrupts the API.
 - Firewall changes (`publicAccess`, `internalAccess`) take from 30 seconds to several minutes to take effect.
+- **PostgreSQL 19 for new installs only.** A release upgraded from 1.x keeps PostgreSQL 18 only with `postgres.image: pgvector/pgvector:0.8.7-pg18` in its values; without it the database refuses to start (data untouched). See [Upgrading from 1.x](#upgrading-from-1x).
 - Use a single-location GVC: the bundled database and Redis run in one location.
 - Uninstalling deletes the database volume, and with it every thread, run and checkpoint.
 

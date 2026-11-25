@@ -13,7 +13,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-aegra` (standard, 1-10 replicas, :2026, default 1) | API, background workers, lease reaper and cron scheduler, all in one process |
-| `postgres` 3.4.1 (default, `pgvector/pgvector:0.8.7-pg18`) or `postgresHA` 2.8.1 | Threads, runs, checkpoints, store |
+| `postgres` 4.0.1 (default, `pgvector/pgvector:0.8.7-pg19` = PostgreSQL 19, boot guard naming `postgres.image`) or `postgresHA` 3.0.0 (patroni-postgres 0.9: new clusters PostgreSQL 18, 1.x clusters stay on 17) | Threads, runs, checkpoints, store |
 | `redis` 3.9.0, `mode: dev` (1 node) | Job queue and run event streams |
 | identity + policy | `reveal` on exactly the named secrets (DB, plus agent / Langfuse / Redis when set); the chart creates no secrets |
 
@@ -27,6 +27,7 @@
 `aegra.image` · `aegra.replicas` (1-10) · `aegra.resources` · `aegra.requestTimeoutSeconds` (600; 1-3600, the platform refuses 3601) · `aegra.extraEnv` · `agentSecrets.{secretName,keys}` · `publicAccess` (off) · `internalAccess` · `langfuse.{secretName,baseUrl}` · `postgres` / `postgresHA` · `redis.redis.auth.fromSecret`
 
 ## Troubleshooting / considerations
+- **Upgrading a 1.x release on the single-instance database (2.0.0 is a major):** its data is PostgreSQL 18, and the postgres 4.0.1 boot guard refuses to start PostgreSQL 19 on it (`{release}-postgres` not ready, `[pg-guard] REFUSING TO START` every 30 s, volume untouched; Aegra restarts until the database is back). Fix: `--set postgres.image=pgvector/pgvector:0.8.7-pg18` and keep it in values. **The guard's own log suggests `postgres.image=postgres:18`** (postgres 4.0.1 hard-codes the `postgres:` repository); that image lacks pgvector, so NOTES.txt and the README name the pgvector pin. The Console wizard carries the installed image (a parent migration) and warns on a different major (a parent rule reading the `-pgNN` suffix: the import's own rule uses `imageMajor()`, which reads `0.8.7` as 0). Moving to 19 = side-by-side new release with the same secrets, both `-aegra` stopped, `pg_dump --clean --if-exists` from the old server (README "Upgrading from 1.x"). HA releases upgrade normally and keep PostgreSQL 17 on the 0.9 image; moving a cluster to 18 is pgha's "Upgrading an existing cluster to PostgreSQL 18".
 - **No auth by default.** Aegra lets every caller in as `anonymous` unless the image's `aegra.json` names an auth handler. Keep `publicAccess` off until it does; use `cpln port-forward {release}-aegra 2026:2026`.
 - **Deployment stuck, no logs:** a named secret is missing; read `status.versions[].message` via `cpln workload get-deployments`.
 - **Crash loop on first install** until PostgreSQL and Redis are up: Aegra exits on a DB or Redis failure at startup and the platform restarts it.
@@ -37,5 +38,8 @@
 - **Env names refused at render:** everything the chart sets, `DATABASE_URL`, `RUN_MIGRATIONS_ON_STARTUP`, `LANGFUSE_*`, `CPLN_*`, invalid names and duplicates across `extraEnv` and `agentSecrets.keys`. `redis.mode` other than `dev` any `redis.redis.auth.password` setting and `redis.redis.publicAccess.enabled: true` (it moves Redis off :6379) are refused.
 - **Secret rotation** needs `cpln workload force-redeployment {release}-aegra`.
 - **Image choice:** a community image, chosen over building our own (ruling 2026-08-25), pinned to an exact tag. Re-check its `USER` on bumps.
-- **Wizard:** the first wizard to import `redis`. It excludes the mode chooser (mode is a read-only parent field), `redisAuth` `redis.auth.fromSecret` (redeclared as a parent toggle section) and `redis.publicAccess`; `redis.redis.auth.password.enabled` and `redis.redis.publicAccess` are `yamlOnly`.
+- **Wizard:** the Langfuse secret sits on the Agent secrets step (2.0.0; one step for every optional secret). The first wizard to import `redis`. It excludes the mode chooser (mode is a read-only parent field), `redisAuth` `redis.auth.fromSecret` (redeclared as a parent toggle section) and `redis.publicAccess`; `redis.redis.auth.password.enabled` and `redis.redis.publicAccess` are `yamlOnly`.
 - **Catalog:** `agentSecrets` is `kind: other` (its keys are user-chosen; the validator requires fixed keys for a dictionary). The `postgres.backup` / `postgresHA.backup` blocks are declared in `values.yaml` (logto pattern) so the catalog can list the bucket, cloud-account and MinIO-keys prerequisites.
+
+## Status
+2.0.0: single-instance PostgreSQL 19 (postgres 4.0.1 with `pgvector/pgvector:0.8.7-pg19`, backup image 19.1.0), HA on postgres-highly-available 3.0.0 (new clusters 18, logical backup image 18.2.0), NOTES.txt upgrade warning with the pgvector pin, wizard image carry-over + cross-major warning, README "Upgrading from 1.x". The chart's identity never attached `cpln-connector`. CI: `fresh-is-19`, refused-then-pinned upgrade from 1.0.0 (`guard-holds`, `pinned-stays-18`, `thread-persists`), and an `ha` variant (fresh HA install, `ha-is-18`).

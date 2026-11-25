@@ -1,0 +1,185 @@
+{{- include "weaviate.validate" . }}
+{{- $providerSecrets := include "weaviate.providerSecretNames" . }}
+{{- /*
+Egress is opened only when something actually needs it: a cloud backup target or
+a third-party AI provider. A plain vector-database install talks to nothing
+outside the GVC, so it gets no outbound allowance at all.
+*/}}
+{{- $needsEgress := or .Values.backup.enabled (ne $providerSecrets "") }}
+kind: workload
+name: {{ include "weaviate.workload.name" . }}
+description: Weaviate vector database cluster
+tags: {{- include "weaviate.tags" . | nindent 2 }}
+spec:
+  type: stateful
+  containers:
+    - name: weaviate
+      command: /bin/sh
+      args:
+        - '-c'
+        - >-
+          cp /scripts/weaviate-start.sh /tmp/weaviate-start.sh &&
+          chmod +x /tmp/weaviate-start.sh &&
+          /tmp/weaviate-start.sh
+      env:
+        - name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED
+          value: "false"
+        - name: AUTHENTICATION_APIKEY_ENABLED
+          value: "true"
+        # User-created prerequisite opaque secret — the key never enters the Helm release.
+        - name: AUTHENTICATION_APIKEY_ALLOWED_KEYS
+          value: cpln://secret/{{ .Values.apiKeySecretName }}.payload
+        - name: AUTHENTICATION_APIKEY_USERS
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-user
+        - name: AUTHORIZATION_ADMINLIST_ENABLED
+          value: "true"
+        - name: AUTHORIZATION_ADMINLIST_USERS
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.api-user
+        - name: QUERY_DEFAULTS_LIMIT
+          value: {{ .Values.queryDefaultsLimit | quote }}
+        - name: PERSISTENCE_DATA_PATH
+          value: /var/lib/weaviate
+        - name: DEFAULT_VECTORIZER_MODULE
+          value: {{ .Values.defaultVectorizerModule | quote }}
+        {{- $modules := list }}
+        {{- if .Values.modules.enabled }}
+        {{- $modules = .Values.modules.enabled }}
+        {{- end }}
+        {{- if .Values.backup.enabled }}
+          {{- if eq .Values.backup.provider "aws" }}
+            {{- $modules = append $modules "backup-s3" }}
+          {{- else if eq .Values.backup.provider "gcp" }}
+            {{- $modules = append $modules "backup-gcs" }}
+          {{- end }}
+        {{- end }}
+        {{- if gt (len $modules) 0 }}
+        - name: ENABLE_MODULES
+          value: {{ join "," $modules | quote }}
+        {{- end }}
+        {{- /* One env var per provider the user has actually configured. An
+               empty apiKeySecretName renders nothing at all — no env var here,
+               no policy target, no egress. */}}
+        {{- range $provider, $envName := dict "anthropic" "ANTHROPIC_APIKEY" "cohere" "COHERE_APIKEY" "huggingface" "HUGGINGFACE_APIKEY" "openai" "OPENAI_APIKEY" }}
+        {{- $cfg := index $.Values.modules $provider }}
+        {{- if $cfg }}
+        {{- if $cfg.apiKeySecretName }}
+        - name: {{ $envName }}
+          value: cpln://secret/{{ $cfg.apiKeySecretName }}.payload
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
+        - name: BACKUP_S3_BUCKET
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-bucket
+        - name: BACKUP_S3_PATH
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-path
+        - name: BACKUP_S3_REGION
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-region
+        {{- end }}
+        {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}
+        - name: BACKUP_GCS_BUCKET
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-bucket
+        - name: BACKUP_GCS_PATH
+          value: cpln://secret/{{ include "weaviate.secret.credentials.name" . }}.backup-path
+        {{- end }}
+      image: {{ .Values.image }}
+      cpu: {{ .Values.cpu | quote }}
+      memory: {{ .Values.memory | quote }}
+      inheritEnv: false
+      ports:
+        - number: 8080
+          protocol: http
+        - number: 50051
+          protocol: grpc
+        - number: 7100
+          protocol: tcp
+        - number: 7101
+          protocol: tcp
+        - number: 8300
+          protocol: tcp
+        - number: 8301
+          protocol: tcp
+      livenessProbe:
+        failureThreshold: 5
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        successThreshold: 1
+        httpGet:
+          path: /v1/.well-known/live
+          port: 8080
+          scheme: HTTP
+        timeoutSeconds: 10
+      readinessProbe:
+        failureThreshold: 10
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        successThreshold: 1
+        httpGet:
+          path: /v1/.well-known/live
+          port: 8080
+          scheme: HTTP
+        timeoutSeconds: 5
+      volumes:
+        - path: /var/lib/weaviate
+          recoveryPolicy: retain
+          uri: 'cpln://volumeset/{{ include "weaviate.volumeset.name" . }}'
+        - path: /scripts/weaviate-start.sh
+          recoveryPolicy: retain
+          uri: 'cpln://secret/{{ include "weaviate.secret.start-script.name" . }}'
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.replicas | int }}
+      metric: disabled
+      minScale: {{ .Values.replicas | int }}
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: {{ .Values.multiZone.enabled }}
+    suspend: false
+    timeoutSeconds: 60
+  rolloutOptions:
+    {{- /*
+    maxUnavailableReplicas is deliberately NOT set: the API drops it on a
+    stateful workload, so sending it produced permanent drift AND implied a
+    rolling-restart limit that is not in force. Ordered rollout plus a 60s
+    readiness soak is what actually serializes the restart here.
+    terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 0%
+    minReadySeconds: 60
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /*
+    The `external` block is ALWAYS rendered with every field declared — the API
+    backfills the empty lists, so omitting the block made a default install
+    drift against its own manifest from the moment it was created.
+    inboundAllowCIDR stays empty unconditionally: Weaviate holds the user's
+    embeddings and is never exposed to the internet by this template.
+    */}}
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      {{- if $needsEgress }}
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if .Values.internalAccess.workloads }}
+      inboundAllowWorkload: {{ .Values.internalAccess.workloads | toYaml | nindent 8 }}
+      {{- end }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "weaviate.identity.name" . }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: true
+  supportDynamicTags: false

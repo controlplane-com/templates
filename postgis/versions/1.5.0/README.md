@@ -5,7 +5,7 @@ Creates a single replica PostGIS database with a dedicated persistent volume. Po
 ### Architecture
 
 - **Stateful PostGIS workload** (`RELEASE_NAME-postgis`) — one PostgreSQL 18 + PostGIS 3.6 replica on `5432`.
-- **Volume set** (`RELEASE_NAME-postgis-vs`) — `PGDATA`, with optional autoscaling.
+- **Volume set** (`RELEASE_NAME-postgis-vs`) — `PGDATA`, with optional autoscaling, snapshotted daily and kept 7 days by default (`volumeset.snapshots`).
 - **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
 - **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`.
 - **Backup cron workload** *(optional)* — a scheduled `pg_dumpall` writing compressed SQL dumps to S3 or GCS.
@@ -17,6 +17,8 @@ This template creates no credential secret of its own, and does not create a GVC
 This application works only with a single replica, do not scale up the replicas.
 
 <b>Upgrading from 1.1.x or older:</b> 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-postgis` and `RELEASE_NAME-postgis-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
+
+<b>Upgrading from 1.4.1 or earlier turns on daily volume snapshots.</b> Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ### Prerequisites
 
@@ -67,7 +69,14 @@ volumeset:
     maxCapacity: 100
     minFreePercentage: 10
     scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 **Internal access** — controls which workloads can reach PostGIS on port 5432. Use `same-gvc` to allow any workload in the same GVC, `same-org` for any workload in the org, or `workload-list` to specify exact workloads:
 ```yaml

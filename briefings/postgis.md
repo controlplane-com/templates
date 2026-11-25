@@ -11,7 +11,7 @@ the app wants spatial types and indexes alongside ordinary relational tables.
 | Resource | Notes |
 |---|---|
 | workload `-postgis` (stateful) | one replica on `5432` |
-| volumeset `-postgis-vs` | `PGDATA`, optional autoscaling |
+| volumeset `-postgis-vs` | `PGDATA`, optional autoscaling; daily snapshots kept 7 d from 1.5.0 (none were ever taken through 1.4.1) |
 | secret `-postgis-config` *(optional)* | backup bucket and region only; created when `backup.enabled` |
 | identity + policy | `reveal` on the prerequisite credentials secret, plus the backup config secret and Cloud Account binding when backups are on |
 | workload `-postgis-backup` (cron, optional) | `pg_dump` to S3 or GCS |
@@ -24,6 +24,7 @@ the app wants spatial types and indexes alongside ordinary relational tables.
 | `config.credentialsSecretName` | `my-postgis-credentials` | **prerequisite** `dictionary` secret (1.4.0+) |
 | `resources` | `200m`/`528Mi` → `500m`/`1024Mi` | |
 | `volumeset.capacity` | `10` | GiB |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | `""` = off; at most hourly (1.5.0) |
 | `internalAccess.type` | `same-gvc` | no public access knob |
 | `backup.enabled` | `false` | `aws` or `gcp`; requires PostGIS 17+ |
 
@@ -41,3 +42,7 @@ the app wants spatial types and indexes alongside ordinary relational tables.
   `status.versions[].message` from `cpln workload get-deployments RELEASE_NAME-postgis`.
 - **Match `backup.image` to the server major.** The tag encodes it (`18.1.0` = Postgres 18, `17.1.0` = 17);
   a mismatched `pg_dump` client refuses to dump a newer server.
+
+## What 1.5.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`postgis.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. The README carries the upgrade note under Warning (this README has no Important Notes section).

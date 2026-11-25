@@ -106,7 +106,14 @@ volumes:
       maxCapacity: 200
       minFreePercentage: 20
       scalingFactor: 1.5
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Placement
 
@@ -240,6 +247,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 - **Supplying a provider key is what activates it, not `modules.enabled`.** Testing showed modules load regardless of that list, so a key added "just to configure it" is a live, billable integration.
 - **Any provider or backup setting opens outbound internet access** on the Weaviate workload. With neither, it has no egress at all.
 - **Restore is not a merge.** It refuses to overwrite a collection that already exists on the cluster.
+- **Upgrading from 1.1.1 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumes.data.snapshots.schedule: ""` to keep scheduled ones off.
 
 ## Links
 

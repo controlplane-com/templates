@@ -1,3 +1,4 @@
+{{- include "weaviate.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "weaviate.volumeset.name" . }}
 description: {{ include "weaviate.workload.name" . }} data
@@ -10,3 +11,9 @@ spec:
     maxCapacity: {{ .Values.volumes.data.autoscaling.maxCapacity }}
     minFreePercentage: {{ .Values.volumes.data.autoscaling.minFreePercentage }}
     scalingFactor: {{ .Values.volumes.data.autoscaling.scalingFactor }}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumes.data.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumes.data.snapshots.schedule }}
+    schedule: {{ .Values.volumes.data.snapshots.schedule | quote }}
+    {{- end }}

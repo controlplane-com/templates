@@ -1,0 +1,47 @@
+# calcom 2.0.0 default install: single-instance PostgreSQL 19, private (no public endpoint), scheduled-job caller on, no SMTP.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+secrets:
+  auth:
+    type: dictionary
+    # Each generated key is 32 hex characters (run.py: token_hex(16)), which is exactly the length
+    # CALENDSO_ENCRYPTION_KEY requires.
+    keys: [nextAuthSecret, encryptionKey, cronSecret, cronApiKey]
+  db:
+    type: dictionary
+    keys: [password]
+    entries: {username: calcom, database: calcom}
+
+vars:
+  pg_password: "{secrets.db.password}"   # the ha-is-18 check connects through the HAProxy endpoint
+
+values:
+  location: aws-us-east-1
+  calcom:
+    auth:
+      secretName: "{secrets.auth.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# The highly available database (postgres-highly-available 3.0.0): a fresh HA install, where Cal.com runs
+# against the HAProxy leader endpoint and ha-is-18 proves the new cluster's major.
+variants:
+  - name: ha
+    values:
+      postgres:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1200
+
+# 2.0.0 runs the single-instance PostgreSQL on 19, so a plain upgrade of a 1.0.0 release (data on PostgreSQL
+# 18) must be REFUSED by the postgres boot guard with the data untouched; the upgrade pinned to postgres:18,
+# as the guard says, then succeeds and the marker written on 1.0.0 survives.
+upgradeFrom:
+  - version: 1.0.0
+    refused: {timeoutSeconds: 420}
+    then: {set: {postgres: {image: "postgres:18"}}}

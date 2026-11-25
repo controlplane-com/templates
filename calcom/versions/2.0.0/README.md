@@ -6,8 +6,8 @@ Open-source scheduling: public booking pages, event types, availability and cale
 
 - **`{release}-calcom`**: a `standard` workload on HTTP :3000 serving the UI, booking pages and `/api/*`. Each start waits for PostgreSQL, applies database migrations and seeds the app store before serving. Pinned to `location`.
 - **`{release}-calcom-cron`** *(optional, on by default)*: one replica of the same image that calls Cal.com's scheduled-job endpoints every minute (queued email, calendar sync, credential refresh). Cal.com runs no scheduler of its own.
-- **`{release}-postgres`**: the bundled `postgres` template (default), holding all Cal.com data.
-- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)*: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint.
+- **`{release}-postgres`**: the bundled `postgres` template (default), PostgreSQL 19, holding all Cal.com data. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
+- **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)*: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **Identity and policies**: `reveal` on exactly the secrets Cal.com reads, and `view` on the install GVC so the app can log a warning when the GVC has other locations.
 
 ## Prerequisites
@@ -90,7 +90,7 @@ internalAccess:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:18
+  image: postgres:19            # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
   config: { credentialsSecretName: my-calcom-db-credentials }   # Prerequisites 2
   resources: { minCpu: 250m, maxCpu: 1, minMemory: 512Mi, maxMemory: 1Gi }
   volumeset: { capacity: 10 }   # GiB (minimum 10)
@@ -98,7 +98,7 @@ postgres:
 postgresHA:
   enabled: false
   config: { credentialsSecretName: my-calcom-db-credentials }   # same shape, in HA mode
-  replicas: 3
+  replicas: 3                   # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   volumeset: { capacity: 10 }   # GiB per replica (minimum 10)
   backup: { enabled: false }    # mode logical (logical.schedule) | wal-g (walg.intervalSeconds)
 ```
@@ -144,6 +144,41 @@ mc ilm rule ls ALIAS/BUCKET_NAME
 
 Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: see [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `{release}-postgres` then stays not ready, Cal.com waits for its database (restarting with `[calcom] FATAL: PostgreSQL ... did not answer`), and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Cal.com gets a new endpoint; bookings pause during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `calcom.auth.secretName` (its `encryptionKey` decrypts the stored calendar and app credentials) and the same `postgres.config.credentialsSecretName`. Cal.com migrates an empty database in it; do not complete `/auth/setup` there.
+2. Stop writes to the old release by stopping its app and scheduled-job caller (the database keeps running):
+
+   ```bash
+   cpln workload stop OLD_RELEASE-calcom --gvc GVC_NAME
+   cpln workload stop OLD_RELEASE-calcom-cron --gvc GVC_NAME
+   ```
+
+3. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Cal.com created:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+4. Run `cpln workload force-redeployment NEW_RELEASE-calcom --gvc GVC_NAME`, sign in with your existing account to check your event types and bookings, point `calcom.appUrl` or your custom domain at the new release (booking links and calendar callbacks use it), then uninstall the old release.
+
 ## Connecting
 
 | Target | Address | Credentials |
@@ -165,6 +200,7 @@ Whoever completes `/auth/setup` first becomes the instance admin, so the install
 
 ## Important Notes
 
+- **Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. See **Upgrading from 1.x**.
 - **Install into a GVC with one location** and set `location` to it: if the GVC lacks that location, Cal.com runs no replica at all. The bundled PostgreSQL starts in every GVC location; the app logs `also has locations this release does not use` when that happens.
 - **Never replace `encryptionKey`**: it encrypts every connected calendar and app credential. Rotating any other key does not restart Cal.com; run `cpln workload force-redeployment {release}-calcom --gvc {gvc}` (and `{release}-calcom-cron` for `cronSecret`) afterwards.
 - **Keep the scheduled-job caller on** unless you call the endpoints yourself: without it queued email, calendar sync and credential refresh never run while Cal.com still reports healthy.

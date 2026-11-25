@@ -7,14 +7,13 @@ tags:
   {{- include "pg-ml.tags" . | nindent 2 }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "aws") }}
 {{/*
-`cpln-connector` plus the user's own bucket-scoped policy, and nothing else —
+the user's own bucket-scoped policy, and nothing else —
 no broad managed policy. The policy is created by the user against exactly the
 bucket in backup.aws.bucket; the JSON is in the README's Storage setup section.
 */}}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

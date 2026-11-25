@@ -39,3 +39,4 @@
 
 ## What 1.3.0 changed
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`timescaledb.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- **1.3.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

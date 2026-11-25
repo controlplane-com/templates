@@ -99,7 +99,14 @@ volumeset:
     maxCapacity: 100   # GiB ceiling
     minFreePercentage: 10
     scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Engine: Redis or Valkey
 
@@ -281,6 +288,7 @@ RDB files are portable. The upstream-documented way to read one is to start a st
   **The failure is close to invisible**, which is the reason this is not merely "your call". The start script discards server output, so `cpln logs` returns **zero lines** for the failing node and the deployment message is empty — there is nothing to read but a node that never becomes ready. Migrate with dump/restore or replication instead of relying on the switch.
 - **The default `250Mi` per node is a floor, not a recommendation.** A cache left at the default will begin evicting almost immediately under real load.
 - **Do not `helm upgrade` from 1.2.x or older.** Those versions cannot start a node on today's `redis:7.2` image, and 1.3.0 renamed the workload and its resources (`RELEASE_NAME` → `RELEASE_NAME-redis-cluster`), so an in-place upgrade does not carry the data. Install a new release of this version and move the data across.
+- **Upgrading from 1.7.0 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumeset.snapshots.schedule: ""` to keep scheduled ones off.
 
 ### Links
 

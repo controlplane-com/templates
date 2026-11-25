@@ -782,7 +782,7 @@ steps:
             help: >-
               Allow `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `s3:GetObjectVersion`
               and `s3:DeleteObjectVersion` on `arn:aws:s3:::<bucket>` and `arn:aws:s3:::<bucket>/*`. The Redis
-              identity, which the backup job also uses, is granted this policy and `cpln-connector` only.
+              identity, which the backup job also uses, is granted this policy only.
           - path: backup.aws.prefix
             type: string
             label: Folder prefix

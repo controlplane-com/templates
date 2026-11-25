@@ -447,7 +447,7 @@ steps:
             help: >-
               The policy needs the S3 actions listed under
               [AWS S3](/template-catalog/templates/redis-cluster#aws-s3), on the bucket and on its objects. The
-              backup identity carries only `cpln-connector` and this policy.
+              backup identity carries only this policy.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
           - path: backup.aws.prefix

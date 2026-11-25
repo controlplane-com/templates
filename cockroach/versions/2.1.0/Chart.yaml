@@ -3,12 +3,12 @@ name: cockroach
 description: CockroachDB distributed SQL database with PostgreSQL wire compatibility and multi-location survivability
 
 type: application
-version: 2.0.0
+version: 2.1.0
 appVersion: "25.4.0"
 
 annotations:
   created: "2025-08-25"
-  lastModified: "2026-11-18"
+  lastModified: "2026-11-25"
   createsGvc: false
 
 dependencies:

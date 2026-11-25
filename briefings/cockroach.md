@@ -13,7 +13,7 @@ region, and multi-region deployments needing a single logical database rather th
 |---|---|
 | workload `-cockroach` (stateful) | nodes per location, `replicaDirect`, drain hook on shutdown |
 | workload `-cockroach-pgbouncer` (standard) | connection pooler, autoscales on RPS **per location** |
-| volumeset | `ext4`, one per node, 7-day snapshots |
+| volumeset | `ext4`, one per node; daily snapshots kept 7 d from 2.1.0 (none were ever taken through 2.0.0) |
 | secrets | cockroach startup script, pgbouncer startup script, a `dictionary` db-config secret |
 | workload `-cockroach-backup` (cron, optional) | `BACKUP INTO` S3/GCS; **carries no identity** — the nodes do the upload |
 | identity + policy | `reveal` on this release's secrets |
@@ -39,6 +39,11 @@ region, and multi-region deployments needing a single logical database rather th
 - **Boot-time GVC read** (`$CPLN_ENDPOINT/org/$CPLN_ORG/gvc/$CPLN_GVC`) — hard-fails on a node with no data, warns on one that already has data.
 - **Render-time check that `backup.location` is one of `locations`.**
 - **`replicas: 0` is now refused** — it used to suspend a location while still counting it as a region.
+
+## What 2.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`cockroach.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`nodes-live`, `write-read-via-pgbouncer`, `data-survives-upgrade`; upgrade from 2.0.0).
 
 ## Troubleshooting traps
 

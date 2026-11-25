@@ -30,12 +30,19 @@ Backups need a bucket and a Control Plane [cloud account](https://docs.controlpl
 | `resources.maxCpu` | Maximum CPU per node | `2` |
 | `resources.maxMemory` | Maximum memory per node | `6Gi` |
 | `volumeset.capacity` | Storage per node in GiB (minimum 10) | `10` |
+| `volumeset.snapshots.schedule` | Volume snapshots of every node, as a 5-field cron in UTC; at most hourly; `""` turns them off | `"0 3 * * *"` |
+| `volumeset.snapshots.retentionDuration` | How long each volume snapshot is kept | `7d` |
 | `multiZone.enabled` | Schedule replicas across availability zones | `false` |
 
 **Production recommendations:**
 - Minimum 3 replicas required for master quorum — always use an odd number
 - Set `jvmHeap` to approximately 50% of `maxMemory`, never exceed 30g
 - Enable `multiZone` for higher durability in production workloads
+
+**Volume snapshots** are separate from the Elasticsearch snapshot backups below: the platform snapshots each
+node's volume on `volumeset.snapshots.schedule`. The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 **Firewall configuration:**
 - External access is blocked by default
@@ -265,6 +272,7 @@ Always use the fully-qualified internal hostname. The bare workload name is not 
 - **`replicas` must be odd**, or the cluster cannot elect a master.
 - **`jvmHeap` is not derived from `resources`.** Raising the container memory limit does not raise the heap, and setting the heap above about half the limit will get the process OOM-killed.
 - **Enabling backups on a running cluster fails for several minutes first.** Every node restarts to pick up the new identity and firewall, and the snapshot repository cannot be registered until they have; the setup job retries until then.
+- **Upgrading from 1.0.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **The snapshot IAM policy needs both bucket ARNs** — `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself.
 
 ## Links

@@ -104,7 +104,14 @@ volumeset:
     maxCapacity: 100
     minFreePercentage: 10
     scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 Configure which workloads can access PostgreSQL:
 
@@ -453,6 +460,7 @@ release. Read them back with `cpln secret reveal SECRET_NAME -o yaml`.
 - **Odd Number for etcd**: Always use an odd number of etcd replicas (3, 5, 7) for proper quorum
 - **Resource Allocation**: Ensure adequate CPU and memory resources for both PostgreSQL and etcd workloads
 - **Multi-zone**: Verify your selected location supports multi-zone
+- **Upgrading from 3.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Backing Up
 

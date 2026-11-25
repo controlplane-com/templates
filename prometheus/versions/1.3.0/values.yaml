@@ -12,6 +12,9 @@ retention:
   size: "" # optional local size cap, e.g. 15GB — empty means no cap
 volumeset:
   capacity: 20 # GiB — TSDB volume mounted at /prometheus
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Metrics ───────────────────────────────────────────────────────────────────
 scrapeInterval: 30s # global scrape interval (self-scrape and extraScrapeConfigs)

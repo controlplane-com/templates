@@ -58,7 +58,15 @@ retention:
 
 volumeset:
   capacity: 20        # GiB — TSDB volume at /prometheus
+  snapshots:
+    schedule: "0 3 * * *"    # snapshots of the TSDB volume, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule. With object storage on, blocks older than `blockDuration` are also in
+your bucket.
 
 ### Metrics
 
@@ -226,10 +234,11 @@ Senders dual-write to both endpoints; a Thanos Query tier dedups via `--query.re
 - **Remote-write password secrets must exist before install** — a missing `passwordSecretName` secret wedges the deployment waiting on it.
 - **Config changes ship via `helm upgrade`** (workload redeploy) — there is no hot reload.
 - **With object storage enabled, keep `retention.time` at least 3× `blockDuration`** (the default `15d`/`2h` satisfies this) — the sidecar needs blocks on the local volume long enough to upload them; history beyond local retention lives in your bucket.
-- **Uninstalling deletes the volume set** — only its final snapshot (kept 7 days) and anything already uploaded to your bucket remain.
+- **Uninstalling deletes the volume set** — only its snapshots (the final one included, each kept for `volumeset.snapshots.retentionDuration`) and anything already uploaded to your bucket remain.
 - **Install into a single-location GVC** (the console requires one). With the CLI in a multi-location GVC, every location runs its own independent Prometheus and volume, so stored data is split across locations.
 - **Upgrading from 1.0.0: `resources.cpu`/`memory` (and `thanos.sidecar.resources.*`) were renamed to `maxCpu`/`maxMemory` in 1.1.0** — the old keys are silently ignored, so rename them.
 - **After a restart, readiness can take minutes on a large TSDB** — WAL replay holds `/-/ready` at 503; this is normal recovery, not a failure.
+- **Upgrading from 1.2.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

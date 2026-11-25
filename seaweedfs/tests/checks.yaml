@@ -1,0 +1,73 @@
+# Feature checks for the seaweedfs template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (s3_access_key, s3_secret_key, bucket).
+#
+# The image carries no S3 client, but its curl signs requests itself (`--aws-sigv4`), so every check
+# speaks real SigV4-authenticated S3 to the gateway through the workload's in-GVC address
+# ({release}-seaweedfs.{gvc}.cpln.local:8333, path-style). Status codes are read from the response
+# headers (-D) rather than curl's -w, whose %-braces would collide with the runner's placeholders.
+checks:
+  - id: startup-bucket
+    description: The bucket listed in s3.buckets exists after boot (ListBuckets with the S3 keys).
+    exec:
+      workload: "{release}-seaweedfs"
+      container: seaweedfs
+      script: |
+        curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "{s3_access_key}:{s3_secret_key}" \
+          "http://{release}-seaweedfs.{gvc}.cpln.local:8333/" | grep -q '<Name>{bucket}</Name>' && echo "BUCKET {bucket}"
+    expect:
+      stdout: "^BUCKET {bucket}$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: s3-put-get
+    description: An object PUT with the S3 keys GETs back byte for byte.
+    exec:
+      workload: "{release}-seaweedfs"
+      container: seaweedfs
+      script: |
+        set -e
+        U="http://{release}-seaweedfs.{gvc}.cpln.local:8333/{bucket}/v-{version}.txt"
+        M="e2e-$(date +%s)-$$"
+        printf '%s %s' "{version}" "$M" > /tmp/e2e-put.txt
+        curl -sS -f -o /dev/null --aws-sigv4 "aws:amz:us-east-1:s3" --user "{s3_access_key}:{s3_secret_key}" -T /tmp/e2e-put.txt "$U"
+        got=$(curl -sS -f --aws-sigv4 "aws:amz:us-east-1:s3" --user "{s3_access_key}:{s3_secret_key}" "$U")
+        rm -f /tmp/e2e-put.txt
+        [ "$got" = "{version} $M" ] && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: wrong-key-refused
+    description: >-
+      The object above is refused with 403 to a request signed with the right access key but a wrong
+      secret key, and to an unsigned request (the control for the checks around it).
+    exec:
+      workload: "{release}-seaweedfs"
+      container: seaweedfs
+      script: |
+        U="http://{release}-seaweedfs.{gvc}.cpln.local:8333/{bucket}/v-{version}.txt"
+        bad=$(curl -sS -D - -o /dev/null --aws-sigv4 "aws:amz:us-east-1:s3" --user "{s3_access_key}:not-the-secret-key" "$U" | head -1 | awk '{print $2}')
+        anon=$(curl -sS -D - -o /dev/null "$U" | head -1 | awk '{print $2}')
+        echo "WRONG-KEY $bad ANONYMOUS $anon"
+    expect:
+      stdout: "^WRONG-KEY 403 ANONYMOUS 403$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The object written on the version this scenario installed first is still there. On a fresh
+      install that is the same version; after an upgrade it proves the volume carried over.
+    exec:
+      workload: "{release}-seaweedfs"
+      container: seaweedfs
+      script: |
+        v=$(curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "{s3_access_key}:{s3_secret_key}" \
+          "http://{release}-seaweedfs.{gvc}.cpln.local:8333/{bucket}/v-{installed_version}.txt")
+        case "$v" in "{installed_version} e2e-"*) echo PERSISTED ;; *) echo "MISSING ($v)" ;; esac
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

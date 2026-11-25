@@ -19,6 +19,9 @@ volumeset:
     maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # minimum free percentage that triggers scaling
     scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── S3 API (port 8333) ───────────────────────────────────────────
 s3:

@@ -3,13 +3,16 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (admin_user,
 # admin_password, pg_user, pg_password, pg_db).
 #
-# The Keycloak image ships no curl or psql, so every check runs in the HA database's patroni-postgres
-# container, which has both and reaches Keycloak over the GVC (internalAccess same-gvc). Database checks
-# go through the HAProxy endpoint, the address Keycloak itself uses. That container's python3 is 3.10, so
-# no backslashes inside f-string expressions.
+# The Keycloak image ships no curl or psql, so the default-install checks run in the HA database's
+# patroni-postgres container, which has both and reaches Keycloak over the GVC (internalAccess same-gvc).
+# Database checks go through the HAProxy endpoint, the address Keycloak itself uses. That container's python3
+# is 3.10, so no backslashes inside f-string expressions. They are kept off the [single] variant
+# (single-instance PostgreSQL, no HA workload), whose own checks run in the postgres container (psql, and
+# bash's /dev/tcp for HTTP: the image has no curl).
 checks:
   - id: admin-token
     description: The bootstrap admin from the prerequisite secret gets an access token from the master realm.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -31,6 +34,7 @@ checks:
 
   - id: rejects-bad-password
     description: A wrong admin password gets no token (the control for the check above).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -45,6 +49,7 @@ checks:
 
   - id: realm-in-database
     description: Keycloak's schema and master realm are in the HA database, read through the HAProxy endpoint.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -63,6 +68,7 @@ checks:
       Creates a realm named after the running version through the admin API, then reads back the realm
       created on the version this scenario installed first. After an upgrade that proves Keycloak's data
       carried over; on a fresh install it is the realm just created.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -95,6 +101,7 @@ checks:
 
   - id: pgvector-0-8-7-available
     description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.1 moved to.
+    scenarios: "^(?!.*\\[single\\])"
     issue: "#5376"
     since: 1.5.1
     exec:
@@ -116,11 +123,12 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
-      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      Every Patroni member restarted onto an image with pgvector 0.8.7 (patroni-postgres 0.8 in 1.5.1, 0.9 from
+      2.0.0) and is back in the cluster, not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
       restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
       without this a member that never comes back (seen once in testing: the old leader stuck initializing for
       17 min) goes unseen.
+    scenarios: "^(?!.*\\[single\\])"
     issue: "#5376"
     since: 1.5.1
     exec:
@@ -145,3 +153,107 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-realm-in-database
+    description: Keycloak migrated its schema into the single-instance PostgreSQL 19 database and the master realm is there.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'REALM ' || name from realm where name = 'master'" 2>&1
+    expect:
+      stdout: "^REALM master$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: single-admin-token
+    description: >-
+      In single-instance mode the bootstrap admin gets an access token from the master realm, and a wrong
+      password is refused, from the postgres container (bash's /dev/tcp; the image has no curl).
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        token() {
+          local body="grant_type=password&client_id=admin-cli&username={admin_user}&password=$1"
+          exec 3<>/dev/tcp/{release}-keycloak.{gvc}.cpln.local/8080 || { echo "CONNECT FAILED"; return; }
+          printf 'POST /realms/master/protocol/openid-connect/token HTTP/1.1\r\nHost: {release}-keycloak.{gvc}.cpln.local:8080\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "${#body}" "$body" >&3
+          timeout 20 cat <&3 | tr -d '\r\n' | tail -c 4000
+          exec 3<&-
+        }
+        echo "GOOD $(token '{admin_password}')"
+        echo "BAD $(token wrong-password)"
+    expect:
+      stdout: '(?s)^GOOD .*"access_token":"[^"]{100,}".*^BAD .*invalid_grant'
+      notStdout: '^BAD .*access_token'
+    retries: 8
+    retryDelaySeconds: 15

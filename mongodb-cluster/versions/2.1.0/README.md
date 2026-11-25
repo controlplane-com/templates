@@ -371,6 +371,7 @@ Afterwards the GVC belongs to you, not the release: `cpln helm uninstall` leaves
 - **A firewall change takes up to ~10 minutes to propagate.** After changing `firewall.internalAllowType`, keep re-testing rather than concluding the knob is broken.
 - **Data lives on the volume set and survives redeployment, but `cpln helm uninstall` deletes it.**
 - **Upgrading from 2.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

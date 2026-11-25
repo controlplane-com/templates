@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 4.0.1
+    version: 4.0.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # Right after the Database server step, which holds this database's image and compute; the database type

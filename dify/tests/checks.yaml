@@ -706,7 +706,7 @@ checks:
         grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
         cat /tmp/pg-major-guard
     expect:
-      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=.*Upgrade > Database server > Postgres image.*Upgrading from 1\\.x"
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=pgvector/pgvector:0\\.8\\.7-pg18.*Upgrade > Database server > Postgres image.*Upgrading from 1\\.x"
     retries: 8
     retryDelaySeconds: 15
 

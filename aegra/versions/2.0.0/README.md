@@ -246,7 +246,7 @@ Aegra has no UI of its own. To chat with an agent in a browser, open the hosted 
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
 ```
 
-**Stay on PostgreSQL 18:** run the upgrade with the pgvector image pinned to 18, and keep it in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). Pin the pgvector image, not the `postgres:18` the guard's log suggests: Aegra needs the pgvector extension. The Console upgrade wizard keeps the installed image for you and warns before a change to another major.
+**Stay on PostgreSQL 18:** run the upgrade with the pgvector image pinned to 18, and keep it in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). Pin the pgvector image (the guard's log names it): Aegra needs the pgvector extension. The Console upgrade wizard keeps the installed image for you and warns before a change to another major.
 
 ```yaml
 postgres:

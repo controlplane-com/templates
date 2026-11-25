@@ -171,7 +171,7 @@ The single-instance database of 2.0.0 runs PostgreSQL 19. A 1.x release's data d
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
 ```
 
-**Stay on PostgreSQL 18.** Pin the pgvector image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does not reuse the release's values). The log line suggests the plain `postgres:18` image; use the pgvector one instead, because Dify's knowledge bases need the extension:
+**Stay on PostgreSQL 18.** Pin the pgvector image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does not reuse the release's values). Use the pgvector image (the database log names it), because Dify's knowledge bases need the extension:
 
 ```yaml
 postgres:

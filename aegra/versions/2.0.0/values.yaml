@@ -66,6 +66,7 @@ postgres:
     imageKey: postgres.image
     consoleField: "Upgrade > Database server > Postgres image"
     readme: 'README, "Upgrading from 1.x"'
+    pinImage: "pgvector/pgvector:0.8.7-pg{major}"   # the guard's log names the pgvector image to pin
   backup: # pass-through to the postgres template's backup feature (Postgres 17+)
     enabled: false
     image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 17 or 18

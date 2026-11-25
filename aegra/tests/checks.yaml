@@ -274,7 +274,7 @@ checks:
         grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
         cat /tmp/pg-major-guard
     expect:
-      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image="
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=pgvector/pgvector:0\\.8\\.7-pg18"
     # an exec can land on the held container's restart
     retries: 8
     retryDelaySeconds: 15

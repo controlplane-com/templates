@@ -15,8 +15,7 @@ UPGRADING A 1.x RELEASE? The single-instance database now defaults to PostgreSQL
 earlier version of this chart is PostgreSQL 18, and the server REFUSES to start on it (your data is
 untouched). If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
 the logs say "REFUSING TO START", run this upgrade again with
---set postgres.image=pgvector/pgvector:0.8.7-pg18 (the pgvector image, not the plain postgres:18 the
-log names: Dify's knowledge bases need the extension), and keep that image in your values for every
+--set postgres.image=pgvector/pgvector:0.8.7-pg18 (the pgvector image, as the log says), and keep that image in your values for every
 later upgrade. To move existing data to
 PostgreSQL 19: README, "Upgrading from 1.x". A new install needs nothing: it starts on PostgreSQL 19.
 {{- end }}

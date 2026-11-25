@@ -19,7 +19,7 @@ have **at least two locations**; for a single-location cluster, use the `redis` 
   master and holding the failover vote. The count is not configurable.
 - **Backup workload** (`{release}-redis-backup`, cron) — nightly RDB snapshot to object storage, in
   the first configured location only. Optional (`backup.enabled`).
-- **Volume sets** (`{release}-redis-vs`, `{release}-sentinel-vs`) — `ext4`, one volume per replica.
+- **Volume sets** (`{release}-redis-vs`, `{release}-sentinel-vs`) — `ext4`, one volume per replica, each snapshotted daily by default.
 - **Domains** — one per public address, mapping a TCP port to each replica. Optional (`publicAccess`).
 - **Identities, policies and config secrets** — one identity per tier, each with `reveal` on exactly
   the secrets that tier reads, plus a bucket-scoped cloud binding when backups are on.
@@ -167,6 +167,9 @@ redis:
       maxCapacity: 100 # GiB
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
 
 ### Sentinel
@@ -184,7 +187,15 @@ sentinel:
   publicAccess:
     enabled: false
     address: redis-sentinel.my-domain.com # a domain you own
+  volumeset: # Sentinel's own state (its rewritten config), 10 GiB per location
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+Both schedules are 5-field crons in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume sets (uninstall)
+takes a final snapshot of every volume whatever the schedule.
 
 ### Networking
 
@@ -498,7 +509,8 @@ Values that changed:
 - **`publicAccess` needs a dedicated load balancer that this chart cannot enable.** It no longer
   creates the GVC, so enable the dedicated load balancer on your GVC before installing with public
   access on; otherwise the `domain` is created and never serves traffic.
-- **Data survives an upgrade but not an uninstall** — `helm uninstall` deletes the volume sets.
+- **Data survives an upgrade but not an uninstall** — `helm uninstall` deletes the volume sets, after a final volume snapshot kept for the configured `retentionDuration`.
+- **Upgrading from 3.0.0 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `redis.volumeset.snapshots.schedule: ""` and `sentinel.volumeset.snapshots.schedule: ""` to keep scheduled ones off.
 
 ## Links
 

@@ -1,3 +1,4 @@
+{{- include "redis-ml.validateSnapshotsSentinel" . }}
 {{- include "redis-ml.validate" . -}}
 kind: volumeset
 name: {{ include "redis-ml.sentinelVolume.name" . }}
@@ -8,3 +9,9 @@ spec:
   fileSystemType: ext4
   initialCapacity: 10
   performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.sentinel.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.sentinel.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.sentinel.volumeset.snapshots.schedule | quote }}
+    {{- end }}

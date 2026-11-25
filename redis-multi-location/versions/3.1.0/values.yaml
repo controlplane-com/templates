@@ -68,6 +68,9 @@ redis:
       maxCapacity: 100 # GiB
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Sentinel ─────────────────────────────────────────────────────────────────
 # Exactly one Sentinel per location — the count is not configurable.
@@ -83,6 +86,10 @@ sentinel:
   publicAccess:
     enabled: false
     address: redis-sentinel.my-domain.com # a domain you own
+  volumeset: # Sentinel's own state (its rewritten config), 10 GiB per location
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Networking (applies to both the Redis and Sentinel workloads) ────────────
 firewall:

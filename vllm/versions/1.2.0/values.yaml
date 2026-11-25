@@ -40,6 +40,9 @@ startupTimeoutSeconds: 900 # seconds from container start to ready (download + l
 # ─── Model cache ──────────────────────────────────────────────────────────────
 volumeset:
   capacity: 50 # GiB per replica for new volumes; at least 2x the model's weights plus 5 (minimum 10)
+  snapshots:
+    schedule: ""             # volume snapshots; off by default (see README); at most hourly, e.g. "0 3 * * *"
+    retentionDuration: 1d    # how long each snapshot is kept
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 publicAccess:

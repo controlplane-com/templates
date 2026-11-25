@@ -5,7 +5,7 @@ This template deploys [vLLM](https://github.com/vllm-project/vllm), a high-throu
 ## Architecture
 
 - **vLLM server**: stateful workload on port 8000, one GPU set per replica (`replicas: 1` by default); replicas are independent servers behind the workload's load-balanced endpoint and are replaced one at a time.
-- **Model cache volume set**: one volume per replica at `/models` holding the downloaded weights and vLLM's compile cache. It is a re-downloadable cache, so no snapshots are kept.
+- **Model cache volume set**: one volume per replica at `/models` holding the downloaded weights and vLLM's compile cache. It is a re-downloadable cache, so scheduled snapshots are off by default and no final snapshot is taken on uninstall.
 - **Identity + policy**: `reveal` on exactly your API key secret, plus your Hugging Face token secret when set.
 - **Metrics**: vLLM's `/metrics` (queue depth, KV-cache usage, token throughput) is scraped into the platform's built-in metrics.
 
@@ -85,7 +85,12 @@ startupTimeoutSeconds: 900 # seconds from container start to ready (download + l
 ```yaml
 volumeset:
   capacity: 50 # GiB per replica for new volumes; at least 2x the model's weights plus 5 (minimum 10)
+  snapshots:
+    schedule: ""             # snapshots of every replica's volume; off by default; at most hourly, e.g. "0 3 * * *"
+    retentionDuration: 1d    # how long each snapshot is kept
 ```
+
+The volume holds only downloaded models, so scheduled snapshots are off by default. The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall) takes no final snapshot.
 
 ### Access
 

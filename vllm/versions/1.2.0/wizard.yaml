@@ -337,7 +337,36 @@ steps:
           old weights.
         suggestions: [20, 50, 100, 250, 500]
         docs: "/reference/volumeset#capacity-and-billing"
+      - path: volumeset.snapshots.schedule
+        type: string
+        format: cron
+        label: Snapshot schedule (UTC)
+        description: >-
+          Off by default: the volume holds only downloaded models, which download again on their own. Leave
+          it empty for no scheduled snapshots, or enter one such as `0 3 * * *` (daily at 03:00 UTC).
+        pattern: '^\s*[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+\s*$'
+        patternMessage: >-
+          Use 5 fields with a single fixed minute, such as `0 3 * * *`; macros such as `@daily` are not
+          accepted. Snapshots cannot run more often than hourly.
+        docs: "/reference/volumeset#snapshots"
+      - path: volumeset.snapshots.retentionDuration
+        type: string
+        label: Keep snapshots for
+        required: true
+        placeholder: 1d
+        pattern: '^\d+(\.\d+)?[dhm]$'
+        patternMessage: Use a number followed by d, h or m, such as 1d or 12h.
+        help: No final snapshot is taken on uninstall, whatever the schedule.
     rules:
+      - rule: >-
+          self.volumeset.snapshots.schedule != null &&
+          (self.volumeset.snapshots.schedule == '' ||
+          self.volumeset.snapshots.schedule.trim().matches('^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$'))
+        mirrors: vllm.validateSnapshots
+        paths: [volumeset.snapshots.schedule]
+        message: >-
+          Snapshots run at most hourly: use a 5-field schedule with a single fixed minute, or an
+          empty string ("") to turn them off.
       - rule: self.volumeset.capacity >= 10
         mirrors: vllm.validateStorage
         paths: [volumeset.capacity]

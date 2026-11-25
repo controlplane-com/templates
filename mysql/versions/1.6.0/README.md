@@ -65,7 +65,14 @@ volumeset:
     maxCapacity: 100          # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10     # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2        # Scaling factor to determine how much to scale up when autoscaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Database access
 
@@ -238,9 +245,10 @@ unset MYSQL_PWD
 - **Do not scale past one replica.** This is a single-instance MySQL on one volume; extra replicas would mount nothing and corrupt nothing usefully.
 - **`phpMyAdmin.publicAccess.enabled: true` puts a database console on the internet.** Anyone reaching it needs only a valid database password to read and write everything. Prefer leaving it off and reaching the console from inside the GVC.
 - **Access changes take up to a couple of minutes** to propagate after an `internalAccess` or `publicAccess` change.
-- **Data lives on the volume set** and survives redeploys; `cpln helm uninstall` deletes it, taking the database with it.
+- **Data lives on the volume set** and survives redeploys; `cpln helm uninstall` deletes it, after a final volume snapshot kept for `volumeset.snapshots.retentionDuration`.
 - **Upgrading from 1.4.x is a breaking change.** `config.*` and `enablePhpMyAdmin` no longer exist — an install that still sets them fails at render with instructions. Create the two secrets first, and expect the credentials on an existing volume to stay whatever they already were.
 - **Do not `helm upgrade` from 1.1.x or older.** 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-mysql` and `RELEASE_NAME-mysql-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
+- **Upgrading from 1.5.2 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumeset.snapshots.schedule: ""` to keep scheduled ones off.
 
 ## Links
 

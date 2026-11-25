@@ -60,7 +60,14 @@ volumeset:
     maxCapacity: 200 # maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # minimum free percentage that triggers scaling
     scalingFactor: 1.2 # how much to grow the volume when scaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### S3 API
 
@@ -139,6 +146,7 @@ aws --endpoint-url http://<release>-seaweedfs:8333 s3 cp ./file s3://<bucket>/fi
 - **Data lives on the volumeset** and survives redeploys and upgrades under the same release name. `helm uninstall` deletes the volumeset and every stored object.
 - **Volume file size is derived from disk capacity at startup**, so growing the volumeset takes effect on the next restart. This is harmless — SeaweedFS simply creates more volume files.
 - **Only the S3 API is publicly routable.** The admin UI is the workload's second port, so `publicAccess` exposes port 8333 only; reach the admin UI from inside the GVC or through `cpln port-forward`.
+- **Upgrading from 1.1.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

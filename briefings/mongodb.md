@@ -49,3 +49,4 @@ evolving schema where a single instance is enough.
 
 - Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.4.2 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`mongo.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
 - E2E baseline `1.5.0` added (upgrade from 1.4.2).
+- **1.5.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

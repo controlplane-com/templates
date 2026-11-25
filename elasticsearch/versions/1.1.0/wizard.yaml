@@ -325,8 +325,7 @@ steps:
             description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
             help: >-
               The policy needs all ten S3 actions listed under [AWS S3](#aws-s3), on both
-              `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. The identity carries only `cpln-connector` and
-              this policy, so an action missing from it is missing for Elasticsearch.
+              `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. The identity carries only this policy, so an action missing from it is missing for Elasticsearch.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
           - path: backup.aws.prefix

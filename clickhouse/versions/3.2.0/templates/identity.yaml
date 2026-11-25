@@ -9,6 +9,5 @@ tags: {{- include "clickhouse.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - "{{ .Values.aws.policyName }}"
 {{- end }}

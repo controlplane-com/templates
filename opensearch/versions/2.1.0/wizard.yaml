@@ -389,7 +389,7 @@ steps:
             help: >-
               The policy needs the eight S3 actions listed under [Backing Up](#backing-up), on both
               `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. With only the `/*` ARN the repository registers
-              and listing snapshots then fails. The identity carries only `cpln-connector` and this policy.
+              and listing snapshots then fails. The identity carries only this policy.
             pattern: '^[A-Za-z0-9+=,.@_-]+$'
             patternMessage: "Enter the name of your IAM policy, using letters, digits and + = , . @ _ -."
           - path: backup.aws.prefix

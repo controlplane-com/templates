@@ -459,6 +459,7 @@ position in `locations`.
 - **Renaming `clusterName` orphans existing `Distributed` tables** — they keep pointing at the old cluster and fail with `Code: 701`. Recreate them after a rename
 - **With one replica per shard, losing a shard fails every distributed query** (~60 s to surface), not just the rows on that shard. Add replicas if partial results are not acceptable
 - **Upgrading from 3.1.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

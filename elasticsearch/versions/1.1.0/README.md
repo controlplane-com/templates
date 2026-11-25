@@ -274,6 +274,7 @@ Always use the fully-qualified internal hostname. The bare workload name is not 
 - **Enabling backups on a running cluster fails for several minutes first.** Every node restarts to pick up the new identity and firewall, and the snapshot repository cannot be registered until they have; the setup job retries until then.
 - **Upgrading from 1.0.1 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **The snapshot IAM policy needs both bucket ARNs** — `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. `s3:ListBucket` and `s3:GetBucketLocation` authorize against the bucket itself.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

@@ -10,7 +10,6 @@ tags:
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.backup.aws.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.backup.aws.policyName | quote }}
 {{- end }}
 {{- if and .Values.backup.enabled (eq .Values.backup.provider "gcp") }}

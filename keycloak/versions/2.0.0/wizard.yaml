@@ -260,6 +260,13 @@ steps:
           3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Keycloak connects through.
           Recommended for production. Its cluster, storage, consensus, network and backups follow in the next steps.
         fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0 && self.postgresHA.enabled
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret

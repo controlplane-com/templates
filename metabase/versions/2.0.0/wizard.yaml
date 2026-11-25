@@ -263,6 +263,13 @@ steps:
             advanced: true
             when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0 && self.postgresHA.enabled
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
       - title: Credentials
         docs: "#prerequisites"
         fields:

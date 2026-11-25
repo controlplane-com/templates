@@ -13,7 +13,7 @@ or its drop-in compatibility with older MySQL clients; the database behind a PHP
 | Resource | Kind | Notes |
 |---|---|---|
 | `{release}-maria` | workload (`stateful`) | MariaDB on tcp/3306, `minScale`/`maxScale` pinned to 1 |
-| `{release}-maria-vs` | volumeset | `ext4`, mounted at `/var/lib/mysql`, `general-purpose-ssd` |
+| `{release}-maria-vs` | volumeset | `ext4`, mounted at `/var/lib/mysql`, `general-purpose-ssd`; daily snapshots kept 7 d + a final snapshot on delete from 1.5.0 (no `snapshots` block through 1.4.1) |
 | `{release}-maria-identity` | identity | carries the AWS/GCP cloud-account binding when backups are on |
 | `{release}-maria-policy` | policy | `reveal` on exactly the two user-created credential secrets |
 | `{release}-phpmyadmin` | workload (`serverless`) | optional, OFF by default; no identity, reads no secret |
@@ -35,6 +35,7 @@ env values on the backup job — they are not credentials; bucket access comes f
 | `resources` | 100m/250m cpu, 128Mi/264Mi mem | `minCpu`/`maxCpu`/`minMemory`/`maxMemory` |
 | `internalAccess.type` | `same-gvc` | governs the **database** only |
 | `volumeset.capacity` | `10` | GiB, minimum 10; optional autoscaling block |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | `""` = no scheduled snapshots; more often than hourly fails at render (`maria.validateSnapshots`, mirrored in the wizard) |
 | `phpMyAdmin.enabled` | `false` | console is opt-in |
 | `phpMyAdmin.image` | `phpmyadmin:5.2.3-apache` | official Docker library image, pinned |
 | `phpMyAdmin.publicAccess.enabled` | `false` | true = login form on the public internet |
@@ -49,7 +50,7 @@ env values on the backup job — they are not credentials; bucket access comes f
   an unresolvable `cpln://secret/...` reference — it looks like a crash, it is a missing secret.
 - **Credentials are only honoured when the volume is first initialized.** Rotating the secret and
   redeploying does nothing; the data directory keeps the original passwords. Change them with
-  `ALTER USER`, or uninstall (which deletes the volumeset) and reinstall.
+  `ALTER USER`, or uninstall (which deletes the volumeset, after a final snapshot from 1.5.0) and reinstall.
 - **Two different `internalAccess` blocks.** `internalAccess` is the database; `phpMyAdmin.internalAccess`
   is the console. Before 1.4.0 the console had **no** access knob at all and was hardcoded public — that
   was the security defect 1.4.0 fixes.
@@ -67,6 +68,9 @@ env values on the backup job — they are not credentials; bucket access comes f
 
 ## History
 
+- **1.5.0** (2026-11-25) — the volume set gets a whole `snapshots` block for the first time (work item 5219):
+  `createFinalSnapshot: true` plus `volumeset.snapshots.schedule` (daily 03:00 UTC) and `retentionDuration` (7d).
+  Through 1.4.1 no snapshot was ever taken, not even on uninstall. CI baseline 1.5.0 upgrades from 1.4.1.
 - **1.4.0** (2026-08-17) — credentials became two prerequisite secrets; phpMyAdmin defaults off, gains
   its own `publicAccess`/`internalAccess` knobs and a pinned image; template-created secret removed;
   backup job passes `MYSQL_DATABASE`.

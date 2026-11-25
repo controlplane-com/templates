@@ -1,3 +1,4 @@
+{{- include "mongo.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "mongo.volume.name" . }}
 description: Volume set for MongoDB data storage
@@ -16,4 +17,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

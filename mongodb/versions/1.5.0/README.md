@@ -5,7 +5,7 @@ Creates a single replica MongoDB database with a dedicated persistent volume wit
 ### Architecture
 
 - **Stateful MongoDB workload** (`RELEASE_NAME-mongo`) — one replica serving `27017`, pinned to a single instance.
-- **Volume set** (`RELEASE_NAME-mongo-vs`) — the data directory, with optional autoscaling.
+- **Volume set** (`RELEASE_NAME-mongo-vs`) — the data directory, with optional autoscaling and daily snapshots.
 - **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
 - **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`. It holds no credentials.
 - **Backup cron workload** *(optional)* — a scheduled `mongodump` writing compressed archives to S3 or GCS.
@@ -69,7 +69,16 @@ volumeset:
     maxCapacity: 100
     minFreePercentage: 10
     scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule. Upgrading from 1.4.2 or earlier turns on daily volume
+snapshots: earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set
+`volumeset.snapshots.schedule: ""` to keep them off.
 
 **Internal access** — controls which workloads can reach MongoDB on port 27017. Use `same-gvc` to allow any workload in the same GVC, `same-org` for any workload in the org, or `workload-list` to specify exact workloads:
 ```yaml

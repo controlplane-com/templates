@@ -654,7 +654,9 @@ checks:
       stdout: "^TIMEOUTS 2$"
 
   - id: fresh-is-19
-    description: A fresh install runs the single-instance database on PostgreSQL 19 with the pgvector extension Dify created.
+    description: >-
+      A fresh install runs the single-instance database on PostgreSQL 19, with Dify's tables migrated and the pgvector
+      extension available in the image (Dify creates it with its first high-quality knowledge index).
     since: 2.0.0
     scenarios: "^install (?!.*\\[ha\\])"
     exec:
@@ -665,9 +667,10 @@ checks:
         export PGPASSWORD='{pg_password}'
         H=$(hostname -i | awk '{print $1}')
         echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
-        echo "VECTOR=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from pg_extension where extname = 'vector'")"
+        echo "DIFY_TABLES=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from information_schema.tables where table_name in ('apps', 'accounts', 'datasets')")"
+        echo "VECTOR=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from pg_available_extensions where name = 'vector'")"
     expect:
-      stdout: "(?s)^SERVER_VERSION_NUM=19[0-9]{4}$.*^VECTOR=1$"
+      stdout: "(?s)^SERVER_VERSION_NUM=19[0-9]{4}$.*^DIFY_TABLES=3$.*^VECTOR=1$"
     retries: 4
     retryDelaySeconds: 15
 

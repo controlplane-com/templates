@@ -362,6 +362,7 @@ checks:
     description: >-
       The replicas booted together and seeded the starter flows once: the Starter Projects folder in
       PostgreSQL holds flows and no name appears twice.
+    scenarios: "^(?!.*\\[ha\\])"   # reads the single-instance database; the [ha] variant has none
     exec:
       workload: "{release}-postgres"
       container: postgresql

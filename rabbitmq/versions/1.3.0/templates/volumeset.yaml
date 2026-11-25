@@ -1,5 +1,6 @@
 {{- include "rabbitmq.validate" . -}}
 {{- if .Values.volumeset }}
+{{- include "rabbitmq.validateSnapshots" . }}
 kind: volumeset
 name: {{ include "rabbitmq.volume.name" . }}
 tags: {{- include "rabbitmq.tags" . | nindent 2 }}
@@ -11,5 +12,8 @@ spec:
   install drift from the moment it is created. */}}
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}
 {{- end }}

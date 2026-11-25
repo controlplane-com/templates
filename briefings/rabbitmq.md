@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-rabbitmq` (stateful, 1 replica) | Broker: AMQP `5672`, management UI `15672`, metrics `15692` |
-| volumeset `{release}-rabbitmq-vs` (10 GiB, ext4) | Mnesia store: messages, queues, **the user database, and the Erlang cookie** |
+| volumeset `{release}-rabbitmq-vs` (10 GiB, ext4; daily snapshots kept 7 d from 1.3.0) | Mnesia store: messages, queues, **the user database, and the Erlang cookie** |
 | secret `{release}-rabbitmq-config` (opaque, plain) | `rabbitmq.conf` — now carries only `listeners.tcp.default` |
 | identity + policy | `reveal` on exactly two secrets: the chart's config secret and the user's credentials secret |
 
@@ -41,3 +41,8 @@
 Every run of the e2e CI installs 1.2.0 fresh and upgrades to it from 1.1.1 and 1.0.0 (`rabbitmq/tests/`). Measured there: the broker picks up `RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` with `RABBITMQ_CONFIG_FILE` pointing at the mounted secret (the secret's user authenticates and a wrong password is refused), a persistent message on a durable queue round-trips and survives the 1.1.1 → 1.2.0 upgrade, rendered == stored on the Drift tab, and a no-op upgrade causes no churn.
 
 Still not measured: an AMQP client connection (the checks use the management API, which authenticates against the same user database), and whether `defaultOptions.timeoutSeconds: 30` disturbs long-lived AMQP connections.
+
+## What 1.3.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.2.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`rabbitmq.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. The guard sits inside the `if .Values.volumeset` gate, so a values file that nulls `volumeset` still renders.
+- E2E baseline `1.3.0` added (upgrade from 1.2.0).

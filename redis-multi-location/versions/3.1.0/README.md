@@ -257,8 +257,7 @@ Complete these before installing with `backup.enabled: true`.
    holding the bucket. Set `backup.aws.cloudAccountName` to its name.
 
 3. Create an AWS IAM policy scoped to exactly that bucket (replace `YOUR_BUCKET_NAME`), and set
-   `backup.aws.policyName` to the policy's name. The workload identity is granted this policy and
-   `cpln-connector` only — no broad managed policy.
+   `backup.aws.policyName` to the policy's name. The workload identity is granted this policy only — no broad managed policy.
 
 ```json
 {
@@ -470,6 +469,7 @@ Values that changed:
   trigger one: measured at 5 minutes with the workload version unchanged and the **old password
   still accepted**. There is no error and the workload stays healthy throughout, so a rotation looks
   like it worked while the old credential keeps working indefinitely. Apply it with:
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
   ```bash
   cpln workload force-redeployment <workload> --gvc <gvc>

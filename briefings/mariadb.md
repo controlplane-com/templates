@@ -76,3 +76,4 @@ env values on the backup job — they are not credentials; bucket access comes f
   backup job passes `MYSQL_DATABASE`.
 - **1.3.2** — backup images moved to ghcr.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 1.4.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
+- **1.5.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

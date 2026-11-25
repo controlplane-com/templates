@@ -248,6 +248,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 - **Any provider or backup setting opens outbound internet access** on the Weaviate workload. With neither, it has no egress at all.
 - **Restore is not a merge.** It refuses to overwrite a collection that already exists on the cluster.
 - **Upgrading from 1.1.1 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumes.data.snapshots.schedule: ""` to keep scheduled ones off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

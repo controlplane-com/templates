@@ -249,6 +249,7 @@ unset MYSQL_PWD
 - **Upgrading from 1.4.x is a breaking change.** `config.*` and `enablePhpMyAdmin` no longer exist — an install that still sets them fails at render with instructions. Create the two secrets first, and expect the credentials on an existing volume to stay whatever they already were.
 - **Do not `helm upgrade` from 1.1.x or older.** 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-mysql` and `RELEASE_NAME-mysql-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
 - **Upgrading from 1.5.2 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumeset.snapshots.schedule: ""` to keep scheduled ones off.
+- **The cloud identity no longer attaches the `cpln-connector` AWS policy.** Only your own bucket-scoped policy is attached; it is all the workload needs. No action is needed on upgrade.
 
 ## Links
 

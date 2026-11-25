@@ -103,3 +103,4 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
   API on this stateful workload and `terminationGracePeriodSeconds: 90` is backfilled.
 - **The start script runs `set -f`**: `$AUTH_PARAMS` is unquoted, so without it a password such as `/e*/..` globs
   to a path and the node never passes its health wait (proven locally 10-22).
+- **1.8.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

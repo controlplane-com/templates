@@ -48,6 +48,9 @@ retention:
 
 volumeset:
   capacity: 20 # GiB — ingester WAL/TSDB and compactor workspace at /data
+  snapshots:
+    schedule: ""             # volume snapshots; off by default (see README); at most hourly, e.g. "0 3 * * *"
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Access ───────────────────────────────────────────────────────────────────
 # Internal-only: Mimir has no built-in authentication, so this template never

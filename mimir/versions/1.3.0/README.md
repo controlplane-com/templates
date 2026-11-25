@@ -103,11 +103,16 @@ retention:
 ```yaml
 volumeset:
   capacity: 20        # GiB — WAL/TSDB and compactor workspace
+  snapshots:
+    schedule: ""             # snapshots of every replica's volume; off by default; at most hourly, e.g. "0 3 * * *"
+    retentionDuration: 7d    # how long each snapshot is kept
 
 internalAccess:
   type: same-gvc      # none | same-gvc | same-org | workload-list
   workloads: []       # used with workload-list
 ```
+
+Metric blocks are stored in your bucket and the volume holds only the write-ahead log and the compactor's workspace, so scheduled snapshots are off by default. The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall) takes a final snapshot whatever the schedule.
 
 ## Storage setup
 

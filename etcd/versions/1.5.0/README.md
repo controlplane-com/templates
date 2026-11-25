@@ -5,7 +5,7 @@ etcd is a distributed, reliable key-value store for the most critical data of a 
 ### Architecture
 
 - **Stateful etcd workload** — `replicas` nodes forming a Raft cluster, using per-replica addressing so each node can find its peers.
-- **Volume set** — the data directory, one per replica.
+- **Volume set** — the data directory, one per replica, snapshotted daily.
 - **Secret** — the startup script that derives each node's identity and peer list at boot.
 - **Identity and policy** — `reveal` on the startup secret.
 
@@ -41,6 +41,12 @@ Note: Confirm your location supports multi-zone
 - **`tuning.autoCompactionMode`**: How the retention value below is read — `periodic` (a duration) or `revision` (a revision count) (default: `periodic`)
 - **`tuning.autoCompactionRetention`**: History kept before old revisions are discarded (default: `1h`)
 - **`tuning.quotaBackendBytes`**: Backend size limit in bytes (default: `0`, meaning etcd's own 2 GiB limit)
+- **`volumeset.snapshots.schedule`**: Volume snapshots of every replica, as a 5-field cron in UTC (default: `"0 3 * * *"`, daily at 3am; `""` turns them off)
+- **`volumeset.snapshots.retentionDuration`**: How long each snapshot is kept (default: `7d`)
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Storage growth and compaction
 
@@ -84,4 +90,5 @@ A `DB SIZE` near 2.1 GB on every member, plus `NOSPACE` in `alarm list`, confirm
 - **`replicas` must be odd and at least 3.** An even count gains no fault tolerance and risks split votes.
 - **Compaction is required, not optional.** etcd retains every superseded revision until told otherwise, so a cluster left uncompacted will fill its backend quota and go read-only. The `tuning` values control this and cannot switch it off.
 - **A full backend quota puts the cluster into a read-only alarm** that survives restarts — it must be cleared explicitly after compacting and defragmenting.
+- **Upgrading from 1.4.2 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 - **Uninstalling deletes the volume sets**, and with them the entire keyspace.

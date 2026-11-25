@@ -1,0 +1,72 @@
+# Feature checks for the etcd template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline var (members).
+#
+# The cluster has no client auth, so there is no wrong-credential control; the checks assert on values
+# only a working, replicating cluster returns. Every check runs etcdctl (v3 API, shipped in the image next
+# to etcd) against the member's own client listener on 127.0.0.1:2379. Replicas are {release}-etcd-N.
+checks:
+  - id: cluster-healthy
+    description: Every member of the baseline is listed as started and answers a health proposal.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      shell: bash
+      script: |
+        started=$(etcdctl member list | grep -c ', started, ')
+        healthy=$(etcdctl endpoint health --cluster 2>&1 | grep -c ' is healthy: ')
+        echo "STARTED $started HEALTHY $healthy"
+    expect:
+      stdout: "^STARTED {members} HEALTHY {members}$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-read
+    description: A key written on member 0 reads back through a linearizable (quorum) read.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      replica: "{release}-etcd-0"
+      shell: bash
+      script: |
+        set -e
+        M="e2e-$(date +%s%N)"
+        etcdctl put /e2e/v/{version} "{version} $M" >/dev/null
+        got=$(etcdctl get /e2e/v/{version} --print-value-only)
+        [ "$got" = "{version} $M" ] && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: replicated-to-peer
+    description: >-
+      The key written on member 0 is in member 2's own copy of the data (a serializable read answers
+      from the local member only, so this proves the write replicated).
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      replica: "{release}-etcd-2"
+      shell: bash
+      script: |
+        echo "GOT $(etcdctl get /e2e/v/{version} --consistency=s --print-value-only)"
+    expect:
+      stdout: "^GOT {version} e2e-"
+    retries: 4
+    retryDelaySeconds: 10
+
+  - id: data-survives-upgrade
+    description: >-
+      The key written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volumes carried over.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      shell: bash
+      script: |
+        v=$(etcdctl get /e2e/v/{installed_version} --print-value-only)
+        case "$v" in "{installed_version} e2e-"*) echo PERSISTED ;; *) echo "MISSING (value: '$v')" ;; esac
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

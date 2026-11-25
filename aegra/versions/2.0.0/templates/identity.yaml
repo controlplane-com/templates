@@ -1,0 +1,4 @@
+kind: identity
+name: {{ include "aegra.identity.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "aegra.tags" . | nindent 4 }}

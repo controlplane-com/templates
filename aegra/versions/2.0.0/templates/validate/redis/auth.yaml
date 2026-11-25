@@ -1,0 +1,9 @@
+{{- /*
+Renders nothing. It lives two directories deep on purpose: Helm renders the deepest
+template paths first, so at the top level the redis subchart's own validation would fire
+before aegra.validate. At this depth the parent's messages, which name the supported
+setting, are the ones users see.
+*/ -}}
+{{- include "aegra.validateRedisMode" . }}
+{{- include "aegra.validateRedisPassword" . }}
+{{- include "aegra.validateRedisPublic" . }}

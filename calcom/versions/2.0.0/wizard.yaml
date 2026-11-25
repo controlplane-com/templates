@@ -1,0 +1,474 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Cal.com
+
+# Cal.com and its cron caller pin themselves to the single `location` value, and both bundled databases
+# are single-location stateful workloads with no location handling: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  - template: postgres
+    version: 3.4.1
+    when: self.postgres.enabled
+    title: Single-instance PostgreSQL
+    after: email
+    steps:
+      - { id: server, title: Database server }
+      - { id: storage, title: Database storage }
+      - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres template docs.
+    exclude:
+      # Chosen in the Database section of the first step, next to the HA mode's secret.
+      - config.credentialsSecretName
+      # Cal.com connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        help: >-
+          Every booking, user and connected-calendar credential lives on this volume. Uninstalling the release
+          deletes the volume set, so the data does not survive a reinstall.
+      internalAccess.type:
+        description: >-
+          Cal.com connects to its database like any other workload: keep Same GVC, or add the Cal.com workload
+          under Allowed workloads.
+      internalAccess.workloads:
+        label: Extra allowed workloads
+        description: >-
+          Optional with Same GVC: workloads in other GVCs that may also connect. Cal.com itself needs no entry
+          here.
+  - template: postgres-highly-available
+    version: 2.8.1
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: email
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Cal.com stores its data in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional scheduled backups to object storage. Create the bucket and the Control Plane cloud account
+          first (for AWS also the IAM policy); the steps are in the postgres-highly-available template docs.
+    exclude:
+      - config.credentialsSecretName
+      # Cal.com connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused.
+      - pgbouncer
+    override:
+      volumeset.capacity:
+        description: >-
+          Per member. A quarter of it caps the WAL that replication slots may hold back.
+        help: >-
+          Every booking, user and connected-calendar credential lives on these volumes. Uninstalling the
+          release deletes the volume sets, so the data does not survive a reinstall.
+      internal_access.type:
+        description: >-
+          Cal.com connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
+          Cal.com workload under Allowed workloads.
+      internal_access.workloads:
+        label: Extra allowed workloads
+        description: >-
+          Optional with Same GVC: workloads in other GVCs that may also connect. Cal.com itself needs no entry
+          here.
+
+steps:
+  - id: calcom
+    title: Cal.com
+    description: Where Cal.com runs, its server, its database, and the two prerequisite secrets.
+    sections:
+      - title: Location
+        docs: "#location"
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC that Cal.com runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: calcom.validate
+            paths: [location]
+            message: >-
+              Cal.com runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: Server
+        docs: "#application"
+        fields:
+          - path: calcom.image
+            type: string
+            format: image
+            label: Cal.com image
+            required: true
+          - path: calcom.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: All state lives in the database, so replicas are interchangeable; 2 keeps the UI up through restarts.
+          - path: calcom.appUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://cal.example.com
+            description: >-
+              Only for a custom domain, with the scheme. Empty uses the canonical endpoint, or
+              `http://localhost:3000` (for `cpln port-forward`) when the public endpoint is off.
+            help: Booking links, email links and sign-in redirects are built from this address.
+          - path: calcom.resources
+            type: resources
+            label: Resources
+            required: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+            help: Every start applies database migrations and seeds the app store before serving.
+        rules:
+          - rule: self.calcom.replicas >= 1
+            mirrors: calcom.validate
+            paths: [calcom.replicas]
+            message: Use at least one replica.
+          - rule: >-
+              self.calcom.appUrl == '' || self.calcom.appUrl.startsWith('http://') ||
+              self.calcom.appUrl.startsWith('https://')
+            mirrors: calcom.validate
+            paths: [calcom.appUrl]
+            message: The public URL needs its scheme, for example https://cal.example.com.
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Two secrets must exist **before** you install: the application keys below and the database
+              credentials under Database further down. If one is missing, the deployment waits and `cpln logs`
+              shows nothing at all.
+          - path: calcom.auth.secretName
+            type: ref
+            label: Application keys secret
+            required: true
+            description: >-
+              A dictionary secret with `nextAuthSecret`, `encryptionKey` (exactly 32 characters), `cronSecret` and
+              `cronApiKey`.
+            help: >-
+              `encryptionKey` encrypts every connected calendar and app credential; replacing it makes them
+              unreadable. `cronSecret` authorizes the scheduled-job caller. After changing any other key, run
+              `cpln workload force-redeployment` on `{release}-calcom` (and `{release}-calcom-cron` for `cronSecret`).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [nextAuthSecret, encryptionKey, cronSecret, cronApiKey]
+              create:
+                suggestName: "context.releaseName + '-calcom-auth'"
+        rules:
+          - rule: self.calcom.auth.secretName != null && self.calcom.auth.secretName != ''
+            mirrors: calcom.validate
+            paths: [calcom.auth.secretName]
+            message: The application keys secret is required.
+
+      - title: Database
+        docs: "#database"
+        description: >-
+          Which PostgreSQL holds Cal.com's data. Its server, storage, network and backups follow in the last
+          steps; their defaults fit a first install.
+        fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica; a restart means brief downtime.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields. The chooser above writes them, so they show only
+          # when YAML mode left them in a state the chart refuses, to carry that rule's message.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            when: self.postgres.enabled == self.postgresHA.enabled
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            when: >-
+              self.postgres.enabled == self.postgresHA.enabled ||
+              (self.postgresHA.enabled && has(self.postgresHA.proxy) && has(self.postgresHA.proxy.enabled) &&
+              dyn(self.postgresHA)['proxy']['enabled'] != true)
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: One PostgreSQL replica.
+        fields:
+          - type: note
+            when: >-
+              (self.postgres.config.credentialsSecretName == null || self.postgres.config.credentialsSecretName == '') &&
+              self.postgresHA.config.credentialsSecretName != null && self.postgresHA.config.credentialsSecretName != ''
+            text: Each database type keeps its own secret setting; pick the secret you chose for the highly available database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the highly available database,
+              pick ' + self.postgresHA.config.credentialsSecretName + ' again.'
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Cal.com puts them in a URL,
+              so all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Cal.com
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update
+              the secret and force a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-calcom-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Cal.com connects through.
+        fields:
+          - type: note
+            when: >-
+              self.postgres.config.credentialsSecretName != null && self.postgres.config.credentialsSecretName != '' &&
+              self.postgresHA.config.credentialsSecretName != self.postgres.config.credentialsSecretName
+            text: Each database type keeps its own secret setting; pick the secret you chose for the single-instance database again.
+            textExpression: >-
+              'Each database type keeps its own secret setting. To use the one you chose for the single-instance database,
+              pick ' + self.postgres.config.credentialsSecretName + ' again.'
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Cal.com puts them in a URL,
+              so all three values must be URL-safe (letters, digits, `-`, `_`, `.`).
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and Cal.com connects with
+              them. Changing it later is a database operation: follow the postgres-highly-available template's
+              password rotation steps, then update the secret and force a redeployment of Cal.com.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-calcom-db-credentials'"
+    rules:
+      - rule: self.postgresHA.enabled != self.postgres.enabled
+        mirrors: calcom.validateDatabase
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+      - rule: >-
+          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+          dyn(self.postgresHA)['proxy']['enabled'] == true
+        mirrors: calcom.validateDatabase
+        paths: [postgresHA.enabled]
+        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Cal.com's database endpoint.
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: calcom.validateDatabase
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: >-
+          oldSelf == null ||
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgresHA.config.credentialsSecretName, postgres.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+
+  - id: access
+    title: Access
+    description: The public endpoint for booking pages, which workloads can reach Cal.com, and the scheduled-job caller.
+    sections:
+      - title: Public endpoint
+        docs: "#access"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Whoever completes `/auth/setup` first becomes the instance admin. Install with the public endpoint
+              off, create your admin account over `cpln port-forward`, then turn it on and upgrade the release.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: >-
+              Booking pages need the public endpoint. Off, reach Cal.com only through `cpln port-forward`.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: >-
+              Changing this restarts Cal.com (brief downtime at 1 replica), and the firewall takes 30 seconds to a
+              few minutes to update.
+            options:
+              - value: none
+                label: None
+                description: No workload can connect. Turn the scheduled-job caller off first; it reaches Cal.com internally.
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, plus this release's own.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            description: The scheduled-job caller is always allowed; list only your own clients.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: self.internalAccess.type in ['none', 'same-gvc', 'same-org', 'workload-list']
+            mirrors: calcom.validate
+            paths: [internalAccess.type]
+            message: Choose who can connect internally.
+
+      - title: Scheduled-job caller
+        toggle: cron.enabled
+        docs: "#scheduled-jobs"
+        description: >-
+          Calls Cal.com's scheduled-job endpoints every minute: queued email, calendar sync and credential
+          refresh. Without it those never run, while Cal.com still reports healthy.
+        fields:
+          - path: cron.resources
+            type: resources
+            label: Resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: "!self.cron.enabled || self.internalAccess.type != 'none'"
+            mirrors: calcom.validate
+            paths: [cron.enabled, internalAccess.type]
+            message: >-
+              The scheduled-job caller reaches Cal.com over internal access: choose an internal access other than
+              None, or turn the caller off.
+
+  - id: email
+    title: Email
+    description: The SMTP relay and sender for booking confirmations, invites and password resets.
+    sections:
+      - title: SMTP relay
+        toggle: email.enabled
+        docs: "#email"
+        description: >-
+          Without it Cal.com sends no mail at all: no booking confirmations, invites or password resets.
+        fields:
+          - path: email.fromAddress
+            type: string
+            label: From address
+            required: true
+            example: true
+          - path: email.fromName
+            type: string
+            label: From name
+          - path: email.host
+            type: string
+            label: SMTP host
+            required: true
+            example: true
+          - path: email.port
+            type: integer
+            label: SMTP port
+            required: true
+            min: 1
+            max: 65535
+            suggestions: [587, 465, 25]
+          - path: email.auth.secretName
+            type: ref
+            label: SMTP login secret
+            description: A dictionary secret with the keys `username` and `password`. Empty for an unauthenticated relay.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+        rules:
+          - rule: "!self.email.enabled || (self.email.host != '' && self.email.fromAddress != '')"
+            mirrors: calcom.validate
+            paths: [email.host, email.fromAddress]
+            message: The SMTP host and the from address are required.
+
+# Rules over the imported values: their issues show on the imported fields' steps.
+rules:
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
+    mirrors: calcom.validateDatabase
+    paths: [postgres.internalAccess.type]
+    message: '"None" also blocks Cal.com, which connects to its database like any other workload.'
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-calcom') in self.postgres.internalAccess.workloads
+    mirrors: calcom.validateDatabase
+    paths: [postgres.internalAccess.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-calcom, or Cal.com cannot reach its database.'
+    message: Add the Cal.com workload to the list, or Cal.com cannot reach its database.
+  - when: self.postgresHA.enabled
+    rule: self.postgresHA.internal_access.type != 'none'
+    mirrors: calcom.validateDatabase
+    paths: [postgresHA.internal_access.type]
+    message: '"None" also blocks Cal.com, which connects to the HAProxy endpoint like any other workload.'
+  - when: self.postgresHA.enabled && self.postgresHA.internal_access.type == 'workload-list' && context.gvc != null
+    rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-calcom') in self.postgresHA.internal_access.workloads
+    mirrors: calcom.validateDatabase
+    paths: [postgresHA.internal_access.workloads]
+    messageExpression: >-
+      'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-calcom, or Cal.com cannot reach its database.'
+    message: Add the Cal.com workload to the list, or Cal.com cannot reach its database.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Cal.com connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Cal.com connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.

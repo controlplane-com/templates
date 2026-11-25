@@ -131,3 +131,17 @@ Common labels - delegated to cpln-common
 {{- define "pg.tags" -}}
 {{- include "cpln-common.tags" . }}
 {{- end }}
+
+{{/*
+The platform rejects volume snapshot schedules more frequent than hourly, at
+apply time only -- the release would be left half-installed. A schedule runs at
+most hourly when its minute field is a single fixed minute.
+*/}}
+{{- define "postgres.validateSnapshots" -}}
+{{- $s := trim (toString (.Values.volumeset.snapshots.schedule | default "")) -}}
+{{- if $s -}}
+{{- if not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" $s) -}}
+{{- fail (printf "postgres: volumeset.snapshots.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"; use \"\" to turn snapshots off" $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

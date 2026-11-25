@@ -7,7 +7,7 @@ failing-over cluster use `postgres-highly-available`, or `postgres-multi-locatio
 ## Architecture
 
 - **Postgres workload** (`{release}-postgres`, stateful) — one replica, PostgreSQL 19, port 5432. A boot guard refuses to start on a data directory of another PostgreSQL major.
-- **Volume set** (`{release}-pg-vs`) — `PGDATA` on `ext4`, general-purpose SSD. Deleting it (uninstall) takes a final snapshot, kept 7 days; no scheduled snapshots are taken.
+- **Volume set** (`{release}-pg-vs`) — `PGDATA` on `ext4`, general-purpose SSD. Snapshotted daily (03:00 UTC) and kept 7 days by default; deleting it (uninstall) takes a final snapshot.
 - **PgBouncer workload** (`{release}-pgbouncer`, serverless) — connection pooler in front of Postgres. Optional (`pgbouncer.enabled`).
 - **Backup workload** (`{release}-postgres-backup`, cron) — scheduled `pg_dumpall` to S3, GCS or MinIO. Optional (`backup.enabled`).
 - **Identity and policy** — `reveal` on exactly the secrets this release uses, plus a bucket-scoped cloud binding when backups are on.
@@ -75,7 +75,14 @@ volumeset:
     maxCapacity: 100 # Maximum capacity in GiB when autoscaling is enabled
     minFreePercentage: 10 # Minimum free percentage to trigger scaling when autoscaling is enabled
     scalingFactor: 1.2 # Scaling factor to determine how much to scale up when autoscaling is triggered
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Network access
 
@@ -358,6 +365,7 @@ Internal only — this template exposes no public endpoint.
   treat every upgrade as a short planned write outage.
 - **Firewall changes take 30–150 seconds to take effect.** After changing `internalAccess`, re-test
   rather than trusting the first response.
+- **Upgrading from 4.0.2 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

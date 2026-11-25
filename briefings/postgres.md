@@ -18,7 +18,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-postgres` (stateful, 1) | PostgreSQL, port 5432; a major-version boot guard runs before the server |
-| `{release}-pg-vs` | `PGDATA` on ext4 SSD; a final snapshot on delete, kept 7 d; **no scheduled snapshots** (work item 5219) |
+| `{release}-pg-vs` | `PGDATA` on ext4 SSD; daily snapshots from 4.1.0 (03:00 UTC, kept 7 d) and a final snapshot on delete; **no scheduled snapshots through 4.0.2** (work item 5219) |
 | `{release}-pgbouncer` (serverless, optional) | Connection pooler, same secret and identity |
 | `{release}-postgres-backup` (cron, optional) | `pg_dumpall` (19 client) gzip to S3/GCS/MinIO |
 | identity + policy | `reveal` on the credentials (+ MinIO) secret; AWS bucket policy only (`cpln-connector` removed in 3.4.3), GCP bucket `objectAdmin` |
@@ -62,3 +62,4 @@ README "Upgrading from 3.x". CI: `fresh-is-19`, `guard-passes`, refused-then-pin
 3.4.3 and 3.2.0 (`guard-holds`). Live round passed (fresh, drift, refused + pinned, README migration, AWS backup).
 4.0.1: `upgradeHint` (`imageKey`, `consoleField`, `moveHow`, `readme`; yamlOnly) lets a parent chart make the guard's log name its own values path (`postgres.image`), console field and README section; defaults render byte-identical to 4.0.0.
 4.0.2: `upgradeHint.pinImage` (default `postgres:{major}`, `{major}` = the data directory's major) is the image the guard tells the user to pin; a parent that runs a pgvector image on this chart sets `pgvector/pgvector:0.8.7-pg{major}`. Defaults render byte-identical to 4.0.1.
+4.1.0: volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`postgres.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. Parents pick it up when they bump to 4.1.0.

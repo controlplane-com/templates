@@ -8,7 +8,7 @@ Langfuse is an open-source LLM observability and evaluation platform — traces,
 - **Langfuse Worker** (`stateful`) — background processor for trace ingestion, evaluations and integrations.
 - **PostgreSQL** (bundled subchart) — users, projects, API keys, prompts, datasets and eval configs.
 - **Redis** (`stateful`) — BullMQ ingestion queue and API key/prompt cache, on a persistent volumeset.
-- **ClickHouse** (`stateful`) — all traces, observations and scores; powers the dashboards. Its data parts live in the object store; the volumeset holds local metadata only.
+- **ClickHouse** (`stateful`) — all traces, observations and scores; powers the dashboards. Its data parts live in the object store; the volumeset holds the local metadata that maps tables to them, snapshotted daily.
 - **Object storage** — AWS S3 or GCS, one bucket shared by ClickHouse (`clickhouse/`) and Langfuse (`events/`, `media/`).
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. PostgreSQL initializes from it and Langfuse connects with it.
 - **Redis and ClickHouse credentials secrets** (dictionary) — *not created by this template*; you create them before install. Each datastore and both Langfuse workloads read them at every start.
@@ -236,7 +236,16 @@ clickhouse:
   credentialsSecretName: my-langfuse-clickhouse # PREREQUISITE dictionary secret (username, password) — must exist BEFORE install
   volumeset:
     capacity: 10 # initial capacity in GiB (minimum is 10)
+    snapshots:
+      schedule: "0 3 * * *"    # snapshots of the ClickHouse volume, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+ClickHouse keeps its data parts in your bucket, but the volume holds the metadata that maps each table
+to those parts, so it is snapshotted daily. The schedule is a 5-field cron in UTC with a single fixed
+minute: the platform takes snapshots at most hourly, and the chart refuses a more frequent schedule at
+render. Deleting the volume set (uninstall) takes a final snapshot whatever the schedule. The Redis
+volume holds only the transient ingestion queue and cache and takes no snapshots.
 
 ## Connecting
 
@@ -354,11 +363,12 @@ Check the object size before restoring from one.
 - Rotating any of these secrets needs a forced redeployment — a running workload keeps the values it started with. The database password also needs `ALTER ROLE` first (see Prerequisites); Redis and ClickHouse need none (see [Rotating the Redis and ClickHouse passwords](#rotating-the-redis-and-clickhouse-passwords)).
 - `encryptionKey` can never be changed: it encrypts every LLM provider key your users add under **Settings → LLM Connections**, and rotating it makes all of them unreadable.
 - Sign-up is closed by default and the owner account is provisioned from your auth secret. Set `langfuse.auth.disableSignup: false` if you want anyone who can reach the UI to register their own account and organization.
-- Back up PostgreSQL: it holds users, projects, API keys, prompts and datasets. Enable snapshots on its volumeset. ClickHouse data already lives in your bucket, and Redis holds only the transient queue.
+- Back up PostgreSQL: it holds users, projects, API keys, prompts and datasets. Enable snapshots on its volumeset. ClickHouse data parts already live in your bucket and its metadata volume is snapshotted daily; Redis holds only the transient queue.
 - Serving Langfuse on your own domain requires `langfuse.publicUrl` (include the scheme). Auth redirects and the session cookie's Secure flag are derived from it; left empty, the auto-assigned platform endpoint is used.
 - Changing `publicAccess` or `internalAccess` takes up to a couple of minutes to propagate — re-test before concluding the knob did not work.
 - Give each Langfuse release its own database, Redis and ClickHouse secrets. Secret names are org-wide, so two releases pointed at one secret share a password, and rotating it for one breaks the other.
 - The first `helm upgrade` after an install re-applies the bundled PostgreSQL, which briefly interrupts the app while it restarts.
+- **Upgrading from 2.0.0 or earlier turns on daily snapshots of the ClickHouse volume.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `clickhouse.volumeset.snapshots.schedule: ""` to keep them off.
 - Upgrading from 1.3.0 is one-way and changes what older SDKs and the legacy APIs can do: read [Upgrading from 1.3.0](#upgrading-from-130) before you upgrade.
 
 ## Links

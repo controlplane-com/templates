@@ -79,4 +79,5 @@ upgradeHint:
   imageKey: image
   consoleField: "Upgrade > Server > Postgres image"
   moveHow: dump and restore into a new release
+  pinImage: "postgres:{major}"   # the guard's pin; {major} = the data directory's major (a parent running pgvector sets pgvector/pgvector:0.8.7-pg{major})
   readme: 'README, "Upgrading from 3.x"'

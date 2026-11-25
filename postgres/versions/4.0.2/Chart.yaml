@@ -3,7 +3,7 @@ name: postgres
 description: Single-replica PostgreSQL 19 with persistent storage, optional pooling and backups
 
 type: application
-version: 4.0.1
+version: 4.0.2
 appVersion: "19"
 
 dependencies:
@@ -13,6 +13,6 @@ dependencies:
 
 annotations:
   created: "2025-12-23"
-  lastModified: "2026-11-23"
+  lastModified: "2026-11-25"
   postgresVersion: "19"
   createsGvc: false

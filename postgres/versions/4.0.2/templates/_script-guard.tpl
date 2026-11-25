@@ -25,9 +25,9 @@ elif [ -s "$PGDATA/PG_VERSION" ]; then
       echo "[pg-guard] REFUSING TO START: the data directory was created by PostgreSQL ${data_major}, but this image (${CPLN_IMAGE:-unknown}) runs PostgreSQL ${server_major}."
       echo "[pg-guard] PostgreSQL has NOT been started and nothing on the volume was changed. Your data is intact."
       echo "[pg-guard] FIX: run your upgrade again with the image pinned to PostgreSQL ${data_major}:"
-      echo "[pg-guard]   cpln helm upgrade {{ .Release.Name }} <chart> --gvc {{ .Values.global.cpln.gvc }} -f <your values> --set {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}=postgres:${data_major}"
-      echo "[pg-guard]   (console: {{ .Values.upgradeHint.consoleField | replace "\"" "\\\"" }} = postgres:${data_major})"
-      echo "[pg-guard] Keep {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}: postgres:${data_major} in your values for every later upgrade."
+      echo "[pg-guard]   cpln helm upgrade {{ .Release.Name }} <chart> --gvc {{ .Values.global.cpln.gvc }} -f <your values> --set {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}={{ .Values.upgradeHint.pinImage | replace "{major}" "${data_major}" | replace "\"" "\\\"" }}"
+      echo "[pg-guard]   (console: {{ .Values.upgradeHint.consoleField | replace "\"" "\\\"" }} = {{ .Values.upgradeHint.pinImage | replace "{major}" "${data_major}" | replace "\"" "\\\"" }})"
+      echo "[pg-guard] Keep {{ .Values.upgradeHint.imageKey | replace "\"" "\\\"" }}: {{ .Values.upgradeHint.pinImage | replace "{major}" "${data_major}" | replace "\"" "\\\"" }} in your values for every later upgrade."
       echo "[pg-guard] To move this data to PostgreSQL ${server_major}: {{ .Values.upgradeHint.moveHow | replace "\"" "\\\"" }} ({{ .Values.upgradeHint.readme | replace "\"" "\\\"" }})."
     } > "$G"
     trap 'exit 0' TERM INT

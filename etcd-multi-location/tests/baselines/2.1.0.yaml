@@ -1,0 +1,19 @@
+# etcd-multi-location 2.1.0 — production shape: three locations, one member each (the README's recommended
+# shape: it survives losing a location), default sizes, no client auth, so no prerequisite secrets. The
+# checks move a few tiny keys across locations only. Daily volume snapshots are on by default
+# from this version.
+locations: [aws-us-east-1, aws-us-east-2, aws-us-west-2]
+timeoutSeconds: 1200
+
+vars:
+  members: "3"
+
+values:
+  global:
+    locations:
+      - name: aws-us-east-1
+      - name: aws-us-east-2
+      - name: aws-us-west-2
+
+upgradeFrom:
+  - version: 2.0.0

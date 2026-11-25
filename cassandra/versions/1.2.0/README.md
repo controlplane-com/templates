@@ -70,7 +70,14 @@ volumes:
       maxCapacity: 100
       minFreePercentage: 20
       scalingFactor: 1.5
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 Configure which workloads can reach Cassandra:
 
@@ -320,6 +327,7 @@ ends with `Physical restore complete.`.
 - **gc_grace_seconds**: The default is 10 days. Ensure repair runs at least once within this window on all nodes, or deleted data may reappear after a node recovers from downtime
 - **Scaling up**: Adding replicas after initial deployment does not automatically rebalance data. Run `nodetool rebuild` on new nodes and then `nodetool cleanup` on existing nodes after scaling
 - **Multi-zone**: Verify your selected location supports multi-zone before enabling
+- **Upgrading from 1.1.2 or earlier turns on daily volume snapshots, and uninstalling now takes a final snapshot.** Earlier versions took no volume snapshots at all. Set `volumes.data.snapshots.schedule: ""` to keep scheduled ones off.
 
 ## Supported External Services
 

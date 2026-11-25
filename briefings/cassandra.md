@@ -2,7 +2,7 @@
 
 **What it is.** An Apache Cassandra cluster (Apache-2.0, wide-column NoSQL) with authentication on, a weekly
 full-repair cron and optional scheduled backups (logical or physical) to S3 or GCS. Deploys into an existing
-GVC. Current version 1.1.2 (`cassandra:5.0.9`). **Use cases:** write-heavy data with known access patterns —
+GVC. Current version 1.2.0 (`cassandra:5.0.9`). **Use cases:** write-heavy data with known access patterns —
 time series, event feeds, session and device state.
 
 ## Architecture
@@ -10,7 +10,7 @@ time series, event feeds, session and device state.
 | Resource | Notes |
 |---|---|
 | workload `-cassandra` (stateful) | `replicas` nodes, every node a seed; `LOCAL_JMX=no` so `nodetool` authenticates |
-| volumeset `-data` | one data volume per node |
+| volumeset `-data` | one data volume per node; daily volume snapshots kept 7 d and a final snapshot on delete from 1.2.0 (no `snapshots` block at all through 1.1.2) |
 | secrets `-init`, `-config` | the startup script (FQDN from `/etc/hosts`, rack config, first-boot bootstrap) and the `cassandra.yaml` template |
 | secret `-credentials` | backup destination only, when `backup.enabled` |
 | workload `-repair` (cron) | `nodetool repair` on every replica over JMX, on `*.svc.cluster.local` (the mesh blocks 7199) |
@@ -25,8 +25,14 @@ time series, event feeds, session and device state.
 | `credentialsSecretName` | `my-cassandra-credentials` | prerequisite dictionary: `superuserPassword`, `username`, `password`, `keyspace` |
 | `cpu` / `memory` / `jvmHeapSize` | `1` / `4Gi` / `2G` | heap ~50% of memory |
 | `multiZone.enabled` | `false` | one-way: never turn off once on (wizard blocks it) |
+| `volumes.data.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | `""` = no scheduled snapshots; more often than hourly fails at render (`cassandra.validateSnapshots`, mirrored in the wizard) |
 | `repair.enabled` | `true` | Sundays 02:00 |
 | `backup.enabled` / `backup.image` | `false` / `…/cassandra-backup:5.0.9` | `aws` or `gcp`, `logical` (default) or `physical` |
+
+## What 1.2.0 changed
+
+- The volume set gets a `snapshots` block for the first time: `createFinalSnapshot: true`, `retentionDuration` and `schedule` from `volumes.data.snapshots` (daily 03:00 UTC by default, work item 5219). Through 1.1.2 the volume set had no block, so the platform took no snapshots, not even on uninstall. The whole block is rendered every time (the API backfills partial blocks).
+- CI baseline 1.2.0, upgrade from 1.1.2 and 1.1.1.
 
 ## Troubleshooting traps
 
@@ -39,4 +45,4 @@ time series, event feeds, session and device state.
 - **A missing prerequisite secret wedges the deployment with zero log lines:** read `status.versions[].message` from `cpln workload get-deployments`.
 - **The repair cron authenticates over JMX:** a wrong `superuserPassword` shows as repair failures, not CQL errors.
 - **Drift:** clean from 1.1.2 (no `maxUnavailableReplicas` on stateful; `terminationGracePeriodSeconds: 90` and the crons' `timeoutSeconds: 5` declared).
-- **CI:** `cassandra/tests/` from 1.1.2 (3 nodes, 2Gi/1G heap, upgrade from 1.1.1). Backups are proven in the test round only (no bucket in CI).
+- **CI:** `cassandra/tests/` from 1.1.2 (3 nodes, 2Gi/1G heap; 1.2.0 upgrades from 1.1.2 and 1.1.1). Backups are proven in the test round only (no bucket in CI).

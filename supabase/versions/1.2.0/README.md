@@ -102,6 +102,9 @@ postgres:
       maxCapacity: 100
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
   internalAccess:
     type: same-gvc  # options: none, same-gvc, same-org, workload-list
@@ -110,6 +113,11 @@ postgres:
 ```
 
 Use `workload-list` to grant your own application workloads direct database access.
+
+The snapshot schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots
+at most hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set
+(uninstall) takes a final snapshot whatever the schedule. The Storage local volume (`backend: local`)
+has its own `storage.volumeset.snapshots` with the same rules.
 
 ### Kong (API gateway)
 
@@ -225,6 +233,9 @@ storage:
       maxCapacity: 100
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
   s3:            # only used when backend is s3
     bucket: my-supabase-storage-bucket
@@ -532,6 +543,7 @@ A restore means `wal-g backup-fetch` into an **empty** data directory plus WAL r
 - **Realtime does not scale out.** It runs as one replica by design (see [PostgREST, Auth, and Realtime](#postgrest-auth-and-realtime)); subscriptions reconnect after it restarts, so clients must handle a dropped socket.
 - **Rotating the JWT `secret` re-seeds Realtime's tenant on its next start**, so force-redeploy Realtime along with everything else — the tenant carries its own copy of the signing secret.
 - **Changing a secret does not restart anything.** After rotating one, force a redeployment — see [Rotating a credential](#rotating-a-credential).
+- **Upgrading from 1.1.1 or earlier turns on daily volume snapshots** of the Postgres volume and, with `backend: local`, the Storage volume. Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `postgres.volumeset.snapshots.schedule: ""` (and `storage.volumeset.snapshots.schedule: ""`) to keep them off.
 - **Switching `backup.mode` restarts Postgres.** `logical` and `walg` need different `archive_mode`/`wal_level` flags, so the change is not hot.
 - **Firewall changes take up to a couple of minutes** to propagate, so `studio.allowedCidrs` and `kong.publicAccess` edits are not visible immediately.
 

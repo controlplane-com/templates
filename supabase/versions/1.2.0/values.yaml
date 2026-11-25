@@ -24,6 +24,9 @@ postgres:
       maxCapacity: 100
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
   # Controls who can reach Postgres directly. All internal services in this
   # deployment connect to Postgres within the same GVC.
@@ -149,6 +152,9 @@ storage:
       maxCapacity: 100
       minFreePercentage: 10
       scalingFactor: 1.2
+    snapshots:
+      schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+      retentionDuration: 7d    # how long each snapshot is kept
 
   s3:             # only used when backend is s3
     bucket: my-supabase-storage-bucket

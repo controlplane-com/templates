@@ -1,3 +1,4 @@
+{{- include "supabase.validateSnapshots" . }}
 ---
 kind: volumeset
 name: {{ include "supabase.postgres.volumeset.name" . }}
@@ -16,4 +17,7 @@ spec:
   performanceClass: general-purpose-ssd
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.postgres.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.postgres.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.postgres.volumeset.snapshots.schedule | quote }}
+    {{- end }}

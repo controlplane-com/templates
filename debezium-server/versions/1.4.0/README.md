@@ -356,7 +356,14 @@ resources:
 volumeset:
   capacity: 10                        # GiB (only used with file storage)
   performanceClass: general-purpose-ssd
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ## Firewall Configuration
 
@@ -423,6 +430,7 @@ Debezium Server exposes Quarkus health endpoints:
 - **Offsets live on the volume set.** Deleting it makes the connector re-snapshot the source from scratch on next start.
 - **A replication slot is left behind on the source** when you uninstall. PostgreSQL retains WAL for an inactive slot indefinitely, so an abandoned slot will eventually fill the source's disk — drop it explicitly.
 - **One connector per deployment.** Capturing from several sources means several releases.
+- **Upgrading from 1.3.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

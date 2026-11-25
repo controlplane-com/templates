@@ -1,0 +1,82 @@
+# Feature checks for the sftpgo template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (admin_user,
+# admin_password, bucket).
+#
+# The checks talk to SFTPGo's REST API on 127.0.0.1:8080 from inside the sftpgo container (the httpd
+# binding is always on; webAdmin.enabled only declares the port). The alpine-slim image has busybox sh
+# and wget, so the scripts use wget only. The runner reads any {word} as a placeholder, so the scripts
+# write $var, never a braced variable.
+checks:
+  - id: admin-login
+    description: >-
+      The admin from the prerequisite secret gets a REST API token; the same user with a wrong password
+      is refused.
+    exec:
+      workload: "{release}-sftpgo"
+      container: sftpgo
+      script: |
+        tok() { wget -q -O - --header "Authorization: Basic $(printf '%s:%s' "$1" "$2" | base64 | tr -d '\n')" http://127.0.0.1:8080/api/v2/token 2>/dev/null; }
+        tok '{admin_user}' '{admin_password}' | grep -q '"access_token":"' && echo RIGHT_OK || echo RIGHT_FAILED
+        tok '{admin_user}' 'wrong-{admin_password}' | grep -q '"access_token":"' && echo WRONG_ACCEPTED || echo WRONG_REFUSED
+    expect:
+      stdout: "(?s)^RIGHT_OK$.*^WRONG_REFUSED$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: declared-user-loaded
+    description: >-
+      The users[] entry the chart declares was loaded into SFTPGo with its S3-compatible filesystem on
+      the configured bucket and a password.
+    exec:
+      workload: "{release}-sftpgo"
+      container: sftpgo
+      script: |
+        B="Authorization: Basic $(printf '%s:%s' '{admin_user}' '{admin_password}' | base64 | tr -d '\n')"
+        T=$(wget -q -O - --header "$B" http://127.0.0.1:8080/api/v2/token | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+        U=$(wget -q -O - --header "Authorization: Bearer $T" http://127.0.0.1:8080/api/v2/users/sftpuser)
+        echo "$U" | grep -q '"username":"sftpuser"' && echo "$U" | grep -q '"bucket":"{bucket}"' && echo "$U" | grep -q '"has_password":true' \
+          && echo "LOADED sftpuser" || echo "NOT LOADED: $(echo "$U" | head -c 300)"
+    expect:
+      stdout: "^LOADED sftpuser$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: write-read-user
+    description: A user created through the REST API (named for this version) reads back from the bolt database.
+    exec:
+      workload: "{release}-sftpgo"
+      container: sftpgo
+      script: |
+        B="Authorization: Basic $(printf '%s:%s' '{admin_user}' '{admin_password}' | base64 | tr -d '\n')"
+        T=$(wget -q -O - --header "$B" http://127.0.0.1:8080/api/v2/token | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+        N="e2e-$(echo '{version}' | tr . -)"
+        A="Authorization: Bearer $T"
+        if ! wget -q -O /dev/null --header "$A" "http://127.0.0.1:8080/api/v2/users/$N" 2>/dev/null; then
+          wget -q -O /dev/null --header "$A" --header 'Content-Type: application/json' \
+            --post-data "{\"username\":\"$N\",\"status\":1,\"password\":\"e2e-$$-pw\",\"home_dir\":\"/var/lib/sftpgo/e2e/$N\",\"permissions\":{\"/\":[\"*\"]},\"description\":\"version {version}\"}" \
+            http://127.0.0.1:8080/api/v2/users || echo CREATE_FAILED
+        fi
+        wget -q -O - --header "$A" "http://127.0.0.1:8080/api/v2/users/$N" | grep -q "\"description\":\"version {version}\"" && echo "READ $N" || echo "MISSING $N"
+    expect:
+      stdout: "^READ e2e-"
+      notStdout: "CREATE_FAILED"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The user written on the version this scenario installed first is still in the bolt database on the
+      volume set. On a fresh install that is the same version; after an upgrade it proves the volume
+      carried over.
+    exec:
+      workload: "{release}-sftpgo"
+      container: sftpgo
+      script: |
+        B="Authorization: Basic $(printf '%s:%s' '{admin_user}' '{admin_password}' | base64 | tr -d '\n')"
+        T=$(wget -q -O - --header "$B" http://127.0.0.1:8080/api/v2/token | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+        N="e2e-$(echo '{installed_version}' | tr . -)"
+        wget -q -O - --header "Authorization: Bearer $T" "http://127.0.0.1:8080/api/v2/users/$N" | grep -q "\"description\":\"version {installed_version}\"" \
+          && echo PERSISTED || echo "MISSING $N"
+    expect:
+      stdout: "^PERSISTED$"

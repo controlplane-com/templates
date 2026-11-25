@@ -5,7 +5,7 @@ CloudBeaver is a browser-based SQL client and administration console for Postgre
 ## Architecture
 
 - **Workload** (`stateful`) — CloudBeaver serving HTTP on port 8978.
-- **Volume set** — 10 GiB `ext4` volume mounted at `/opt/cloudbeaver/workspace`, holding the server configuration, saved connections and users. A final snapshot is taken when the volume set is deleted and kept for 7 days; there are no scheduled snapshots.
+- **Volume set** — 10 GiB `ext4` volume mounted at `/opt/cloudbeaver/workspace`, holding the server configuration, saved connections and users. Snapshotted daily (kept 7 days), plus a final snapshot when the volume set is deleted.
 - **Identity + policy** — grants the workload `reveal` on exactly the admin-password secret you created; nothing else.
 - **No template-created secret** — the only credential lives in your own prerequisite secret.
 
@@ -67,7 +67,14 @@ resources:
 
 volumeset:
   capacity: 10                # initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ## Connecting
 
@@ -95,7 +102,8 @@ Add database connections from the UI after logging in. Point them at in-GVC host
 - **CloudBeaver logs the submitted password hash, and that hash is enough to log in.** At its default log level the hash appears in `cpln logs`, and the API accepts it in place of the password — so anyone who can read this workload's logs can authenticate as the admin. This is upstream behaviour, not something the chart sets; treat log access to this workload as equivalent to database access.
 - **Access changes take a few minutes** to propagate after a `publicAccess` or `internalAccess` change; re-check before concluding the setting did not apply.
 - **The first `helm upgrade` after an install can restart the workload**, briefly taking the UI down even when nothing about it changed.
-- **Connections and users live on the volume set** and survive redeploys; `cpln helm uninstall` deletes it, taking every saved connection with it. There is no scheduled-backup feature — the only snapshot is the one taken on delete, kept 7 days.
+- **Connections and users live on the volume set** and survive redeploys; `cpln helm uninstall` deletes it, taking every saved connection with it. Daily volume snapshots (kept 7 days) and the final snapshot taken on delete are the only backups.
+- **Upgrading from 1.3.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

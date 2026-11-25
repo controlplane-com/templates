@@ -1,0 +1,20 @@
+# dbeaver 1.3.0 — the default install: one CloudBeaver instance at the chart's default size, private (internal
+# access only). The admin password is generated per run.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  adminpw: hex
+
+secrets:
+  admin:
+    type: opaque
+    payload: "{gen.adminpw}"
+
+vars:
+  admin_user: cbadmin
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    passwordSecretName: "{secrets.admin.name}"

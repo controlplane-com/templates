@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-dbeaver` (stateful, 1 replica) | CloudBeaver server + UI, port 8978 (HTTP) |
-| volumeset `{release}-dbeaver-vs` (10 GiB, ext4) | Workspace at `/opt/cloudbeaver/workspace` — server config, saved connections, users. Final snapshot kept 7 days |
+| volumeset `{release}-dbeaver-vs` (10 GiB, ext4) | Workspace at `/opt/cloudbeaver/workspace` — server config, saved connections, users. Daily snapshots kept 7 d from 1.4.0 (none were ever taken through 1.3.0), plus a final one on delete |
 | identity `{release}-dbeaver-identity` | Principal for the reveal grant |
 | policy `{release}-dbeaver-policy` | `reveal` on **only** the user's admin-password secret |
 
@@ -23,7 +23,12 @@
 - Egress is closed (`outboundAllowCIDR: []`) — inherited from 1.0.0 and deliberately left alone.
 
 ## Key knobs (shipped defaults)
-`image` (`dbeaver/cloudbeaver:25.2.0`) | `admin.name` (`cbadmin`) | `admin.passwordSecretName` (`my-dbeaver-admin-password`, must exist before install) | `publicAccess.enabled` (**false**) | `internalAccess.type` (`same-gvc`) | `resources.cpu`/`.memory` (500m / 512Mi) | `volumeset.capacity` (10 GiB)
+`image` (`dbeaver/cloudbeaver:25.2.0`) | `admin.name` (`cbadmin`) | `admin.passwordSecretName` (`my-dbeaver-admin-password`, must exist before install) | `publicAccess.enabled` (**false**) | `internalAccess.type` (`same-gvc`) | `resources.cpu`/`.memory` (500m / 512Mi) | `volumeset.capacity` (10 GiB) | `volumeset.snapshots.schedule` (`0 3 * * *`) / `.retentionDuration` (7d)
+
+## What 1.4.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`dbeaver.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`server-config`, `admin-login`, `rejects-unknown-login`, `data-survives-upgrade`; upgrade from 1.3.0).
 
 ## Troubleshooting / considerations
 - **The admin credentials are first-boot only.** `CB_ADMIN_NAME`/`CB_ADMIN_PASSWORD` are consumed when CloudBeaver initializes an empty workspace. Once `/opt/cloudbeaver/workspace` is configured on the volumeset, both are ignored — rotating the secret does nothing, and neither does changing `admin.name`. Change the password in the UI (Administration → Users), or uninstall (deleting the volumeset) and reinstall. If a user reports "I changed the secret and the old password still works", this is why.
@@ -32,7 +37,7 @@
 - **`CB_SERVER_URL` is the internal `cpln.local` address, always** — including when `publicAccess.enabled: true`. It has been that way since 1.0.0 and the UI works, because CloudBeaver's login flow uses relative URLs. If an SSO or absolute-link feature is ever added, this is the first thing to look at (and the fix is to derive it from `CPLN_GLOBAL_ENDPOINT` in a boot wrapper, per the grafana precedent — never to hand-build the hostname).
 - **No probes.** The workload has no readiness or liveness probe, so `ready: true` means the container started, not that CloudBeaver is serving. Inherited from 1.0.0; a `GET /` readiness probe on 8978 is the obvious follow-up.
 - **Autoscaling is `metric: cpu`, minScale 1 / maxScale 3, on a stateful workload with one volumeset.** Scaling past one replica has never been tested and CloudBeaver has no clustering — treat this template as single-instance regardless of what the autoscaling block says.
-- **A workspace survives redeploys but not uninstall.** `cpln helm uninstall` deletes the volumeset and every saved connection with it; there is no backup feature.
+- **A workspace survives redeploys but not uninstall.** `cpln helm uninstall` deletes the volumeset and every saved connection with it; the daily volume snapshots (1.4.0+) and the final snapshot are the only backups.
 - **Firewall changes take 30–150 s to propagate.** A user flipping `publicAccess` and testing immediately will see stale behavior.
 
 ## Two traps the 1.3.0 test round measured

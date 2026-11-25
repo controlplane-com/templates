@@ -1,0 +1,72 @@
+# Feature checks for the dbeaver (CloudBeaver) template. Each runs after install (and after each upgrade)
+# on every version in its since/until range. Add a check with `since: <new version>` for every change you
+# ship. Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_user, admin_password).
+#
+# Every check runs in the dbeaver container, which carries bash, curl and md5sum, against CloudBeaver's
+# GraphQL API on localhost:8978. Local login sends the password as its upper-case MD5, as the web UI does.
+# CloudBeaver refuses logins that come too close together ("Too frequent authentication requests"), so the
+# login checks retry and the refusal check waits first.
+checks:
+  - id: server-config
+    description: CloudBeaver's GraphQL API answers with the server name the chart sets (CB_SERVER_NAME).
+    exec:
+      workload: "{release}-dbeaver"
+      container: dbeaver
+      shell: bash
+      script: |
+        curl -s -m 10 -X POST http://localhost:8978/api/gql -H 'Content-Type: application/json' \
+          -d '{"query":"{ serverConfig { name version } }"}' | tr -d ' \n'
+    expect:
+      stdout: '"name":"{release}-dbeaver"'
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: admin-login
+    description: The admin logs in with the password from the prerequisite secret.
+    exec:
+      workload: "{release}-dbeaver"
+      container: dbeaver
+      shell: bash
+      script: |
+        H=$(printf '%s' '{admin_password}' | md5sum | cut -d' ' -f1 | tr a-f A-F)
+        curl -s -m 10 -X POST http://localhost:8978/api/gql -H 'Content-Type: application/json' \
+          -d "{\"query\":\"query { authLogin(provider: \\\"local\\\", credentials: {user: \\\"{admin_user}\\\", password: \\\"$H\\\"}) { authStatus userTokens { userId } } }\"}" | tr -d ' \n'
+    expect:
+      stdout: '"authStatus":"SUCCESS".*"userId":"{admin_user}"'
+    retries: 6
+    retryDelaySeconds: 20
+
+  - id: rejects-unknown-login
+    description: >-
+      A login as an unknown user is refused as invalid credentials (the control for admin-login; an unknown
+      user, so failed attempts never count against the real admin).
+    exec:
+      workload: "{release}-dbeaver"
+      container: dbeaver
+      shell: bash
+      script: |
+        sleep 20
+        curl -s -m 10 -X POST http://localhost:8978/api/gql -H 'Content-Type: application/json' \
+          -d '{"query":"query { authLogin(provider: \"local\", credentials: {user: \"e2e-nobody\", password: \"ABCDEF0123456789ABCDEF0123456789\"}) { authStatus } }"}'
+    expect:
+      stdout: "Invalid user credentials"
+      notStdout: "SUCCESS"
+    retries: 4
+    retryDelaySeconds: 20
+
+  - id: data-survives-upgrade
+    description: >-
+      A marker written to the workspace volume by the version this scenario installed first is still there
+      (each version writes its own). On a fresh install that is the same version; after an upgrade it proves
+      the workspace volume carried over.
+    exec:
+      workload: "{release}-dbeaver"
+      container: dbeaver
+      shell: bash
+      script: |
+        D=/opt/cloudbeaver/workspace/.e2e
+        mkdir -p "$D" && [ -f "$D/{version}" ] || echo "written by {version}" > "$D/{version}"
+        cat "$D/{installed_version}" 2>/dev/null || echo "MISSING {installed_version}"
+    expect:
+      stdout: "^written by {installed_version}$"

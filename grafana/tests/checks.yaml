@@ -261,25 +261,18 @@ checks:
   - id: single-admin-login
     description: >-
       In single-instance mode Grafana reports its database ok, the admin logs in with the password from the
-      prerequisite secret, and an unknown user is refused (bash's /dev/tcp from the postgres container, which
-      has no curl).
+      prerequisite secret, and an unknown user is refused (curl from the Grafana container itself).
     since: 2.0.0
     scenarios: "\\[single\\]"
     exec:
-      workload: "{release}-postgres"
-      container: postgresql
-      shell: bash
+      workload: "{release}-grafana"
+      container: grafana
+      shell: sh
       script: |
-        get() {
-          exec 3<>"/dev/tcp/{release}-grafana.{gvc}.cpln.local/3000" || { echo "CONNECT_FAILED"; return; }
-          printf 'GET %s HTTP/1.1\r\nHost: {release}-grafana\r\nAuthorization: Basic %s\r\nConnection: close\r\n\r\n' \
-            "$1" "$(printf '%s' "$2" | base64 -w0)" >&3
-          timeout 10 cat <&3 | tr -d '\r\n'
-          exec 3<&-
-        }
-        echo "HEALTH $(get /api/health 'admin:{admin_password}')"
-        echo "GOOD $(get /api/user 'admin:{admin_password}')"
-        echo "BAD $(get /api/user 'e2e-nobody:wrong-password')"
+        B=http://127.0.0.1:3000
+        echo "HEALTH $(curl -s -m 10 $B/api/health | tr -d '\r\n')"
+        echo "GOOD $(curl -s -m 10 -u 'admin:{admin_password}' $B/api/user | tr -d '\r\n')"
+        echo "BAD $(curl -s -m 10 -u 'e2e-nobody:wrong-password' $B/api/user | tr -d '\r\n')"
     expect:
       stdout: '(?s)^HEALTH .*"database"\s*:\s*"ok".*^GOOD .*"isGrafanaAdmin"\s*:\s*true.*^BAD (?!.*isGrafanaAdmin).*(?i:invalid username or password|unauthorized)'
     retries: 8

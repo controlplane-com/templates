@@ -44,6 +44,9 @@ vars:
   admin_password: "Dify1{gen.adminpw}"   # Dify requires a letter and a digit
   init_password: "{gen.initpw}"
   redis_password: "{gen.redispw}"
+  pg_user: dify
+  pg_password: "{gen.pgpw}"
+  pg_db: dify
 
 values:
   dify:

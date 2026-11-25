@@ -11,7 +11,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # After Dify's own steps; the database type and its secret are chosen on the Credentials step.
@@ -34,8 +34,12 @@ imports:
         description: >-
           Dify stores knowledge-base vectors in this database, so the image must include the pgvector extension
           (the default pgvector/pgvector image does).
+        help: >-
+          New installs run `pgvector/pgvector:0.8.7-pg19`; `pgvector/pgvector:0.8.7-pg18` also works. The `-pgNN`
+          suffix is the PostgreSQL major version, and the data directory is specific to it: on an existing volume,
+          an image of another major does not start, and the database logs the image to set instead.
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
@@ -237,7 +241,6 @@ steps:
               PostgreSQL reads these values only when its data directory is first initialized, and Dify connects
               with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
               and force a redeployment of the Dify workloads.
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -269,7 +272,6 @@ steps:
               PostgreSQL reads these values only when its data is first initialized, and Dify connects with them.
               Changing it later is a database operation: follow the postgres-highly-available template's password
               rotation steps, then update the secret and force a redeployment of the Dify workloads.
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -687,6 +689,28 @@ rules:
     message: >-
       Switching the database type deploys a new, empty database; the apps, users and knowledge bases in the
       current one are not moved. Keep the current database type, or install a new release and move the data.
+  # The postgres import's own major-version rule reads imageMajor(), the tag's leading digits: for the pgvector
+  # image that is the pgvector version (0.8.7-pg18 -> 0), so it never fires here. The PostgreSQL major is the
+  # first -pgNN part of the tag (pgvector 2.0.1's rule); a tag without one is not judged. The database's boot
+  # guard refuses a mismatch at runtime; this warns in the wizard first.
+  - rule: >-
+      oldSelf == null || !self.postgres.enabled || !has(oldSelf.postgres.image) ||
+      size(('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))) == 0 ||
+      size(('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))) == 0 ||
+      ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] ==
+      ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0]
+    severity: warning
+    paths: [postgres.image]
+    messageExpression: >-
+      'This release\'s data directory is PostgreSQL ' + ('-' + oldSelf.postgres.image.split(':')[size(oldSelf.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] +
+      '; a PostgreSQL ' + ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] +
+      ' image refuses to start on it. Keep the image at ' + oldSelf.postgres.image + ', or move to PostgreSQL ' +
+      ('-' + self.postgres.image.split(':')[size(self.postgres.image.split(':')) - 1]).split('-pg').filter(x, x.matches('^[0-9]+(-|$)'))[0].split('-')[0] +
+      ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+    message: >-
+      The data directory belongs to the installed PostgreSQL major version; an image of a different major
+      refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+      (README, Upgrading from 1.x).
   - rule: >-
       !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
       dyn(self.postgresHA)['proxy']['enabled'] == true
@@ -780,3 +804,44 @@ yamlOnly:
     reason: Redis holds Dify's cache and task queue; backups stay off.
   - path: redis.redis.exporter
     reason: The metrics exporter stays off; Control Plane collects workload metrics itself.
+
+# The postgres import's image carry, claimed here under this chart's path, and the redis keys this import
+# excludes that the redis chart's own migrations touch (written for redis 3.7.0 and older releases, which no
+# Dify release shipped), so those migrations never run here.
+migrations:
+  # A 1.x release that never set postgres.image runs pgvector/pgvector:0.8.7-pg18 (1.x's default), and its data
+  # directory is PostgreSQL 18. Carry-over would hand it the new default -pg19 image, which refuses to start on
+  # that data: keep the installed image instead.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database's data directory keeps the PostgreSQL major it was created with, so the installed image is
+      kept (Database server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release
+      (README, Upgrading from 1.x).
+  - fromVersions: "<1.0.0"
+    assume:
+      redis.engine: redis
+      redis.backup.enabled: false
+      redis.redis.replicaDirect: false
+      redis.sentinel.replicaDirect: false
+      redis.redis.image: "redis:8"
+      redis.sentinel.image: "redis:8"
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.cpu
+    note: No Dify release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.exporter.resources.memory
+    note: No Dify release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_inboundAllowCIDR
+    note: No Dify release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.redis.firewall.external_outboundAllowCIDR
+    note: No Dify release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.sentinel.firewall.external_inboundAllowCIDR
+    note: No Dify release carried this Redis key; it is dropped.
+  - fromVersions: "<1.0.0"
+    from: redis.sentinel.firewall.external_outboundAllowCIDR
+    note: No Dify release carried this Redis key; it is dropped.

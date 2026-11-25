@@ -12,7 +12,7 @@ This app deploys [Dify](https://dify.ai), an open-source builder for LLM applica
 - **Code sandbox** (`RELEASE_NAME-dify-sandbox`): runs the Python and JavaScript of Code and Template nodes. Omitted when `codeExecution.endpoint` points at your own executor.
 - **SSRF proxy** (`RELEASE_NAME-dify-ssrf-proxy`): squid on port 3128. HTTP Request nodes, tools and Python HTTP calls in Code nodes go through it, and it refuses private, link-local and in-GVC addresses.
 - **File storage** (`RELEASE_NAME-dify-storage`): a shared volume that the API and worker mount at `/app/api/storage`.
-- **PostgreSQL**: the `postgres` template with the pgvector image (default), or `postgres-highly-available` (3 Patroni replicas, etcd and an HAProxy leader endpoint). It holds apps, users, conversations and knowledge-base vectors.
+- **PostgreSQL**: the `postgres` template with the pgvector image (default; PostgreSQL 19 with pgvector 0.8.7), or `postgres-highly-available` (PostgreSQL 18 for a new cluster: 3 Patroni replicas, etcd and an HAProxy leader endpoint). It holds apps, users, conversations and knowledge-base vectors. The single instance refuses to start on a data directory from another PostgreSQL major version and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Redis**: the `redis` template as one node, password required. It holds the cache, the task queue and plugin state.
 - **Firewall**: each Dify tier accepts connections only from the tiers that call it; the sandbox cannot reach the API, web or plugin daemon.
 - **Identities + policies**: `reveal` on exactly the secrets you name; the sandbox can read only its own key. The template creates no credentials; the bundled Redis keeps its config in its own secret (`RELEASE_NAME-redis-config`).
@@ -101,14 +101,14 @@ internalAccess:                 # who in Control Plane may reach the gateway (th
 ```yaml
 postgres:                       # every knob of the postgres template
   enabled: true
-  image: pgvector/pgvector:0.8.7-pg18
+  image: pgvector/pgvector:0.8.7-pg19   # new installs; keep pgvector/pgvector:0.8.7-pg18 when upgrading a 1.x release (Upgrading from 1.x)
   config:
     credentialsSecretName: my-dify-db-credentials
   backup:
     enabled: false              # scheduled backups to object storage; provider aws, gcp or minio
 postgresHA:                     # every knob of the postgres-highly-available template
   enabled: false                # enable exactly one of postgres / postgresHA
-  image: controlplanecorporation/patroni-postgres:0.8   # includes pgvector 0.8.7
+  image: controlplanecorporation/patroni-postgres:0.9   # pgvector 0.8.7; new clusters PostgreSQL 18, a 1.x cluster stays on 17
   config:
     credentialsSecretName: my-dify-db-credentials
 redis:
@@ -163,6 +163,62 @@ mc ilm rule ls ALIAS/BUCKET_NAME
 
 Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
 
+## Upgrading from 1.x
+
+The single-instance database of 2.0.0 runs PostgreSQL 19. A 1.x release's data directory is PostgreSQL 18, and a data directory only starts under the major version that created it: on a PostgreSQL 19 image the database container does not start PostgreSQL and changes nothing on the volume. `RELEASE_NAME-postgres` stays not ready, Dify waits for it, and the database logs repeat a `[pg-guard] REFUSING TO START` message:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18.** Pin the pgvector image, and keep the pin in your values file for every later upgrade (`cpln helm upgrade` does not reuse the release's values). The log line suggests the plain `postgres:18` image; use the pgvector one instead, because Dify's knowledge bases need the extension:
+
+```yaml
+postgres:
+  image: pgvector/pgvector:0.8.7-pg18
+```
+
+If an upgrade ran without the pin, run the same upgrade again with `--set postgres.image=pgvector/pgvector:0.8.7-pg18`; the database comes back on its data. The Console upgrade wizard keeps the installed image and warns before a change to another major version.
+
+**Move to PostgreSQL 19** (a dump and restore into a new release in the same GVC; Dify gets a new endpoint and cannot write while the copy runs):
+
+1. Install 2.0.0 as a **new release** with the **same** `dify.secretName`, `postgres.config.credentialsSecretName` and `codeExecution.apiKeySecretName`. Wait until `NEW_RELEASE-dify-api` and `NEW_RELEASE-dify-plugin-daemon` are ready (they create empty schemas); do not open its `/install` page.
+2. Copy the file storage (uploads and the keys that decrypt saved model credentials) and the installed plugins through your machine while the old release still runs:
+
+   ```bash
+   mkdir -p ./dify-storage ./dify-plugins
+   cpln workload exec OLD_RELEASE-dify-api --gvc GVC_NAME --container api -- \
+     sh -c 'cd /app/api/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./dify-storage
+   cpln workload exec OLD_RELEASE-dify-plugin-daemon --gvc GVC_NAME --container plugin-daemon -- \
+     sh -c 'cd /app/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./dify-plugins
+   cpln cp ./dify-storage/. NEW_RELEASE-dify-api:/app/api/storage --gvc GVC_NAME --container api
+   cpln cp ./dify-plugins/. NEW_RELEASE-dify-plugin-daemon:/app/storage --gvc GVC_NAME --container plugin-daemon
+   ```
+
+3. Stop writes on both releases:
+
+   ```bash
+   cpln workload stop OLD_RELEASE-dify-api OLD_RELEASE-dify-worker OLD_RELEASE-dify-beat OLD_RELEASE-dify-plugin-daemon \
+     NEW_RELEASE-dify-api NEW_RELEASE-dify-worker NEW_RELEASE-dify-beat NEW_RELEASE-dify-plugin-daemon --gvc GVC_NAME
+   ```
+
+4. Stream both databases (Dify's own and the plugin daemon's `dify_plugin`) into the new release, inside its database container (`--clean` replaces the empty schemas; nothing binary crosses `cpln workload exec`):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"; for db in "$POSTGRES_DB" dify_plugin; do pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$db" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$db" -q; done'
+   ```
+
+5. Start the new release, sign in with your existing account, check your apps, knowledge bases and model providers, and point your users at the new URL (or move your custom domain and `dify.publicUrl`):
+
+   ```bash
+   cpln workload start NEW_RELEASE-dify-api NEW_RELEASE-dify-worker NEW_RELEASE-dify-beat NEW_RELEASE-dify-plugin-daemon --gvc GVC_NAME
+   ```
+
+6. Uninstall the old release.
+
+**Highly available mode (`postgresHA`).** The upgrade is in place: an existing cluster keeps the PostgreSQL major it was created with (17 for a 1.x release) on the new `patroni-postgres:0.9` image, and only a new cluster starts on PostgreSQL 18. To move an existing cluster to 18, follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template, with a new Dify 2.0.0 release (`postgresHA.enabled: true`, the same secrets) as the second release. This chart names its database workloads `RELEASE_NAME-postgres-ha` and `RELEASE_NAME-postgres-ha-proxy`, so those commands apply as written, and `pg_dumpall` copies both of Dify's databases. Copy the file storage and plugins as in step 2, and stop both releases' Dify workloads as in step 3 while the copy runs.
+
 ## Connecting
 
 | What | Where |
@@ -186,6 +242,7 @@ Dify builds every link, cookie and webhook from the public URL, and the login wo
 - With the SSRF proxy on, HTTP Request nodes, tools and Python HTTP calls in Code nodes (`requests`) go through it and cannot call services inside the GVC (`*.cpln.local`). JavaScript code gets no proxy. Model-provider plugins run in the plugin daemon, not through the proxy, so the Ollama, vLLM and LiteLLM providers can use in-GVC URLs.
 - Plugins install from the Dify marketplace or an uploaded package, and only signed plugins are accepted.
 - Six failed logins lock an email out for 24 hours. To clear it: `cpln workload exec RELEASE_NAME-redis --gvc GVC_NAME --container redis -- sh -c 'REDISCLI_AUTH="$CUSTOM_REDIS_PASSWORD" redis-cli DEL login_error_rate_limit:USER_EMAIL'`.
+- **PostgreSQL 19 for new installs only.** A release upgraded from 1.x keeps PostgreSQL 18 only with `postgres.image: pgvector/pgvector:0.8.7-pg18` in its values; without it the database refuses to start (data untouched). See [Upgrading from 1.x](#upgrading-from-1x).
 - Use a single-location GVC: the database, Redis, both volumes and the plugin daemon run in one location. The first `helm upgrade` after an install can restart the bundled database. Uninstalling deletes the database and both volumes, and with them every app, user, knowledge base and installed plugin.
 
 ## Links

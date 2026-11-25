@@ -2,12 +2,12 @@ apiVersion: v2
 name: dify
 description: Dify LLM app builder for workflows, agents, RAG knowledge bases and APIs
 type: application
-version: 1.0.1
+version: 2.0.0
 appVersion: "1.19.0"
 
 annotations:
   created: "2026-11-10"
-  lastModified: "2026-11-23"
+  lastModified: "2026-11-25"
   createsGvc: false
 
 dependencies:
@@ -15,12 +15,12 @@ dependencies:
     version: 1.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
   - name: postgres
-    version: 3.4.1
+    version: 4.0.1
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgres.enabled
   - name: postgres-highly-available
     alias: postgresHA
-    version: 2.8.1
+    version: 3.0.0
     repository: "oci://ghcr.io/controlplane-com/templates"
     condition: postgresHA.enabled
   - name: redis

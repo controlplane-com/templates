@@ -1,0 +1,29 @@
+Langflow {{ .Chart.Version }} is deploying as {{ include "langflow.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+
+  Status:   cpln workload get-deployments {{ include "langflow.name" . }} --gvc {{ .Values.global.cpln.gvc }}
+  Endpoint: cpln workload get {{ include "langflow.name" . }} --gvc {{ .Values.global.cpln.gvc }} -o yaml (status.canonicalEndpoint)
+  Database: {{ include "langflow.db.host" . }}:5432
+{{- if .Values.postgres.enabled }}
+{{- $image := toString .Values.postgres.image }}
+
+UPGRADING A 1.x RELEASE? This chart's single-instance PostgreSQL defaults to PostgreSQL 19, and a
+1.x release's data directory is PostgreSQL 18 (or the major of the image it ran). A PostgreSQL 19
+server REFUSES to start on it, and your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" $image }}
+  If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with --set postgres.image=postgres:18
+  (the major the logs name), and keep that image in your values for every later upgrade.
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" $image }}
+  This release runs {{ $image }}: the server stays on that major. Keep postgres.image in
+  your values for every later upgrade.
+{{- else }}
+  This release runs {{ $image }}. If the database stays not ready and the logs say
+  "REFUSING TO START", set postgres.image to the image the logs name and keep it in your values.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 1.x" (dump and restore).
+{{- end }}
+{{- if .Values.postgresHA.enabled }}
+
+Highly available PostgreSQL: a new cluster starts on PostgreSQL 18; a cluster created by a 1.x
+release keeps PostgreSQL 17. To move a cluster to 18: README, "Upgrading from 1.x".
+{{- end }}

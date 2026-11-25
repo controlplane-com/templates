@@ -6,8 +6,8 @@ This app deploys [Langflow](https://www.langflow.org), a visual low-code builder
 
 - **Langflow** (`RELEASE_NAME-langflow`): standard workload serving the editor, the API and MCP on port 7860, 1 replica by default. Replicas share PostgreSQL, the data volume and Redis, so they are interchangeable.
 - **Data volume** (`RELEASE_NAME-langflow-data`): a shared volume at `/app/langflow` that every replica mounts. It holds uploaded files and knowledge bases.
-- **PostgreSQL (single instance, default)**: the `postgres` template. It holds users, flows, messages and stored credentials.
-- **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint.
+- **PostgreSQL (single instance, default)**: the `postgres` template, PostgreSQL 19. It holds users, flows, messages and stored credentials. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
+- **PostgreSQL (HA, optional)**: the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **Redis (optional, required above 1 replica)**: the `redis` template as one node. It holds the shared editor build queue and the login rate limits.
 - **Control Plane MCP server (optional)**: with `cplnMcp.keySecretName` set, Langflow registers `https://mcp.cpln.io/mcp?toolsets=readonly` (read-only tools) as the superuser's MCP server `cpln` at boot, authenticated with a service-account key.
 - **Identity + policy**: `reveal` on exactly the secrets you name. The template creates no secrets.
@@ -109,7 +109,7 @@ internalAccess:
 ```yaml
 postgres:                       # every knob of the postgres template
   enabled: true
-  image: postgres:18
+  image: postgres:19            # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
   config:
     credentialsSecretName: my-langflow-db-credentials   # REQUIRED, create before install
   resources:
@@ -126,7 +126,7 @@ postgresHA:                     # every knob of the postgres-highly-available te
   enabled: false                # enable exactly one of postgres / postgresHA
   config:
     credentialsSecretName: my-langflow-db-credentials
-  replicas: 3
+  replicas: 3                   # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   resources:                    # per Patroni replica
     minCpu: 250m
     maxCpu: 1000m
@@ -199,6 +199,44 @@ redis:
         passwordKey: password
 ```
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: see [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, Langflow cannot reach its database, and the logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Langflow gets a new endpoint; writes pause during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `admin.secretName`, `secretKey.secretName` and `postgres.config.credentialsSecretName` (and the same `variableSecrets` and `cplnMcp` settings). The encryption key must be the same one, or the API keys stored in the copied database cannot be decrypted. Langflow initializes an empty database in it.
+2. Copy the data volume (uploaded files and knowledge bases) through your machine while the old Langflow is still running (do this in a quiet window: a file uploaded after this step is not copied):
+
+   ```bash
+   mkdir -p ./langflow-data
+   cpln workload exec OLD_RELEASE-langflow --gvc GVC_NAME --container langflow -- \
+     sh -c 'cd /app/langflow && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./langflow-data
+   cpln cp ./langflow-data/. NEW_RELEASE-langflow:/app/langflow --gvc GVC_NAME --container langflow
+   ```
+
+3. Stop writes to the old release by stopping its Langflow workload (`cpln workload stop OLD_RELEASE-langflow --gvc GVC_NAME`; the database keeps running).
+4. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Langflow created:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+5. Run `cpln workload force-redeployment NEW_RELEASE-langflow --gvc GVC_NAME` so Langflow reloads the copied data, log in to check your flows and files, point your clients at the new endpoint (or move your custom domain), then uninstall the old release.
+
 ## Connecting
 
 | What | Where |
@@ -226,6 +264,7 @@ Langflow blocks requests to private addresses by default, which includes service
 - Any logged-in user can read the service-account key through Python, so grant that service account only what flows need.
 - Rotating the service-account key does not update a server that is already registered: edit its `Authorization` header under Settings → MCP Servers, or delete the `cpln` server there and run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME`.
 - Rotating a provider-keys secret does not restart Langflow; run `cpln workload force-redeployment RELEASE_NAME-langflow --gvc GVC_NAME` afterwards.
+- Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18` in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. See **Upgrading from 1.x**.
 - The first `helm upgrade` after an install can restart the bundled database, which briefly interrupts the editor and the API.
 - Use a single-location GVC: the database, the data volume and Redis run in one location.
 - Uninstalling deletes the database and the data volume, and with them every flow, user and uploaded file.

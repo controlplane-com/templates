@@ -11,10 +11,10 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.1
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    # Right after the Database and login step that picks it and names its secret.
+    # Right after the Database, login and keys step that picks it and names its secret.
     after: database
     steps:
       - { id: server, title: Database server }
@@ -34,11 +34,11 @@ imports:
           Langflow connects to its database like any other workload: keep Same GVC, or add the Langflow workload under
           Allowed workloads.
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
-    # Right after the Database and login step that picks it and names its secret.
+    # Right after the Database, login and keys step that picks it and names its secret.
     after: database
     steps:
       - { id: cluster, title: Database cluster, description: "The Patroni-managed PostgreSQL members that hold Langflow's users, flows and messages." }
@@ -96,11 +96,11 @@ imports:
 
 steps:
   - id: database
-    title: Database and login
+    title: Database, login and keys
     description: >-
-      Which PostgreSQL holds Langflow's users, flows, messages and stored credentials, and the three prerequisite
-      secrets: the database credentials, the superuser and the encryption key.
-    docs: "#prerequisites"
+      Which PostgreSQL holds Langflow's users, flows, messages and stored credentials, the three required
+      secrets (the database credentials, the superuser and the encryption key), and the optional provider-keys
+      and Control Plane MCP secrets.
     sections:
       - title: Database
         fields:
@@ -138,9 +138,9 @@ steps:
           - type: note
             severity: warning
             text: >-
-              All three secrets on this step must exist **before** you install; if one is missing, the
-              deployment waits and `cpln logs` shows nothing at all. Langflow receives the values inside a
-              connection URL, so use only letters, digits, `-`, `_`, `.` and `~`.
+              Every secret named on this step must exist **before** you install; if one is missing, the
+              deployment waits and `cpln logs` shows nothing at all. Langflow receives the database credentials
+              inside a connection URL, so use only letters, digits, `-`, `_`, `.` and `~` in them.
           - type: note
             text: Uninstalling deletes the database volume, and with it every user, flow, message and stored credential.
           - type: note
@@ -171,7 +171,6 @@ steps:
               PostgreSQL reads these values only when its data directory is first initialized, and Langflow connects
               with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret
               and force a redeployment of Langflow.
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -203,7 +202,6 @@ steps:
               PostgreSQL reads these values only when its data is first initialized, and Langflow connects with them.
               Changing it later is a database operation: follow the postgres-highly-available template's password
               rotation steps, then update the secret and force a redeployment of Langflow.
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -268,6 +266,85 @@ steps:
             message: >-
               A different key cannot decrypt the API keys already stored in Langflow. Change the secret only if
               the new one holds the same key.
+      - title: Provider keys
+        docs: "#configuration"
+        fields:
+          - path: variableSecrets.secretName
+            type: ref
+            label: Provider keys secret
+            description: >-
+              Optional. A dictionary secret you create; each key listed below becomes an environment variable and a
+              Langflow global variable of the same name. Leave empty for none.
+            help: >-
+              Rotating the secret does not restart Langflow; run `cpln workload force-redeployment
+              <release>-langflow` afterwards.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeysFrom: "self.variableSecrets.keys"
+          - path: variableSecrets.keys
+            type: list
+            label: Keys
+            widget: tags
+            unique: true
+            when: self.variableSecrets.secretName != ''
+            description: The keys of the secret to load, for example `OPENAI_API_KEY`. Each must exist in the secret.
+            item:
+              type: string
+              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              patternMessage: Use letters, digits and _, not starting with a digit.
+        rules:
+          - rule: (self.variableSecrets.secretName == '') == (size(self.variableSecrets.keys) == 0)
+            mirrors: langflow.validateVariableSecrets
+            paths: [variableSecrets.keys]
+            message: List at least one key of the provider keys secret, or clear the secret.
+      - title: Control Plane MCP server
+        description: >-
+          Optional. Registers the Control Plane MCP server as the superuser's MCP server `cpln`, so an MCP Tools
+          component can work with your org. Langflow cannot sign in to it with OAuth, so it uses a
+          service-account key.
+        fields:
+          - path: cplnMcp.keySecretName
+            type: ref
+            label: Service-account key secret
+            description: >-
+              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
+              empty for no Control Plane MCP server.
+            help: >-
+              Registered once, for the superuser only; other users add their own under Settings > MCP Servers.
+              Rotating the key does not update a registered server: edit its header there, or delete it and force
+              a redeployment.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-langflow-cpln-mcp-key'"
+                encoding: plain
+          - type: note
+            severity: warning
+            when: self.cplnMcp.keySecretName != ''
+            text: >-
+              Every flow that uses this server acts as the service account, and any logged-in user can read its
+              key through Python. Grant the service account only what flows need.
+          - path: cplnMcp.url
+            type: string
+            label: MCP server URL
+            advanced: true
+            required: true
+            when: self.cplnMcp.keySecretName != ''
+            suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
+            description: The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete tools as well, and grant the service account only what flows need.
+        rules:
+          - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
+            mirrors: langflow.validateCplnMcp
+            paths: [cplnMcp.url]
+            message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
     rules:
       # Only when exactly one database is on: with both (or neither) on, the root rule below says so instead of
       # flagging a secret field that has a value.
@@ -291,8 +368,8 @@ steps:
   - id: langflow
     title: Langflow
     description: >-
-      The Langflow server and its replicas, the optional Redis job queue, provider keys and extra settings, and who
-      can reach Langflow.
+      The Langflow server and its replicas, the optional Redis job queue, extra settings, and who can reach
+      Langflow.
     sections:
       - title: Server
         docs: "#configuration"
@@ -355,7 +432,6 @@ steps:
       - id: redis
         title: Redis job queue
         toggle: redis.enabled
-        docs: "#configuration"
         description: >-
           A single Redis node that every replica shares for editor builds and login rate limits. Needed for more
           than one replica; with one replica Langflow keeps both in memory.
@@ -426,86 +502,6 @@ steps:
             severity: info
             paths: [redis.redis.auth.fromSecret.name]
             message: Turning the Redis password on or off restarts Redis and Langflow; editor builds in progress fail.
-      - title: Provider keys
-        docs: "#configuration"
-        fields:
-          - path: variableSecrets.secretName
-            type: ref
-            label: Provider keys secret
-            description: >-
-              Optional. A dictionary secret you create; each key listed below becomes an environment variable and a
-              Langflow global variable of the same name. Leave empty for none.
-            help: >-
-              Rotating the secret does not restart Langflow; run `cpln workload force-redeployment
-              <release>-langflow` afterwards.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeysFrom: "self.variableSecrets.keys"
-          - path: variableSecrets.keys
-            type: list
-            label: Keys
-            widget: tags
-            unique: true
-            when: self.variableSecrets.secretName != ''
-            description: The keys of the secret to load, for example `OPENAI_API_KEY`. Each must exist in the secret.
-            item:
-              type: string
-              pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
-              patternMessage: Use letters, digits and _, not starting with a digit.
-        rules:
-          - rule: (self.variableSecrets.secretName == '') == (size(self.variableSecrets.keys) == 0)
-            mirrors: langflow.validateVariableSecrets
-            paths: [variableSecrets.keys]
-            message: List at least one key of the provider keys secret, or clear the secret.
-      - title: Control Plane MCP server
-        docs: "#prerequisites"
-        description: >-
-          Optional. Registers the Control Plane MCP server as the superuser's MCP server `cpln`, so an MCP Tools
-          component can work with your org. Langflow cannot sign in to it with OAuth, so it uses a
-          service-account key.
-        fields:
-          - path: cplnMcp.keySecretName
-            type: ref
-            label: Service-account key secret
-            description: >-
-              An opaque secret holding a Control Plane service-account key (`cpln serviceaccount add-key`). Leave
-              empty for no Control Plane MCP server.
-            help: >-
-              Registered once, for the superuser only; other users add their own under Settings > MCP Servers.
-              Rotating the key does not update a registered server: edit its header there, or delete it and force
-              a redeployment.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [opaque] }
-              mustExist: error
-              allowCreate: true
-              create:
-                suggestName: "context.releaseName + '-langflow-cpln-mcp-key'"
-                encoding: plain
-          - type: note
-            severity: warning
-            when: self.cplnMcp.keySecretName != ''
-            text: >-
-              Every flow that uses this server acts as the service account, and any logged-in user can read its
-              key through Python. Grant the service account only what flows need.
-          - path: cplnMcp.url
-            type: string
-            label: MCP server URL
-            advanced: true
-            required: true
-            when: self.cplnMcp.keySecretName != ''
-            suggestions: ["https://mcp.cpln.io/mcp?toolsets=readonly", "https://mcp.cpln.io/mcp"]
-            description: The default `?toolsets=readonly` offers only read-only tools. Remove it for create, update and delete tools as well, and grant the service account only what flows need.
-        rules:
-          - rule: self.cplnMcp.keySecretName == '' || self.cplnMcp.url.startsWith('https://')
-            mirrors: langflow.validateCplnMcp
-            paths: [cplnMcp.url]
-            message: Use an https:// URL, for example https://mcp.cpln.io/mcp.
       - title: Extra environment variables
         fields:
           - path: langflow.extraEnv
@@ -733,3 +729,16 @@ yamlOnly:
     reason: Sentinel never runs (redis.mode is fixed to dev).
   - path: redis.sentinel.requestRetryPolicy
     reason: Sentinel never runs (redis.mode is fixed to dev).
+
+migrations:
+  # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the path from the postgres import's own 3.x migration, so the
+  # note names this chart's README section.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database keeps the PostgreSQL major it was created with, so the installed image is kept (Database
+      server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading
+      from 1.x).

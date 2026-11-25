@@ -1,7 +1,7 @@
 # Feature checks for the langflow template. Each runs after install (and after each upgrade) on every
 # version in its since/until range. Add a check with `since: <new version>` for every change you ship.
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
-# (langflow_version, admin_user, admin_password, secret_key, redis_password, probe).
+# (langflow_version, admin_user, admin_password, secret_key, redis_password, probe, pg_user, pg_password, pg_db).
 #
 # The checks are Python (standard library only) run in the Langflow container against its own API on
 # 127.0.0.1:7860; Redis is reached with raw RESP over a socket (the image has no redis-cli). The runner
@@ -540,3 +540,75 @@ checks:
     retries: 4
     retryDelaySeconds: 30
     timeoutSeconds: 180
+
+  - id: fresh-is-19
+    description: A fresh install runs the single-instance PostgreSQL on 19 (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: pinned-stays-18
+    description: >-
+      A 1.0.0 release upgraded with postgres.image pinned to postgres:18 (the guard's fix) runs PostgreSQL 18
+      on its original data directory. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$"
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.0.0 release (data on PostgreSQL 18) is held by the postgres boot guard: the data
+      directory is still 18, no postgres process runs, and the guard file names this chart's pin and wizard field.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:18.*Upgrade > Database server > Postgres image"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      and Langflow's own tables are in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "FLOW_TABLE=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from information_schema.tables where table_name = 'flow'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^FLOW_TABLE=1$"
+    retries: 4
+    retryDelaySeconds: 15

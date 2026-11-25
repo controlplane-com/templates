@@ -1,0 +1,101 @@
+# langflow 2.0.0 — the production-leaning shape at the smallest size that runs: two Langflow replicas on
+# the bundled single PostgreSQL and a one-node Redis that requires a password, with a provider-keys
+# secret loaded as a global variable and one extraEnv setting. All credentials are prerequisite secrets
+# CI creates (hex, so the database and Redis passwords are URL-safe; the encryption key is a real
+# 44-character Fernet key).
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+  adminpw: hex
+  redispw: hex
+  probe: hex
+  fernet: fernet
+  fakemcpkey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: langflow
+      password: "{gen.pgpw}"
+      database: langflow
+  admin:
+    type: dictionary
+    entries:
+      username: admin
+      password: "{gen.adminpw}"
+  key:
+    type: opaque
+    payload: "{gen.fernet}"
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  vars:
+    type: dictionary
+    entries:
+      E2E_PROBE: "{gen.probe}"
+  # Not a real service-account key: mcp.cpln.io refuses it, which cpln-mcp-key-refused proves.
+  mcpkey:
+    type: opaque
+    payload: "{gen.fakemcpkey}"
+
+vars:
+  langflow_version: "1.13.1"       # the version /api/v1/version reports; bump with the image tag
+  admin_user: admin
+  admin_password: "{gen.adminpw}"
+  secret_key: "{gen.fernet}"
+  redis_password: "{gen.redispw}"
+  probe: "{gen.probe}"
+  pg_user: langflow
+  pg_password: "{gen.pgpw}"
+  pg_db: langflow
+
+values:
+  langflow:
+    replicas: 2
+    extraEnv:
+      - name: LANGFLOW_MAX_FILE_SIZE_UPLOAD
+        value: "77"
+  admin:
+    secretName: "{secrets.admin.name}"
+  secretKey:
+    secretName: "{secrets.key.name}"
+  variableSecrets:
+    secretName: "{secrets.vars.name}"
+    keys: [E2E_PROBE]
+  cplnMcp:
+    keySecretName: "{secrets.mcpkey.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    enabled: true
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# The highly available database (postgres-highly-available 3.0.0): a fresh HA install, where every Langflow
+# check runs against the HAProxy leader endpoint and ha-is-18 proves the new cluster's major.
+variants:
+  - name: ha
+    values:
+      postgres:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1200
+
+# 2.0.0 runs the single-instance PostgreSQL on 19, so a plain upgrade of a 1.0.0 release (data on PostgreSQL
+# 18) must be REFUSED by the postgres boot guard with the data untouched; the upgrade pinned to postgres:18,
+# as the guard says, then succeeds and the flow written on 1.0.0 survives.
+upgradeFrom:
+  - version: 1.0.0
+    refused: {timeoutSeconds: 420}
+    then: {set: {postgres: {image: "postgres:18"}}}

@@ -59,7 +59,7 @@ internalAccess:
 # Every knob of the `postgres` template is available under this key. Enable exactly one of postgres / postgresHA.
 postgres:
   enabled: true
-  image: postgres:18
+  image: postgres:19            # new installs; a release upgraded from 1.x keeps postgres:18, its data's major (README, "Upgrading from 1.x")
   config:
     # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL, or the deployment WEDGES silently.
     # A `dictionary` secret with exactly username, password and database, all URL-safe
@@ -72,9 +72,15 @@ postgres:
     maxMemory: 1Gi
   volumeset:
     capacity: 10                # GiB (minimum 10)
+  # How the database's major-version guard names its fix in the logs: this chart's values path, wizard field and
+  # README section. Leave as is.
+  upgradeHint:
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
   backup: # pass-through to the postgres template's backup feature (Postgres 17+)
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0   # PostgreSQL 19 client; also backs up a server pinned to 17 or 18
     schedule: "0 2 * * *"       # daily at 2am UTC
     resources:
       cpu: 100m
@@ -101,6 +107,7 @@ postgres:
 # ─── Database: highly available PostgreSQL ───────────────────────────────────
 # 3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint; every knob of the
 # `postgres-highly-available` template is available under this key.
+# New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on 17 (README, "Upgrading from 1.x").
 postgresHA:
   enabled: false
   config:
@@ -121,7 +128,7 @@ postgresHA:
       cpu: 100m
       memory: 512Mi             # 128Mi OOM-kills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0   # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"     # daily at 2am UTC
     walg:
       intervalSeconds: 21600    # every 6 hours

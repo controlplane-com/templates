@@ -248,8 +248,7 @@ steps:
       - id: snapshots
         title: Volume snapshots
         description: >-
-          Snapshots of every replica's data volume, off by default because an import rebuilds the tables. The
-          shared import volume is never snapshotted. A final snapshot is taken when the volume set is deleted,
+          Snapshots of every replica's data volume. The shared import volume is never snapshotted. A final snapshot is taken when the volume set is deleted,
           with or without a schedule.
         docs: "/reference/volumeset#snapshots"
         fields:

@@ -227,6 +227,8 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
    cpln cp ./langflow-data/. NEW_RELEASE-langflow:/app/langflow --gvc GVC_NAME --container langflow
    ```
 
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-langflow --gvc GVC_NAME --container langflow -- ls -la /app/langflow`.
+
 3. Stop writes to the old release by stopping its Langflow workload (`cpln workload stop OLD_RELEASE-langflow --gvc GVC_NAME`; the database keeps running).
 4. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Langflow created:
 

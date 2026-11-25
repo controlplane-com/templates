@@ -183,17 +183,19 @@ If an upgrade ran without the pin, run the same upgrade again with `--set postgr
 **Move to PostgreSQL 19** (a dump and restore into a new release in the same GVC; Dify gets a new endpoint and cannot write while the copy runs):
 
 1. Install 2.0.0 as a **new release** with the **same** `dify.secretName`, `postgres.config.credentialsSecretName` and `codeExecution.apiKeySecretName`. Wait until `NEW_RELEASE-dify-api` and `NEW_RELEASE-dify-plugin-daemon` are ready (they create empty schemas); do not open its `/install` page.
-2. Copy the file storage (uploads and the keys that decrypt saved model credentials) and the installed plugins through your machine while the old release still runs:
+2. Copy the file storage (uploads and the keys that decrypt saved model credentials) and the installed plugins through your machine while the old release still runs (`./cwd`, the plugins' Python environments, is left out: the plugin daemon rebuilds it):
 
    ```bash
    mkdir -p ./dify-storage ./dify-plugins
    cpln workload exec OLD_RELEASE-dify-api --gvc GVC_NAME --container api -- \
      sh -c 'cd /app/api/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./dify-storage
    cpln workload exec OLD_RELEASE-dify-plugin-daemon --gvc GVC_NAME --container plugin-daemon -- \
-     sh -c 'cd /app/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./dify-plugins
+     sh -c 'cd /app/storage && tar czf - --exclude="./.*" --exclude="./cwd" . | base64' | base64 -d | tar xzf - -C ./dify-plugins
    cpln cp ./dify-storage/. NEW_RELEASE-dify-api:/app/api/storage --gvc GVC_NAME --container api
    cpln cp ./dify-plugins/. NEW_RELEASE-dify-plugin-daemon:/app/storage --gvc GVC_NAME --container plugin-daemon
    ```
+
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-dify-api --gvc GVC_NAME --container api -- ls -la /app/api/storage`.
 
 3. Stop writes on both releases:
 
@@ -209,7 +211,7 @@ If an upgrade ran without the pin, run the same upgrade again with `--set postgr
      'export PGPASSWORD="$POSTGRES_PASSWORD"; for db in "$POSTGRES_DB" dify_plugin; do pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$db" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$db" -q; done'
    ```
 
-5. Start the new release, sign in with your existing account, check your apps, knowledge bases and model providers, and point your users at the new URL (or move your custom domain and `dify.publicUrl`):
+5. Start the new release (for the first few minutes the plugin daemon rebuilds the plugins' environments, and knowledge bases and the plugin list return errors until it finishes), sign in with your existing account, check your apps, knowledge bases and model providers, and point your users at the new URL (or move your custom domain and `dify.publicUrl`):
 
    ```bash
    cpln workload start NEW_RELEASE-dify-api NEW_RELEASE-dify-worker NEW_RELEASE-dify-beat NEW_RELEASE-dify-plugin-daemon --gvc GVC_NAME

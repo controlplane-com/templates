@@ -29,6 +29,7 @@
 | `replicas` | 3 | cluster member count (1 leader + N-1 standbys) |
 | `image` | `timescale/timescaledb-ha:pg18.6-ts2.31.0` | PG 18.6 + TS 2.31.0 Community + pgvector 0.8.7, Patroni bundled (1.2.1; was `pg18.4-ts2.28.3`) |
 | `postgres.credentialsSecretName` | `my-timescaledb-ha-credentials` | **prerequisite** `dictionary` secret with `username`, `password`, `database` (1.1.0+) |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / 7d | scheduled volume snapshots, `""` = off (1.3.0) |
 | `proxy.enabled` | true | HAProxy leader endpoint; auto-on with pgbouncer |
 | `pgbouncer.enabled` | false | pooler in front of the proxy |
 | `backup.enabled` + `provider` | false / aws | logical cron backup to aws/gcp/minio |
@@ -100,3 +101,4 @@
   - **Readiness must NOT be `/healthz` :8404** (false whenever no leader is routable): tried first; in a hang failover it stayed false ~60 s and the platform then stopped BOTH proxy replicas (exit 137) ~9 s after the new leader was UP — 155 s instead of 70 s. HAProxy marks every server UP until its first check (~1-2 s after start); the 5 s `initialDelaySeconds` covers that, so do not shorten it.
 - **1.2.1 fixed PgBouncer being uninstallable** (1.2.0 regression from the credentials move): `ADMIN_USERS` read the removed `postgres.username`, rendered null, and the API rejected the workload (`"spec.containers[0].env[0].value" must be a string`), leaving a failed release with no workaround. It now reads `cpln://secret/{credentialsSecretName}.username`; measured: installs, pools through to the leader, `SHOW POOLS` works as the superuser.
 - **Pre-existing drift, deferred:** the timescaledb-ha workload drifts on six probe fields (liveness/readiness `httpGet.scheme`, `initialDelaySeconds`, `successThreshold`); the proxy is clean.
+- **1.3.0 (2026-11-25, work item 5219): volume snapshots are scheduled, daily at 03:00 UTC by default** (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one. A schedule more frequent than hourly fails at render (`tsdb-ha.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. **The bundled etcd subchart's volume set (etcd 1.4.2) still has no schedule**; it follows when etcd's own fix ships and this chart bumps etcd. E2E tests onboarded (`cluster-healthy`, `hypertable-write-read-via-proxy`, `rejects-bad-password`, `data-survives-upgrade`; upgrade from 1.2.1); the deferred probe drift above shows as a warning (no `driftBlocks`).

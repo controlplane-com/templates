@@ -424,7 +424,6 @@ steps:
             help: >-
               Read the job's logs with
               `cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-backup-setup"}' --limit 50 --since 10m`.
-            docs: "#backing-up"
         rules:
           # workload-backup-setup.yaml:1-2 renders the job only while remove_setup_workload is off, and
           # nothing else registers the repository or creates the SLM policy.

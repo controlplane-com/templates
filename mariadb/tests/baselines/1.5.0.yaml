@@ -37,6 +37,11 @@ upgradeFrom:
   - version: 1.4.1
   - version: 1.3.2
     values: new
+    knownIssue:
+      note: >-
+        Moving onto the credential secrets can leave the workload paused on "not allowed to reveal"
+        when the reveal policy is granted in the same apply; force-redeployment resumes it. A platform
+        race, also in 1.4.x; ruled 2026-11-25: README note, warn here.
   - version: 1.0.0
     values: new
     knownIssue:

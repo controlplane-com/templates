@@ -196,3 +196,17 @@ with no signal.
 {{- fail "hermes-agent: resources.memory was RENAMED to resources.maxMemory. A block exposing both a reservation and a limit names the limit maxCpu/maxMemory, so the bare name is no longer read and would be silently ignored. Rename it in your values." -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The platform rejects volume snapshot schedules more frequent than hourly, at
+apply time only -- the release would be left half-installed. A schedule runs at
+most hourly when its minute field is a single fixed minute.
+*/}}
+{{- define "hermes-agent.validateSnapshots" -}}
+{{- $s := trim (toString (.Values.volumeset.snapshots.schedule | default "")) -}}
+{{- if $s -}}
+{{- if not (regexMatch "^[0-5]?[0-9] +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+$" $s) -}}
+{{- fail (printf "hermes-agent: volumeset.snapshots.schedule %q must be a 5-field cron with a single fixed minute (snapshots cannot run more often than hourly), e.g. \"0 3 * * *\"; use \"\" to turn snapshots off" $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

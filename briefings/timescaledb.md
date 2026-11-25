@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | stateful workload `{release}-timescaledb` | single Postgres 18 + TimescaleDB 2.28.3 instance, pinned to 1 replica |
-| volumeset `{release}-tsdb-vs` | data dir, 10 GiB default, optional autoscaling, 7-day snapshots |
+| volumeset `{release}-tsdb-vs` | data dir, 10 GiB default, optional autoscaling, daily snapshots kept 7 d from 1.3.0 (none were ever taken through 1.2.0) |
 | dictionary secret + identity + policy | db credentials; identity gets scoped bucket access only when backups on |
 | serverless workload `{release}-pgbouncer` (optional) | connection pooler (multiplexes many client connections into few real ones) |
 | cron workload `{release}-timescaledb-backup` (optional) | nightly `pg_dumpall` (full-cluster SQL dump) to S3/GCS/MinIO |
@@ -23,11 +23,11 @@
 - Availability posture: **single replica in v1** (proposal-staged scope, not a license or platform limit). Patroni HA (automatic failover manager, free upstream) is the planned `timescaledb-highly-available` follow-up adapting postgres-highly-available. Do not scale this workload.
 
 ## Key knobs
-`image` (pinned tag) · `resources` (tune reads limits at first boot) · `config.{username,password,database}` · `volumeset.capacity`+autoscaling · `internalAccess.type` · `publicAccess.enabled` (TCP 5432, default off) · `pgbouncer.*` (default off) · `backup.*` (aws/gcp/minio, default off)
+`image` (pinned tag) · `resources` (tune reads limits at first boot) · `config.credentialsSecretName` (prerequisite `dictionary` secret: `username`, `password`, `database`) · `volumeset.capacity`+autoscaling · `volumeset.snapshots.schedule` (`"0 3 * * *"`, `""` = off) / `.retentionDuration` (7d) · `internalAccess.type` · `publicAccess.enabled` (TCP 5432, default off) · `pgbouncer.*` (default off) · `backup.*` (aws/gcp/minio, default off)
 
 ## Troubleshooting / considerations
 - **Tuning is frozen at first boot.** `timescaledb-tune` sizes memory settings from the container limit only when the data volume is empty. User raises `resources.maxMemory` later → Postgres keeps old settings; fix = manual `ALTER SYSTEM` or fresh volume (uninstall deletes the volumeset).
-- **Credentials are also frozen at first boot** (standard postgres-family gotcha): changing `config.password` after init does not change the database password on the persisted volume.
+- **Credentials are also frozen at first boot** (standard postgres-family gotcha): changing the password in the credentials secret after init does not change the database password on the persisted volume.
 - **Restore is NOT the vanilla postgres procedure.** Must run `SELECT timescaledb_pre_restore();` before replaying a dump and `timescaledb_post_restore();` after, on a server with the SAME extension version as the dump. Plain psql replay without these fails or silently mangles hypertable catalogs.
 - **Backup image version must match server major** (PG18 client ↔ pg18 image). If a user pins an older `pgXX` image tag, they must also switch `backup.image` to the matching tag (17.1.0 for PG17).
 - **Public 5432 is unencrypted** — the alpine image ships no TLS certs. Default is off; steer users to internal access or their own cert setup.
@@ -36,3 +36,6 @@
 - **Compression/retention run as background jobs inside the DB** — if jobs seem stuck, check `timescaledb_information.jobs` / `job_errors`; jobs pause if someone ran `timescaledb_pre_restore()` and forgot `timescaledb_post_restore()`.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 1.1.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
 - **pgvector in the image is 0.8.1 (CVE-2026-103484, fixed in 0.8.7).** The alpine `timescale/timescaledb` images pin `PGVECTOR_VERSION=v0.8.1`, even 2.31.0 (2026-10-20); upstream asked in timescale/timescaledb-docker#355 (2026-10-23). Ruled 2026-10-23: wait for upstream rather than build our own image, with a README note; the `POSTGRES_USER` role is a superuser (can already run code), so only extra non-superuser roles with index rights gain anything. Bump the image when a fixed tag ships (work item 5376).
+
+## What 1.3.0 changed
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`timescaledb.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.

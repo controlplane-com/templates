@@ -1,3 +1,4 @@
+{{- include "cpln-jenkins.validateSnapshots" . }}
 {{- include "cpln-jenkins.validate" . -}}
 kind: volumeset
 name: {{ include "cpln-jenkins.volumeset.name" . }}
@@ -9,4 +10,7 @@ spec:
   fileSystemType: ext4
   snapshots:
     createFinalSnapshot: true
-    retentionDuration: 7d
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

@@ -1,0 +1,74 @@
+# Feature checks for the cpln-jenkins template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (admin_user,
+# admin_password).
+#
+# Every check runs in the controller's jenkins container, which carries bash and curl, against Jenkins on
+# localhost:8080. CI has no Control Plane API key to give the cloud, so no check queues a build: a queued
+# job would ask the cloud for an agent. Creating a job does not queue it.
+checks:
+  - id: admin-login
+    description: The admin logs in with the password from the prerequisite secret.
+    exec:
+      workload: "{release}-jenkins"
+      container: jenkins
+      shell: bash
+      script: |
+        curl -s -m 10 -u '{admin_user}:{admin_password}' http://localhost:8080/whoAmI/api/json 2>&1
+    expect:
+      stdout: '"authenticated"\s*:\s*true.*"name"\s*:\s*"{admin_user}"'
+    retries: 12
+    retryDelaySeconds: 15
+
+  - id: rejects-unknown-login
+    description: >-
+      Basic auth with an unknown user is refused (the control for admin-login; an unknown user, so failed
+      attempts never count against the real admin).
+    exec:
+      workload: "{release}-jenkins"
+      container: jenkins
+      shell: bash
+      script: |
+        curl -s -m 10 -o /dev/null -w 'HTTP=%{''http_code}\n' -u 'e2e-nobody:wrong-password' http://localhost:8080/whoAmI/api/json 2>&1
+    expect:
+      stdout: "^HTTP=401$"
+
+  - id: create-job
+    description: >-
+      A job created through the REST API as the admin (with a CSRF crumb) reads back with its description.
+      The job is named after the running version, so data-survives-upgrade can find it later.
+    exec:
+      workload: "{release}-jenkins"
+      container: jenkins
+      shell: bash
+      script: |
+        set -e
+        U=http://localhost:8080; A='{admin_user}:{admin_password}'; J=$(mktemp)
+        if ! curl -sf -m 10 -o /dev/null -u "$A" "$U/job/e2e-{version}/api/json"; then
+          C=$(curl -sf -m 10 -c "$J" -b "$J" -u "$A" "$U/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
+          curl -sf -m 10 -o /dev/null -c "$J" -b "$J" -u "$A" -H "$C" -H 'Content-Type: application/xml' \
+            --data-binary '<project><description>e2e marker {version}</description><builders/></project>' \
+            "$U/createItem?name=e2e-{version}"
+        fi
+        curl -s -m 10 -u "$A" "$U/job/e2e-{version}/api/json?tree=name,description"
+    expect:
+      stdout: '"description"\s*:\s*"e2e marker {version}"'
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The job created on the version this scenario installed first is still there, and its config is on the
+      volume. On a fresh install that is the same version; after an upgrade it proves JENKINS_HOME carried over.
+    exec:
+      workload: "{release}-jenkins"
+      container: jenkins
+      shell: bash
+      script: |
+        curl -s -m 10 -u '{admin_user}:{admin_password}' "http://localhost:8080/job/e2e-{installed_version}/api/json?tree=description"
+        echo
+        grep -q 'e2e marker {installed_version}' /var/jenkins_home/jobs/e2e-{installed_version}/config.xml && echo ON_VOLUME
+    expect:
+      stdout: '(?s)"description"\s*:\s*"e2e marker {installed_version}".*^ON_VOLUME$'
+    retries: 6
+    retryDelaySeconds: 15

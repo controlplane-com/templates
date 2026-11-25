@@ -5,7 +5,7 @@ Jenkins CI server with the [Control Plane cloud plugin](https://github.com/contr
 ## Architecture
 
 - **Workload** (`stateful`) — the Jenkins controller, HTTP on port 8080, pinned to a single replica.
-- **Volume set** — `ext4` volume mounted at `/var/jenkins_home`, holding jobs, build history and plugin state. A final snapshot is kept for 7 days when the volume set is deleted.
+- **Volume set** — `ext4` volume mounted at `/var/jenkins_home`, holding jobs, build history and plugin state. Snapshotted daily (kept 7 days), plus a final snapshot when the volume set is deleted.
 - **Cloud configuration secret** — created by this chart from your values and read by Jenkins at boot as Configuration as Code.
 - **Identity + policy** — grants the controller `reveal` on exactly the secrets it mounts.
 - **Agent workloads** — created and deleted by Jenkins itself at build time, not by this chart.
@@ -88,7 +88,14 @@ resources:
 
 volumeset:
   capacity: 10               # GiB (minimum 10); holds JENKINS_HOME
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Access
 
@@ -164,6 +171,7 @@ cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-jenkins"} |= "Failed to list 
 - **Agent CPU and memory have floors** (50 millicores, 128 MiB). The chart refuses to render below them, because the agent JVM fails to start or is OOM-killed.
 - **Jobs, build history and installed plugins live on the volume set** and survive redeployment; uninstalling the release deletes it.
 - **Access changes can take a few minutes to propagate** after toggling `publicAccess` or `internalAccess`.
+- **Upgrading from 1.0.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

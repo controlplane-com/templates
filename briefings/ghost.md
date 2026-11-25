@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-ghost` (stateful, 1 replica, :2368) | Ghost Node app; content volumeset at `/var/lib/ghost/content` |
-| `{release}-ghost-vs` volumeset | durable uploaded images, themes, logs |
+| `{release}-ghost-vs` volumeset | durable uploaded images, themes, logs; daily snapshots kept 7 d from 1.4.0 (none were ever taken through 1.3.0) |
 | `{release}-ghost-start` secret | startup script: derives `url` from the canonical endpoint, then execs the image entrypoint |
 | `{release}-ghost-identity` / `-policy` | least-privilege `reveal` on the start script, the DB credentials secret (`mysql.credentialsSecretName`), and the SMTP secret (only if set) — never the root-password secret |
 | `{release}-mysql` (+ `-vs`) | MySQL 8 backing DB (`mysql` subchart 1.5.2, image pinned `mysql:8`); reads the two prerequisite secrets |
@@ -40,6 +40,11 @@
 ## Availability posture (state plainly)
 - **Single-replica by design. No `replicas` knob, ever.** Ghost has **no upstream clustering/multi-instance support** (a "quorum" — majority-agreement — model does not apply; it simply is not built for >1 replica): it holds in-process scheduler, job-queue and cache state that is unsafe to run in parallel.
 - Durability = durable MySQL + durable content volumeset + fast restart + optional scheduled DB dumps. A rolling restart of the one replica is a brief (seconds) outage — put a CDN in front for a public site.
+
+## What 1.4.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`ghost.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`site-serves`, `owner-login`, `post-roundtrip`, `data-survives-upgrade`; upgrade from 1.3.0). The owner is created through Ghost's setup API by the first check. The bundled MySQL volume set is the mysql subchart's and is unchanged.
 
 ## Troubleshooting / considerations
 - **1.3.0: no credential is a value any more.** `mysql.config.*` and `mysql.enablePhpMyAdmin` are gone (the chart, and the mysql 1.5.2 subchart before it, `fail` at render if they are still set — so a 1.2.0 values file is refused before anything is touched). Note the subchart's `fail` fires first (Helm renders subchart templates first), so users see mysql's wording, not ghost's.

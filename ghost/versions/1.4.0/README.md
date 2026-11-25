@@ -41,7 +41,14 @@ resources:      # single Node instance
   minMemory: 512Mi
 volumeset:
   capacity: 10  # content dir capacity in GiB (minimum 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 ```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
 
 ### Site URL
 
@@ -208,6 +215,7 @@ Resource blocks that expose both a floor and a ceiling name the ceiling `maxCpu`
 - **SMTP is a prerequisite secret**, not a value — create the dictionary secret (`user`, `password`) and set `mail.secretName`/`host`/`from`; leaving `mail.secretName` empty keeps email fully off. After rotating it, force a redeployment of `RELEASE_NAME-ghost`.
 - **Admin is at `/ghost`; staff 2FA is off by default.** Ghost 6 emails a verification code on every new-device admin login, which needs SMTP — so the default (mail-off) install ships with `staffDeviceVerification: false` to keep `/ghost` reachable. Set it `true` after configuring mail to re-enable the check.
 - **Set `publicUrl` for a custom domain** so links and emails point at the right host; empty derives the canonical `*.cpln.app` endpoint.
+- **Upgrading from 1.3.0 or earlier turns on daily volume snapshots.** Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
 
 ## Links
 

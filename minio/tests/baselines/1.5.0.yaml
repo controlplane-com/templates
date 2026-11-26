@@ -1,0 +1,34 @@
+# minio 1.5.0 — the default topology: six nodes in one erasure-coded pool in one location, root
+# credentials in the prerequisite dictionary secret. Compute is reduced from the 1/2 CPU, 2Gi/4Gi
+# default to 250m/1 CPU and 512Mi/1Gi, which runs the e2e load (a few small objects) comfortably and
+# keeps the stateful cpu:minCpu ratio at 4:1.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  rootpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.rootpw}"
+
+vars:
+  minio_workload: "{release}-minio"
+  root_user: e2eadmin
+  root_password: "{gen.rootpw}"
+
+values:
+  admin:
+    credentialsSecretName: "{secrets.creds.name}"
+  resources:
+    minCpu: 250m
+    maxCpu: 1
+    minMemory: 512Mi
+    maxMemory: 1Gi
+
+# 1.4.0 is the previous version and has the same values surface, so it upgrades with its own values.
+upgradeFrom:
+  - version: 1.4.0

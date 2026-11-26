@@ -1,0 +1,131 @@
+# Feature checks for the minio template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version} {locations.0}, and the baseline
+# vars (minio_workload, root_user, root_password).
+#
+# The Silo image has bash, curl (with --aws-sigv4) and coreutils but no grep, so the scripts match
+# with bash patterns. Placeholders are {name}, so curl's write-out is spelled '%{''http_code}'. S3 calls are signed with the root credentials from the prerequisite secret.
+
+checks:
+  - id: cluster-formed
+    description: >-
+      The erasure-coded pool has write quorum, and it can lose this node and keep it
+      (/minio/health/cluster?maintenance=true), which holds only while every node is online.
+    exec:
+      workload: "{minio_workload}"
+      replica: "{minio_workload}-0"
+      container: minio
+      shell: bash
+      script: |
+        c=$(curl -s -m 10 -o /dev/null -w '%{''http_code}' http://127.0.0.1:9000/minio/health/cluster)
+        m=$(curl -s -m 10 -o /dev/null -w '%{''http_code}' 'http://127.0.0.1:9000/minio/health/cluster?maintenance=true')
+        echo "CLUSTER=$c MAINTENANCE=$m"
+    expect:
+      stdout: "^CLUSTER=200 MAINTENANCE=200$"
+    retries: 6
+    retryDelaySeconds: 15
+
+  - id: write-read-across-nodes
+    description: >-
+      An object written through one node's per-replica address reads back byte for byte through
+      another node's, and through the service name.
+    exec:
+      workload: "{minio_workload}"
+      replica: "{minio_workload}-0"
+      container: minio
+      shell: bash
+      script: |
+        A=(--aws-sigv4 aws:amz:us-east-1:s3 --user '{root_user}:{root_password}' -s -m 20)
+        N=http://replica-1.{minio_workload}.{locations.0}.{gvc}.cpln.local:9000
+        M=http://replica-4.{minio_workload}.{locations.0}.{gvc}.cpln.local:9000
+        S=http://{minio_workload}.{gvc}.cpln.local:9000
+        curl "${A[@]}" -o /dev/null -X PUT "$N/e2e-rw" || true
+        head -c 262144 /dev/urandom > /tmp/e2e-obj
+        want=$(sha256sum /tmp/e2e-obj | cut -d' ' -f1)
+        put=$(curl "${A[@]}" -o /dev/null -w '%{''http_code}' -T /tmp/e2e-obj "$N/e2e-rw/obj-{version}")
+        got=$(curl "${A[@]}" "$M/e2e-rw/obj-{version}" | sha256sum | cut -d' ' -f1)
+        svc=$(curl "${A[@]}" "$S/e2e-rw/obj-{version}" | sha256sum | cut -d' ' -f1)
+        rm -f /tmp/e2e-obj
+        echo "PUT=$put"
+        [ "$got" = "$want" ] && echo "READ_OTHER_NODE=match" || echo "READ_OTHER_NODE=mismatch"
+        [ "$svc" = "$want" ] && echo "READ_SERVICE=match" || echo "READ_SERVICE=mismatch"
+    expect:
+      stdout: "(?s)^PUT=200$.*^READ_OTHER_NODE=match$.*^READ_SERVICE=match$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: rejects-wrong-credential
+    description: >-
+      A request signed with a wrong secret key is refused with SignatureDoesNotMatch, while the same
+      request signed with the real root credentials succeeds (the control).
+    exec:
+      workload: "{minio_workload}"
+      replica: "{minio_workload}-0"
+      container: minio
+      shell: bash
+      script: |
+        E=http://127.0.0.1:9000/
+        good=$(curl -s -m 10 -o /dev/null -w '%{''http_code}' --aws-sigv4 aws:amz:us-east-1:s3 --user '{root_user}:{root_password}' "$E")
+        body=$(curl -s -m 10 -w ' HTTP=%{''http_code}' --aws-sigv4 aws:amz:us-east-1:s3 --user '{root_user}:wrong-secret-key-e2e' "$E")
+        echo "RIGHT=$good"
+        [[ "$body" == *SignatureDoesNotMatch*" HTTP=403" ]] && echo "WRONG=refused" || echo "WRONG=not-refused ${body: -40}"
+    expect:
+      stdout: "(?s)^RIGHT=200$.*^WRONG=refused$"
+
+  - id: data-survives-upgrade
+    description: >-
+      An object written on the version this scenario installed first is still there with its content.
+      On a fresh install it is the same version's object; after an upgrade it proves the volumes and the
+      pool carried over.
+    exec:
+      workload: "{minio_workload}"
+      replica: "{minio_workload}-0"
+      container: minio
+      shell: bash
+      script: |
+        A=(--aws-sigv4 aws:amz:us-east-1:s3 --user '{root_user}:{root_password}' -s -m 20)
+        E=http://127.0.0.1:9000
+        curl "${A[@]}" -o /dev/null -X PUT "$E/e2e-persist" || true
+        curl "${A[@]}" -o /dev/null -X PUT --data-binary 'written-on-{version}' "$E/e2e-persist/{version}"
+        got=$(curl "${A[@]}" "$E/e2e-persist/{installed_version}")
+        [ "$got" = 'written-on-{installed_version}' ] && echo PERSISTED || echo "MISSING ({installed_version}: ${got:0:120})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: ready-without-quorum
+    description: >-
+      The readiness probe's endpoint answers per node without quorum. A second server started in the
+      container with three unreachable peers has no quorum (cluster check 503, S3 503), yet
+      /minio/health/ready answers 200. 1.5.0's readiness probe relies on this: a not-ready replica is
+      unreachable on the platform, so a quorum-gated probe would deadlock a cold start.
+    issue: "#5745"
+    since: 1.5.0
+    exec:
+      workload: "{minio_workload}"
+      replica: "{minio_workload}-0"
+      container: minio
+      shell: bash
+      script: |
+        BIN=$(command -v silo || command -v minio)
+        # Stop only the extra server: its command line starts with the binary's path (this shell's
+        # starts with bash, so it never matches itself).
+        stopq() { for p in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+          case "$c" in "$BIN server --address :9100 "*) kill "${p#/proc/}";; esac; done; }
+        stopq; rm -rf /tmp/e2e-q; mkdir -p /tmp/e2e-q
+        peers=(); for i in 0 1 2 3; do
+          peers+=("http://replica-$i.{minio_workload}.{locations.0}.{gvc}.cpln.local:9100/tmp/e2e-q"); done
+        (MINIO_BROWSER=off "$BIN" server --address :9100 "${peers[@]}" >/tmp/e2e-q.log 2>&1 &)
+        Q=http://127.0.0.1:9100
+        for i in $(seq 1 30); do
+          r=$(curl -s -m 5 -o /dev/null -w '%{''http_code}' "$Q/minio/health/live"); [ "$r" = 200 ] && break; sleep 1
+        done
+        sleep 10
+        echo "READY=$(curl -s -m 5 -o /dev/null -w '%{''http_code}' "$Q/minio/health/ready")"
+        echo "CLUSTER=$(curl -s -m 5 -o /dev/null -w '%{''http_code}' "$Q/minio/health/cluster")"
+        echo "S3=$(curl -s -m 5 -o /dev/null -w '%{''http_code}' --aws-sigv4 aws:amz:us-east-1:s3 --user '{root_user}:{root_password}' "$Q/")"
+        stopq; rm -rf /tmp/e2e-q /tmp/e2e-q.log
+    expect:
+      stdout: "(?s)^READY=200$.*^CLUSTER=503$.*^S3=503$"
+    timeoutSeconds: 120

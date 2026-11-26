@@ -174,3 +174,58 @@ checks:
       stdout: "^WELLKNOWN_OK$"
     retries: 3
     retryDelaySeconds: 15
+
+  - id: fresh-is-18
+    description: A fresh install runs the single-instance PostgreSQL on 18 (the 2.0.0 default), and Nextcloud's tables are in it.
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num') || ' USERS=' || coalesce(to_regclass('public.oc_users')::text, 'missing')"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4} USERS=oc_users$"
+    retries: 3
+
+  - id: upgrade-keeps-18
+    description: >-
+      A 1.0.0 release upgrades in place: PostgreSQL 18 runs on the same data directory, which holds the
+      Nextcloud install from before the upgrade restarted the server (core installedat precedes the server's
+      start time) and the admin user.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT CASE WHEN to_timestamp(configvalue::double precision) < pg_postmaster_start_time() THEN 'INSTALLED_BEFORE_START' ELSE 'INSTALLED_AFTER_START' END FROM oc_appconfig WHERE appid = 'core' AND configkey = 'installedat'"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'ADMIN=' || uid FROM oc_users WHERE uid = '{admin_user}'"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$.*^INSTALLED_BEFORE_START$.*^ADMIN=e2eadmin$"
+    retries: 3
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      and Nextcloud's tables are in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U nextcloud -d nextcloud -qtA -c 'show server_version_num')"
+        echo "USERS=$(psql -h "$P" -U nextcloud -d nextcloud -qtA -c "select coalesce(to_regclass('public.oc_users')::text, 'missing')")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^USERS=oc_users$"
+    retries: 4
+    retryDelaySeconds: 15

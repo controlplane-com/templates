@@ -1,0 +1,60 @@
+# listmonk 2.0.0 — the highly available database path (three Patroni members, three etcd members, two
+# HAProxy replicas) with one listmonk replica, one location, both prerequisite secrets created by CI.
+# HA rather than the single-instance default, as in 1.6.x: the earlier baselines run HA, so the upgrade from
+# 1.6.1 below moves postgres-highly-available 2.5.0 → 3.0.0 on an existing cluster. The chart's default,
+# single-instance PostgreSQL 19, is the `single` variant.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before listmonk can run its --install (about 5-7 minutes).
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  adminpw: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: listmonk
+      password: "{gen.pgpw}"
+      database: listmonk
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.adminpw}"
+
+vars:
+  pg_user: listmonk
+  pg_password: "{gen.pgpw}"
+  pg_db: listmonk
+  admin_user: e2eadmin
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+variants:
+  - name: single
+    values:
+      postgresHA:
+        enabled: false
+      postgres:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 900
+
+# 1.6.1 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade
+# moves postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain
+# upgrade. A refused single-instance upgrade from 1.6.1 is not expressible: the starting install always
+# uses 1.6.1's own (HA) baseline.
+upgradeFrom:
+  - version: 1.6.1

@@ -1,0 +1,229 @@
+## PostGIS
+
+Creates a single replica PostGIS database with a dedicated persistent volume. PostGIS extends PostgreSQL with support for geographic objects and spatial queries.
+
+### Architecture
+
+- **Stateful PostGIS workload** (`RELEASE_NAME-postgis`) — one PostgreSQL 18 + PostGIS 3.6 replica on `5432`.
+- **Volume set** (`RELEASE_NAME-postgis-vs`) — `PGDATA`, with optional autoscaling, snapshotted daily and kept 7 days by default (`volumeset.snapshots`).
+- **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
+- **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`.
+- **Backup cron workload** *(optional)* — a scheduled `pg_dumpall` writing compressed SQL dumps to S3 or GCS.
+
+This template creates no credential secret of its own, and does not create a GVC.
+
+### Warning
+
+This application works only with a single replica, do not scale up the replicas.
+
+<b>Upgrading from 1.1.x or older:</b> 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-postgis` and `RELEASE_NAME-postgis-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
+
+<b>Upgrading from 1.4.1 or earlier turns on daily volume snapshots.</b> Earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set `volumeset.snapshots.schedule: ""` to keep them off.
+
+### Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-postgis-credentials \
+  --entry username=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydb
+```
+
+Set `config.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. Read `status.versions[].message` instead:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-postgis --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+<b>Upgrading from 1.3.x:</b> delete `config.username`, `config.password` and `config.database` from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries the old keys is refused at render.
+
+### Configuration
+
+**Database credentials** — set a username, password, and database name:
+```yaml
+config:
+  credentialsSecretName: my-postgis-credentials
+```
+
+**Resources** — adjust CPU and memory per replica:
+```yaml
+resources:
+  minCpu: 200m
+  minMemory: 528Mi
+  maxCpu: 500m
+  maxMemory: 1024Mi
+```
+
+**Volume** — set the initial storage capacity (minimum 10 GiB). Optionally enable autoscaling to expand the volume automatically as it fills up:
+```yaml
+volumeset:
+  capacity: 10
+  autoscaling:
+    enabled: true
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
+```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule.
+
+**Internal access** — controls which workloads can reach PostGIS on port 5432. Use `same-gvc` to allow any workload in the same GVC, `same-org` for any workload in the org, or `workload-list` to specify exact workloads:
+```yaml
+internalAccess:
+  type: workload-list
+  workloads:
+    - //gvc/my-gvc/workload/my-app
+```
+
+### Connecting
+
+Once deployed, PostGIS will be reachable at:
+
+```
+RELEASE_NAME-postgis.GVC_NAME.cpln.local:5432
+```
+
+## Backing Up
+
+Set your desired backup schedule in the values file and configure your AWS S3 or GCS bucket. You can also set a prefix where your backups will be stored in the bucket.
+
+### AWS S3
+
+
+<b>Upgrading from 1.4.1 or earlier:</b> the backup identity no longer attaches the <code>cpln-connector</code> AWS policy;
+only your bucket-scoped policy is attached, and it is all the backup needs. No action is needed.
+
+<b>Upgrading from 1.4.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
+For the cron job to have access to a S3 bucket, ensure the following prerequisites are completed in your AWS account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name and `region` to include its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+3. Create a new AWS IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`)
+
+```JSON
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+4. Update `cloudAccountName` in your values file with the name of your Cloud Account.
+
+5. Set `policyName` to match the policy created in step 3.
+
+### GCS
+
+For the cron job to have access to a GCS bucket, ensure the following prerequisites are completed in your GCP account before installing:
+
+1. Create your bucket. Update the value `bucket` to include its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Update the value `cloudAccountName`.
+
+**Important**: You must add the `Storage Admin` role to the created GCP service account.
+
+### Backup retention
+
+The backup job only uploads; it never deletes old backups. To keep a fixed window, add a lifecycle rule on the bucket that expires objects under the backup prefix. Each backup is a complete, standalone copy, so expiring old ones never affects restoring a newer one. Set the window to at least your retention plus one backup interval, and note that an age rule keeps no minimum: if backups stop running, the last ones expire too.
+
+The rules below use the default prefix `postgis/backups/`; change it if you changed `backup.<provider>.prefix`.
+
+**AWS S3.** `put-bucket-lifecycle-configuration` **replaces every existing rule on the bucket**, so check for existing rules first and add them to the file:
+
+```bash
+aws s3api get-bucket-lifecycle-configuration --bucket BUCKET_NAME
+cat > lifecycle.json <<'EOF'
+{"Rules":[{"ID":"expire-db-backups","Filter":{"Prefix":"postgis/backups/"},"Status":"Enabled",
+  "Expiration":{"Days":30},"NoncurrentVersionExpiration":{"NoncurrentDays":1}}]}
+EOF
+aws s3api put-bucket-lifecycle-configuration --bucket BUCKET_NAME --lifecycle-configuration file://lifecycle.json
+```
+
+**Google Cloud Storage.** `--lifecycle-file` also **replaces the bucket's existing rules**; check with `gcloud storage buckets describe gs://BUCKET_NAME --format='json(lifecycle_config)'` first:
+
+```bash
+cat > lifecycle.json <<'EOF'
+{"rule":[
+  {"action":{"type":"Delete"},"condition":{"age":30,"matchesPrefix":["postgis/backups/"]}},
+  {"action":{"type":"Delete"},"condition":{"daysSinceNoncurrentTime":1,"isLive":false,"matchesPrefix":["postgis/backups/"]}}]}
+EOF
+gcloud storage buckets update gs://BUCKET_NAME --lifecycle-file=lifecycle.json
+```
+
+Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
+
+### Restoring Backup
+
+Each backup is a gzip-compressed `pg_dumpall` script; replay it against the `postgres` maintenance database as the superuser from your credentials secret. Run it from a client that can reach both the bucket and the server — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-postgis 5432:5432 --gvc GVC_NAME` open and `--host=127.0.0.1` in place of the internal hostname. `already exists` errors for the role and database the server created at first boot are expected.
+
+S3
+```SH
+export PGPASSWORD="PASSWORD"
+
+aws s3 cp "s3://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
+  | gunzip \
+  | psql \
+      --host=RELEASE_NAME-postgis.GVC_NAME.cpln.local \
+      --port=5432 \
+      --username=USERNAME \
+      --dbname=postgres
+
+unset PGPASSWORD
+```
+
+GCS
+```SH
+export PGPASSWORD="PASSWORD"
+
+gsutil cp "gs://BUCKET_NAME/PREFIX/BACKUP_FILE.sql.gz" - \
+  | gunzip \
+  | psql \
+      --host=RELEASE_NAME-postgis.GVC_NAME.cpln.local \
+      --port=5432 \
+      --username=USERNAME \
+      --dbname=postgres
+
+unset PGPASSWORD
+```
+
+### Supported External Services
+- [PostGIS Documentation](https://postgis.net/documentation/)
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/)

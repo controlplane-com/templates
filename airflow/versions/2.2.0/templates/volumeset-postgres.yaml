@@ -1,0 +1,18 @@
+{{- include "airflow.validateSnapshotsPostgres" . }}
+{{- include "airflow.validate" . -}}
+kind: volumeset
+name: {{ include "airflow.postgresVolume.name" . }}
+description: Airflow Postgres volume set
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "airflow.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.postgres.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.postgres.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.postgres.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.postgres.volumeset.snapshots.schedule | quote }}
+    {{- end }}

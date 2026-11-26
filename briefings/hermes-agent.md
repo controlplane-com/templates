@@ -14,14 +14,14 @@
 |---|---|
 | Stateful workload ×1 | Gateway API :8642 + dashboard :9119 + optional webhook listener :8644; the one canonical HTTPS endpoint fronts whichever `publicAccess.expose` picks (default **dashboard** as of 1.3.0; the others stay internal) |
 | Chromium sidecar (optional, 1.3.0) | 2nd container, `browser.enabled`; headless Chrome on loopback CDP :9222 the agent attaches to |
-| Volumeset /opt/data (10Gi) | Memory DB, sessions, skills, config, MCP OAuth tokens |
+| Volumeset /opt/data (10Gi) | Memory DB, sessions, skills, config, MCP OAuth tokens; daily snapshots kept 7 d from 1.5.0 (none were ever taken through 1.4.1) |
 | Scratch /dev/shm (both containers) | Chromium shared memory (app: `dev-shm`; sidecar: its own `chrome-shm`) |
 | Identity + policy | `reveal` on exactly the user's prerequisite secret |
 
 - Single replica by design (SQLite single-writer; upstream forbids two gateways on one data dir)
 - User creates a dictionary secret (their own key names, mapped via `secret.keys`): LLM key, API bearer token (≥16 chars), dashboard password
 
-**Key knobs:** `model.{provider(anthropic|openai|custom),name,baseUrl,reasoningEffort}` · `secret.{name,keys(apiKey,apiServerKey,dashboardPassword,webhookSecret)}` · `dashboard.{enabled,username,publicUrl(1.3.0)}` · `browser.{enabled(1.3.0,default false),image,cdpPort,resources}` · `webhooks.{enabled(1.3.0)}` · `publicAccess.{enabled (default **false**), expose (api|dashboard|webhooks; default **dashboard** as of 1.3.0)}` · volumeset autoscaling
+**Key knobs:** `model.{provider(anthropic|openai|custom),name,baseUrl,reasoningEffort}` · `secret.{name,keys(apiKey,apiServerKey,dashboardPassword,webhookSecret)}` · `dashboard.{enabled,username,publicUrl(1.3.0)}` · `browser.{enabled(1.3.0,default false),image,cdpPort,resources}` · `webhooks.{enabled(1.3.0)}` · `publicAccess.{enabled (default **false**), expose (api|dashboard|webhooks; default **dashboard** as of 1.3.0)}` · volumeset autoscaling · `volumeset.snapshots.{schedule ("0 3 * * *"), retentionDuration (7d)}` (1.5.0)
 
 **Troubleshooting / considerations**
 - **Public install = internet-facing terminal-capable agent behind ONE bearer token** — that's why `publicAccess` defaults false; insist on long random keys
@@ -96,3 +96,8 @@
 - **cpln MCP** end-to-end verified on v0.21.4: registered with `auth: oauth` (the re-assert loop still needed — behaviour unchanged), user clicked Authenticate, agent called `mcp__cpln` and returned the real GVC list (55/65-tool catalog).
 - **Benign but noisier:** `[config-migrate]` warning ESCALATED wording on 0.21.4 — now "predates version 12 … can **no longer be auto-migrated** … set `_config_version: 12`." Still benign (config seeds fine, MCP registers, `state.db` healthy), same root cause (our seeded config carries no `_config_version`). Candidate future cleanup: add `_config_version` to the seed to silence it. Do not chase as a defect.
 - **Live-verified on test-gvc 2026-09-22 (all round-trips):** dashboard login (real browser) + 12-nav clean; model chat (PONG); cpln MCP OAuth + tool call; webhooks (401 bad-sig / 202 valid); Telegram, WhatsApp, Slack all round-trip after the `.env` fix. Slack tokens are `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` (Socket Mode) in `.env`; Telegram `TELEGRAM_BOT_TOKEN`; all platform tokens are user-supplied post-deploy (not chart knobs).
+
+## What 1.5.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`hermes-agent.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`api-key-auth`, `dashboard-login`, `state-volume-write`, `data-survives-upgrade`; upgrade from 1.4.1) with a dummy LLM key; no check runs an agent turn.

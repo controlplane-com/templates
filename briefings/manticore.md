@@ -37,6 +37,7 @@
 | `manticore.autoscaling.minScale` / `maxScale` | `3` / `4` | `minScale` is also the replica count the orchestrator coordinates across |
 | `manticore.resources.cpu` / `.memory` | `4` / `8Gi` | Limits only — bare names are correct per the 2026-08-06 ruling |
 | `manticore.volumeset.capacity` / `sharedVolumeset.capacity` | `200` / `100` (GB) | Sized for real datasets; shrink for a trial install |
+| `manticore.volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 2.3.0; per-replica volume only |
 | `buckets.sourceBucket` / `cloudAccountName` / `awsPolicyRefs` | `my-manticore-*` | AWS only. **Read-only is sufficient** (see below). `buckets.awsRegion` is not read by any template |
 | `orchestrator.action` / `schedule` / `suspend` | `import` / hourly / `true` | The cron ships suspended; the schedule only matters once un-suspended |
 | `tables[]` | one `addresses` example | `segmentCount` must equal `len(csvPath)` — enforced by a render-time `fail` |
@@ -65,3 +66,9 @@
 - Live-tested end to end on `test-gvc-3`: cluster bootstrap, import from S3 under a read-only policy, delta + main backup to a real bucket, restore, `repair`, the k6 load test, both access knobs, and a no-op-upgrade drift gate (all `Updated` resources proved spec-identical; only the release tag moved).
 - **Open for the maintainer:** multi-segment / `clusterMain: true` (above), and a restore that lands on the cluster unevenly — after a restore plus a rolling restart, one replica had the restored rows and another did not while every node reported `synced`. Verify per-replica counts after a restore rather than trusting the cluster status.
 - **In-place validation fix, 2026-09-28 (versions 1.0.0–1.2.0).** These shipped versions failed marketplace/CI validation: `.Values.cpln.gvc` (missing `global`) is a nil-pointer at render (the orchestrator-API hostname), and their `manticore.tags` emitted too few marketplace tags (1.0.0/1.1.0 none; 1.2.0 missing `cpln/marketplace-gvc`). 1.0.0's description was also a 20-word block scalar (card clips past 15). Fixed **in place** (maintainer ruling: patch immutable old versions so every version validates) — gvc reference corrected, `manticore.tags` delegated to `cpln-common.tags` (+ the `cpln-common` dependency), 1.0.0 description trimmed to the 7-word line the later versions use. **1.3.0 and 2.x were already clean and were not touched.** This edits `templates/`, so it is not byte-identical — but no new version, by explicit ruling, since these versions are already broken and unusable as shipped.
+
+## What 2.3.0 changed
+
+- A volume snapshot schedule knob for the per-replica volume (`manticore.volumeset.snapshots.schedule`, `retentionDuration` 7d), **daily by default** (03:00 UTC; maintainer ruling 2026-11-25: snapshot the data volume, never the import scratch volume). 2.2.0 and earlier rendered `retentionDuration` with no schedule, so none were ever taken (work item 5219). A schedule more frequent than hourly fails at render (`manticore.validateSnapshots`, mirrored in the wizard).
+- The `shared` volumeset (import scratch under `/mnt/shared`) still has no snapshots block: scratch, rebuilt by the next import.
+- No E2E tests: an install needs an S3 bucket and AWS cloud account the CI org does not have.

@@ -1,0 +1,36 @@
+# cassandra 1.2.0 — the default topology: three nodes in one location, credentials in the prerequisite
+# dictionary secret. Memory is halved from the 4Gi default (heap 1G, the chart's ~50% rule), which runs
+# the e2e load comfortably. Backups are off: they need a bucket and cloud account the CI org lacks.
+locations: [aws-us-east-1]
+timeoutSeconds: 1500
+
+generated:
+  superpw: hex
+  apppw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      superuserPassword: "{gen.superpw}"
+      username: e2e
+      password: "{gen.apppw}"
+      keyspace: e2eks
+
+vars:
+  cass_workload: "{release}-cassandra"
+  cass_replicas: "3"
+  app_user: e2e
+  app_password: "{gen.apppw}"
+  app_keyspace: e2eks
+  superuser_password: "{gen.superpw}"
+
+values:
+  credentialsSecretName: "{secrets.creds.name}"
+  replicas: 3
+  memory: 2Gi
+  jvmHeapSize: 1G
+
+upgradeFrom:
+  - version: 1.1.2
+  - version: 1.1.1

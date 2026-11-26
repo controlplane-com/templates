@@ -1,0 +1,17 @@
+# etcd-multi-location 2.0.0 — production shape: three locations, one member each (the README's recommended
+# shape: it survives losing a location), default sizes, no client auth, so no prerequisite secrets. The
+# checks move a few tiny keys across locations only. No upgrade source: 1.x creates its own GVC,
+# and 2.0.0 refuses that upgrade by design (install a new release and copy the keyspace, as the README says).
+locations: [aws-us-east-1, aws-us-east-2, aws-us-west-2]
+timeoutSeconds: 1200
+
+vars:
+  members: "3"
+
+values:
+  global:
+    locations:
+      - name: aws-us-east-1
+      - name: aws-us-east-2
+      - name: aws-us-west-2
+

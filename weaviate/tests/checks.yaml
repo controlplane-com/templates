@@ -1,0 +1,74 @@
+# Feature checks for the weaviate template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (weaviate_workload, nodes, api_key).
+#
+# Every check calls the REST API on the node's own port 8080 with the image's busybox wget (the image is
+# Alpine and carries no curl). Objects are written to a collection of their own, E2eRow, with no vectorizer.
+# Backups need a bucket and a cloud account, which the CI org does not have.
+checks:
+  - id: cluster-formed
+    description: Every node of the baseline has joined the cluster and reports HEALTHY.
+    exec:
+      workload: "{weaviate_workload}"
+      replica: "{weaviate_workload}-0"
+      container: weaviate
+      script: |
+        out=$(wget -q -O - --header "Authorization: Bearer {api_key}" http://127.0.0.1:8080/v1/nodes 2>&1)
+        n=$(printf '%s' "$out" | grep -o '"status":"HEALTHY"' | wc -l | tr -d ' ')
+        echo "HEALTHY $n WANT {nodes}"
+    expect:
+      stdout: '^HEALTHY (\d+) WANT \1$'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-read
+    description: An object written with the API key reads back by its id.
+    exec:
+      workload: "{weaviate_workload}"
+      replica: "{weaviate_workload}-0"
+      container: weaviate
+      script: |
+        B=http://127.0.0.1:8080/v1
+        w() { wget -q -O - --header "Authorization: Bearer {api_key}" --header 'Content-Type: application/json' "$@" 2>&1; }
+        w --post-data '{"class":"E2eRow","vectorizer":"none","properties":[{"name":"tag","dataType":["text"]},{"name":"marker","dataType":["text"]}]}' "$B/schema" >/dev/null || true
+        U=$(cat /proc/sys/kernel/random/uuid)
+        w --post-data "{\"class\":\"E2eRow\",\"id\":\"$U\",\"properties\":{\"tag\":\"{version}\",\"marker\":\"m-$U\"}}" "$B/objects" >/dev/null
+        if w "$B/objects/E2eRow/$U" | grep -q "\"marker\":\"m-$U\""; then echo "READ m-$U"; else echo "NOT FOUND $U"; fi
+    expect:
+      stdout: "^READ m-"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 120
+
+  - id: rejects-wrong-api-key
+    description: >-
+      A wrong API key is refused with 401 while the right one is accepted on the same endpoint (the control
+      for the checks above, which would pass against an open cluster).
+    exec:
+      workload: "{weaviate_workload}"
+      replica: "{weaviate_workload}-0"
+      container: weaviate
+      script: |
+        bad=$(wget -q -O - --header "Authorization: Bearer wrong-key" http://127.0.0.1:8080/v1/schema 2>&1)
+        case "$bad" in *401*) echo "REFUSED 401" ;; *) echo "NOT REFUSED: $bad" | head -c 200; echo ;; esac
+        wget -q -O - --header "Authorization: Bearer {api_key}" http://127.0.0.1:8080/v1/schema >/dev/null 2>&1 \
+          && echo ACCEPTED || echo "RIGHT KEY FAILED"
+    expect:
+      stdout: "(?s)^REFUSED 401$.*^ACCEPTED$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The object written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volumes carried over.
+    exec:
+      workload: "{weaviate_workload}"
+      replica: "{weaviate_workload}-0"
+      container: weaviate
+      script: |
+        out=$(wget -q -O - --header "Authorization: Bearer {api_key}" "http://127.0.0.1:8080/v1/objects?class=E2eRow&limit=1000" 2>&1)
+        if printf '%s' "$out" | grep -qF '"tag":"{installed_version}"'; then echo PERSISTED; else echo "MISSING (no object tagged {installed_version})"; fi
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 6
+    retryDelaySeconds: 20

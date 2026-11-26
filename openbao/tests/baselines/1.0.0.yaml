@@ -1,0 +1,28 @@
+# openbao 1.0.0 — the default install: one server with raft storage and the static auto-unseal seal, the
+# unseal key in a CI-generated opaque prerequisite secret (64 hex characters, the README's
+# `openssl rand -hex 32` shape), private (no public access), default sizes.
+#
+# The chart does not initialize the server; the first check runs `bao operator init` once, as the README
+# tells users to, and keeps the root token on the data volume so every later check (and the checks after
+# an upgrade) can log in.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  unseal_a: hex
+  unseal_b: hex
+
+secrets:
+  unseal:
+    type: opaque
+    payload: "{gen.unseal_a}{gen.unseal_b}"
+
+vars:
+  token_file: /openbao/data/.e2e-root-token
+
+values:
+  seal:
+    type: static
+    static:
+      secretName: "{secrets.unseal.name}"
+

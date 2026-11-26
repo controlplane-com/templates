@@ -1,0 +1,18 @@
+{{- include "airflow.validateSnapshotsRedis" . }}
+{{- include "airflow.validate" . -}}
+kind: volumeset
+name: {{ include "airflow.redisVolume.name" . }}
+description: Airflow Redis volume set
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "airflow.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.redis.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.redis.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.redis.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.redis.volumeset.snapshots.schedule | quote }}
+    {{- end }}

@@ -64,3 +64,5 @@ Does not create a GVC.
   (v0.11.1, v0.12.1 schema changes — no rollback to 1.1.2), tool servers saved in personal Integrations stop
   being used until Direct Integrations is turned on (v0.12.4), pip-installing custom functions need Python
   3.12 builds. `ENABLE_REALTIME_CHAT_SAVE` is now a no-op (the chart does not set it).
+
+- **1.3.0 (2026-11-25, work item 5219):** `volumeset.snapshots.schedule` added, default `"0 3 * * *"` (`""` = off). 1.2.0 and earlier rendered `retentionDuration` with no schedule, so no snapshot was ever taken. The volume holds Open WebUI users/chats as well as models, hence daily. A schedule more frequent than hourly fails at render (`ollama.validateSnapshots`, mirrored in the wizard). No `tests/` (the default shape needs a GPU).

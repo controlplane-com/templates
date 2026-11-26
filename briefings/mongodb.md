@@ -11,7 +11,7 @@ evolving schema where a single instance is enough.
 | Resource | Notes |
 |---|---|
 | workload `-mongo` (stateful) | one replica on `27017`, autoscaling pinned to `minScale: 1, maxScale: 1` |
-| volumeset `-mongo-vs` | `/data/db`, optional autoscaling |
+| volumeset `-mongo-vs` | `/data/db`, optional autoscaling; daily snapshots kept 7 d from 1.5.0 (none were ever taken through 1.4.2) |
 | secret `-mongo-config` *(optional)* | backup bucket and region only; created when `backup.enabled` |
 | identity + policy | `reveal` on the prerequisite credentials secret, plus the backup config secret and Cloud Account binding when backups are on |
 | workload `-mongodb-backup` (cron, optional) | `mongodump` to S3 or GCS |
@@ -44,3 +44,10 @@ evolving schema where a single instance is enough.
   MongoDB 8 template as v6.
 
 1.4.2 declares the fields the API backfills on the mongo workload(s) (`autoscaling.maxConcurrency: 0`, `scaleToZeroDelay: 300`, `target: 95`, `defaultOptions.timeoutSeconds: 5`), found by drift-diff on a template bundling 1.4.1. Its e2e drift check blocks (`driftBlocks: true`). Nothing about how it runs changes.
+
+## What 1.5.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.4.2 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`mongo.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E baseline `1.5.0` added (upgrade from 1.4.2).
+- **1.5.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.
+- **Upgrade from 1.3.x can stall (platform race, also in 1.4.x):** moving onto the credential secrets with the reveal policy granted in the same apply can leave the workload paused on "not allowed to reveal the secret"; `cpln workload force-redeployment` resumes it. README upgrade note; the E2E 1.3.2 row is a knownIssue (ruling 2026-11-25).

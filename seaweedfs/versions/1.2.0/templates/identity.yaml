@@ -1,0 +1,6 @@
+kind: identity
+name: {{ include "seaweedfs.identity.name" . }}
+description: SeaweedFS identity
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "seaweedfs.tags" . | nindent 4 }}

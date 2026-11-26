@@ -1,0 +1,18 @@
+{{- include "vllm.validateSnapshots" . }}
+kind: volumeset
+name: {{ include "vllm.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: vLLM model cache (Hugging Face downloads and compile cache), one volume per replica
+tags: {{- include "vllm.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity | int }}
+  performanceClass: general-purpose-ssd
+  # A re-downloadable cache: no final snapshot on uninstall, and no scheduled snapshots unless
+  # volumeset.snapshots.schedule is set.
+  snapshots:
+    createFinalSnapshot: false
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

@@ -1,0 +1,29 @@
+# hermes-agent 1.4.1 — the default install: one stateful agent replica on its volume set, API server and
+# dashboard on, Control Plane MCP registered, browser sidecar, webhooks and WhatsApp off, public access
+# off, default sizes. The prerequisite secret is created by CI. The LLM key is a dummy: the gateway, its
+# API auth and the dashboard login all work without one, and no check runs an agent turn.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  apiserverkey: hex
+  dashpw: hex
+  webhook: hex
+
+secrets:
+  hermes:
+    type: dictionary
+    entries:
+      api-key: e2e-dummy-not-a-real-key
+      api-server-key: "{gen.apiserverkey}"
+      dashboard-password: "{gen.dashpw}"
+      webhook-secret: "{gen.webhook}"
+
+vars:
+  api_server_key: "{gen.apiserverkey}"
+  dashboard_user: admin
+  dashboard_password: "{gen.dashpw}"
+
+values:
+  secret:
+    name: "{secrets.hermes.name}"

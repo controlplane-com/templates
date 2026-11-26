@@ -15,7 +15,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-seaweedfs` (stateful, 1 replica, :8333) | one container, `weed mini`; every port pinned by flag; `timeoutSeconds: 300` for long uploads |
-| `{release}-seaweedfs-data` volumeset (20 GiB) | `/data` — objects + filer leveldb + master metadata on one disk; final snapshot retained 7 days |
+| `{release}-seaweedfs-data` volumeset (20 GiB) | `/data` — objects + filer leveldb + master metadata on one disk; daily snapshots kept 7 d from 1.2.0 (none were ever taken through 1.1.0), final snapshot on uninstall |
 | `{release}-seaweedfs-identity` / `-policy` | `reveal` on exactly the two user-created secrets (S3 always; admin only when the UI is on) — no cloud access at all, no `aws` or `gcp` block on the identity |
 | *(user-created)* S3 prerequisite dictionary secret | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
 | *(user-created)* admin prerequisite dictionary secret | `username` + `password` — since **1.1.0**; the template creates NO secrets of its own |
@@ -29,6 +29,7 @@
 | `image` | `chrislusf/seaweedfs:4.40` | matches `appVersion`; pin a released tag, never `latest` |
 | `resources.{minCpu,maxCpu,minMemory,maxMemory}` | 250m/1000m · 512Mi/2Gi | 4.00 cpu:minCpu ratio accepted on first apply; raise memory for tens of millions of objects |
 | `volumeset.capacity` | `20` | GiB; render-validated minimum 10 |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 1.2.0; `""` = off |
 | `volumeset.autoscaling.{enabled,maxCapacity,minFreePercentage,scalingFactor}` | `false` / `200` / `10` / `1.2` | matters here — object stores fill up; `maxCapacity` must be ≥ `capacity` |
 | `s3.credentialsSecretName` | `my-seaweedfs-s3-credentials` | REQUIRED prerequisite dictionary secret — **must exist BEFORE install** |
 | `s3.buckets` | `[]` | created at boot if missing; most backup tools need the bucket to pre-exist |
@@ -66,3 +67,8 @@ cpln secret create-dictionary --name my-seaweedfs-admin-credentials \
 - **Never set `-s3.externalUrl` / `S3_EXTERNAL_URL`** — upstream makes it the *only* accepted host for signature checking, instantly breaking every in-GVC client connecting on the internal hostname.
 - **`-ip=localhost` is load-bearing**: it pins the advertised identity so master raft/sequencer state survives a reschedule onto a new pod IP (`Running in single-master mode (peers=none)`, no raft errors across restarts); `-ip.bind=0.0.0.0` keeps listeners on all interfaces. No `filesystemGroupId` needed — the image entrypoint chowns `/data` on first boot.
 - Benign log noise: `W … filer_server.go:215 skipping default store dir in /data/filerldb2` (the only W/E line across the whole run). The admin login form requires a `csrf_token` hidden field — relevant only if someone scripts against the UI.
+
+## What 1.2.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 1.1.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`seaweedfs.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`startup-bucket`, `s3-put-get`, `wrong-key-refused`, `data-survives-upgrade`; S3 via curl `--aws-sigv4`, the image has no aws CLI; upgrade from 1.1.0).

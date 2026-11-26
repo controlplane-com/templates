@@ -1,0 +1,65 @@
+# Feature checks for the prometheus template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# The checks run in the prometheus container (busybox wget and promtool) against Prometheus on
+# 127.0.0.1:9095, and in the thanos-sidecar container against the sidecar's HTTP port 10902. PromQL in a
+# URL is percent-encoded (%7B %7D for the braces), because the runner reads any {word} as a placeholder.
+checks:
+  - id: self-scrape
+    description: Prometheus scrapes itself, so the query API returns up == 1 for the prometheus job.
+    exec:
+      workload: "{release}-prometheus"
+      container: prometheus
+      script: |
+        R=$(wget -qO- 'http://127.0.0.1:9095/api/v1/query?query=up%7Bjob%3D%22prometheus%22%7D')
+        printf 'UP %s\n' "$(printf '%s' "$R" | sed -n 's/.*"value":\[[^,]*,"\([^"]*\)"\].*/\1/p')"
+    expect:
+      stdout: "^UP 1$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: remote-write-read-back
+    description: >-
+      A sample pushed through the remote-write receiver (promtool push metrics), tagged with this version,
+      is returned by the query API.
+    exec:
+      workload: "{release}-prometheus"
+      container: prometheus
+      script: |
+        printf 'e2e_marker{version="{version}"} 42\n' > /tmp/e2e.prom
+        promtool push metrics http://127.0.0.1:9095 /tmp/e2e.prom >/dev/null 2>&1 || echo PUSH_FAILED
+        sleep 2
+        R=$(wget -qO- 'http://127.0.0.1:9095/api/v1/query?query=last_over_time(e2e_marker%7Bversion%3D%22{version}%22%7D%5B30d%5D)')
+        printf 'MARKER %s\n' "$(printf '%s' "$R" | sed -n 's/.*"value":\[[^,]*,"\([^"]*\)"\].*/\1/p')"
+    expect:
+      stdout: "^MARKER 42$"
+
+  - id: thanos-sidecar-connected
+    description: The Thanos sidecar (on by default) is connected to Prometheus and ready to serve the Store API.
+    exec:
+      workload: "{release}-prometheus"
+      container: thanos-sidecar
+      script: |
+        printf 'READY %s\n' "$(wget -qO- http://127.0.0.1:10902/-/ready)"
+        wget -qO- http://127.0.0.1:10902/metrics | grep '^thanos_sidecar_prometheus_up '
+    expect:
+      stdout: "(?s)^READY OK\nthanos_sidecar_prometheus_up 1$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: data-survives-upgrade
+    description: >-
+      The sample the version this scenario installed first pushed is still returned. On a fresh install that
+      is the same version; after an upgrade (a restart that replays the TSDB from the volume set) it proves
+      the data carried over. Never writes.
+    exec:
+      workload: "{release}-prometheus"
+      container: prometheus
+      script: |
+        R=$(wget -qO- 'http://127.0.0.1:9095/api/v1/query?query=last_over_time(e2e_marker%7Bversion%3D%22{installed_version}%22%7D%5B30d%5D)')
+        printf 'FOUND %s\n' "$(printf '%s' "$R" | sed -n 's/.*"value":\[[^,]*,"\([^"]*\)"\].*/\1/p')"
+    expect:
+      stdout: "^FOUND 42$"
+    retries: 8
+    retryDelaySeconds: 15

@@ -32,7 +32,7 @@
 | `workload` (standard) `{release}-postgres-proxy` | HAProxy in **every** location, all routing to the one current primary via Patroni's `/primary` check |
 | `workload` (standard) `{release}-postgres-pgbouncer` | Optional pooler, one tier per location, pooling into that location's HAProxy |
 | `workload` (cron) `{release}-postgres-backup` | Optional nightly `pg_dumpall`; suspended in every location except `backup.location` |
-| `volumeset` `{release}-postgres-vs` | `PGDATA`, `ext4`, 10 GiB, final snapshot + 7-day retention |
+| `volumeset` `{release}-postgres-vs` | `PGDATA`, `ext4`, 10 GiB; daily snapshots kept 7 d from 2.1.0 (none were ever taken through 2.0.1), final snapshot on delete |
 | `identity` + `policy` | `reveal` on exactly the secrets in play; `aws`/`gcp` bucket-scoped binding only when backups are on |
 | `policy` `{release}-postgres-gvc-policy` | **New in 2.0.0.** `view` on exactly the one install GVC, for the boot-time location check. Never `target: all` |
 | secrets | Patroni `start.sh`, HAProxy `start.sh`, wal-g `backup.sh` (all opaque/plain). **No credential secret is created by the chart** |
@@ -54,12 +54,24 @@
 | `primaryLocation` | `""` | Preferred location for the primary. Since 1.0.2 it places the primary on a **fresh install** (bootstrap head start) as well as biasing failover (`failover_priority`); empty = neither renders |
 | `resources.minCpu/minMemory/maxCpu/maxMemory` | `500m` / `1Gi` / `1` / `2Gi` | Per Patroni member; ratio 2:1 |
 | `volumeset.capacity` / `.autoscaling.*` | `10` GiB / off | Data volume |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | Scheduled volume snapshots; `""` = off (2.1.0) |
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may connect (all tiers). The list also governs **Patroni-to-Patroni replication and the proxy's health checks**, so the chart appends its own workloads — list only clients |
 | `proxy.enabled` … `.maxReplicas` | `true` / `haproxy:2.9` / `100m`+`128Mi` / `2` / `2` | HAProxy tier **per location**; force-enabled when pgbouncer is on |
 | `pgbouncer.enabled` / `.poolMode` / `.defaultPoolSize` / `.maxClientConn` / `.maxDbConnections` | `false` / `transaction` / `25` / `1000` / `100` | Pooler tier per location, `200m`+`128Mi`, 2–4 replicas |
 | `backup.enabled` / `.mode` / `.location` | `false` / `logical` / `aws-us-east-1` | `logical` = nightly cron, `wal-g` = sidecar. `location` is **logical-only** |
 | `backup.provider` + `.aws` / `.gcp` / `.minio` | `aws` | `minio.credentialsSecretName` is a second required prerequisite secret (`accessKey`, `secretKey`) |
 | `etcd.*` | see the chart's own README | Subchart (**2.0.0**); it decides its own replica guard from `.Chart.IsRoot`, so the parent passes nothing. Setting `etcd.internalAccess.type: workload-list` needs `//gvc/{gvc}/workload/{release}-postgres` added BY HAND — etcd only appends itself |
+
+## 2.1.0 — scheduled volume snapshots (2026-11-25, work item 5219)
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off;
+  `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never
+  took one. A schedule more frequent than hourly fails at render (`pg-ml.validateSnapshots`, mirrored in the
+  wizard); the API would reject it only at apply.
+- **The bundled etcd-multi-location subchart's volume set (2.0.0) still has no schedule**; it follows when
+  etcd-multi-location's own fix ships and this chart bumps it.
+- E2E tests onboarded (`cluster-healthy`, `write-reaches-every-location`, `rejects-bad-password`,
+  `data-survives-upgrade`; three locations, upgrade from 2.0.1).
 
 ## 2.0.1 — pgvector CVE-2026-103484 (2026-10-23)
 
@@ -384,3 +396,4 @@ The bundled etcd subchart must be pinned to **1.0.1 or later** (2.0.0 as of this
 
 - Side finding: switching `backup.provider` leaves **both** cloud blocks on the stored identity (`usable: true` for each) even though the render contains only the new one.
 - Still not run: a volumeset growth event (needs ~80-90 min of sustained load).
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

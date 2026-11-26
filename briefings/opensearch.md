@@ -14,7 +14,7 @@ application search and analytics where the user wants to own the index and the r
 | Resource | Notes |
 |---|---|
 | workload `-opensearch` (stateful) | `replicas` nodes, HTTPS `9200` + TLS transport `9300` (both `tcp` ports: TLS passes through the mesh), `replicaDirect`, OrderedReady, `minReadySeconds: 60` |
-| volumeset `-opensearch-vs` | per-node data directory, optional autoscaling |
+| volumeset `-opensearch-vs` | per-node data directory, optional autoscaling; daily volume snapshots kept 7 d from 2.1.0 (none were ever taken through 2.0.0) |
 | secret `-opensearch-startup` | startup script: issues certificates with `keytool` from the user's CA at every boot, writes the security config, reconciles `admin`/`kibanaserver` |
 | node identity + policy | reveals startup, credentials and CA secrets; cloud binding only with backups |
 | client identity + policy | Dashboards and both setup jobs; reveals the credentials secret only |
@@ -67,3 +67,10 @@ kill 923/925), snapshots and restore, auth/TLS, CA not retained; demo pipeline p
 Discover, Visualize/Dashboards, saved-object round trip, Query Workbench, Index Management, Advanced settings,
 SA rules/detectors, Alerting → webhook, ISM, Reporting, PPL, Anomaly detection, tenants. Generic bundled
 plugins (Maps, Search Relevance, Query Insights, Flow Framework, ML, Notebooks, Traces) skipped by ruling.
+
+## What 2.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 2.0.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`opensearch.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. These are platform volume snapshots, separate from the optional snapshot backups to S3/GCS. The demo-logs `shared` volumeset still takes none (demo data).
+- E2E baseline `2.1.0` added (upgrade from 2.0.0).
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.
+- **Known issue (2.0.0, 2.1.0):** an upgrade restart of the demo workloads leaves a few `demo-logs` documents unparsed; the E2E demo-pipeline check warns on the 2.0.0 upgrade (ruling 2026-11-25). Follow-up fix to come.

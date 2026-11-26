@@ -17,7 +17,7 @@
 | workload `{release}-mongo` (stateful, `replicaDirect`) | mongod members; per-replica DNS for peer discovery |
 | workload `{release}-mongo-proxy` (HAProxy, standard, optional) | Single endpoint routing to the current primary |
 | workload `{release}-mongo-backup` (cron, optional) | Logical `mongodump` to object storage |
-| volumeset per replica | `/data/db`, ext4, snapshots retained 7d |
+| volumeset per replica | `/data/db`, ext4; daily snapshots kept 7d from 2.1.0 (none were ever taken through 2.0.0) |
 | identity | Cloud-account binding when backups are enabled |
 | policy `{release}-mongo-policy` | `reveal` on the two user secrets plus the chart's scripts |
 | policy `{release}-mongo-gvc-policy` | `view` on the ONE install GVC, for the boot-time GVC read |
@@ -49,3 +49,5 @@ Three-layer defence, per the standing ruling:
 - **NOT yet deploy-tested at 2.0.0** — this is a build, not a test round. The 1.1.1 baseline was also never deploy-tested.
 - Cleared at build time, in the pinned image (`percona/percona-server-mongodb:8.0`, uid 1001/gid 0): it **has `curl` 7.76.1 and no `wget`**; `--connect-timeout 8` bounds a blackholed connect at 8 s and `--max-time 10` bounds an accept-never-respond server at 10 s, while `--connect-timeout` **alone does not bound the second arm** (measured running past 25 s). A refused connection and an NXDOMAIN both return in 0 s and prove nothing about either bound. All five boot-check branches were then exercised against the real image with a mock GVC endpoint: undeclared location → exit 1; all locations present → exit 0; missing location + fresh `/data/db` → exit 1; missing location + `WiredTiger` present → warn, exit 0; unreachable endpoint → warn, exit 0 in ~30 s.
 - A test round still owes: both prerequisite secrets resolving at boot, the keyfile guard firing on a bad value, replica-set formation, failover, the proxy path, both backup modes, the `workload-list` path, an undeclared GVC location genuinely reading `deactivated because maxScale is set to 0`, the refused-upgrade row, and the no-op `helm upgrade` drift gate.
+- **2.1.0:** volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`mongo-cluster.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. E2E tests onboarded (`replica-set-formed`, `write-read-via-proxy`, `rejects-bad-password`, `data-survives-upgrade`; upgrade from 2.0.0), so CI now covers replica-set formation and the proxy path.
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

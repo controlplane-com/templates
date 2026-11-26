@@ -1,0 +1,97 @@
+kind: workload
+name: {{ include "openbao.name" . }}
+description: OpenBao secrets engine — HTTP API + UI :8200, raft storage
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "openbao.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "openbao.identity.name" . }}
+  containers:
+    - name: openbao
+      image: {{ .Values.openbao.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.openbao.resources.minCpu | quote }}
+      cpu: {{ .Values.openbao.resources.maxCpu | quote }}
+      minMemory: {{ .Values.openbao.resources.minMemory | quote }}
+      memory: {{ .Values.openbao.resources.maxMemory | quote }}
+      env:
+        # Makes every exec'd `bao` CLI command (operator init, status, login) work flag-free
+        - name: BAO_ADDR
+          value: http://127.0.0.1:8200
+        {{- if eq .Values.seal.type "static" }}
+        # 32-byte unseal key from the user's prerequisite opaque secret (WRITE-ONCE)
+        - name: BAO_UNSEAL_KEY
+          value: cpln://secret/{{ .Values.seal.static.secretName }}.payload
+        {{- end }}
+      # Entrypoint intact (docker-entrypoint.sh): `server` → bao server -config=/openbao/config
+      args:
+        - server
+      ports:
+        - number: 8200
+          protocol: http
+      volumes:
+        - path: /openbao/data
+          uri: cpln://volumeset/{{ include "openbao.volume.name" . }}
+        - path: /openbao/config/config.hcl
+          uri: cpln://secret/{{ include "openbao.secret.config.name" . }}.payload
+      # Passes in EVERY seal state (sealed/uninitialized return 200 via the overrides)
+      # so routing — incl. the UI for the one-time `bao operator init` — works pre-init.
+      readinessProbe:
+        httpGet:
+          path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+          port: 8200
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      # tcpSocket only — restarts a dead/hung process, never a sealed/uninitialized one
+      livenessProbe:
+        tcpSocket:
+          port: 8200
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 6
+        successThreshold: 1
+        timeoutSeconds: 5
+  securityOptions:
+    # Image runs as non-root `openbao` (group GID 1000); make the fresh root-owned
+    # volumeset mount group-writable — same proven pattern as gitea/timescaledb-ha.
+    filesystemGroupId: 1000
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      target: 100
+      scaleToZeroDelay: 300
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- range .Values.internalAccess.workloads }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+    replicaDirect: false
+  supportDynamicTags: false

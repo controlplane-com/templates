@@ -1,0 +1,25 @@
+{{- include "pg-ha.validateSnapshots" . }}
+{{- include "pg-ha.validate" . -}}
+kind: volumeset
+name: {{ include "pg-ha.volume.name" . }}
+description: Postgres Highly Available volumeset
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "pg-ha.tags" . | nindent 2 }}
+  workload: {{ include "pg-ha.name" . }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  {{- if .Values.volumeset.autoscaling.enabled }}
+  autoscaling:
+    maxCapacity: {{ .Values.volumeset.autoscaling.maxCapacity }}
+    minFreePercentage: {{ .Values.volumeset.autoscaling.minFreePercentage }}
+    scalingFactor: {{ .Values.volumeset.autoscaling.scalingFactor }}
+  {{- end }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

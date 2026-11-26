@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-gitea` (stateful, 1 replica) | Gitea server: http 3000 (UI + Git-over-HTTPS + registry), tcp 2222 (SSH) |
-| volumeset `/var/lib/gitea` (20 GiB) | Repos, LFS, attachments, built-in SSH host keys |
+| volumeset `/var/lib/gitea` (20 GiB) | Repos, LFS, attachments, built-in SSH host keys; daily snapshots kept 7 d from 1.4.0 (none were ever taken through 1.3.0) |
 | auth secret (dictionary, **user-created**) | `adminUsername/Password/Email`, `secretKey`, `internalToken`, `jwtSecret` — named by `gitea.auth.secretName`, NOT created by the chart |
 | `{release}-gitea-bootstrap` (opaque secret) | Admin-bootstrap wrapper script |
 | identity + policy | `reveal` scoped to the bootstrap script and the user's two secrets by name |
@@ -34,6 +34,11 @@
 | `ssh.enabled` (default **false**) / `ssh.externalPort` / `ssh.domain` | Opt-in public Git-over-SSH (raw-TCP LB) + advertised port/domain — takes over the endpoint (see below) |
 | `postgres.config.credentialsSecretName` (default `my-gitea-db-credentials`) | REQUIRED prerequisite dictionary secret (`username`, `password`, `database`), **1.3.0+**. Must exist BEFORE install |
 | `postgres.*` (resources, volumeset, image) | Pass-through to the backing `postgres` template |
+
+## What 1.4.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`gitea.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`admin-auth`, `repo-push-clone`, `data-survives-upgrade`; upgrade from 1.3.0). The bundled postgres volume set is the subchart's and is unchanged until the next dependency bump.
 
 ## Troubleshooting / considerations
 - **Since 1.1.0 the admin login and all three signing keys live in a PREREQUISITE dictionary secret** named by `gitea.auth.secretName` — the chart creates no credential secret at all. `gitea.admin.*` and `gitea.security.*` were removed with `fail` guards naming each replacement; there are no compatibility shims.

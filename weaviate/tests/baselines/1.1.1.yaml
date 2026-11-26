@@ -1,0 +1,28 @@
+# weaviate 1.1.1 — the default topology: a three-node Raft cluster in one location, the API key in the
+# prerequisite opaque secret, no AI provider keys and no backups (they need accounts the CI org lacks).
+# Resources are halved from the 2 CPU / 4Gi default and the volume is at the 10 GiB minimum; the e2e
+# data set is a handful of objects with no vectors.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  apikey: hex
+
+secrets:
+  apikey:
+    type: opaque
+    payload: "{gen.apikey}"
+
+vars:
+  weaviate_workload: "{release}-weaviate"
+  nodes: "3"
+  api_key: "{gen.apikey}"
+
+values:
+  apiKeySecretName: "{secrets.apikey.name}"
+  replicas: 3
+  cpu: 1
+  memory: 2Gi
+  volumes:
+    data:
+      initialCapacity: 10

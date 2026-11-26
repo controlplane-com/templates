@@ -1,0 +1,17 @@
+{{- include "openbao.validateSnapshots" . }}
+kind: volumeset
+name: {{ include "openbao.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: OpenBao raft data (all secrets, auth config, cluster state)
+tags:
+  {{- include "openbao.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

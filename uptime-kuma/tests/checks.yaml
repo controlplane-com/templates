@@ -1,0 +1,54 @@
+# Feature checks for the uptime-kuma template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}.
+#
+# Every check runs in the uptime-kuma container (it carries curl and sqlite3) against the app on
+# 127.0.0.1:3001 and its SQLite database on the volume set at /app/data. Uptime Kuma has no credential
+# set at install (the first visitor creates the admin account), so the checks never log in.
+checks:
+  - id: app-serving
+    description: >-
+      The app answers on :3001 with its database already chosen (the setup wizard skips the database
+      page), and the Prometheus metrics endpoint refuses callers without an API key or with a wrong one.
+    exec:
+      workload: "{release}-uptime-kuma"
+      container: uptime-kuma
+      script: |
+        code() { curl -s -o /dev/null -D - "$@" | head -1 | cut -d' ' -f2; }
+        printf 'ROOT %s\n' "$(code http://127.0.0.1:3001/)"
+        curl -s http://127.0.0.1:3001/setup-database-info | grep -q '"needSetup":false' && echo DB_SETUP_SKIPPED || echo DB_SETUP_SHOWN
+        printf 'METRICS_NOAUTH %s\n' "$(code http://127.0.0.1:3001/metrics)"
+        printf 'METRICS_BADKEY %s\n' "$(code -u ':uk1_not-a-real-key' http://127.0.0.1:3001/metrics)"
+    expect:
+      stdout: "(?s)^ROOT 302\nDB_SETUP_SKIPPED\nMETRICS_NOAUTH 401\nMETRICS_BADKEY 401$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: sqlite-write-read
+    description: >-
+      The app's SQLite database on the volume set has its schema migrated, and a row written to it (tagged
+      with this version) reads back.
+    exec:
+      workload: "{release}-uptime-kuma"
+      container: uptime-kuma
+      script: |
+        DB=/app/data/kuma.db
+        M=$(sqlite3 "$DB" 'select count(*) from knex_migrations;')
+        [ "${M:-0}" -gt 0 ] && echo MIGRATED || echo "NOT_MIGRATED $M"
+        sqlite3 "$DB" "create table if not exists e2e_marker (version text primary key, v text); insert or replace into e2e_marker values ('{version}', 'kept-{version}');"
+        printf 'READBACK %s\n' "$(sqlite3 "$DB" "select v from e2e_marker where version = '{version}';")"
+    expect:
+      stdout: "(?s)^MIGRATED\nREADBACK kept-[0-9][0-9.]*$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The row the version this scenario installed first wrote is still in the database. On a fresh install
+      that is the same version; after an upgrade (a restart on a new image) it proves the SQLite database on
+      the volume set carried over. Never writes.
+    exec:
+      workload: "{release}-uptime-kuma"
+      container: uptime-kuma
+      script: |
+        printf 'FOUND %s\n' "$(sqlite3 /app/data/kuma.db "select v from e2e_marker where version = '{installed_version}';")"
+    expect:
+      stdout: "^FOUND kept-[0-9][0-9.]*$"

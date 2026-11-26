@@ -1,0 +1,78 @@
+# Feature checks for the etcd-multi-location template. Each runs after install (and after each upgrade)
+# on every version in its since/until range. Add a check with `since: <new version>` for every change you
+# ship. Placeholders: {release} {gvc} {org} {version} {installed_version} {locations.N}, and the baseline
+# var (members).
+#
+# The cluster has no client auth, so there is no wrong-credential control; the checks assert on values
+# only a working, replicating cluster returns. Every check runs etcdctl (v3 API, shipped in the image next
+# to etcd) against the member's own client listener on 127.0.0.1:2379. One member per location, so
+# `exec.location` picks the member.
+checks:
+  - id: cluster-healthy
+    description: One member per location is listed as started, and every member answers a health proposal.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        started=$(etcdctl member list | grep -c ', started, ')
+        healthy=$(etcdctl endpoint health --cluster 2>&1 | grep -c ' is healthy: ')
+        echo "STARTED $started HEALTHY $healthy WANT {members}"
+    expect:
+      stdout: '^STARTED (\d+) HEALTHY \1 WANT \1$'
+    retries: 8
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: write-read
+    description: A key written in the first location reads back through a linearizable (quorum) read.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      location: "{locations.0}"
+      shell: bash
+      script: |
+        set -e
+        M="e2e-$(date +%s%N)"
+        etcdctl --command-timeout=10s put /e2e/v/{version} "{version} $M" >/dev/null
+        got=$(etcdctl --command-timeout=10s get /e2e/v/{version} --print-value-only)
+        [ "$got" = "{version} $M" ] && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: replicated-cross-location
+    description: >-
+      The key written in the first location is in the second location's member's own copy of the data
+      (a serializable read answers from the local member only, so this proves cross-location replication).
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      location: "{locations.1}"
+      shell: bash
+      script: |
+        v=$(etcdctl get /e2e/v/{version} --consistency=s --print-value-only)
+        case "$v" in "{version} e2e-"*) echo "GOT OK $v" ;; *) echo "GOT WRONG $v" ;; esac
+    expect:
+      stdout: "^GOT OK "
+    retries: 4
+    retryDelaySeconds: 10
+
+  - id: data-survives-upgrade
+    description: >-
+      The key written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volumes carried over.
+    exec:
+      workload: "{release}-etcd"
+      container: etcd
+      location: "{locations.1}"
+      shell: bash
+      script: |
+        v=$(etcdctl --command-timeout=10s get /e2e/v/{installed_version} --print-value-only)
+        case "$v" in "{installed_version} e2e-"*) echo PERSISTED ;; *) echo "MISSING (value: '$v')" ;; esac
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

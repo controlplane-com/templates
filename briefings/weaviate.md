@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-weaviate` (stateful, `replicas: 3`) | Weaviate nodes, HTTP `8080` + gRPC; raft cluster |
-| volumeset (20 GiB/replica, autoscaling to 200) | HNSW index + object store, one per replica |
+| volumeset (20 GiB/replica, autoscaling to 200) | HNSW index + object store, one per replica; daily snapshots kept 7 d + a final snapshot on delete from 1.2.0 (no `snapshots` block through 1.1.1) |
 | secret `{release}-weaviate-credentials` (dictionary) | Holds `api-user` only — NOT the key |
 | secret `{release}-weaviate-start-script` | Boot script |
 | workload `{release}-weaviate-backup` (cron, optional) | Scheduled backup to S3 or GCS |
@@ -22,8 +22,12 @@
 
 - **No public endpoint, unconditionally.** `inboundAllowCIDR` is hardcoded empty — not gated on a knob — because Weaviate holds the user's embeddings and its only auth is a single bearer key. Reachability is `internalAccess.type` only (default `same-gvc`).
 
-## Key knobs (shipped 1.1.0 defaults)
-`replicas` (3) | `image` (`semitechnologies/weaviate:1.38.0`) | `apiKeySecretName` (`my-weaviate-api-key`, **must exist before install**) | `apiUser` (`admin@example.com`) | `queryDefaultsLimit` (25) | `defaultVectorizerModule` (`none`) | `modules.enabled` (`[]`) | `modules.{openai,anthropic,cohere,huggingface}.apiKeySecretName` (`""` = off) | `cpu`/`memory` (2 / 4Gi) | `volumes.data.initialCapacity` (20) | `multiZone.enabled` (false) | `internalAccess.type` (`same-gvc`) | `backup.enabled` (false)
+## Key knobs (shipped 1.2.0 defaults)
+`replicas` (3) | `image` (`semitechnologies/weaviate:1.38.0`) | `apiKeySecretName` (`my-weaviate-api-key`, **must exist before install**) | `apiUser` (`admin@example.com`) | `queryDefaultsLimit` (25) | `defaultVectorizerModule` (`none`) | `modules.enabled` (`[]`) | `modules.{openai,anthropic,cohere,huggingface}.apiKeySecretName` (`""` = off) | `cpu`/`memory` (2 / 4Gi) | `volumes.data.initialCapacity` (20) | `volumes.data.snapshots.schedule` (`"0 3 * * *"`, `""` = off; more often than hourly fails at render, mirrored in the wizard) / `.retentionDuration` (7d) | `multiZone.enabled` (false) | `internalAccess.type` (`same-gvc`) | `backup.enabled` (false)
+
+## What 1.2.0 changed
+- The volume set gets a whole `snapshots` block for the first time (work item 5219): `createFinalSnapshot: true`, `volumes.data.snapshots.schedule` (daily 03:00 UTC) and `retentionDuration` (7d). Through 1.1.1 no snapshot was ever taken, not even on uninstall. The workload spec is unchanged.
+- E2E tests onboarded (`cluster-formed`, `write-read`, `rejects-wrong-api-key`, `data-survives-upgrade`; 3 nodes at 1 CPU / 2Gi; upgrade from 1.1.1). The checks run on replica 0, so the rolling-restart rejoin defect below would show as a failure there if an upgrade restarts the nodes.
 
 ## Troubleshooting / considerations
 - **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
@@ -47,3 +51,4 @@ Two **pre-existing** defects were found — neither introduced by 1.1.0, both no
 
 Also unverified: **backup was NOT tested** (needs an S3 bucket and IAM policy outside the test blast radius) — renders and validation negatives pass, and the cron job's URL derivation was live-checked, but `status.aws.usable` is exactly the surface CLAUDE.md warns can report false success. And with `internalAccess.type: workload-list` the backup cron is not on the allow-list, so its calls would be denied.
 - **`aws::ReadOnlyAccess` was removed from the backup identity in 1.1.1.** It granted read access to every bucket in the AWS account and contains no write actions, so it was never carrying the backup — what it did carry was account-wide read. The identity is now `cpln-connector` plus the user's bucket-scoped policy only. The documented IAM policy was widened to ten actions at the same time, because `ReadOnlyAccess` had been silently supplying any read action a user's policy omitted; **an upgrading user must update their IAM policy first**.
+- **1.2.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

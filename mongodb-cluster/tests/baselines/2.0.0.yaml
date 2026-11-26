@@ -1,0 +1,33 @@
+# mongodb-cluster 2.0.0 — the default install: three members in one location (the smallest shape that
+# survives losing a member), HAProxy in front, credentials and keyfile in prerequisite secrets, default sizes.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  mongopw: hex
+  keyfile: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.mongopw}"
+      database: e2e
+  keyfile:
+    type: opaque
+    payload: "{gen.keyfile}"
+
+vars:
+  mongo_user: e2e
+  mongo_password: "{gen.mongopw}"
+  mongo_db: e2e
+  members: "3"
+
+values:
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+  mongodb:
+    credentialsSecretName: "{secrets.creds.name}"
+    keyfileSecretName: "{secrets.keyfile.name}"

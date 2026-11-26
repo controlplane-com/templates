@@ -1,0 +1,73 @@
+# Feature checks for the gitea template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
+# (admin_user, admin_password).
+#
+# The checks run in the Gitea container (rootless image: curl and git) against its own HTTP port on
+# 127.0.0.1:3000. The runner reads any brace-wrapped word as a placeholder, so the scripts use $VAR,
+# never the braced shell form.
+checks:
+  - id: admin-auth
+    description: >-
+      The site admin from the prerequisite secret authenticates on the API (HTTP 200, login echoed back),
+      and a wrong password is refused with HTTP 401.
+    exec:
+      workload: "{release}-gitea"
+      container: gitea
+      script: |
+        B=http://127.0.0.1:3000/api/v1
+        body=$(curl -s -u '{admin_user}:{admin_password}' "$B/user")
+        echo "$body" | grep -q '"login":"{admin_user}"' && echo ADMIN_OK || echo "ADMIN_BAD $body"
+        code=$(curl -s -o /dev/null -w '%{''http_code}' -u '{admin_user}:wrong-password' "$B/user")
+        [ "$code" = 401 ] && echo WRONG_REFUSED || echo "WRONG_ACCEPTED $code"
+    expect:
+      stdout: "(?s)^ADMIN_OK\nWRONG_REFUSED$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: repo-push-clone
+    description: >-
+      A repository created through the API (named for the running version) takes a pushed commit, and a
+      fresh clone over HTTP reads the pushed file back.
+    exec:
+      workload: "{release}-gitea"
+      container: gitea
+      script: |
+        set -e
+        B=http://127.0.0.1:3000
+        R=e2e-{version}
+        M="e2e-$(date +%s)"
+        curl -s -o /dev/null -u '{admin_user}:{admin_password}' -H 'content-type: application/json' \
+          -X POST "$B/api/v1/user/repos" -d '{"name":"'"$R"'","auto_init":true,"default_branch":"main"}'
+        W=$(mktemp -d)
+        U="http://{admin_user}:{admin_password}@127.0.0.1:3000/{admin_user}/$R.git"
+        git clone -q "$U" "$W/a"
+        cd "$W/a"
+        echo "$M" > marker.txt
+        git add marker.txt
+        git -c user.name=e2e -c user.email=e2e@example.com commit -q -m "$M"
+        git push -q origin HEAD
+        git clone -q "$U" "$W/b"
+        grep -qx "$M" "$W/b/marker.txt" && echo "CLONED $M"
+        rm -rf "$W"
+    expect:
+      stdout: "^CLONED e2e-"
+    retries: 4
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: data-survives-upgrade
+    description: >-
+      The repository pushed on the version this scenario installed first still clones with its marker
+      file. On a fresh install that is the same version; after an upgrade it proves the repository volume
+      and the database carried over.
+    exec:
+      workload: "{release}-gitea"
+      container: gitea
+      script: |
+        W=$(mktemp -d)
+        if git clone -q "http://{admin_user}:{admin_password}@127.0.0.1:3000/{admin_user}/e2e-{installed_version}.git" "$W/c" \
+          && grep -q '^e2e-' "$W/c/marker.txt"; then echo PERSISTED; else echo "MISSING e2e-{installed_version}"; fi
+        rm -rf "$W"
+    expect:
+      stdout: "^PERSISTED$"

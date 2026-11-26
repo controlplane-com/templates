@@ -1,0 +1,8 @@
+# prometheus 1.2.0 — the default install: one Prometheus with the Thanos sidecar, local TSDB on its volume
+# set, object-storage upload off, internal access only, one location. No prerequisite secrets.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+values: {}
+
+# First baseline of this template: the starting point for upgrades into 1.3.0.

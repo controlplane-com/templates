@@ -1,0 +1,83 @@
+# Feature checks for the openbao template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline var (token_file).
+#
+# Every check runs the `bao` CLI that ships in the official image, against the server's own listener
+# (BAO_ADDR=http://127.0.0.1:8200). The server boots uninitialized; `initialized-unsealed` initializes it
+# once (one recovery share) and saves the root token to {token_file} on the data volume, which is how the
+# token survives into the checks that run after an upgrade.
+checks:
+  - id: initialized-unsealed
+    description: >-
+      The server is initialized and unsealed by the static seal with no manual unseal step (after an
+      upgrade, the restarted server auto-unsealed from the prerequisite key).
+    exec:
+      workload: "{release}-openbao"
+      container: openbao
+      script: |
+        export BAO_ADDR=http://127.0.0.1:8200
+        if bao status -format=json 2>/dev/null | grep -q '"initialized": false'; then
+          bao operator init -recovery-shares=1 -recovery-threshold=1 -format=json > /tmp/e2e-init.json || exit 1
+          sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' /tmp/e2e-init.json > {token_file}
+          chmod 600 {token_file}
+          rm -f /tmp/e2e-init.json
+        fi
+        s=$(bao status -format=json 2>&1)
+        echo "$s" | grep -q '"initialized": true' && echo "$s" | grep -q '"sealed": false' && [ -s {token_file} ] \
+          && echo "INITIALIZED UNSEALED" || echo "NOT READY: $s"
+    expect:
+      stdout: "^INITIALIZED UNSEALED$"
+    retries: 8
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+
+  - id: kv-write-read
+    description: A secret written to a KV v2 engine with the root token reads back unchanged.
+    exec:
+      workload: "{release}-openbao"
+      container: openbao
+      script: |
+        set -e
+        export BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat {token_file})"
+        bao secrets list -format=json | grep -q '"e2e/"' || bao secrets enable -path=e2e kv-v2 >/dev/null
+        M="e2e-$(date +%s%N)"
+        bao kv put -mount=e2e v-{version} version={version} marker="$M" >/dev/null
+        got=$(bao kv get -mount=e2e -field=marker v-{version})
+        [ "$got" = "$M" ] && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: bad-token-refused
+    description: >-
+      A read of the secret above with a made-up token is refused with permission denied and returns no
+      data (the control for the checks around it).
+    exec:
+      workload: "{release}-openbao"
+      container: openbao
+      script: |
+        export BAO_ADDR=http://127.0.0.1:8200
+        # A raw read of the KV v2 data path, so the refusal is the API's own 403 (`bao kv get` would fail
+        # earlier, in its mount preflight, with a different message).
+        out=$(BAO_TOKEN=s.e2e-not-a-real-token bao read -field=data e2e/data/v-{version} 2>&1)
+        echo "$out" | grep -q 'Code: 403' && echo "$out" | grep -qi 'permission denied' && echo REFUSED || echo "NOT REFUSED: $out"
+    expect:
+      stdout: "^REFUSED$"
+
+  - id: data-survives-upgrade
+    description: >-
+      The secret written on the version this scenario installed first is still there. On a fresh
+      install that is the same version; after an upgrade it proves the raft volume carried over and the
+      static seal unwrapped it again.
+    exec:
+      workload: "{release}-openbao"
+      container: openbao
+      script: |
+        export BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat {token_file})"
+        v=$(bao kv get -mount=e2e -field=version v-{installed_version} 2>&1)
+        [ "$v" = "{installed_version}" ] && echo PERSISTED || echo "MISSING ($v)"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

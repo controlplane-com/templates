@@ -1,0 +1,28 @@
+n8n is deploying as {{ include "n8n.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+{{- if .Values.postgresHA.enabled }}
+
+  Database: highly available PostgreSQL (postgres-highly-available 3.0.0, {{ .Values.postgresHA.image }}).
+
+UPGRADING FROM n8n 1.x? New HA clusters run PostgreSQL 18; an existing cluster keeps
+PostgreSQL 17 in place (the image bundles both), so no pin is needed. The database members
+restart one after another. With AWS backups, the backup identity no longer carries
+aws::ReadOnlyAccess: your bucket IAM policy needs the full action list in the README.
+  To move an existing cluster to PostgreSQL 18: README, "Upgrading from 1.x".
+{{- else if .Values.postgres.enabled }}
+
+  Database: single-instance PostgreSQL ({{ .Values.postgres.image }}) as {{ .Release.Name }}-postgres.
+
+UPGRADING FROM n8n 1.x IN SINGLE-INSTANCE MODE? This chart defaults the single-instance
+database to PostgreSQL 19, and its data from an earlier version of this chart is
+PostgreSQL 18. A PostgreSQL 19 server REFUSES to start on it, and your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" .Values.postgres.image }}
+  If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with
+  --set postgres.image=postgres:18 (the major the logs name), and keep it in your values
+  for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.postgres.image }}: the server stays on that major. Keep
+  postgres.image in your values for every later upgrade.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 1.x" (dump and restore).
+{{- end }}

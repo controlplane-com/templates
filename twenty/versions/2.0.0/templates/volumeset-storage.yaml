@@ -1,0 +1,14 @@
+{{- if eq .Values.storage.type "local" }}
+---
+kind: volumeset
+name: {{ include "twenty.storage.volumeset.name" . }}
+description: Twenty local attachment storage (/app/packages/twenty-server/.local-storage)
+tags: {{- include "twenty.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  # shared = read-write-many, so the server AND the worker can both mount it
+  # (upstream runs both off one volume). performanceClass is auto-set to
+  # "shared"; note shared volumes support expand only — no snapshots.
+  fileSystemType: shared
+  initialCapacity: {{ .Values.storage.local.volumeset.capacity }}
+{{- end }}

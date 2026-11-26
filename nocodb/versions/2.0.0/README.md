@@ -402,14 +402,28 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
 1. Install this version as a NEW release in the same GVC with the **same** `secrets.name` (its `NC_CONNECTION_ENCRYPT_KEY` decrypts the stored external data-source credentials, and the same `NC_AUTH_JWT_SECRET` keeps users signed in), the same `postgres.config.credentialsSecretName` and the same `storage` settings. NocoDB initializes an empty database in it; do not create anything there.
 2. With local attachment storage (`storage.type: local`), copy the attachments through your machine while the old NocoDB is still running (do this in a quiet window: a file uploaded after this step is not copied). With S3 storage, skip this step; both releases read the same bucket.
 
+   The files travel in 8 MB pieces, each checked against its checksum, because `cpln workload exec` can cut off long output without reporting an error. The old container needs free space in `/tmp` for one compressed copy of the files.
+
    ```bash
-   mkdir -p ./nocodb-data
-   cpln workload exec OLD_RELEASE-nocodb --gvc GVC_NAME --container nocodb -- \
-     sh -c 'cd /usr/app/data && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./nocodb-data
-   cpln cp ./nocodb-data/. NEW_RELEASE-nocodb:/usr/app/data --gvc GVC_NAME --container nocodb
+   OLD=OLD_RELEASE-nocodb NEW=NEW_RELEASE-nocodb GVC=GVC_NAME C=nocodb
+   # pack the files in the old container, split them, and list each piece's checksum
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
+     'cd /usr/app/data && tar czf /tmp/copy.tgz --exclude="./.*" . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+   # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
+   mkdir -p ./copyparts
+   while read -r sum name; do
+     until [ -f "./copyparts/$name" ] && [ "$(openssl md5 < "./copyparts/$name" | awk '{print $NF}')" = "$sum" ]; do
+       cpln workload exec $OLD --gvc $GVC --container $C -- sh -c "base64 /tmp/$name; sleep 5" </dev/null | base64 -d > "./copyparts/$name"
+     done
+   done < copyparts.md5
+   # upload the pieces, then unpack them only if every piece arrived intact
+   for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
+   cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
+     'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /usr/app/data && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
+   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
    ```
 
-   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory cannot take the copied mode. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-nocodb --gvc GVC_NAME --container nocodb -- ls -la /usr/app/data/nc/uploads`.
+   If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.
 
 3. Stop both NocoDB workloads, so nothing writes to either database (the databases keep running): `cpln workload stop OLD_RELEASE-nocodb --gvc GVC_NAME` and `cpln workload stop NEW_RELEASE-nocodb --gvc GVC_NAME`.
 4. Replace the new release's empty database with a copy of the old one, from inside the new PostgreSQL container. The PostgreSQL 19 `pg_dump` reads the old server; every base is a schema in this one database, so the copy carries them all:

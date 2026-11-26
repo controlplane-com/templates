@@ -408,14 +408,28 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
 1. Install this version as a NEW release in the same GVC with the **same** `secrets.name` (the app key decrypts the OAuth tokens, two-factor secrets and app variables stored in the database) and the same `postgres.config.credentialsSecretName` (the copied database role keeps its password). With `storage.type: s3`, use the same `storage.s3` settings: the attachments stay in the bucket, and the copied database points at them. Do not sign up in the new release.
 2. With `storage.type: local` only, copy the attachments through your machine while the old Twenty still runs (do this in a quiet window: a file uploaded after this step is not copied):
 
+   The files travel in 8 MB pieces, each checked against its checksum, because `cpln workload exec` can cut off long output without reporting an error. The old container needs free space in `/tmp` for one compressed copy of the files.
+
    ```bash
-   mkdir -p ./twenty-storage
-   cpln workload exec OLD_RELEASE-twenty --gvc GVC_NAME --container twenty -- \
-     sh -c 'cd /app/packages/twenty-server/.local-storage && tar czf - . | base64' | base64 -d | tar xzf - -C ./twenty-storage
-   cpln cp ./twenty-storage/. NEW_RELEASE-twenty:/app/packages/twenty-server/.local-storage --gvc GVC_NAME --container twenty
+   OLD=OLD_RELEASE-twenty NEW=NEW_RELEASE-twenty GVC=GVC_NAME C=twenty
+   # pack the files in the old container, split them, and list each piece's checksum
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
+     'cd /app/packages/twenty-server/.local-storage && tar czf /tmp/copy.tgz . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+   # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
+   mkdir -p ./copyparts
+   while read -r sum name; do
+     until [ -f "./copyparts/$name" ] && [ "$(openssl md5 < "./copyparts/$name" | awk '{print $NF}')" = "$sum" ]; do
+       cpln workload exec $OLD --gvc $GVC --container $C -- sh -c "base64 /tmp/$name; sleep 5" </dev/null | base64 -d > "./copyparts/$name"
+     done
+   done < copyparts.md5
+   # upload the pieces, then unpack them only if every piece arrived intact
+   for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
+   cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
+     'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /app/packages/twenty-server/.local-storage && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
+   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
    ```
 
-   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-twenty --gvc GVC_NAME --container twenty -- ls -la /app/packages/twenty-server/.local-storage`.
+   If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.
 
 3. Stop the old Twenty, so nothing writes to its database: `cpln workload stop OLD_RELEASE-twenty --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-twenty-worker --gvc GVC_NAME`.
 4. Stop the new release's Twenty too (`cpln workload stop NEW_RELEASE-twenty --gvc GVC_NAME` and `cpln workload stop NEW_RELEASE-twenty-worker --gvc GVC_NAME`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container. The dump carries every schema (`core`, `public` and each `workspace_…`) and the extensions Twenty uses:

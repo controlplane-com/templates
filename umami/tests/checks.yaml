@@ -3,25 +3,31 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db).
 #
-# The baselines use the HA store, so every check runs in its patroni-postgres container, which has curl
-# and psql and reaches Umami over the GVC (internalAccess same-gvc; public access is off). Database checks
-# go through the HAProxy endpoint, the address Umami itself uses.
+# The 1.x baselines use the HA store; from 2.0.0 the baseline is the default single-instance store and HA is
+# the [ha] variant (and the [ha]-named upgrade from 1.5.0). The app checks run in the Umami container (curl
+# and node) against its own listener. HA database checks run in the patroni-postgres container through the
+# HAProxy endpoint, the address Umami itself uses; they select `\[ha\]` scenarios and every 1.x install.
+# Single-instance database checks run in the postgresql container and skip `\[ha\]` scenarios.
 checks:
+  # Umami's server binds $HOSTNAME (0.0.0.0 in the image; the platform may set the replica name, which
+  # /etc/hosts maps to the replica's own address), so the app checks call it there.
   - id: admin-login
     description: The seeded admin logs in to Umami's API and gets a token, which needs the database and the app secret.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-umami"
+      container: umami
+      shell: sh
       script: |
-        curl -s -m 20 -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+        curl -s -m 20 -X POST "http://${HOSTNAME:-127.0.0.1}:3000/api/auth/login" \
           -H 'Content-Type: application/json' -d '{"username":"admin","password":"umami"}' \
-        | python3 -c '
-        import json, sys
-        try: d = json.load(sys.stdin)
-        except Exception: d = {}
-        u = (d.get("user") or {}).get("username")
-        print("LOGIN " + u if d.get("token") and u else "NO TOKEN " + json.dumps(d))
+        | node -e '
+        let s = "";
+        process.stdin.on("data", (c) => (s += c)).on("end", () => {
+          let d = {};
+          try { d = JSON.parse(s); } catch (e) {}
+          const u = (d.user || {}).username;
+          console.log(d.token && u ? "LOGIN " + u : "NO TOKEN " + s.slice(0, 300));
+        });
         '
     expect:
       stdout: "^LOGIN admin$"
@@ -31,14 +37,15 @@ checks:
   - id: rejects-bad-password
     description: A wrong admin password gets no token (the control for the check above).
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-umami"
+      container: umami
+      shell: sh
       script: |
-        out=$(curl -s -m 20 -o /dev/null -D - -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+        U="http://${HOSTNAME:-127.0.0.1}:3000/api/auth/login"
+        out=$(curl -s -m 20 -o /dev/null -D - -X POST "$U" \
           -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')
         echo "$out" | awk 'NR==1 {print "STATUS " $2}'
-        curl -s -m 20 -X POST http://{release}-umami.{gvc}.cpln.local:3000/api/auth/login \
+        curl -s -m 20 -X POST "$U" \
           -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}'
     expect:
       stdout: "^STATUS 401"
@@ -46,6 +53,7 @@ checks:
 
   - id: admin-in-database
     description: Umami's schema and its seeded admin are in the HA database, read through the HAProxy endpoint.
+    scenarios: "\\[ha\\]|^install 1\\."
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -63,6 +71,7 @@ checks:
     description: >-
       Writes a row tagged with the running version into Umami's database, then reads the row written on the
       version this scenario installed first. After an upgrade that proves the HA database carried over.
+    scenarios: "\\[ha\\]|^install 1\\."
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -84,6 +93,7 @@ checks:
     description: The HA database image ships pgvector 0.8.7 (CVE-2026-103484), the image 1.5.0 moved to.
     issue: "#5376"
     since: 1.5.0
+    scenarios: "\\[ha\\]|^install 1\\."
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -110,6 +120,7 @@ checks:
       17 min) goes unseen.
     issue: "#5376"
     since: 1.5.0
+    scenarios: "\\[ha\\]|^install 1\\."
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -132,3 +143,108 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  # ── HA database (postgres-highly-available 3.0.0 from 2.0.0) ──
+  - id: ha-postgres-major
+    description: >-
+      The HA database runs PostgreSQL 18 on a cluster this version created, and a cluster created by 1.x keeps
+      PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance database (the default from 2.0.0): PostgreSQL 19 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On data of its own major the major-version guard hands over to the server: no guard file, and postgres
+      is PID 1.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-admin-in-database
+    description: >-
+      Umami migrated its schema into the single-instance database and seeded its admin there, reached with the
+      credentials secret's password; a wrong database password is refused (the control).
+    since: 2.0.0
+    scenarios: "^(?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        PGPASSWORD='{pg_password}' psql -h "$H" -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'USER ' || username from \"user\" where username = 'admin'" 2>&1
+        PGPASSWORD=wrong-password psql -h "$H" -U {pg_user} -d {pg_db} -c "select 1" >/dev/null 2>&1 \
+          && echo BAD_PASSWORD_ACCEPTED || echo BAD_PASSWORD_REFUSED
+    expect:
+      stdout: "(?s)^USER admin$.*^BAD_PASSWORD_REFUSED$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: single-data-survives-upgrade
+    description: >-
+      Writes a row tagged with the running version into the single-instance database, then reads the row
+      written on the version this scenario installed first; after an upgrade that proves the data carried over.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -v ON_ERROR_STOP=1 -qtA \
+          -c "create table if not exists e2e (version text not null)" \
+          -c "insert into e2e (version) values ('{version}')" >/dev/null || { echo "WRITE FAILED"; exit 1; }
+        n=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from e2e where version = '{installed_version}'" 2>&1)
+        [ "${n:-0}" -ge 1 ] 2>/dev/null && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"
+    retries: 4
+    retryDelaySeconds: 15

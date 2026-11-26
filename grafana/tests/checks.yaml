@@ -3,11 +3,14 @@
 # {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user, pg_password, pg_db,
 # admin_password).
 #
-# Every check runs in a Patroni member, which carries curl and psql. Database checks go through the HAProxy
-# endpoint, the address Grafana uses, so they only pass when the proxy routes to the current leader.
+# The default-install checks run in a Patroni member, which carries curl and psql. Database checks go through
+# the HAProxy endpoint, the address Grafana uses, so they only pass when the proxy routes to the current
+# leader. They are kept off the [single] variant (single-instance PostgreSQL, no HA workload), whose own
+# checks run in the postgres container (psql, and bash's /dev/tcp for HTTP: the image has no curl).
 checks:
   - id: app-healthy
     description: Grafana's /api/health answers on its internal port and reports its database ok.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -21,6 +24,7 @@ checks:
 
   - id: admin-login
     description: The admin logs in with the password from the prerequisite secret and is a server admin.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -36,6 +40,7 @@ checks:
     description: >-
       Basic auth with an unknown user is refused (the control for admin-login; an unknown user, so failed
       attempts never count toward locking out the real admin).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -50,6 +55,7 @@ checks:
     description: >-
       Grafana keeps its state in the bundled PostgreSQL, not a local SQLite file: its user table there holds the
       admin account.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -65,6 +71,7 @@ checks:
 
   - id: rejects-bad-password
     description: A wrong database password is refused through the proxy (the control for the checks above).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -78,6 +85,7 @@ checks:
 
   - id: write-read-via-proxy
     description: A row written as Grafana's database user through the proxy reads back.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -100,6 +108,7 @@ checks:
     description: >-
       The row written on the version this scenario installed first is still there. On a fresh install that is
       the same version; after an upgrade it proves the database carried over.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -115,10 +124,11 @@ checks:
 
   - id: pgvector-0-8-7-available
     description: >-
-      The HA database runs patroni-postgres 0.8, whose pgvector is 0.8.7 (CVE-2026-103484), the image 1.5.1
-      moved to. Read on the leader, through the proxy.
+      The HA database runs an image whose pgvector is 0.8.7 (CVE-2026-103484): patroni-postgres 0.8, the image
+      1.5.1 moved to, and 0.9 from 2.0.0. Read on the leader, through the proxy.
     issue: "#5376"
     since: 1.5.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -138,13 +148,14 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
-      not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
+      Every Patroni member restarted onto an image with pgvector 0.8.7 (patroni-postgres 0.8 in 1.5.1, 0.9 from
+      2.0.0) and is back in the cluster, not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
       restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
       without this a member that never comes back (seen once in testing: the old leader stuck initializing for
       17 min) goes unseen.
     issue: "#5376"
     since: 1.5.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -167,3 +178,102 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-state-in-postgres
+    description: >-
+      Grafana migrated its schema into the single-instance PostgreSQL 19 database: its user table there holds
+      the admin account.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select 'ADMIN ' || login from \"user\" where is_admin" 2>&1
+    expect:
+      stdout: "^ADMIN admin$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: single-admin-login
+    description: >-
+      In single-instance mode Grafana reports its database ok, the admin logs in with the password from the
+      prerequisite secret, and an unknown user is refused (curl from the Grafana container itself).
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-grafana"
+      container: grafana
+      shell: sh
+      script: |
+        B=http://127.0.0.1:3000
+        echo "HEALTH $(curl -s -m 10 $B/api/health | tr -d '\r\n')"
+        echo "GOOD $(curl -s -m 10 -u 'admin:{admin_password}' $B/api/user | tr -d '\r\n')"
+        echo "BAD $(curl -s -m 10 -u 'e2e-nobody:wrong-password' $B/api/user | tr -d '\r\n')"
+    expect:
+      stdout: '(?s)^HEALTH .*"database"\s*:\s*"ok".*^GOOD .*"isGrafanaAdmin"\s*:\s*true.*^BAD (?!.*isGrafanaAdmin).*(?i:invalid username or password|unauthorized)'
+    retries: 8
+    retryDelaySeconds: 15

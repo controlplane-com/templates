@@ -1009,8 +1009,9 @@ checks:
     timeoutSeconds: 240
 
   - id: single-admin
-    # Runs in the HA database container: every logto baseline uses postgresHA (a single-postgres baseline needs its own check).
+    # Runs in the HA database container, so it is kept off the [single] variant (single-admin-single below).
     description: The bootstrap created exactly one admin-tenant account and switched the admin tenant to sign-in only.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -1034,4 +1035,84 @@ checks:
     expect:
       stdout: "Found 0 alteration"
     retries: 2
+    retryDelaySeconds: 15
+
+  # ── Database majors from 2.0.0: HA 18 for new clusters (17 kept on upgrade), single-instance 19 ──
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-admin-single
+    description: >-
+      In single-instance mode the bootstrap created exactly one admin-tenant account in the PostgreSQL 19
+      database and switched the admin tenant to sign-in only.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c \
+          "select 'ADMINS ' || (select count(*) from users where tenant_id = 'admin') || ' MODE ' || (select sign_in_mode from sign_in_experiences where tenant_id = 'admin' and id = 'default')" 2>&1
+    expect:
+      stdout: "^ADMINS 1 MODE SignIn$"
+    retries: 4
     retryDelaySeconds: 15

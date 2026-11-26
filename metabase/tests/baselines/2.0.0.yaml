@@ -1,0 +1,61 @@
+# metabase 2.0.0 — the default install: one Metabase replica on highly available PostgreSQL (3 Patroni
+# members, 3 etcd, HAProxy; postgres-highly-available 3.0.0), at the chart's default sizes. The three
+# prerequisite secrets are generated per run (hex passes Metabase's letters-and-digits password rule).
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  pgpw: hex
+  adminpw: hex
+  enckey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: metabase
+      password: "{gen.pgpw}"
+      database: metabase
+  admin:
+    type: dictionary
+    entries:
+      email: e2e-admin@example.com
+      password: "{gen.adminpw}"
+  key:
+    type: opaque
+    payload: "{gen.enckey}"
+
+vars:
+  pg_user: metabase
+  pg_password: "{gen.pgpw}"
+  pg_db: metabase
+  admin_email: e2e-admin@example.com
+  admin_password: "{gen.adminpw}"
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  encryptionKey:
+    secretName: "{secrets.key.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# Single-instance PostgreSQL (the opt-in mode), which 2.0.0 moves to PostgreSQL 19: one more fresh install.
+variants:
+  - name: single
+    values:
+      postgresHA:
+        enabled: false
+      postgres:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 900
+
+# 1.5.1 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade
+# moves postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain
+# upgrade. A refused single-instance upgrade from 1.5.1 is not expressible: the starting install always
+# uses 1.5.1's own (HA) baseline.
+upgradeFrom:
+  - version: 1.5.1

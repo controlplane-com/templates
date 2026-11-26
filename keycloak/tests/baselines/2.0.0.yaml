@@ -1,0 +1,55 @@
+# keycloak 2.0.0 — the default install: two Keycloak replicas (an Infinispan cluster) on the bundled
+# postgres-highly-available database (three Patroni members, three etcd members, HAProxy), one location,
+# at the chart's default sizes. The admin and database credentials are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+timeoutSeconds: 1200
+
+generated:
+  adminpw: hex
+  pgpw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: e2e-admin
+      password: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: keycloak
+      password: "{gen.pgpw}"
+      database: keycloak
+
+vars:
+  admin_user: e2e-admin
+  admin_password: "{gen.adminpw}"
+  pg_user: keycloak
+  pg_password: "{gen.pgpw}"
+  pg_db: keycloak
+
+values:
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgresHA:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# Single-instance PostgreSQL (the opt-in mode), which 2.0.0 moves to PostgreSQL 19: one more fresh install.
+variants:
+  - name: single
+    values:
+      postgresHA:
+        enabled: false
+      postgres:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 900
+
+# 1.5.1 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade
+# moves postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain
+# upgrade. A refused single-instance upgrade from 1.5.1 is not expressible: the starting install always
+# uses 1.5.1's own (HA) baseline.
+upgradeFrom:
+  - version: 1.5.1

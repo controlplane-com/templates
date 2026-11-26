@@ -39,7 +39,7 @@ imports:
 steps:
   - id: polaris
     title: Polaris
-    description: The Polaris server image, its replicas and compute, and its single realm.
+    description: The Polaris server image, its replicas and compute, its single realm, and the bootstrap job.
     sections:
       - title: Server
         docs: "#server"
@@ -113,6 +113,34 @@ steps:
               A new realm name bootstraps an empty realm and hides every existing catalog. Changing it back makes
               them visible again.
 
+      - title: Bootstrap
+        advanced: true
+        description: The one-time job that creates the realm schema and the root principal, then idles.
+        docs: "#bootstrap"
+        fields:
+          - path: bootstrap.image
+            type: string
+            format: image
+            label: Admin tool image
+            required: true
+            help: Keep this tag in lockstep with the Polaris image.
+          - path: bootstrap.resources
+            type: resources
+            label: Bootstrap job resources
+            required: true
+            description: Always one replica.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: cpuMillicores(self.bootstrap.resources.maxCpu) <= 4 * cpuMillicores(self.bootstrap.resources.minCpu)
+            mirrors: polaris.validate.resources
+            paths: [bootstrap.resources]
+            message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+          - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+            mirrors: polaris.validate.resources
+            paths: [bootstrap.resources]
+            message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
+
   - id: credentials
     title: Credentials
     description: >-
@@ -184,6 +212,7 @@ steps:
           - path: storage.region
             type: string
             label: Region
+            when: self.storage.credentialsSecretName != null && self.storage.credentialsSecretName != ''
             required: true
             placeholder: us-east-1
             description: The bucket's AWS region. S3-compatible servers ignore it, but the SDK requires one.
@@ -287,6 +316,15 @@ steps:
             text: >-
               New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
               Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0 &&
+              self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+            text: >-
+              Before you upgrade, update the IAM policy of your backup bucket to the action list in the README
+              (Storage setup). The backup identity no longer carries `aws::ReadOnlyAccess`, so with the old policy
+              the backups fail.
           - type: note
             severity: warning
             text: >-
@@ -636,36 +674,6 @@ steps:
               The data directory belongs to the installed Postgres major version; an image of a different major
               refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
               (README, Upgrading from 1.x).
-
-  - id: bootstrap
-    title: Bootstrap
-    description: The one-time job that creates the realm schema and the root principal, then idles.
-    fields:
-      - path: bootstrap.image
-        type: string
-        format: image
-        label: Admin tool image
-        docs: "#bootstrap"
-        required: true
-        advanced: true
-        help: Keep this tag in lockstep with the Polaris image.
-      - path: bootstrap.resources
-        type: resources
-        label: Resources
-        required: true
-        advanced: true
-        description: Always one replica.
-        cpu: { min: 25m }
-        memory: { min: 32Mi }
-    rules:
-      - rule: cpuMillicores(self.bootstrap.resources.maxCpu) <= 4 * cpuMillicores(self.bootstrap.resources.minCpu)
-        mirrors: polaris.validate.resources
-        paths: [bootstrap.resources]
-        message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
-      - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
-        mirrors: polaris.validate.resources
-        paths: [bootstrap.resources]
-        message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
 
 # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
 rules:

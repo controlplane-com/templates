@@ -34,7 +34,7 @@ imports:
 steps:
   - id: plane
     title: Plane
-    description: Where Plane runs, where it keeps files, the prerequisite secrets, and the web and background tiers.
+    description: Where Plane runs, where it keeps files, and the prerequisite secrets.
     sections:
       - title: Location
         fields:
@@ -237,6 +237,11 @@ steps:
             message: >-
               RabbitMQ reads the login only on its first start; pointing at another secret does not change the
               broker's existing user, so Plane would fail to connect.
+
+  - id: services
+    title: Web and workers
+    description: The Plane image tag, the web tier's replicas and limits, and the background workers.
+    sections:
       - title: Web tier
         docs: "#configuration"
         fields:

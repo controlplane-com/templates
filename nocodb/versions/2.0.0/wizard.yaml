@@ -220,6 +220,180 @@ steps:
               create:
                 suggestName: "context.releaseName + '-nocodb-admin'"
 
+  - id: database
+    title: Database
+    description: Which PostgreSQL holds NocoDB's data, and the prerequisite secret with its credentials.
+    sections:
+      - fields:
+          - id: dbMode
+            virtual: true
+            type: enum
+            label: Database
+            docs: "#database"
+            widget: cards
+            required: true
+            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
+            options:
+              - value: single
+                label: Single-instance PostgreSQL
+                description: One PostgreSQL replica on a volume with snapshots; a failure costs minutes of downtime.
+                set: { postgresHA.enabled: false, postgres.enabled: true }
+              - value: ha
+                label: Highly available PostgreSQL
+                description: >-
+                  Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint, for
+                  near-zero-downtime upgrades.
+                set: { postgresHA.enabled: true, postgres.enabled: false }
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
+          - path: postgres.enabled
+            type: boolean
+            label: Single-instance PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - path: postgresHA.enabled
+            type: boolean
+            label: Highly available PostgreSQL on
+            readOnly: true
+            advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
+            description: Set by the database choice above.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0 &&
+              self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+            text: >-
+              Before you upgrade, update the IAM policy of your backup bucket to the action list in the README
+              (Database backups). The backup identity no longer carries `aws::ReadOnlyAccess`, so with the old
+              policy the backups fail.
+          - type: note
+            severity: warning
+            text: >-
+              The database credentials secret must exist **before** you install; if it is missing, the
+              deployment waits and `cpln logs` shows nothing at all.
+          - type: note
+            severity: info
+            when: oldSelf != null
+            text: >-
+              The database cannot be switched on a running release: the other choice is a separate, empty
+              database, and NocoDB would start over.
+      - id: single
+        title: Single-instance PostgreSQL
+        when: self.postgres.enabled
+        description: >-
+          One PostgreSQL replica (PostgreSQL 19 for new installs). Its server, storage, network and backups
+          follow after the Access step.
+        fields:
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Use only letters, digits,
+              `-` and `_`: NocoDB receives them inside its connection URL.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and NocoDB
+              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
+              update the secret and force a redeployment.
+            docs: "#prerequisites"
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-nocodb-db-credentials'"
+      - id: ha
+        title: Highly available PostgreSQL
+        when: self.postgresHA.enabled
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that NocoDB connects through.
+          New clusters run PostgreSQL 18. Its cluster, storage, consensus, network and backups follow after the
+          Access step.
+        fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
+          - path: postgresHA.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: >-
+              A dictionary secret with the keys `username`, `password` and `database`. Use only letters, digits,
+              `-` and `_`: NocoDB receives them inside its connection URL.
+            help: >-
+              PostgreSQL reads these values only when its data is first initialized, and NocoDB connects with
+              them. To change the password later, change it in the database first, then update the secret and
+              force a redeployment.
+              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-nocodb-db-credentials'"
+    rules:
+      - rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
+        mirrors: nocodb.validateDatabaseSecret
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: The database credentials secret is required.
+      - rule: "!has(self.postgres.credentials)"
+        mirrors: nocodb.validateDatabaseSecret
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: >-
+          postgres.credentials was removed in 1.4.0: the database credentials are now a prerequisite
+          dictionary secret named by the credentials secret field. Remove postgres.credentials from the values.
+      - rule: "!has(self.postgresHA.postgres)"
+        paths: [postgresHA.config.credentialsSecretName]
+        message: >-
+          postgresHA.postgres was removed in 1.2.0: put its username, password and database in the database
+          credentials secret and remove the block from the values.
+      - rule: >-
+          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+          !has(self.postgres.config.database)
+        paths: [postgres.config.credentialsSecretName]
+        message: >-
+          postgres.config.username, password and database were removed in 1.1.0: put them in the database
+          credentials secret and remove them from the values.
+      # Upgrading from 1.3.x or earlier, the chart-created secret is deleted by the upgrade itself, so the new
+      # prerequisite secret must have a different name (holding the same username, password and database).
+      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) !=
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: >-
+          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
+          under a NEW name holding the same username, password and database, and name it here.
+      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0)
+        rule: >-
+          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
+          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
+        severity: info
+        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
+        message: >-
+          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+          does not change the existing user or password.
+      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
+        severity: warning
+        paths: [postgresHA.enabled, postgres.enabled]
+        message: >-
+          Switching the database on a running release points NocoDB at a separate, empty database; the
+          existing data is not migrated.
+
   - id: attachments
     title: Attachments
     description: Where uploaded files and attachments are stored.
@@ -461,180 +635,6 @@ steps:
         paths: [internalAccess.workloads]
         message: With "Specific workloads" and an empty list, no workload inside Control Plane can connect.
 
-  - id: database
-    title: Database
-    description: Which PostgreSQL holds NocoDB's data, and the prerequisite secret with its credentials.
-    sections:
-      - fields:
-          - id: dbMode
-            virtual: true
-            type: enum
-            label: Database
-            docs: "#database"
-            widget: cards
-            required: true
-            init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
-            options:
-              - value: single
-                label: Single-instance PostgreSQL
-                description: One PostgreSQL replica on a volume with snapshots; a failure costs minutes of downtime.
-                set: { postgresHA.enabled: false, postgres.enabled: true }
-              - value: ha
-                label: Highly available PostgreSQL
-                description: >-
-                  Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint, for
-                  near-zero-downtime upgrades.
-                set: { postgresHA.enabled: true, postgres.enabled: false }
-          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
-          - path: postgres.enabled
-            type: boolean
-            label: Single-instance PostgreSQL on
-            readOnly: true
-            advanced: true
-            when: self.postgres.enabled == null   # never shown: the Database choice writes it
-            description: Set by the database choice above.
-          - path: postgresHA.enabled
-            type: boolean
-            label: Highly available PostgreSQL on
-            readOnly: true
-            advanced: true
-            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
-            description: Set by the database choice above.
-          - type: note
-            severity: warning
-            when: >-
-              context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0 &&
-              self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-            text: >-
-              Before you upgrade, update the IAM policy of your backup bucket to the action list in the README
-              (Database backups). The backup identity no longer carries `aws::ReadOnlyAccess`, so with the old
-              policy the backups fail.
-          - type: note
-            severity: warning
-            text: >-
-              The database credentials secret must exist **before** you install; if it is missing, the
-              deployment waits and `cpln logs` shows nothing at all.
-          - type: note
-            severity: info
-            when: oldSelf != null
-            text: >-
-              The database cannot be switched on a running release: the other choice is a separate, empty
-              database, and NocoDB would start over.
-      - id: single
-        title: Single-instance PostgreSQL
-        when: self.postgres.enabled
-        description: >-
-          One PostgreSQL replica (PostgreSQL 19 for new installs). Its server, storage, network and backups
-          follow in the next steps.
-        fields:
-          - path: postgres.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: >-
-              A dictionary secret with the keys `username`, `password` and `database`. Use only letters, digits,
-              `-` and `_`: NocoDB receives them inside its connection URL.
-            help: >-
-              PostgreSQL reads these values only when its data directory is first initialized, and NocoDB
-              connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
-              update the secret and force a redeployment.
-            docs: "#prerequisites"
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-nocodb-db-credentials'"
-      - id: ha
-        title: Highly available PostgreSQL
-        when: self.postgresHA.enabled
-        description: >-
-          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that NocoDB connects through.
-          New clusters run PostgreSQL 18. Its cluster, storage, consensus, network and backups follow in the next
-          steps.
-        fields:
-          - type: note
-            when: >-
-              context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '2.0.0') < 0
-            text: >-
-              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
-              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
-          - path: postgresHA.config.credentialsSecretName
-            type: ref
-            label: Database credentials secret
-            required: true
-            description: >-
-              A dictionary secret with the keys `username`, `password` and `database`. Use only letters, digits,
-              `-` and `_`: NocoDB receives them inside its connection URL.
-            help: >-
-              PostgreSQL reads these values only when its data is first initialized, and NocoDB connects with
-              them. To change the password later, change it in the database first, then update the secret and
-              force a redeployment.
-              In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [username, password, database]
-              create:
-                suggestName: "context.releaseName + '-nocodb-db-credentials'"
-    rules:
-      - rule: >-
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
-        mirrors: nocodb.validateDatabaseSecret
-        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
-        message: The database credentials secret is required.
-      - rule: "!has(self.postgres.credentials)"
-        mirrors: nocodb.validateDatabaseSecret
-        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
-        message: >-
-          postgres.credentials was removed in 1.4.0: the database credentials are now a prerequisite
-          dictionary secret named by the credentials secret field. Remove postgres.credentials from the values.
-      - rule: "!has(self.postgresHA.postgres)"
-        paths: [postgresHA.config.credentialsSecretName]
-        message: >-
-          postgresHA.postgres was removed in 1.2.0: put its username, password and database in the database
-          credentials secret and remove the block from the values.
-      - rule: >-
-          !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
-          !has(self.postgres.config.database)
-        paths: [postgres.config.credentialsSecretName]
-        message: >-
-          postgres.config.username, password and database were removed in 1.1.0: put them in the database
-          credentials secret and remove them from the values.
-      # Upgrading from 1.3.x or earlier, the chart-created secret is deleted by the upgrade itself, so the new
-      # prerequisite secret must have a different name (holding the same username, password and database).
-      - when: oldSelf != null && context.fromVersion != null && semverCompare(context.fromVersion, '1.4.0') < 0
-        rule: >-
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) !=
-          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
-        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
-        message: >-
-          The previous version created the database secret itself, and this upgrade deletes it. Create a secret
-          under a NEW name holding the same username, password and database, and name it here.
-      - when: oldSelf != null && (context.fromVersion == null || semverCompare(context.fromVersion, '1.4.0') >= 0)
-        rule: >-
-          (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) ==
-          (oldSelf.postgresHA.enabled ? oldSelf.postgresHA.config.credentialsSecretName : oldSelf.postgres.config.credentialsSecretName)
-        severity: info
-        paths: [postgres.config.credentialsSecretName, postgresHA.config.credentialsSecretName]
-        message: >-
-          PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
-          does not change the existing user or password.
-      - rule: oldSelf == null || self.postgresHA.enabled == oldSelf.postgresHA.enabled
-        severity: warning
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: >-
-          Switching the database on a running release points NocoDB at a separate, empty database; the
-          existing data is not migrated.
-
   # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
   # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
   - id: dbserver
@@ -696,6 +696,13 @@ steps:
       The bundled single-node Redis for job and event pub-sub, the metadata cache and the rate limiter. Its
       password secret is chosen in the NocoDB step.
     fields:
+      - type: note
+        severity: warning
+        when: context.mode == 'upgrade'
+        text: >-
+          The first upgrade after an install briefly restarts Redis, even when nothing about it changed, and NocoDB
+          restarts with it: with one NocoDB replica, expect about a minute of `503` responses. Two replicas absorb
+          it. Later upgrades of the same release do not restart Redis.
       - path: redis.image
         type: string
         format: image

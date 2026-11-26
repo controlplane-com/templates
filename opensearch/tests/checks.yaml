@@ -272,4 +272,9 @@ checks:
     # Setup job, first generated match and the 1-minute detector: a few minutes after install.
     retries: 20
     retryDelaySeconds: 30
+    knownIssue:
+      note: >-
+        An upgrade restart of the demo workloads leaves a few demo-logs documents unparsed (RAW > 0) in
+        2.0.0 and 2.1.0; the demo data only. Ruled 2026-11-25: warn on the 2.0.0 upgrade, fix in a follow-up.
+      scenarios: '^upgrade 2\.0\.0 '
 

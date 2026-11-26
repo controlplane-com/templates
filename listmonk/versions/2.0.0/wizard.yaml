@@ -128,6 +128,14 @@ steps:
           a schedule.
         docs: "/reference/volumeset#snapshots"
         fields:
+          - type: note
+            severity: info
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              This upgrade turns on a daily snapshot of the uploads volume (03:00 UTC, kept 7 days); earlier versions
+              took none. Clear the schedule to keep snapshots off.
           - path: volumeset.snapshots.schedule
             type: string
             format: cron

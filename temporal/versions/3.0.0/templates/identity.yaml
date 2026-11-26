@@ -9,6 +9,5 @@ tags: {{- include "temporal.tags" . | nindent 4 }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.archival.s3.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - {{ .Values.archival.s3.policyName | quote }}
 {{- end }}

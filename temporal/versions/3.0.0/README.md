@@ -1,5 +1,8 @@
 # Temporal
 
+> **Upgrading from 2.x:** the default HA database upgrades in place and keeps PostgreSQL 17; a single-instance
+> database needs `postgres.image: postgres:18` in your values — see [Upgrading from 2.x](#upgrading-from-2x).
+>
 > **Upgrading from 2.1.0 or earlier:** the HA database moves to patroni-postgres 0.8 (pgvector 0.8.7) — see
 > [Upgrading from 2.1.0 or earlier](#upgrading-from-210-or-earlier).
 >
@@ -18,8 +21,9 @@ This app deploys [Temporal](https://temporal.io/), an open-source (MIT) durable-
 - **Temporal server**: `replicas` replicas (default 1), each running all four services (frontend, history, matching, worker) in one process; gRPC on 7233, HTTP API on 7243, internal-only. With more than one replica they form a single Temporal cluster. Stateless: all state lives in PostgreSQL.
 - **`admin` sidecar** (in every server replica): creates the databases, migrates the schema (one replica at a time), refuses an upgrade that skips a minor version, creates the `default` namespace, then serves as an in-cluster `temporal` CLI.
 - **Temporal Web UI** (optional, default on): serves the UI on port 8080, internal-only unless you list IP ranges in `ui.allowedCIDRs` (the UI has no built-in authentication).
-- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template: 3 Patroni Postgres replicas, 3 etcd replicas, and an HAProxy leader endpoint Temporal connects through.
-- **PostgreSQL (single-instance, optional)** (subchart): the `postgres` template instead, for lighter deployments.
+- **PostgreSQL (HA, default)** (subchart): the `postgres-highly-available` template (PostgreSQL 18 for new clusters): 3 Patroni Postgres replicas, 3 etcd replicas, and an HAProxy leader endpoint Temporal connects through.
+- **PostgreSQL (single-instance, optional)** (subchart): the `postgres` template (PostgreSQL 19) instead, for lighter deployments. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched.
+- **Two databases** in either mode: `temporal` (workflow state, histories and task queues) and `temporal_visibility` (the index behind workflow lists and queries), both created by the `admin` sidecar.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Temporal connects with it, in either database mode.
 - **Identity and policy**: the server identity may `reveal` exactly the database credentials secret; with archival on it is also bound to your AWS cloud account and the bucket-scoped IAM policy (no keys).
 - **Server metrics**: each replica's Prometheus metrics (port 8000) are collected into the platform's built-in metrics.
@@ -126,7 +130,7 @@ Exactly one of the two databases must be enabled (the chart enforces this at ren
 ```yaml
 postgresHA: # default: highly available PostgreSQL
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-temporal-db-credentials # PREREQUISITE dictionary secret (username, password, database=temporal) — must exist BEFORE install
   replicas: 3
@@ -145,6 +149,7 @@ postgresHA:
   enabled: false
 postgres: # dev/lightweight: single-instance PostgreSQL
   enabled: true
+  image: postgres:19 # a release from an earlier version of this chart keeps postgres:18 (see Upgrading from 2.x)
   config:
     credentialsSecretName: my-temporal-db-credentials # PREREQUISITE dictionary secret (username, password, database=temporal) — must exist BEFORE install
   volumeset:
@@ -189,9 +194,77 @@ postgres: # dev/lightweight: single-instance PostgreSQL
 - **Python workers must guard their entrypoint with `if __name__ == "__main__":`**: the Temporal Python SDK's workflow sandbox re-imports the worker module, and an unguarded module-level `main()` crashes the worker.
 - `cpln port-forward` suits curl-level checks; a browser through it can stop loading pages after some navigation. For browser use, list your address in `ui.allowedCIDRs`.
 
+## Upgrading from 2.x
+
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so the Temporal API is briefly unavailable while the leader changes; running workflows and schedules continue.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **check that your IAM policy grants the action list in [AWS S3](#aws-s3) before upgrading.**
+- With archival on, the server identity no longer attaches `cpln-connector`; it uses only your bucket-scoped IAM policy.
+
+To move an existing HA cluster to PostgreSQL 18, copy both Temporal databases into a new release: see [Moving the data to a new release](#moving-the-data-to-a-new-release) below.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19, while a 2.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+To move a single-instance database to PostgreSQL 19, use the same procedure.
+
+### Moving the data to a new release
+
+Temporal keeps everything in two databases, `temporal` and `temporal_visibility`, and both must be copied. The new release gets a new endpoint, so workers and clients move to `NEW_RELEASE-temporal.GVC_NAME.cpln.local:7233`. The Temporal API is down during the copy; running workflows, timers and schedules continue from where they were afterwards.
+
+1. **Install this version as a NEW release** in the same GVC and database mode, with the same values as the old one: the same `historyShards` (the copied data keeps its shard count) and the same database credentials secret (`postgresHA.config.credentialsSecretName` or `postgres.config.credentialsSecretName`). In single-instance mode leave `postgres.image` at the default `postgres:19`; in HA mode leave `postgresHA.image` at the `0.9` default. With WAL-G backups, give the new release a different `backup.*.prefix`.
+2. **Once `NEW_RELEASE-temporal` is ready, stop both servers**, so nothing writes to either database: `cpln workload stop NEW_RELEASE-temporal --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-temporal --gvc GVC_NAME`.
+3. **Replace the new release's empty databases with copies of the old ones.** Single-instance mode, from inside the new PostgreSQL container:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      for db in temporal temporal_visibility; do
+        psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+          -c "DROP DATABASE \"$db\" WITH (FORCE)" -c "CREATE DATABASE \"$db\" OWNER \"$POSTGRES_USER\"" &&
+        pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$db" |
+          psql -U "$POSTGRES_USER" -d "$db" -v ON_ERROR_STOP=1 -q >/dev/null || exit 1
+      done
+      echo COPIED'
+   ```
+
+   HA mode, from inside a new Patroni member, through both releases' HAProxy endpoints:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres-ha --gvc GVC_NAME --container patroni-postgres -- bash -c \
+     'N=NEW_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local; O=OLD_RELEASE-postgres-ha-proxy.GVC_NAME.cpln.local
+      for db in temporal temporal_visibility; do
+        psql -h "$N" -d postgres -v ON_ERROR_STOP=1 -q \
+          -c "DROP DATABASE \"$db\" WITH (FORCE)" -c "CREATE DATABASE \"$db\"" &&
+        pg_dump -h "$O" -d "$db" | psql -h "$N" -d "$db" -v ON_ERROR_STOP=1 -q >/dev/null || exit 1
+      done
+      echo COPIED'
+   ```
+
+   Both print `COPIED` once the two databases are in. On an error they stop at once; run the command again, as it starts each database over.
+4. **Start the new server** (`cpln workload start NEW_RELEASE-temporal --gvc GVC_NAME`). Once it is ready, check that your workflows came across:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-temporal --gvc GVC_NAME --container admin -- temporal workflow list -n default
+   ```
+
+5. **Point your workers and clients at `NEW_RELEASE-temporal.GVC_NAME.cpln.local:7233`.** Then uninstall the old release; this deletes its volumes, so take a backup of it first if you want one to fall back on.
+
 ## Upgrading from 2.1.0 or earlier
 
-2.1.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Temporal itself restarts without a gap, but its API is briefly unavailable while the database leader changes; running workflows and schedules continue. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Temporal does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. Single-instance mode is unchanged.
+2.1.1 moves the HA database to `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484). The fix takes effect when the upgrade restarts the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Temporal itself restarts without a gap, but its API is briefly unavailable while the database leader changes; running workflows and schedules continue. Upgrade in a quiet window. If you pinned `postgresHA.image`, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. Temporal does not use the `vector` extension; if you created it yourself in a database, run `ALTER EXTENSION vector UPDATE;` there, which only updates the version `\dx` reports. 2.1.1 left single-instance mode unchanged; for 3.0.0 see [Upgrading from 2.x](#upgrading-from-2x).
 
 ## Upgrading from 2.0.0
 
@@ -236,7 +309,7 @@ Temporal supports upgrading **one minor version at a time**, with about 10 minut
 3. **Wait** until the server is ready, then about 10 more minutes.
 4. **Upgrade to 1.31:** the same command with `1.31.4` in both `--set`s.
 5. **Upgrade to 1.32:** the same command without the two `--set`s (the chart defaults are 1.32.1).
-6. **Upgrade to this version** following [Upgrading from 2.0.0](#upgrading-from-200).
+6. **Upgrade to this version** following [Upgrading from 2.0.0](#upgrading-from-200) and [Upgrading from 2.x](#upgrading-from-2x).
 
 Each step migrates the schema before the new server starts. A step that skips a minor version is refused before the database is touched: the new replica never becomes ready, and its `admin` container logs `CPLN_TEMPORAL_SKIP_GUARD` with the tag to use next. Set the right tag and upgrade again.
 
@@ -382,6 +455,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
+- **3.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 2.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 2.x](#upgrading-from-2x).
 - **Create the database credentials secret before installing**, with `database` set to `temporal`. A missing secret leaves the workload waiting with zero log lines — see Prerequisites for how to diagnose it.
 - **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Temporal** — see [Rotating the database password](#rotating-the-database-password); editing the secret alone changes nothing.
 - **`historyShards` is permanent**: it is fixed at the cluster's first boot, and a later change is ignored (the server keeps the original count and only logs the mismatch). 512 suits most deployments.

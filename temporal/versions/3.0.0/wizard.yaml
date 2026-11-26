@@ -11,31 +11,65 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: database
+    after: dbserver
     steps:
-      - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the single-instance PostgreSQL. }
       - { id: backup, title: Database backups }
     exclude:
       # Chosen in the Database step below, next to the HA mode's secret, so both modes ask for it in one place.
       - config.credentialsSecretName
-      # Temporal connects to <release>-postgres directly: a pooler in front of it would sit unused.
+      # Temporal connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # The server step (image and compute) is bound in the parent's Database server step, so its upgrade note,
+      # cross-major warning and image migration name this chart's README section; the child's checks are
+      # restated there.
+      - image
+      - resources
     override:
       internalAccess.type:
         description: >-
           Temporal connects to its database like any other workload: keep Same GVC, or add the Temporal
           server workload under Allowed workloads.
 
+  - template: postgres-highly-available
+    version: 3.0.0
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: dbserver
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members that hold Temporal's workflows and visibility records. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional backups to object storage. Uninstalling the release deletes the database volumes, so turn
+          this on if the workflow history matters.
+    exclude:
+      # Named in the Database step, next to the single-instance mode's secret, so both modes ask for it in one place.
+      - config.credentialsSecretName
+      # Temporal connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      multiZone:
+        description: >-
+          Applies to the PostgreSQL members and their HAProxy workloads. Confirm that your location supports
+          multiple zones.
+      internal_access.type:
+        description: >-
+          Temporal connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the
+          Temporal server workload under Allowed workloads.
+
 steps:
   - id: server
     title: Temporal server
     description: The server and admin-tools images, the replica count and the cluster settings.
-    docs: "#temporal-server"
     sections:
       - fields:
           - type: note
@@ -178,11 +212,11 @@ steps:
   - id: ui
     title: Web UI
     description: The Temporal Web UI, and which IP ranges may open it in a browser.
-    docs: "#web-ui"
     sections:
       - id: ui
         title: Temporal Web UI
         toggle: ui.enabled
+        docs: "#web-ui"
         description: >-
           The UI has no login of its own. It is internal-only unless you list IP ranges below; for a quick
           check without that, use `cpln port-forward RELEASE-temporal-ui 8080:8080 --gvc GVC`.
@@ -232,11 +266,11 @@ steps:
   - id: access
     title: Access
     description: Which workloads reach the Temporal server and the Web UI inside Control Plane.
-    docs: "#access"
     fields:
       - path: internalAccess.type
         type: enum
         label: Who can connect
+        docs: "#access"
         widget: cards
         required: true
         description: >-
@@ -282,11 +316,11 @@ steps:
   - id: archival
     title: Archival
     description: Optional long-term copies of closed workflows in S3.
-    docs: "#archival"
     sections:
       - id: archival
         title: Workflow archival to S3
         toggle: archival.enabled
+        docs: "#archival"
         description: >-
           Copies each closed workflow's history and visibility record to S3 a few minutes after it closes, so
           it stays readable (`temporal workflow list --archived`, `workflow show`) after retention deletes it.
@@ -403,19 +437,30 @@ steps:
               - rule: self.postgresHA.enabled != self.postgres.enabled
                 mirrors: temporal.validate
                 message: Enable exactly one database, highly available or single-instance.
-          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '3.0.0') < 0 &&
+              self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+            text: >-
+              Before you upgrade, make sure the IAM policy of your backup bucket grants every action in the
+              README's AWS S3 setup. The backup identity no longer carries `aws::ReadOnlyAccess`, so with a
+              narrower policy the backups fail.
           - type: note
             severity: warning
             text: >-
@@ -426,7 +471,17 @@ steps:
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
         docs: "#postgresql"
+        description: >-
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Temporal connects through.
+          Its cluster, storage, consensus, network and backups follow in the next steps.
         fields:
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '3.0.0') < 0
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 2.x in the README.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -448,47 +503,6 @@ steps:
               requiredKeys: [username, password, database]
               create:
                 suggestName: "context.releaseName + '-postgres-credentials'"
-          - path: postgresHA.replicas
-            type: integer
-            label: PostgreSQL replicas
-            required: true
-            min: 1
-            suggestions: [3, 5]
-          - path: postgresHA.image
-            type: string
-            format: image
-            label: Patroni PostgreSQL image
-            required: true
-            advanced: true
-            help: >-
-              2.1.1 moves to patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484). Tags 0.1 to 0.7 are
-              refused.
-          - path: postgresHA.volumeset.capacity
-            type: integer
-            label: Initial capacity
-            unit: GiB
-            min: 10
-            required: true
-            description: Per replica.
-            suggestions: [10, 20, 50, 100, 250, 500, 1000]
-        rules:
-          - rule: >-
-              !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
-              !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
-              size(self.postgresHA.image.split(':')) < 2 ||
-              !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
-            mirrors: temporal.validatePostgresHAImage
-            paths: [postgresHA.image]
-            message: >-
-              This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
-              create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
-          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
-            paths: [postgresHA.volumeset.capacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
-          - rule: self.postgresHA.replicas >= 3
-            severity: info
-            paths: [postgresHA.replicas]
-            message: Fewer than 3 PostgreSQL replicas cannot fail over while one of them is down.
       - id: single
         title: Single-instance PostgreSQL
         when: self.postgres.enabled
@@ -507,7 +521,6 @@ steps:
               PostgreSQL reads these values only when its data directory is first initialized, and Temporal
               connects with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then
               update the secret, then right away force a redeployment of Temporal (not of the database).
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -562,180 +575,62 @@ steps:
           PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
           does not change the existing user or password.
 
-  - id: backups
-    title: Database backups
-    description: Optional backups of the highly available PostgreSQL to object storage.
-    docs: "#backing-up"
-    when: self.postgresHA.enabled
+  # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
+  # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: dbserver
+    title: Database server
+    description: >-
+      The Postgres image and the compute of the single-instance database's stateful replica, which holds both
+      of Temporal's databases (temporal and temporal_visibility).
+    when: self.postgres.enabled
     sections:
-      - id: backup
-        title: Scheduled backups
-        toggle: postgresHA.backup.enabled
-        description: >-
-          Logical dumps on a schedule, or continuous WAL-G archiving with periodic base backups. Uninstalling
-          the release deletes the database volumes, so turn this on if the workflow history matters.
-        fields:
-          - path: postgresHA.backup.mode
-            type: enum
-            label: Backup mode
-            widget: segmented
-            required: true
-            options:
-              - { value: logical, label: Logical dumps, description: A scheduled pg_dump of every database. }
-              - { value: wal-g, label: WAL-G, description: Continuous WAL archiving plus periodic base backups. }
-          - path: postgresHA.backup.provider
-            type: enum
-            label: Destination
-            widget: cards
-            required: true
-            options:
-              - { value: aws, label: AWS S3 }
-              - { value: gcp, label: Google Cloud Storage }
-              - { value: minio, label: MinIO or S3-compatible }
-          - path: postgresHA.backup.logical.schedule
-            type: string
-            format: cron
-            label: Schedule (UTC)
-            required: true
-            when: self.postgresHA.backup.mode == 'logical'
-          - path: postgresHA.backup.walg.intervalSeconds
-            type: integer
-            label: Base backup interval
-            unit: s
-            required: true
-            min: 1
-            when: self.postgresHA.backup.mode == 'wal-g'
-            suggestions:
-              - { value: 3600, label: "3600 (hourly)" }
-              - { value: 21600, label: "21600 (6 hours, default)" }
-              - { value: 86400, label: "86400 (daily)" }
-          - path: postgresHA.backup.logical.image
-            type: string
-            format: image
-            label: Logical backup image
-            required: true
-            advanced: true
-            when: self.postgresHA.backup.mode == 'logical'
-            description: Tag 17.x.x for the bundled PostgreSQL 17.
-          - path: postgresHA.backup.resources
-            type: resources
-            label: Backup resources
-            required: true
-            advanced: true
-            description: Used by whichever mode is on. WAL-G needs about 512Mi of memory.
-      - title: AWS S3
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-        docs: "#backing-up"
-        fields:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short outage of the Temporal API; running workflows resume afterwards.
           - type: note
             severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '2.0.0') < 0
+              semverCompare(context.fromVersion, '3.0.0') < 0
             text: >-
-              The backups no longer attach the AWS ReadOnlyAccess policy. Make sure your bucket-scoped IAM
-              policy grants every action listed in the README's AWS S3 setup before you upgrade.
-          - path: postgresHA.backup.aws.bucket
+              New installs of this version run PostgreSQL 19. This release keeps the major its database was
+              created with, so the image below stays on it. Moving the data to 19 is a dump and restore of both
+              Temporal databases into a new release; see Upgrading from 2.x in the README.
+          - path: postgres.image
             type: string
-            label: Bucket
-            required: true
-            example: true
-            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
-            patternMessage: Use lowercase letters, digits, dots and hyphens (3 to 63 characters).
-          - path: postgresHA.backup.aws.region
-            type: string
-            label: Bucket region
-            required: true
-            placeholder: us-east-1
-            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
-            patternMessage: Use an AWS region name, such as us-east-1.
-          - path: postgresHA.backup.aws.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [aws] }
-              mustExist: error
-          - path: postgresHA.backup.aws.policyName
-            type: string
-            label: IAM policy name
-            required: true
-            example: true
-            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-          - path: postgresHA.backup.aws.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: Google Cloud Storage
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.gcp.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.gcp.cloudAccountName
-            type: ref
-            label: Cloud account
+            format: image
+            label: Postgres image
             required: true
             help: >-
-              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Admin
-              role on the bucket.
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [gcp] }
-              mustExist: error
-          - path: postgresHA.backup.gcp.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: MinIO or S3-compatible
-        when: self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.minio.endpoint
-            type: string
-            format: url
-            label: S3 endpoint
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
             required: true
-            example: true
-            placeholder: http://my-minio-workload:9000
-            description: The URL including the port.
-          - path: postgresHA.backup.minio.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.minio.credentialsSecretName
-            type: ref
-            label: MinIO credentials secret
-            required: true
-            description: A dictionary secret with the keys `accessKey` and `secretKey`.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [accessKey, secretKey]
-          - path: postgresHA.backup.minio.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
         rules:
-          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
-            paths: [postgresHA.backup.minio.credentialsSecretName]
+          - rule: >-
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 2.x).'
             message: >-
-              postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in a dictionary
-              secret and remove them from the values.
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 2.x).
 
 # Rules over values outside the steps: their issues show on the fields named in paths.
 rules:
@@ -759,10 +654,23 @@ rules:
     mirrors: temporal.validate
     paths: [postgresHA.config.credentialsSecretName]
     message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Temporal's database endpoint.
-  - rule: self.postgres.internalAccess.type != 'none'
+  # temporal.validatePostgresHAImage also refuses tags 0.1-0.7; the import's own image rule says that, so this
+  # one keeps only the check the child does not make. The field is required, so it shows only in YAML mode.
+  - rule: "!self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '')"
+    mirrors: temporal.validatePostgresHAImage
+    paths: [postgresHA.image]
+    message: Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from the values to use the chart default.
+  - when: self.postgresHA.enabled
+    rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
+    paths: [postgresHA.backup.minio.credentialsSecretName]
+    message: >-
+      postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in a dictionary
+      secret and remove them from the values.
+  - when: self.postgres.enabled
+    rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
     message: '"None" also blocks Temporal, which connects to its database like any other workload.'
-  - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+  - when: self.postgres.enabled && self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
     rule: ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-temporal') in self.postgres.internalAccess.workloads
     severity: warning
     paths: [postgres.internalAccess.workloads]
@@ -775,8 +683,22 @@ rules:
 yamlOnly:
   - path: postgres.pgbouncer
     reason: Temporal connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Temporal connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  # A 2.x (or older) release runs postgres:18 in single-instance mode (the postgres 3.x default), and its data
+  # directory is PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on
+  # that data: keep the installed image instead. Claims the postgres import's own image migration (the import
+  # excludes `image` and binds it in Database server), so the note names this chart's README section.
+  - fromVersions: ">=1.0.0 <3.0.0"
+    to: postgres.image
+    # has(): the previous versions' own values.yaml leave the image to the postgres 3.x default, postgres:18.
+    valueExpr: "has(self.postgres.image) ? self.postgres.image : 'postgres:18'"
+    note: >-
+      The database keeps the PostgreSQL major it was created with, so the installed image is kept (Database
+      server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading
+      from 2.x).
   # Archival is new in 2.0.0: an older release had it off.
   - fromVersions: "<2.0.0"
     assume: { archival.enabled: false, archival.defaultNamespace: true }

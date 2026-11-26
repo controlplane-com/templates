@@ -1,5 +1,5 @@
 # nextcloud 2.0.0 — the default production shape at the smallest size that runs: one Nextcloud web
-# replica and the cron worker on the shared volume, the bundled single PostgreSQL (19), and a one-node Redis
+# replica and the cron worker on the shared volume, the bundled single PostgreSQL (18), and a one-node Redis
 # that requires a password (file locks, cache and sessions). Files on the shared volume. All
 # credentials are prerequisite secrets CI creates.
 locations: [aws-us-east-1]
@@ -61,10 +61,7 @@ variants:
           credentialsSecretName: "{secrets.db.name}"
     timeoutSeconds: 1500
 
-# 2.0.0 runs the single-instance PostgreSQL on 19, so a plain upgrade of a 1.0.0 release (data on PostgreSQL
-# 18) must be REFUSED by the postgres boot guard with the data untouched; the upgrade pinned to postgres:18,
-# as the guard says, then succeeds and the file written on 1.0.0 survives.
+# 2.0.0 keeps the single-instance PostgreSQL on 18 (the 1.x default), so a 1.0.0 release upgrades in place:
+# upgrade-keeps-18 proves the same data directory, file-survives the file written on 1.0.0.
 upgradeFrom:
   - version: 1.0.0
-    refused: {timeoutSeconds: 420}
-    then: {set: {postgres: {image: "postgres:18"}}}

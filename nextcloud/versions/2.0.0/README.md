@@ -9,7 +9,7 @@ Nextcloud Server is licensed AGPL-3.0 and this is the free community edition. Ab
 - **`{release}-nextcloud`** — a `standard` workload of 1-10 interchangeable replicas serving the web UI, WebDAV and the sync clients on HTTP :80 (Apache with PHP). On boot it copies the application code to local disk, then installs or upgrades Nextcloud under a PostgreSQL advisory lock, so only one replica does it at a time. Pinned to `location`.
 - **`{release}-nextcloud-cron`** — a `standard` workload with one replica that runs Nextcloud's background jobs (`cron.php`) every 5 minutes. It never installs or upgrades; it waits for the web tier.
 - **`{release}-nextcloud-data`** — a shared (read-write-many) volume set mounted by every replica and the cron worker at `/srv/nextcloud`: `config/` (including the instance secret), `custom_apps/` (apps installed from the app store), and with `storage.type: local` (default) every user file under `data/`. With `storage.type: s3` files go to your bucket instead.
-- **`{release}-postgres`** — the bundled `postgres` template (default), PostgreSQL 19, holding users, shares, calendars, contacts and the file index. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
+- **`{release}-postgres`** — the bundled `postgres` template (default), PostgreSQL 18, holding users, shares, calendars, contacts and the file index. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
 - **`{release}-postgres-ha` + `{release}-postgres-ha-proxy`** *(optional)* — the `postgres-highly-available` template instead: 3 Patroni replicas, 3 etcd and an HAProxy leader endpoint. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **`{release}-redis`** — the `redis` template as one password-protected node: file locks, the shared cache and browser sessions. Required for 2 or more replicas. It holds no data of record.
 - **Identity and policies** — `reveal` on exactly the secrets Nextcloud reads, `view` on its own GVC (a boot-time location check), and the AWS cloud-account link in keyless S3 mode.
@@ -61,7 +61,7 @@ redis:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:19             # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
+  image: postgres:18             # Nextcloud 34 suggests PostgreSQL 14-18; 19 runs, with an admin-overview warning
   config: { credentialsSecretName: my-nextcloud-db-credentials }   # Prerequisites 2
   volumeset: { capacity: 10 }    # GiB (minimum 10)
   backup: { enabled: false }     # scheduled pg_dump; provider aws | gcp | minio, schedule "0 2 * * *"
@@ -120,23 +120,21 @@ cpln secret create-dictionary --name my-nextcloud-s3-keys \
 
 ## Upgrading from 1.x
 
-**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template. The second release is a new Nextcloud release installed as in step 1 of the single-instance move below, with `postgresHA.enabled: true` and `postgres.enabled: false`; its database workloads are `RELEASE_NAME-postgres-ha` and `RELEASE_NAME-postgres-ha-proxy`, so those commands apply as written. Its `pg_dumpall` takes the place of step 3 there; steps 2, 4 and 5 (maintenance mode, the volume copy, the restart) still apply.
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template. The second release is a new Nextcloud release installed as in step 1 of **Moving to PostgreSQL 19** below, but with `postgresHA.enabled: true` and `postgres.enabled: false`; its database workloads are `RELEASE_NAME-postgres-ha` and `RELEASE_NAME-postgres-ha-proxy`, so those commands apply as written. Its `pg_dumpall` takes the place of step 3 there; steps 2, 4 and 5 (maintenance mode, the volume copy, the restart) still apply.
 
-**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, Nextcloud restarts with `cpln-nextcloud: FATAL: the database or Redis was not reachable`, and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+**Single-instance database (`postgres.enabled: true`, the default):** stays on PostgreSQL 18, the 1.x default, so a plain upgrade needs no action. A data directory only opens with its own PostgreSQL major, and a guard checks that before the server starts: with a `postgres.image` of another major the server is not started, nothing on the volume changes, `RELEASE_NAME-postgres` stays not ready, and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run. The Console upgrade wizard keeps the installed image (**Advanced → Database server → Postgres image**) and warns before a change to another major.
 
 ```bash
 cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
 ```
 
-**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you (**Advanced → Database server → Postgres image**).
+### Moving to PostgreSQL 19 (optional)
 
-```bash
-cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
-```
+Nextcloud 34 suggests PostgreSQL 14 to 18. PostgreSQL 19 runs, and Nextcloud's admin overview then lists a database-version warning that 19 is outside that range.
 
-**Move to PostgreSQL 19, side by side.** Nextcloud keeps state in two places: the database, and the volume's `config/` (`config.php` with the `instanceid`, `passwordsalt` and `secret` that app passwords and stored credentials depend on), `custom_apps/` and `data/`. Both move together. Nextcloud gets a new endpoint and answers 503 (maintenance mode) during the copy.
+The move is side by side. Nextcloud keeps state in two places: the database, and the volume's `config/` (`config.php` with the `instanceid`, `passwordsalt` and `secret` that app passwords and stored credentials depend on), `custom_apps/` and `data/`. Both move together. Nextcloud gets a new endpoint and answers 503 (maintenance mode) during the copy.
 
-1. Install this version as a NEW release in the same GVC with the same `location`, the same secrets (`admin.secretName`, `postgres.config.credentialsSecretName`, the Redis password) and a `volumeset.capacity` that holds the old volume. With `storage.type: s3`, install the new release with `storage.type: local` for now: its own first install writes objects named by file ID, and a fresh database's file IDs would overwrite your files in the bucket. Wait until `NEW_RELEASE-nextcloud` is ready (do not sign in), then stop its cron worker:
+1. Install this version as a NEW release in the same GVC with `postgres.image: postgres:19`, the same `location`, the same secrets (`admin.secretName`, `postgres.config.credentialsSecretName`, the Redis password) and a `volumeset.capacity` that holds the old volume. With `storage.type: s3`, install the new release with `storage.type: local` for now: its own first install writes objects named by file ID, and a fresh database's file IDs would overwrite your files in the bucket. Wait until `NEW_RELEASE-nextcloud` is ready (do not sign in), then stop its cron worker:
 
    ```bash
    cpln workload stop NEW_RELEASE-nextcloud-cron --gvc GVC_NAME
@@ -209,7 +207,7 @@ cpln workload exec {release}-nextcloud --gvc {gvc} --container nextcloud -- \
 
 ## Important Notes
 
-- **Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release plus a copy of the volume. See **Upgrading from 1.x**. Nextcloud 34 suggests PostgreSQL 14 to 18, so on 19 its admin overview lists a database-version warning.
+- **The single-instance database stays on PostgreSQL 18** (Nextcloud 34 suggests 14 to 18), so a 1.x release upgrades with no action. Keep `postgres.image` at the installed major: another major refuses to start (data untouched). Moving to PostgreSQL 19 is optional, a dump and restore into a new release plus a copy of the volume, after which the admin overview warns about the database version. See **Upgrading from 1.x**.
 - **Copy `config/config.php` somewhere safe after the first install.** It holds the instance `secret`, `passwordsalt` and `instanceid`, which are on the volume only: a database backup cannot fully restore Nextcloud without them. It also holds the Redis password (and S3 keys, if set), so store it as a secret: `cpln workload exec {release}-nextcloud --gvc {gvc} --container nextcloud -- cat /srv/nextcloud/config/config.php > config.php`. The database password is never written to it.
 - **The volume is not snapshotted and is deleted on uninstall,** with every file when `storage.type` is `local`. Use `storage.type: s3` for files that must outlive the release. `storage.type` and `storage.s3.bucket` are fixed at install: a changed value stops new replicas at boot while the old ones keep serving, since Nextcloud cannot move files between them.
 - **Nextcloud version upgrades take Nextcloud offline for a few minutes** while `occ upgrade` runs in maintenance mode (HTTP 503). Upgrade one major version at a time. If an upgrade is cut short and the 503 lingers after the next start, run `occ maintenance:mode --off` as shown above. The first `helm upgrade` can also briefly restart the single-instance PostgreSQL, and Nextcloud with it; use `postgresHA` when that matters.

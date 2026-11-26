@@ -66,7 +66,7 @@ internalAccess:
 # set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:19                # new installs; a release upgraded from 1.x keeps postgres:18, its data's major (README, "Upgrading from 1.x")
+  image: postgres:18                # Nextcloud 34 suggests PostgreSQL 14-18; 19 runs but its admin overview warns (README, "Upgrading from 1.x")
   config:
     # REQUIRED — MUST EXIST BEFORE INSTALL, or the deployment WEDGES silently. A `dictionary` with the
     # keys username, password, database (see README Prerequisites).

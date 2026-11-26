@@ -1,7 +1,8 @@
 # Listmonk
 
-> **Upgrading from 1.5.0:** the database credentials are now a secret you create before upgrading,
-> under a **new** name — see [Upgrading from 1.5.0](#upgrading-from-150).
+> **Upgrading from 1.x with the single-instance database (the default):** new installs run PostgreSQL 19,
+> and a 1.x database is PostgreSQL 18 — pin `postgres.image: postgres:18` or the database refuses to start
+> (data untouched). See [Upgrading from 1.x](#upgrading-from-1x).
 
 This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-hosted newsletter and mailing list manager (AGPL-3.0). It runs the listmonk server (admin dashboard, campaign engine, public subscription pages, transactional-mail API) backed by a PostgreSQL store, with schema install and admin bootstrap fully automatic on first boot.
 
@@ -9,8 +10,8 @@ This app deploys [listmonk](https://listmonk.app/) — a high-performance, self-
 
 - **Listmonk**: Stateful workload on port 9000 — single replica by upstream design (one listmonk instance per database, see Important Notes). Serves the admin UI and the public subscription/tracking pages over HTTPS.
 - **Uploads volumeset**: Persistent media store at `/listmonk/uploads` for images uploaded via the admin Media page.
-- **PostgreSQL (single-instance, default)**: The `postgres` template — holds all lists, subscribers, campaigns, and settings.
-- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
+- **PostgreSQL (single-instance, default)**: The `postgres` template, PostgreSQL 19 — holds all lists, subscribers, campaigns, and settings. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see **Upgrading from 1.x**).
+- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **Admin secret** (dictionary) — *not created by this template*; you create it before install and reference it by name. Holds the Super Admin login.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled database initializes from it and listmonk connects with it, in either store mode.
 - **Identity + policy**: a least-privilege policy granting the workload `reveal` on exactly two secrets — your admin secret and the active database credential secret.
@@ -88,7 +89,7 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres:             # default: single-instance PostgreSQL
   enabled: true
-  image: postgres:18  # listmonk requires Postgres 12+
+  image: postgres:19  # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
   config:
     credentialsSecretName: my-listmonk-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -108,7 +109,7 @@ postgres:
   enabled: false
 postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy leader endpoint
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   config:
     credentialsSecretName: my-listmonk-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -152,9 +153,49 @@ Public access is **on** by default and is load-bearing: subscription forms, unsu
 | Postgres (internal, single mode) | `{release}-postgres.{gvc}.cpln.local:5432`, credentials from your `postgres.config.credentialsSecretName` secret (`cpln secret reveal SECRET_NAME -o yaml`) |
 | Postgres (internal, HA mode) | `{release}-postgres-ha-proxy.{gvc}.cpln.local:5432`, credentials from your `postgresHA.config.credentialsSecretName` secret |
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`):** a plain upgrade works, and the cluster stays on PostgreSQL 17, the major it was created with; new HA releases start on PostgreSQL 18. Moving an existing cluster to 18 is a copy into a new release: see [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the postgres-highly-available template. With AWS backups, first update the bucket's IAM policy to the action list under **Storage setup**: the HA backup identity no longer carries `aws::ReadOnlyAccess`, so with the old policy the backups fail.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, listmonk cannot reach its database, and the logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (listmonk gets a new endpoint; sending and subscriptions pause during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `admin.secretName` and `postgres.config.credentialsSecretName`, and the same `rootUrl`. listmonk initializes an empty database in it.
+2. Copy the uploaded media (the Media page's files, on the uploads volume) through your machine while the old listmonk is still running (do this in a quiet window: a file uploaded after this step is not copied):
+
+   ```bash
+   mkdir -p ./listmonk-uploads
+   cpln workload exec OLD_RELEASE-listmonk --gvc GVC_NAME --container listmonk -- \
+     sh -c 'cd /listmonk/uploads && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./listmonk-uploads
+   cpln cp ./listmonk-uploads/. NEW_RELEASE-listmonk:/listmonk/uploads --gvc GVC_NAME --container listmonk
+   ```
+
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-listmonk --gvc GVC_NAME --container listmonk -- ls -la /listmonk/uploads`.
+
+3. Stop the old release's listmonk (`cpln workload stop OLD_RELEASE-listmonk --gvc GVC_NAME`; the database keeps running). Only one listmonk may run on a database, and this also stops writes and campaign sends.
+4. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new listmonk created (its schema, settings and the `pgcrypto` extension):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+5. Run `cpln workload force-redeployment NEW_RELEASE-listmonk --gvc GVC_NAME` so listmonk reloads its settings, and log in with your existing users (the copied database brings them). The copied settings still hold the old release's root URL, so subscriber and email links point at the old endpoint: set **Admin → Settings → General → Root URL** to the new endpoint, or move your custom domain to the new release. Check your lists, campaigns and media, then uninstall the old release.
+
 ## Upgrading from 1.6.0 or earlier (HA mode)
 
-1.6.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. listmonk itself restarts as on any upgrade, which is the longer interruption, because its single replica stops before the new one serves; a few writes on already-open database connections can also fail right after the leader change. Upgrade in a quiet window. listmonk does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
+1.6.1 moved the highly available database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8` (2.0.0 runs `0.9`), which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. listmonk itself restarts as on any upgrade, which is the longer interruption, because its single replica stops before the new one serves; a few writes on already-open database connections can also fail right after the leader change. Upgrade in a quiet window. listmonk does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
 
 ## Upgrading from 1.5.0
 
@@ -215,10 +256,13 @@ Backups are off by default and need no cloud account. To turn them on, set `<sto
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [
-    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-backup-bucket" },
-    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-backup-bucket/*" }
-  ]
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
+               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+               "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
+    "Resource": ["arn:aws:s3:::my-backup-bucket", "arn:aws:s3:::my-backup-bucket/*"]
+  }]
 }
 ```
 
@@ -303,6 +347,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
+- **Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. See **Upgrading from 1.x**.
 - **Create both secrets before installing.** A missing prerequisite secret leaves the workload waiting on something that does not exist, with zero log lines — see Prerequisites for how to diagnose it.
 - **Changing the database password:** run `ALTER ROLE <username> PASSWORD '<new>'` in the database first, then `cpln secret edit` the credentials secret, then right away force-redeploy `{release}-listmonk` (in HA mode follow [Rotating the database password in HA mode](#rotating-the-database-password-in-ha-mode) instead). Do not redeploy the database: PostgreSQL reads the secret only when it is first initialized, so restarting it only adds downtime. A running workload keeps the values it started with, and editing the secret alone does not change the database's password.
 - **Single instance by design — do not attempt to scale.** Upstream forbids two listmonk instances on one database (duplicate campaign sends); the template pins one replica and uses a no-surge rollout, so upgrades incur a brief gap instead of overlapping instances.

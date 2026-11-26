@@ -132,22 +132,22 @@ path.
 
 {{/*
 Refuse controlplanecorporation/patroni-postgres 0.1-0.7 for the HA database: they carry a pgvector older
-than 0.8.7 (CVE-2026-103484). The bundled postgres-highly-available 2.5.0 defaults to 0.7, so 1.5.1 sets
-postgresHA.image to 0.8; a values file still pinning an older tag would otherwise keep the vulnerable
-image. Same matching as postgres-highly-available 2.8.1's pg-ha.validateImage: other registries, digests
-and non-version tags pass.
+than 0.8.7 (CVE-2026-103484). Added in 1.5.1, when the vendored postgres-highly-available 2.5.0 had no
+guard of its own; postgres-highly-available 3.0.0 (2.0.0) refuses them too, and this check is kept so the
+error names Unleash's own key. An empty value is refused as well, since it would hand the subchart an
+empty image. Same matching as pg-ha.validateImage: other registries, digests and non-version tags pass.
 */}}
 {{- define "unleash.validatePostgresHAImage" -}}
 {{- if .Values.postgresHA.enabled -}}
 {{- $raw := .Values.postgresHA.image | default "" | toString -}}
 {{- if not $raw -}}
-{{- fail "unleash: postgresHA.image is required — without it the database subchart falls back to controlplanecorporation/patroni-postgres:0.7, whose pgvector is open to CVE-2026-103484. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." -}}
+{{- fail "unleash: postgresHA.image is required — the HA database has no image without it. Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from your values to use the chart default." -}}
 {{- end -}}
 {{- $image := trimPrefix "docker.io/" $raw -}}
 {{- $prefix := "controlplanecorporation/patroni-postgres:" -}}
 {{- if hasPrefix $prefix $image -}}
 {{- if regexMatch "^0\\.[0-7](\\.[0-9]+)?$" (trimPrefix $prefix $image) -}}
-{{- fail (printf "unleash: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.8, or remove it from your values to use the chart default." $raw) -}}
+{{- fail (printf "unleash: postgresHA.image %s carries a pgvector older than 0.8.7, which is open to CVE-2026-103484 (a database user who can create an IVFFlat index can run arbitrary code). Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from your values to use the chart default." $raw) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

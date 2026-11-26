@@ -37,10 +37,12 @@ internalAccess: # internal firewall scope (in-GVC SDK callers)
 
 # ─── Database: Highly Available PostgreSQL (default) ──────────────────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
-# replicas, and an HAProxy leader-routing endpoint Unleash connects to.
+# replicas, and an HAProxy leader-routing endpoint Unleash connects to. New clusters
+# run PostgreSQL 18; a cluster created by an earlier version of this chart keeps
+# PostgreSQL 17 (README, "Upgrading from 1.x").
 postgresHA:
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     # REQUIRED PREREQUISITE SECRET (HA mode) — CREATE IT BEFORE YOU INSTALL. If
     # it does not exist the deployment WEDGES silently and looks like a platform
@@ -57,9 +59,9 @@ postgresHA:
     mode: logical # logical or wal-g
     resources:
       cpu: 100m
-      memory: 128Mi
+      memory: 512Mi # 128Mi OOMKills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0 # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"
     walg:
       intervalSeconds: 21600
@@ -87,6 +89,13 @@ postgresHA:
 # Enable this and disable postgresHA for a lighter non-HA deployment.
 postgres:
   enabled: false
+  # PostgreSQL 19 for new installs. A release installed with an earlier version of this chart
+  # has PostgreSQL 18 data: keep image: postgres:18 in your values (README, "Upgrading from 1.x").
+  image: postgres:19
+  upgradeHint: # how the PostgreSQL boot guard names the fix in its log; leave as is
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
   config:
     # REQUIRED PREREQUISITE SECRET (single-instance mode) — the same kind of
     # `dictionary` secret as postgresHA.config.credentialsSecretName above
@@ -97,7 +106,7 @@ postgres:
 
   backup: # optional database backups (Postgres 17+) — see README storage setup
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0 # PostgreSQL 19 client; also backs up a server pinned to 18
     schedule: "0 2 * * *"
     resources:
       cpu: 100m

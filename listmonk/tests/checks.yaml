@@ -3,13 +3,16 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db, admin_user, admin_password).
 #
-# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
-# and calls listmonk at its internal address. listmonk keeps its users, sessions and lists in PostgreSQL,
-# so a login and a list read back only pass when the server and its database both work.
+# The default-install checks run from the HA database's patroni-postgres container, which has curl, psql and
+# python3, and call listmonk at its internal address. listmonk keeps its users, sessions and lists in
+# PostgreSQL, so a login and a list read back only pass when the server and its database both work. They are
+# kept off the [single] variant (single-instance PostgreSQL, no HA workload), whose own checks run in the
+# postgres container (psql) and in the listmonk container (busybox wget and nc, no curl or python3).
 # (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
 checks:
   - id: cluster-healthy
     description: Patroni reports exactly one leader and every other member streaming from it.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -30,6 +33,7 @@ checks:
 
   - id: listmonk-healthy
     description: listmonk answers its health endpoint on its internal address.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -45,6 +49,7 @@ checks:
     description: >-
       The bootstrapped Super Admin logs in through the login form, creates a mailing list named after the
       running version, and reads it back through the API.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -75,6 +80,7 @@ checks:
 
   - id: rejects-bad-password
     description: A wrong Super Admin password gets no session (the control for the check above).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -93,6 +99,7 @@ checks:
     description: >-
       The list created on the version this scenario installed first is still there. On a fresh install
       that is the same version; after an upgrade it proves the lists carried over.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -112,9 +119,12 @@ checks:
     retryDelaySeconds: 15
 
   - id: pgvector-0-8-7-available
-    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.6.1.
+    description: >-
+      The HA leader runs an image with pgvector 0.8.7 (CVE-2026-103484): patroni-postgres 0.8 from 1.6.1, 0.9
+      from 2.0.0.
     issue: "#5376"
     since: 1.6.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -133,13 +143,15 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      Every Patroni member restarted onto an image with pgvector 0.8.7 (patroni-postgres 0.8 in 1.6.1, 0.9 from
+      2.0.0) and is back in the cluster,
       not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
       restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
       without this a member that never comes back (seen once in testing: the old leader stuck initializing for
       17 min) goes unseen.
     issue: "#5376"
     since: 1.6.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -162,3 +174,124 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant, the chart's default): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-admin-seeded
+    description: >-
+      In single-instance mode listmonk installed its schema into PostgreSQL 19 and created the Super Admin
+      from the admin secret; a wrong database password is refused (the control).
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        H=$(hostname -i | awk '{print $1}')
+        PGPASSWORD='{pg_password}' psql -h "$H" -U {pg_user} -d {pg_db} -qtA \
+          -c "select 'ADMIN ' || username || ' ' || type from users where username = '{admin_user}'" 2>&1
+        PGPASSWORD=wrong-password psql -h "$H" -U {pg_user} -d {pg_db} -c "select 1" >/dev/null 2>&1 \
+          && echo BAD_PASSWORD_ACCEPTED || echo BAD_PASSWORD_REFUSED
+    expect:
+      stdout: "(?s)^ADMIN e2eadmin user$.*^BAD_PASSWORD_REFUSED$"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: single-login-and-list
+    description: >-
+      In single-instance mode the Super Admin logs in through the login form, creates a mailing list named
+      after the running version and reads it back through the API; a wrong password gets no session (the
+      control). Run in the listmonk container against its own port.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-listmonk"
+      container: listmonk
+      shell: sh
+      script: |
+        U=http://127.0.0.1:9000
+        N="e2e-single-$(echo '{version}' | tr . -)"
+        # busybox wget does not show the Set-Cookie header, so the login form is posted with nc to the local port.
+        login() {
+          B="username={admin_user}&password=$1&next=%2Fadmin"
+          L=$(printf '%s' "$B" | wc -c | tr -d ' ')
+          printf 'POST /admin/login HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\n\r\n%s' "$L" "$B" |
+            nc -w 10 127.0.0.1 9000 | tr -d '\r'
+        }
+        H=$(login '{admin_password}')
+        echo "LOGIN $(echo "$H" | awk 'NR==1 {print $2}')"
+        C=$(echo "$H" | awk -F'[: ;]+' 'tolower($1) == "set-cookie" && $2 ~ /^session=/ {print $2}' | paste -sd ';' -)
+        found() {
+          wget -q -O - --header "Cookie: $C" "$U/api/lists?per_page=all&query=$N" | grep -o "\"name\": *\"$N\"" | wc -l | tr -d ' '
+        }
+        # Create the list once per version, so a re-run or a no-op upgrade does not add duplicates.
+        if [ "$(found)" = 0 ]; then
+          wget -q -O /dev/null --header "Cookie: $C" --header 'Content-Type: application/json' \
+            --post-data "{\"name\":\"$N\",\"type\":\"private\",\"optin\":\"single\"}" "$U/api/lists"
+        fi
+        echo "LISTS $N $(found)"
+        B=$(login 'wrong-password')
+        echo "BAD $(echo "$B" | awk 'NR==1 {print $2}') SESSIONS $(echo "$B" | grep -ci '^set-cookie: session=')"
+    expect:
+      stdout: "(?s)^LOGIN 302$.*^LISTS e2e-single-\\S+ [1-9][0-9]*$.*^BAD (?!302)\\d+ SESSIONS 0$"
+    retries: 6
+    retryDelaySeconds: 15

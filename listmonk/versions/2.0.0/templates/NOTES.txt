@@ -1,0 +1,28 @@
+listmonk is deploying as {{ include "listmonk.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+
+  Status:   cpln workload get-deployments {{ include "listmonk.name" . }} --gvc {{ .Values.global.cpln.gvc }}
+  Endpoint: cpln workload get {{ include "listmonk.name" . }} --gvc {{ .Values.global.cpln.gvc }} -o yaml (status.canonicalEndpoint), then /admin
+  Database: {{ include "listmonk.db.host" . }}:5432
+{{- if .Values.postgres.enabled }}
+
+UPGRADING A 1.x RELEASE? This chart's single-instance PostgreSQL defaults to PostgreSQL 19, and a
+1.x release's data directory is PostgreSQL 18 (or the major of the image it ran). A PostgreSQL 19
+server REFUSES to start on it, and your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" .Values.postgres.image }}
+  If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with --set postgres.image=postgres:18
+  (the major the logs name), and keep that image in your values for every later upgrade.
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.postgres.image }}
+  This release runs {{ .Values.postgres.image }}: the server stays on that major. Keep postgres.image in
+  your values for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.postgres.image }}. If the database stays not ready and the logs say
+  "REFUSING TO START", set postgres.image to the image the logs name and keep it in your values.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 1.x" (dump and restore).
+{{- end }}
+{{- if .Values.postgresHA.enabled }}
+
+Highly available PostgreSQL: new clusters run PostgreSQL 18; a cluster created by a 1.x release stays
+on PostgreSQL 17 (README, "Upgrading from 1.x").
+{{- end }}

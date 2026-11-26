@@ -156,18 +156,29 @@ The move is side by side. Nextcloud keeps state in two places: the database, and
 
 4. Copy the old volume over the new one through your machine (with `storage.type: local` this is every file, so allow the disk space and time). The new release's own `data/` and `custom_apps/` are removed first; its `config/` is overwritten:
 
+   The files travel in 8 MB pieces, each checked against its checksum, because `cpln workload exec` can cut off long output without reporting an error. The old container needs free space in `/tmp` for one compressed copy of the files.
+
    ```bash
-   cpln workload exec NEW_RELEASE-nextcloud --gvc GVC_NAME --container nextcloud -- \
-     rm -rf /srv/nextcloud/data /srv/nextcloud/custom_apps
-   mkdir -p ./nextcloud-volume
-   cpln workload exec OLD_RELEASE-nextcloud --gvc GVC_NAME --container nextcloud -- \
-     sh -c 'cd /srv/nextcloud && tar czf - config custom_apps data | base64' | base64 -d | tar xzf - -C ./nextcloud-volume
-   cpln cp ./nextcloud-volume/. NEW_RELEASE-nextcloud:/srv/nextcloud --gvc GVC_NAME --container nextcloud
-   cpln workload exec NEW_RELEASE-nextcloud --gvc GVC_NAME --container nextcloud -- \
-     chown -R www-data:www-data /srv/nextcloud
+   OLD=OLD_RELEASE-nextcloud NEW=NEW_RELEASE-nextcloud GVC=GVC_NAME C=nextcloud
+   cpln workload exec $NEW --gvc $GVC --container $C -- rm -rf /srv/nextcloud/data /srv/nextcloud/custom_apps
+   # pack the files in the old container, split them, and list each piece's checksum
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
+     'cd /srv/nextcloud && tar czf /tmp/copy.tgz config custom_apps data && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+   # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
+   mkdir -p ./copyparts
+   while read -r sum name; do
+     until [ -f "./copyparts/$name" ] && [ "$(openssl md5 < "./copyparts/$name" | awk '{print $NF}')" = "$sum" ]; do
+       cpln workload exec $OLD --gvc $GVC --container $C -- sh -c "base64 /tmp/$name; sleep 5" </dev/null | base64 -d > "./copyparts/$name"
+     done
+   done < copyparts.md5
+   # upload the pieces, then unpack them only if every piece arrived intact
+   for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
+   cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
+     'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /srv/nextcloud && chown -R www-data:www-data /srv/nextcloud && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
+   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
    ```
 
-   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-nextcloud --gvc GVC_NAME --container nextcloud -- ls -la /srv/nextcloud/config /srv/nextcloud/data`.
+   If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.
 
 5. Take the new release out of maintenance mode (the copied `config.php` carries the old release's flag) and restart it on the copied state:
 

@@ -181,14 +181,28 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
 1. Install this version as a NEW release in the same GVC with the **same** `admin.secretName` and `postgres.config.credentialsSecretName`, and the same `rootUrl`. listmonk initializes an empty database in it.
 2. Copy the uploaded media (the Media page's files, on the uploads volume) through your machine while the old listmonk is still running (do this in a quiet window: a file uploaded after this step is not copied):
 
+   The files travel in 8 MB pieces, each checked against its checksum, because `cpln workload exec` can cut off long output without reporting an error. The old container needs free space in `/tmp` for one compressed copy of the files.
+
    ```bash
-   mkdir -p ./listmonk-uploads
-   cpln workload exec OLD_RELEASE-listmonk --gvc GVC_NAME --container listmonk -- \
-     sh -c 'cd /listmonk/uploads && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./listmonk-uploads
-   cpln cp ./listmonk-uploads/. NEW_RELEASE-listmonk:/listmonk/uploads --gvc GVC_NAME --container listmonk
+   OLD=OLD_RELEASE-listmonk NEW=NEW_RELEASE-listmonk GVC=GVC_NAME C=listmonk
+   # pack the files in the old container, split them, and list each piece's checksum
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
+     'cd /listmonk/uploads && tar czf /tmp/copy.tgz --exclude="./.*" . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+   # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
+   mkdir -p ./copyparts
+   while read -r sum name; do
+     until [ -f "./copyparts/$name" ] && [ "$(openssl md5 < "./copyparts/$name" | awk '{print $NF}')" = "$sum" ]; do
+       cpln workload exec $OLD --gvc $GVC --container $C -- sh -c "base64 /tmp/$name; sleep 5" </dev/null | base64 -d > "./copyparts/$name"
+     done
+   done < copyparts.md5
+   # upload the pieces, then unpack them only if every piece arrived intact
+   for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
+   cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
+     'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /listmonk/uploads && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
+   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
    ```
 
-   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-listmonk --gvc GVC_NAME --container listmonk -- ls -la /listmonk/uploads`.
+   If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.
 
 3. Stop the old release's listmonk (`cpln workload stop OLD_RELEASE-listmonk --gvc GVC_NAME`; the database keeps running). Only one listmonk may run on a database, and this also stops writes and campaign sends.
 4. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new listmonk created (its schema, settings and the `pgcrypto` extension):

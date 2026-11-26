@@ -388,14 +388,28 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
 1. Install this version as a NEW release in single-instance mode with the **same prerequisite secrets** (`secrets.name`, `postgres.config.credentialsSecretName`, `redis.credentialsSecretName`) and the same `storage` settings. The root keys must be the same, or the two-factor secrets in the copied database cannot be decrypted; with `s3` or `s3-compatible` storage both releases read the same bucket.
 2. With `storage.type: local` only, copy the attachments through your machine while both releases run:
 
+   The files travel in 8 MB pieces, each checked against its checksum, because `cpln workload exec` can cut off long output without reporting an error. The old container needs free space in `/tmp` for one compressed copy of the files.
+
    ```bash
-   mkdir -p ./chatwoot-storage
-   cpln workload exec OLD_RELEASE-chatwoot --gvc GVC_NAME --container chatwoot -- \
-     sh -c 'cd /app/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./chatwoot-storage
-   cpln cp ./chatwoot-storage/. NEW_RELEASE-chatwoot:/app/storage --gvc GVC_NAME --container chatwoot
+   OLD=OLD_RELEASE-chatwoot NEW=NEW_RELEASE-chatwoot GVC=GVC_NAME C=chatwoot
+   # pack the files in the old container, split them, and list each piece's checksum
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
+     'cd /app/storage && tar czf /tmp/copy.tgz --exclude="./.*" . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+   # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
+   mkdir -p ./copyparts
+   while read -r sum name; do
+     until [ -f "./copyparts/$name" ] && [ "$(openssl md5 < "./copyparts/$name" | awk '{print $NF}')" = "$sum" ]; do
+       cpln workload exec $OLD --gvc $GVC --container $C -- sh -c "base64 /tmp/$name; sleep 5" </dev/null | base64 -d > "./copyparts/$name"
+     done
+   done < copyparts.md5
+   # upload the pieces, then unpack them only if every piece arrived intact
+   for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
+   cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
+     'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /app/storage && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
+   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
    ```
 
-   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-chatwoot --gvc GVC_NAME --container chatwoot -- ls -la /app/storage`.
+   If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.
 
 3. Stop the old Chatwoot, so nothing writes to its database: `cpln workload stop OLD_RELEASE-chatwoot --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-chatwoot-worker --gvc GVC_NAME`.
 4. Stop the new Chatwoot the same way (`NEW_RELEASE-chatwoot` and `NEW_RELEASE-chatwoot-worker`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container. The PostgreSQL 19 `pg_dump` reads the old server, and the dump recreates the `vector` extension:

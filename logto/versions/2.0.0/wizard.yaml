@@ -171,14 +171,12 @@ steps:
               New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
               Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
           - type: note
-            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0 &&
               self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
             text: >-
-              Before you upgrade, update the IAM policy of your backup bucket to the action list in the
-              postgres-highly-available template docs (AWS S3). The backup identity no longer carries
-              `aws::ReadOnlyAccess`, so with the old policy the backups fail.
+              The backup identity no longer carries `cpln-connector`; your bucket-scoped IAM policy needs no
+              change.
           - type: note
             severity: warning
             text: >-

@@ -85,10 +85,10 @@ storage:
       secretName: ""      # S3-compatible only: dictionary with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, e.g. my-plane-s3-keys
 
 # ─── PostgreSQL (subchart: postgres) ──────────────────────────────────────────
-# Plane's upstream deployments run PostgreSQL 15 and 16, so this stays on 16.
-# A highly available database is not offered: postgres-highly-available is PostgreSQL 17.
+# PostgreSQL 19 for new installs. A release upgraded from 1.x keeps postgres:16, its data's
+# major (README, "Upgrading from 1.x").
 postgres:
-  image: postgres:16.15
+  image: postgres:19
   config:
     # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with the URL-safe
     # keys username, password and database (see README Prerequisites).
@@ -100,6 +100,12 @@ postgres:
     maxMemory: 1Gi
   volumeset:
     capacity: 10          # GiB (minimum 10)
+  # How the database's major-version guard names its fix in the logs: this chart's values path,
+  # wizard field and README section. Leave as is.
+  upgradeHint:
+    imageKey: postgres.image
+    consoleField: "Upgrade > Datastores > PostgreSQL image"
+    readme: 'README, "Upgrading from 1.x"'
 
 # ─── Redis (Valkey) — Django cache and live-editor sync; required ─────────────
 redis:

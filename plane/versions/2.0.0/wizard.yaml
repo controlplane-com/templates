@@ -14,12 +14,13 @@ imports:
   # step with the cache and the broker instead of three imported steps. The import still supplies the child's
   # defaults, location limits and migrations.
   - template: postgres
-    version: 3.4.1
+    version: 4.0.2
     title: PostgreSQL
     exclude:
       # Chosen on the first step, together with the other prerequisite secrets.
       - config.credentialsSecretName
-      # Parent fields in the Database sections of the Datastores step.
+      # Parent fields in the Database sections of the Datastores step (the image's upgrade note, cross-major
+      # warning and migration name this chart's README section).
       - image
       - resources
       - volumeset
@@ -27,7 +28,7 @@ imports:
       - internalAccess
       # Plane connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
-      # The postgres template's scheduled backups need PostgreSQL 17 or newer; Plane runs on 16 (yamlOnly below).
+      # This chart does not offer the postgres template's scheduled backups (yamlOnly below).
       - backup
 
 steps:
@@ -482,8 +483,23 @@ steps:
           - type: note
             severity: warning
             text: >-
-              No scheduled backups and no high availability: both need PostgreSQL 17, and Plane runs on 16. Back
-              up with `pg_dump` in the `postgresql` container, and back up the object store too.
+              No scheduled backups and no high availability database. Back up with `pg_dump` in the `postgresql`
+              container, and back up the object store too.
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short write outage.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its database was
+              created with (PostgreSQL 16 for a 1.x release), so the PostgreSQL image below stays on it. Moving
+              the data to 19 is a dump and restore into a new release; see Upgrading from 1.x in the README.
           - path: postgres.volumeset.capacity
             type: integer
             label: Database capacity
@@ -501,10 +517,9 @@ steps:
             format: image
             label: PostgreSQL image
             required: true
-            advanced: true
             help: >-
-              Plane's own deployments run PostgreSQL 15 and 16; keep a 16.x tag. The data directory is specific to
-              a major version: a different major on an existing volume does not start.
+              New installs run `postgres:19`. The data directory is specific to a major version: on an existing
+              volume, an image of another major does not start, and the database logs the image to set instead.
           - path: postgres.resources
             type: resources
             label: PostgreSQL resources
@@ -515,13 +530,19 @@ steps:
             memory: { min: 32Mi }
         rules:
           - rule: >-
-              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
-              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
             severity: warning
             paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
             message: >-
-              The data directory belongs to the installed PostgreSQL major version; a different major version does
-              not start on it. Upgrade with a dump and restore instead.
+              The data directory belongs to the installed PostgreSQL major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
           - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
             paths: [postgres.volumeset.capacity]
             message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
@@ -628,7 +649,6 @@ steps:
             max: 65536
             required: true
             suggestions: [10, 20]
-            docs: "/reference/volumeset#capacity-and-billing"
           - path: redis.image
             type: string
             format: image
@@ -656,7 +676,6 @@ steps:
             max: 65536
             required: true
             suggestions: [10, 20]
-            docs: "/reference/volumeset#capacity-and-billing"
           - path: rabbitmq.vhost
             type: string
             label: Virtual host
@@ -742,10 +761,10 @@ yamlOnly:
   - path: postgres.pgbouncer
     reason: Plane connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
   - path: postgres.backup
-    reason: The postgres template's scheduled backups need PostgreSQL 17 or newer, and Plane runs on PostgreSQL 16.
+    reason: This chart does not offer the postgres template's scheduled backups; back up with pg_dump.
 
-# Claims the postgres child's backup.minio key migrations: this chart excludes the child's backup step
-# (PostgreSQL 16 has no scheduled backups), and no Plane release ever carried those keys.
+# Claims the postgres child's backup.minio key migrations: this chart excludes the child's backup step, and no
+# Plane release ever carried those keys.
 migrations:
   - fromVersions: "<1.0.0"
     from: postgres.backup.minio.accessKey
@@ -753,3 +772,14 @@ migrations:
   - fromVersions: "<1.0.0"
     from: postgres.backup.minio.secretKey
     note: Plane's bundled PostgreSQL has no scheduled backups; the key is dropped.
+  # A 1.x release that never set postgres.image runs postgres:16.15 (1.x's default), and its data directory is
+  # PostgreSQL 16. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+  # `image` and binds it in Datastores), so the note names this chart's README section.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database keeps the PostgreSQL major it was created with, so the installed image is kept (Datastores,
+      PostgreSQL image). To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading from
+      1.x).

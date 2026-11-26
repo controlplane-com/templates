@@ -41,7 +41,7 @@ cpln workload get-deployments RELEASE_NAME-mongo --gvc GVC_NAME -o yaml
 
 Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
 
-<b>Upgrading from 1.3.x:</b> delete `config.username` and `config.password` from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries either key is refused at render.
+<b>Upgrading from 1.3.x:</b> delete `config.username` and `config.password` from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries either key is refused at render. If the workload then stays at "transitioning to version …" with "not allowed to reveal the secret" in its deployment status, run <code>cpln workload force-redeployment RELEASE_NAME-mongo --gvc GVC_NAME</code> to resume it.
 
 ### Configuration
 

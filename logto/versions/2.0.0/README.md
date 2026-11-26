@@ -266,7 +266,7 @@ Find a canonical endpoint with `cpln workload get RELEASE_NAME-logto --gvc GVC_N
 - The database members restart one after another onto the new image (and the latest 17 minor release), so sign-in pauses briefly while the leader changes.
 - If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
 - The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters.
-- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your bucket's IAM policy to the action list in the [postgres-highly-available](https://docs.controlplane.com/template-catalog/templates/postgres-highly-available) template docs before upgrading.**
+- The backup identity no longer carries `cpln-connector`; your bucket-scoped IAM policy needs no change.
 
 To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Logto release (same two prerequisite secrets) in place of the second database release, and both Logto workloads stopped during the copy.
 

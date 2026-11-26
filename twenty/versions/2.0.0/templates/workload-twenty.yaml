@@ -123,9 +123,11 @@ spec:
       enabled: false
     replicaDirect: false
   rolloutOptions:
-    # allow at most one replica below count during an upgrade
+    # maxUnavailableReplicas is not sent: the API drops it on a stateful
+    # workload (OrderedReady already rolls one replica at a time).
+    # terminationGracePeriodSeconds is declared because the API backfills 90.
     maxSurgeReplicas: "0%"
-    maxUnavailableReplicas: "1"
     minReadySeconds: 10
     scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
   supportDynamicTags: false

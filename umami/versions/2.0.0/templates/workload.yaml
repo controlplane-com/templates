@@ -60,6 +60,7 @@ spec:
         httpGet:
           path: /api/heartbeat
           port: 3000
+          scheme: HTTP
         initialDelaySeconds: 30
         periodSeconds: 10
         failureThreshold: 20
@@ -69,9 +70,11 @@ spec:
         httpGet:
           path: /api/heartbeat
           port: 3000
+          scheme: HTTP
         initialDelaySeconds: 120
         periodSeconds: 15
         failureThreshold: 5
+        successThreshold: 1
         timeoutSeconds: 5
   defaultOptions:
     autoscaling:

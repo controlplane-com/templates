@@ -1,0 +1,29 @@
+Twenty {{ .Chart.Version }} is deploying as {{ include "twenty.name" . }} and {{ include "twenty.worker.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+
+  Status:   cpln workload get-deployments {{ include "twenty.name" . }} --gvc {{ .Values.global.cpln.gvc }}
+  Database: {{ include "twenty.postgres.host" . }}:5432
+{{- if .Values.postgresHA.enabled }}
+
+UPGRADING A 1.x RELEASE? New highly available clusters run PostgreSQL 18; an existing cluster
+keeps PostgreSQL 17 in place (the image bundles both), so no pin is needed. The database members
+restart one after another. With AWS backups, the backup identity no longer carries
+aws::ReadOnlyAccess: your bucket IAM policy needs the full action list in the README.
+  To move an existing cluster to PostgreSQL 18: README, "Upgrading from 1.x".
+{{- else if .Values.postgres.enabled }}
+
+UPGRADING A 1.x RELEASE? This chart's single-instance PostgreSQL defaults to PostgreSQL 19, and a
+1.x release's data directory is PostgreSQL 18 (or the major of the image it ran). A PostgreSQL 19
+server REFUSES to start on it, and your data stays untouched.
+{{- if regexMatch ":19([.-]|$)" .Values.postgres.image }}
+  If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+  the logs say "REFUSING TO START", run this upgrade again with --set postgres.image=postgres:18
+  (the major the logs name), and keep that image in your values for every later upgrade.
+{{- else if regexMatch ":[0-9]+([.-][^@]*)?$" .Values.postgres.image }}
+  This release runs {{ .Values.postgres.image }}: the server stays on that major. Keep postgres.image in
+  your values for every later upgrade.
+{{- else }}
+  This release runs {{ .Values.postgres.image }}. If the database stays not ready and the logs say
+  "REFUSING TO START", set postgres.image to the image the logs name and keep it in your values.
+{{- end }}
+  To move existing data to PostgreSQL 19: README, "Upgrading from 1.x" (dump and restore).
+{{- end }}

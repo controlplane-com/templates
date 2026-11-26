@@ -1,7 +1,8 @@
 # Twenty
 
-> **Upgrading from 1.3.x:** the database credentials and the Redis password are now secrets you create
-> before upgrading, under **new** names — see [Upgrading from 1.3.x](#upgrading-from-13x).
+> **Upgrading from 1.x:** the single-instance database (the default) needs `postgres.image: postgres:18` in
+> your values; an HA database upgrades in place and keeps PostgreSQL 17 — see [Upgrading from 1.x](#upgrading-from-1x).
+> From 1.3.x, also create the database and Redis secrets first — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
 [Twenty](https://twenty.com) is an open-source CRM — customizable objects, pipelines, views and workflows, with a REST and GraphQL API. This template deploys the Twenty server, its background worker, a bundled Redis job queue, and a PostgreSQL database (single-instance by default, or highly available), reachable over HTTPS on the platform's automatic endpoint.
 
@@ -10,7 +11,7 @@
 - **Twenty server** — one image serving the React front end and the NestJS API on HTTP `:3000`; scales horizontally via `twenty.replicas`.
 - **Background worker** — the same image running `yarn worker:prod`; always exactly one replica (it registers cron jobs, and owns boot migrations when `twenty.replicas > 1`).
 - **Redis** — bundled single node with AOF persistence and `maxmemory-policy noeviction`, for BullMQ job queues and cache.
-- **PostgreSQL** — the `postgres` template (single instance, PostgreSQL 18) by default, or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas, HAProxy leader endpoint, PostgreSQL 17) as an opt-in.
+- **PostgreSQL** — the `postgres` template (single instance, PostgreSQL 19) by default, or the `postgres-highly-available` template (3 Patroni replicas, 3 etcd replicas, HAProxy leader endpoint; PostgreSQL 18 for new clusters) as an opt-in. Twenty keeps its data in one database, in the `core` and `public` schemas plus one `workspace_…` schema per workspace. The single-instance database has a boot guard that refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Volume sets** — Redis AOF at `/data`; local attachment storage at `/app/packages/twenty-server/.local-storage` (*only* in `storage.type: local`).
 - **Identity + policy** — one identity shared by the three workloads, granted `reveal` on exactly the secrets they mount.
 - **Secrets** — template-created secrets for the server and worker start scripts; the app key, the database credentials, the Redis password and any S3 static keys come from secrets you create.
@@ -151,7 +152,7 @@ redis:
 ```yaml
 postgres:
   enabled: true
-  image: postgres:18          # PostgreSQL 18 (the HA path below runs 17 — the majors differ)
+  image: postgres:19          # new installs; a release upgraded from 1.x keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-twenty-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   resources:
@@ -172,10 +173,10 @@ Set `postgres.enabled: false` and `postgresHA.enabled: true`. Exactly one databa
 ```yaml
 postgresHA:
   enabled: false
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-twenty-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
-  replicas: 3
+  replicas: 3                 # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   resources:
     minCpu: 500m
     maxCpu: 1000m
@@ -235,7 +236,34 @@ cpln secret create-dictionary --name my-twenty-s3-keys \
 
 Scheduled database backups are configured on whichever database path you enabled — `postgres.backup.*` (single instance) or `postgresHA.backup.*` (highly available). They are off by default.
 
-**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The backup identity carries only this policy, so it needs the full action list below (replace `YOUR_BUCKET_NAME` with the backup bucket):
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
 
 **MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket}`; no cloud account is involved because keys authenticate directly. The two database paths take those keys differently:
 
@@ -352,9 +380,63 @@ Redis keeps no password on disk: it takes the password from the secret each time
 
 Expect a short interruption: until all three have restarted, Redis and the app hold different passwords, so queued jobs wait and the server cannot reach its cache.
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`):** this version moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes. Twenty reconnects by itself.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [Database backups](#database-backups-aws-s3-and-minio) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Twenty release (same app key and database secret) in place of the second database release, and the old release's `-twenty` and `-twenty-worker` workloads stopped during the copy. Attachments move as in step 2 below.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, Twenty waits for its database (`twenty: waiting for Postgres`), and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Twenty gets a new endpoint, and the CRM is down during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `secrets.name` (the app key decrypts the OAuth tokens, two-factor secrets and app variables stored in the database) and the same `postgres.config.credentialsSecretName` (the copied database role keeps its password). With `storage.type: s3`, use the same `storage.s3` settings: the attachments stay in the bucket, and the copied database points at them. Do not sign up in the new release.
+2. With `storage.type: local` only, copy the attachments through your machine while the old Twenty still runs (do this in a quiet window: a file uploaded after this step is not copied):
+
+   ```bash
+   mkdir -p ./twenty-storage
+   cpln workload exec OLD_RELEASE-twenty --gvc GVC_NAME --container twenty -- \
+     sh -c 'cd /app/packages/twenty-server/.local-storage && tar czf - . | base64' | base64 -d | tar xzf - -C ./twenty-storage
+   cpln cp ./twenty-storage/. NEW_RELEASE-twenty:/app/packages/twenty-server/.local-storage --gvc GVC_NAME --container twenty
+   ```
+
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-twenty --gvc GVC_NAME --container twenty -- ls -la /app/packages/twenty-server/.local-storage`.
+
+3. Stop the old Twenty, so nothing writes to its database: `cpln workload stop OLD_RELEASE-twenty --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-twenty-worker --gvc GVC_NAME`.
+4. Stop the new release's Twenty too (`cpln workload stop NEW_RELEASE-twenty --gvc GVC_NAME` and `cpln workload stop NEW_RELEASE-twenty-worker --gvc GVC_NAME`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container. The dump carries every schema (`core`, `public` and each `workspace_…`) and the extensions Twenty uses:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+   Then empty the new release's Redis cache, so nothing cached from the empty database survives: `cpln workload exec NEW_RELEASE-twenty-redis --gvc GVC_NAME --container redis -- sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning FLUSHALL'`.
+
+5. Start the new worker, then the server (`cpln workload start NEW_RELEASE-twenty-worker --gvc GVC_NAME`, then `cpln workload start NEW_RELEASE-twenty --gvc GVC_NAME`), sign in with your existing account, and check your records and an attachment.
+6. Move your custom domain (and `twenty.serverUrl`) to the new release, and update the redirect URLs of any Google or Microsoft app you connected for sign-in or email sync. Then uninstall the old release (this deletes its volumes; an S3 bucket is not touched).
+
 ## Upgrading from 1.4.0 or earlier (HA mode)
 
-1.4.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Twenty itself restarts as on any upgrade, and its worker and bundled Redis restart with it; with a single Twenty server replica (the default) that is the longer interruption, because the old replica stops before the new one serves, and writes fail while Redis restarts. Upgrade in a quiet window. Twenty does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
+1.4.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Twenty itself restarts as on any upgrade, and its worker and bundled Redis restart with it; with a single Twenty server replica (the default) that is the longer interruption, because the old replica stops before the new one serves, and writes fail while Redis restarts. Upgrade in a quiet window. Twenty does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. 1.4.1 left single-instance installs (`postgres`) unchanged; for 2.0.0 see [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Upgrading from 1.3.x
 
@@ -389,6 +471,8 @@ The upgrade restarts the bundled PostgreSQL and Redis too (they now read the new
 `postgresHA.postgres.username/password/database` were removed in 1.2.0 (postgres-highly-available 2.5.0). Put those three values **unchanged** into the database credentials secret under [Prerequisites](#prerequisites), set `postgresHA.config.credentialsSecretName` to its name, and delete the `postgresHA.postgres` block. `postgresHA.backup.minio.accessKey`/`secretKey` moved to a dictionary secret you create, named by `postgresHA.backup.minio.credentialsSecretName` (see Storage setup).
 
 ## Important Notes
+
+- **2.0.0 moves new databases to PostgreSQL 19 (single-instance, the default) and 18 (HA).** A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. An existing HA cluster keeps PostgreSQL 17 with no action. See [Upgrading from 1.x](#upgrading-from-1x).
 
 - **First boot takes a few minutes, and logs some alarming-looking errors on the way.** A single-instance install reaches ready in roughly 4 minutes; the highly-available path takes closer to 9, because the server retries against the HAProxy endpoint until Patroni has elected a leader. During that window you will see `relation "core.appToken" does not exist` and similar for about a minute — that is the migration race resolving itself, not a failure. Give it the full window before intervening.
 

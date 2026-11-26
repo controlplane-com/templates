@@ -1,0 +1,16 @@
+{{- include "listmonk.validateSnapshots" . }}
+kind: volumeset
+name: {{ include "listmonk.volume.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+description: Listmonk uploads directory (filesystem media store)
+tags: {{- include "listmonk.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}

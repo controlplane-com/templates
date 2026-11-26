@@ -1,0 +1,22 @@
+Nextcloud {{ .Chart.Version }} is deploying as {{ include "nextcloud.name" . }} (and {{ include "nextcloud.cron.name" . }}) in GVC {{ .Values.global.cpln.gvc }} (location {{ .Values.location }}).
+
+  Status:   cpln workload get-deployments {{ include "nextcloud.name" . }} --gvc {{ .Values.global.cpln.gvc }}
+  Database: {{ include "nextcloud.postgres.host" . }}:5432
+{{- if .Values.postgresHA.enabled }}
+
+UPGRADING A 1.x RELEASE? New highly available clusters run PostgreSQL 18; an existing cluster
+keeps PostgreSQL 17 in place, so no pin is needed. The database members restart one after another.
+  To move an existing cluster to PostgreSQL 18: README, "Upgrading from 1.x".
+{{- else if .Values.postgres.enabled }}
+{{- if regexMatch ":18([.-]|$)" .Values.postgres.image }}
+
+UPGRADING A 1.x RELEASE? The single-instance PostgreSQL stays on PostgreSQL 18, the 1.x default, so
+no action is needed. Moving to PostgreSQL 19 is optional: README, "Upgrading from 1.x".
+{{- else }}
+
+This release runs {{ .Values.postgres.image }}. A data directory only opens with its own PostgreSQL
+major: if `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready
+and the logs say "REFUSING TO START", set postgres.image to the image the logs name and keep it in your
+values for every later upgrade (README, "Upgrading from 1.x").
+{{- end }}
+{{- end }}

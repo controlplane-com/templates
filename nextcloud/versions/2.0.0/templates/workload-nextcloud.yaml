@@ -1,0 +1,136 @@
+{{- include "nextcloud.validate" . -}}
+kind: workload
+name: {{ include "nextcloud.name" . }}
+description: Nextcloud web UI, WebDAV and sync API, HTTP :80
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "nextcloud.tags" . | nindent 4 }}
+spec:
+  {{- /*
+    `standard`, not `stateful`: replicas are interchangeable and share all state
+    through PostgreSQL, Redis and the read-write-many volume, which a standard
+    workload can mount. maxUnavailableReplicas is kept on `standard` (dropped on
+    `stateful`) and the 4:1 cpu cap does not apply. Every hostname is fully
+    qualified: the bare short name is NXDOMAIN on a standard workload.
+  */}}
+  type: standard
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "nextcloud.identity.name" . }}
+  containers:
+    - name: nextcloud
+      image: {{ .Values.nextcloud.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.nextcloud.resources.minCpu | quote }}
+      cpu: {{ .Values.nextcloud.resources.maxCpu | quote }}
+      minMemory: {{ .Values.nextcloud.resources.minMemory | quote }}
+      memory: {{ .Values.nextcloud.resources.maxMemory | quote }}
+      {{- /* Inline boot script (_script-prep.tpl + _script-start.tpl); it runs as
+             root to copy the code and chown the volume, then Apache drops to
+             www-data. Inline, so no secret or reveal grant is needed for it. */}}
+      command: /bin/bash
+      args:
+        - "-c"
+        - {{- include "nextcloud.inlineScript" (include "nextcloud.script.start" .) | nindent 10 }}
+      env:
+        {{- include "nextcloud.env" . | nindent 8 }}
+        # ── First administrator (prerequisite dictionary: username, password) ──
+        # Read by the first install only; later changes do nothing (the password
+        # hash lives in the database).
+        - name: NEXTCLOUD_CPLN_ADMIN_USER
+          value: cpln://secret/{{ .Values.admin.secretName }}.username
+        - name: NEXTCLOUD_CPLN_ADMIN_PASSWORD
+          value: cpln://secret/{{ .Values.admin.secretName }}.password
+      ports:
+        - number: 80
+          protocol: http
+      lifecycle:
+        preStop:
+          exec:
+            # Keep serving for 20 s while the edge drops this replica (5 s was too
+            # short: Apache closed its listener while requests still arrived and
+            # they failed with 503), then finish in-flight requests
+            # (GracefulShutdownTimeout 60): 20 + 65 s fits the 90 s grace. Apache
+            # is PID 1, so its exit ends the hook and the event log records
+            # "PreStopHook failed"; that is expected.
+            command:
+              - /bin/sh
+              - "-c"
+              - sleep 20; apachectl -k graceful-stop; timeout 65 sh -c 'while pidof apache2 >/dev/null; do sleep 1; done'
+      readinessProbe:
+        # The login page runs the full stack (config, database, Redis sessions)
+        # and answers 503 in maintenance mode or with an upgrade pending.
+        # localhost is always a trusted domain.
+        httpGet:
+          path: /index.php/login
+          port: 80
+          scheme: HTTP
+          httpHeaders:
+            - name: Host
+              value: localhost
+        initialDelaySeconds: 20
+        periodSeconds: 30
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        # A static file Apache serves without PHP or the database, so a database
+        # blip takes a replica out of rotation without restarting it. First
+        # possible kill at 600 + 10 x 30 = 900 s, beyond every boot gate.
+        httpGet:
+          path: /robots.txt
+          port: 80
+          scheme: HTTP
+        initialDelaySeconds: 600
+        periodSeconds: 30
+        failureThreshold: 10
+        successThreshold: 1
+        timeoutSeconds: 5
+      volumes:
+        - path: /srv/nextcloud
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "nextcloud.volume.name" . }}
+  {{- /*
+    Scale 0 EVERYWHERE by default, with the real replica count supplied for the
+    one configured location only. See `nextcloud.autoscaling` in _helpers.tpl.
+  */}}
+  defaultOptions:
+    autoscaling:
+      {{- include "nextcloud.autoscaling" (dict "scale" 0) | nindent 6 }}
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600   # the platform maximum: single-request WebDAV uploads
+  localOptions:
+    {{- include "nextcloud.localOptions" (dict "root" . "scale" (int .Values.nextcloud.replicas)) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      Surge-first: a new replica is ready before an old one stops, even at
+      replicas: 1. terminationGracePeriodSeconds is declared because the API
+      backfills 90.
+    */}}
+    minReadySeconds: 0
+    maxUnavailableReplicas: "0"
+    maxSurgeReplicas: "1"
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      {{- include "nextcloud.externalFirewall" (dict "public" .Values.publicAccess.enabled) | nindent 6 }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      {{- $own := splitList "\n" (trim (include "nextcloud.ownWorkloadLinks" .)) }}
+      inboundAllowWorkload:
+        {{- include "nextcloud.ownWorkloadLinks" . | nindent 8 }}
+        {{- range .Values.internalAccess.workloads }}
+        {{- if not (has (printf "- %s" .) $own) }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- else }}
+      inboundAllowWorkload: []
+      {{- end }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

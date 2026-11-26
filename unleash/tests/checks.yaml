@@ -3,13 +3,15 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db, admin_user, admin_password).
 #
-# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
-# and calls Unleash at its internal address, as an in-GVC SDK would. Unleash keeps every flag and user in
+# The default-install checks run from the HA database's patroni-postgres container, which has curl, psql and
+# python3, and call Unleash at its internal address, as an in-GVC SDK would. They are kept off the [single]
+# variant (single-instance PostgreSQL, no HA workload), whose own checks follow at the end. Unleash keeps every flag and user in
 # PostgreSQL, so a login and a flag read back only pass when the server and its database both work.
 # (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
 checks:
   - id: unleash-healthy
     description: Unleash reports itself healthy on its internal address (only after its migrations ran).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -25,6 +27,7 @@ checks:
     description: >-
       The seeded admin logs in, creates a feature flag tagged with the running version, and reads it back
       through the Admin API.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -52,6 +55,7 @@ checks:
 
   - id: rejects-bad-password
     description: A wrong admin password is refused (the control for the check above).
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -68,6 +72,7 @@ checks:
     description: >-
       The flag created on the version this scenario installed first is still there. On a fresh install
       that is the same version; after an upgrade it proves the flags carried over.
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -87,9 +92,12 @@ checks:
     retryDelaySeconds: 15
 
   - id: pgvector-0-8-7-available
-    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.5.1.
+    description: >-
+      The HA leader runs an image with pgvector 0.8.7 (CVE-2026-103484): patroni-postgres 0.8 from 1.5.1, 0.9
+      from 2.0.0.
     issue: "#5376"
     since: 1.5.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -108,12 +116,14 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      Every Patroni member restarted onto an image with pgvector 0.8.7 (patroni-postgres 0.8 in 1.5.1, 0.9 from
+      2.0.0) and is back in the cluster,
       not only the leader. The check above passes as soon as the leader has moved to a restarted member, and
       the runner's readiness wait returns while the old leader is still restarting, so without this a member
       that never comes back (seen once in testing: the old leader stuck initializing for 17 min) goes unseen.
     issue: "#5376"
     since: 1.5.1
+    scenarios: "^(?!.*\\[single\\])"
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -136,3 +146,118 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant): PostgreSQL 19 from 2.0.0 ──
+  # No HA workload exists there: the database checks run in the postgres container (psql), the app checks in
+  # the Unleash container on its own loopback (the image has node and busybox wget, no curl or bash).
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num' 2>&1)"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-login-and-flag
+    description: >-
+      In single-instance mode Unleash is healthy, the seeded admin logs in, creates a feature flag tagged with
+      the running version and reads it back, and a wrong password is refused, from the Unleash container.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-unleash"
+      container: unleash
+      shell: sh
+      script: |
+        node -e '
+        const U = "http://127.0.0.1:4242";
+        const J = { "Content-Type": "application/json" };
+        const login = (p) => fetch(U + "/auth/simple/login", { method: "POST", headers: J, body: JSON.stringify({ username: "{admin_user}", password: p }) });
+        (async () => {
+          console.log("HEALTH " + (await (await fetch(U + "/health")).text()));
+          const r = await login("{admin_password}");
+          console.log("LOGIN " + r.status);
+          const c = r.headers.getSetCookie().map((x) => x.split(";")[0]).join("; ");
+          const n = "e2e-single-" + "{version}".split(".").join("-");
+          const cr = await fetch(U + "/api/admin/projects/default/features", { method: "POST", headers: { ...J, Cookie: c }, body: JSON.stringify({ name: n }) });
+          console.log("CREATE " + cr.status);
+          const g = await (await fetch(U + "/api/admin/projects/default/features/" + n, { headers: { Cookie: c } })).json();
+          console.log("FLAG " + g.name);
+          console.log("BAD " + (await login("wrong-password")).status);
+        })().catch((e) => console.log("ERR " + e));'
+    expect:
+      stdout: '(?s)^HEALTH .*"health":"GOOD".*^LOGIN 200$.*^FLAG e2e-single-.*^BAD 401$'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: single-flag-in-postgres
+    description: >-
+      The flag the check above created through the API is a row in the single-instance PostgreSQL 19 database,
+      read as Unleash's database user.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        N="e2e-single-$(echo '{version}' | tr . -)"
+        out=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select name from features where name = '$N'" 2>&1)
+        [ "$out" = "$N" ] && echo "ROW $N" || echo "NO ROW: $out"
+    expect:
+      stdout: "^ROW e2e-single-"
+    retries: 6
+    retryDelaySeconds: 15

@@ -3,13 +3,18 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db, admin_email, admin_password).
 #
-# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3,
-# and calls NocoDB at its internal address. NocoDB keeps its users and bases in PostgreSQL, so a sign-in
-# and a base read back only pass when the server and its database both work.
-# (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
+# The app checks run in the NocoDB container (curl and node, no bash or python) against NocoDB on
+# 127.0.0.1, so they hold in either database mode. NocoDB keeps its users and bases in PostgreSQL, so a
+# sign-in and a base read back only pass when the server and its database both work. The HA checks run in
+# a Patroni member (curl, psql, python3) and are scoped to the scenarios that run the HA database: the [ha]
+# variant and the upgrade from 1.4.1, whose baseline is HA. The single-instance checks run in the postgres
+# container and are scoped to the default fresh install.
+# (Inside scripts, write $VAR rather than the braced form, and keep a space inside any other braces: the
+# runner fills every {name} placeholder and fails on an unknown one.)
 checks:
   - id: cluster-healthy
     description: Patroni reports exactly one leader and every other member streaming from it.
+    scenarios: "\\[ha\\]|^upgrade "   # the HA database: the [ha] variant, and the upgrade from 1.4.1's HA baseline
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -29,13 +34,12 @@ checks:
     retryDelaySeconds: 15
 
   - id: nocodb-healthy
-    description: NocoDB answers its health endpoint on its internal address.
+    description: NocoDB answers its health endpoint.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-nocodb"
+      container: nocodb
       script: |
-        curl -s -m 10 http://{release}-nocodb.{gvc}.cpln.local:8080/api/v1/health
+        curl -s -m 10 http://127.0.0.1:8080/api/v1/health
     expect:
       stdout: '"message":\s*"OK"'
     retries: 10
@@ -46,21 +50,19 @@ checks:
       The bootstrapped super admin signs in, creates a base named after the running version, and reads it
       back from the base list.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-nocodb"
+      container: nocodb
       script: |
-        U=http://{release}-nocodb.{gvc}.cpln.local:8080
+        U=http://127.0.0.1:8080
         N="e2e-$(echo '{version}' | tr . -)"
         T=$(curl -s -m 15 -H 'Content-Type: application/json' \
           -d '{"email":"{admin_email}","password":"{admin_password}"}' "$U/api/v1/auth/user/signin" |
-          python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null)
+          node -e 'try { console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).token || "") } catch (e) { console.log("") }')
         [ -n "$T" ] && echo "SIGNIN ok" || echo "SIGNIN failed"
         found() {
           curl -s -m 15 -H "xc-auth: $T" "$U/api/v2/meta/bases/" |
-            python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for b in json.load(sys.stdin)["list"] if b["title"] == n))' "$N"
+            node -e 'const n = process.argv[1]; try { const l = JSON.parse(require("fs").readFileSync(0, "utf8")).list; console.log(l.filter((b) => b.title === n).length) } catch (e) { console.log("ERR " + e.message) }' "$N"
         }
-        # Create the base once per version, so a re-run or a no-op upgrade does not add duplicates.
         if [ "$(found)" = 0 ]; then
           curl -s -m 30 -o /dev/null -H "xc-auth: $T" -H 'Content-Type: application/json' \
             -d "{\"title\":\"$N\"}" "$U/api/v2/meta/bases/"
@@ -75,14 +77,13 @@ checks:
   - id: rejects-bad-password
     description: A wrong super-admin password gets no token (the control for the check above).
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-nocodb"
+      container: nocodb
       script: |
         curl -s -m 15 -H 'Content-Type: application/json' \
           -d '{"email":"{admin_email}","password":"Wrong-password-1"}' \
-          http://{release}-nocodb.{gvc}.cpln.local:8080/api/v1/auth/user/signin |
-          python3 -c 'import json, sys; b = json.load(sys.stdin); print("TOKEN" if b.get("token") else "REFUSED " + str(b.get("msg") or b.get("message")))'
+          http://127.0.0.1:8080/api/v1/auth/user/signin |
+          node -e 'try { const b = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(b.token ? "TOKEN" : "REFUSED " + (b.msg || b.message)) } catch (e) { console.log("ERR " + e.message) }'
     expect:
       stdout: "^REFUSED "
       notStdout: "^TOKEN"
@@ -92,17 +93,16 @@ checks:
       The base created on the version this scenario installed first is still there. On a fresh install
       that is the same version; after an upgrade it proves the bases carried over.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
-      shell: bash
+      workload: "{release}-nocodb"
+      container: nocodb
       script: |
-        U=http://{release}-nocodb.{gvc}.cpln.local:8080
+        U=http://127.0.0.1:8080
         N="e2e-$(echo '{installed_version}' | tr . -)"
         T=$(curl -s -m 15 -H 'Content-Type: application/json' \
           -d '{"email":"{admin_email}","password":"{admin_password}"}' "$U/api/v1/auth/user/signin" |
-          python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null)
+          node -e 'try { console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).token || "") } catch (e) { console.log("") }')
         n=$(curl -s -m 15 -H "xc-auth: $T" "$U/api/v2/meta/bases/" |
-          python3 -c 'import json, sys; n = sys.argv[1]; print(sum(1 for b in json.load(sys.stdin)["list"] if b["title"] == n))' "$N" 2>&1)
+          node -e 'const n = process.argv[1]; try { const l = JSON.parse(require("fs").readFileSync(0, "utf8")).list; console.log(l.filter((b) => b.title === n).length) } catch (e) { console.log("ERR " + e.message) }' "$N")
         echo "BASES $N $n"
     expect:
       stdout: "^BASES e2e-\\S+ [1-9][0-9]*$"
@@ -110,9 +110,12 @@ checks:
     retryDelaySeconds: 15
 
   - id: pgvector-0-8-7-available
-    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.4.1.
+    description: >-
+      The HA leader runs an image with pgvector 0.8.7 (CVE-2026-103484): patroni-postgres 0.8 in 1.4.1, 0.9
+      from 2.0.0.
     issue: "#5376"
     since: 1.4.1
+    scenarios: "\\[ha\\]|^upgrade "   # the HA database: the [ha] variant, and the upgrade from 1.4.1's HA baseline
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -131,13 +134,15 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      Every Patroni member restarted onto an image with pgvector 0.8.7 (patroni-postgres 0.8 in 1.4.1, 0.9 from
+      2.0.0) and is back in the cluster,
       not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
       restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
       without this a member that never comes back (seen once in testing: the old leader stuck initializing for
       17 min) goes unseen.
     issue: "#5376"
     since: 1.4.1
+    scenarios: "\\[ha\\]|^upgrade "   # the HA database: the [ha] variant, and the upgrade from 1.4.1's HA baseline
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -160,3 +165,79 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "\\[ha\\]|^upgrade "   # the HA database: the [ha] variant, and the upgrade from 1.4.1's HA baseline
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode (the default fresh install): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+    retries: 3
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-bases-in-19
+    description: >-
+      The base admin-signin-and-base created through NocoDB is a row in NocoDB's metadata in the PostgreSQL 19
+      server, so the app runs on the new major (not only the database).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        N="e2e-$(echo '{version}' | tr . -)"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')" \
+          -c "SELECT 'BASE_ROWS=' || count(*) FROM nc_bases_v2 WHERE title = '$N'" 2>&1
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=19[0-9]{4}$.*^BASE_ROWS=[1-9][0-9]*$"
+    retries: 4
+    retryDelaySeconds: 15

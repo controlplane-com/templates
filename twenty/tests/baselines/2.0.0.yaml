@@ -1,0 +1,66 @@
+# twenty 2.0.0 — the highly available database path (three Patroni members, three etcd members, two
+# HAProxy replicas; postgres-highly-available 3.0.0, PostgreSQL 18 for a new cluster) with one Twenty server,
+# the worker, the bundled Redis and local attachment storage, one location, all three prerequisite secrets
+# created by CI. HA rather than the single-instance default, so the upgrade from 1.4.1 (whose baseline is HA)
+# exercises the postgres-highly-available 2.5.0 → 3.0.0 move; the default single-instance PostgreSQL 19 runs
+# as the [single] variant.
+locations: [aws-us-east-1]
+# HA first boot: Patroni elects a leader before Twenty can run its migrations (about 6-8 minutes).
+timeoutSeconds: 1500
+
+generated:
+  pgpw: hex
+  redispw: hex
+  appkey: hex
+
+secrets:
+  db:
+    type: dictionary
+    entries:
+      username: twenty
+      password: "{gen.pgpw}"
+      database: twenty
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+  app:
+    type: opaque
+    payload: "{gen.appkey}"
+
+vars:
+  pg_user: twenty
+  pg_password: "{gen.pgpw}"
+  pg_db: twenty
+
+values:
+  secrets:
+    name: "{secrets.app.name}"
+  redis:
+    credentialsSecretName: "{secrets.redis.name}"
+  postgres:
+    enabled: false
+  postgresHA:
+    enabled: true
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# The single-instance default (postgres 4.0.2, PostgreSQL 19): a fresh install, where Twenty migrates into
+# PostgreSQL 19 and serves its API.
+variants:
+  - name: single
+    values:
+      postgresHA:
+        enabled: false
+      postgres:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 900
+
+# 1.4.1 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade
+# moves postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain
+# upgrade. A refused single-instance upgrade from 1.4.1 is not expressible: the starting install always
+# uses 1.4.1's own (HA) baseline.
+upgradeFrom:
+  - version: 1.4.1

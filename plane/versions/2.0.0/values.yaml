@@ -1,0 +1,135 @@
+# ─── Location ─────────────────────────────────────────────────────────────────
+# The ONE location of your GVC that Plane runs in; it must already be a GVC location.
+# A location the GVC lacks runs nothing (see Important Notes in the README).
+location: aws-us-east-1
+
+# ─── Plane ────────────────────────────────────────────────────────────────────
+plane:
+  # ONE tag for all six Plane images (proxy, frontend, space, admin, live, backend);
+  # they are released together and never mixed.
+  imageTag: v1.4.3
+  replicas: 1             # the whole HTTP tier; 2+ keeps Plane up through a rolling restart
+  appUrl: ""              # empty = the canonical endpoint; a custom domain WITH its scheme, e.g. https://plane.example.com
+  fileSizeLimit: 5242880  # max upload in bytes (5 MiB), enforced by the proxy and the object store
+  api:
+    gunicornWorkers: 1    # gunicorn worker processes; each needs ~1 more CPU and ~300Mi
+  resources:
+    proxy:                # Caddy, the single public entry point
+      minCpu: 50m
+      maxCpu: 200m
+      minMemory: 64Mi
+      maxMemory: 256Mi
+    ui:                   # applied to EACH of web, space and admin
+      minCpu: 50m
+      maxCpu: 250m
+      minMemory: 96Mi
+      maxMemory: 384Mi
+    live:                 # collaborative-editing server
+      minCpu: 100m
+      maxCpu: 500m
+      minMemory: 192Mi
+      maxMemory: 512Mi
+    api:                  # Django + gunicorn
+      minCpu: 250m
+      maxCpu: 1000m
+      minMemory: 512Mi
+      maxMemory: 1536Mi
+
+# ─── Background processing ────────────────────────────────────────────────────
+worker:
+  replicas: 1             # Celery workers: notifications, imports, exports, invites
+  concurrency: 4          # prefork children PER replica; Celery's own default follows the HOST's CPU count and OOM-kills
+  resources:
+    minCpu: 200m
+    maxCpu: 1000m
+    minMemory: 384Mi
+    maxMemory: 2Gi        # sized for `concurrency` children plus the parent; raise it with concurrency
+
+# The Celery scheduler, always ONE replica (two would run every periodic task twice).
+# It also applies the database migrations. maxCpu is the ceiling the first
+# install's full migration history runs on; minCpu keeps it cheap at idle.
+beat:
+  resources:
+    minCpu: 50m
+    maxCpu: 1000m
+    minMemory: 192Mi
+    maxMemory: 512Mi
+
+# ─── Application keys (REQUIRED — MUST EXIST BEFORE INSTALL) ──────────────────
+# A `dictionary` secret with SECRET_KEY and LIVE_SERVER_SECRET_KEY. If it is
+# missing the deployment WEDGES silently. See Prerequisites in the README.
+secrets:
+  name: my-plane-secrets
+
+# ─── Attachment / asset storage ───────────────────────────────────────────────
+storage:
+  type: minio             # minio (bundled) | s3 (your bucket)
+  minio:                  # bundled single-node object store (Silo, the maintained MinIO fork)
+    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    # REQUIRED with type minio — MUST EXIST BEFORE INSTALL: a `dictionary` secret
+    # with accessKey (3+ characters) and secretKey (8+ characters).
+    credentialsSecretName: my-plane-minio-credentials
+    bucket: uploads
+    resources:
+      cpu: 500m
+      memory: 512Mi
+    volumeset:
+      capacity: 10        # GiB (minimum 10)
+  s3:                     # external S3 or S3-compatible bucket (storage.type: s3)
+    bucket: my-plane-bucket
+    region: us-east-1
+    endpoint: ""          # S3-compatible servers only; users' browsers must reach it, e.g. https://s3.example.com
+    cloudAccountName: my-s3-cloud-account   # AWS keyless: a Control Plane cloud account
+    policyName: my-plane-s3-policy          # AWS keyless: your bucket-scoped IAM policy (README)
+    auth:
+      secretName: ""      # S3-compatible only: dictionary with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, e.g. my-plane-s3-keys
+
+# ─── PostgreSQL (subchart: postgres) ──────────────────────────────────────────
+# Plane's upstream deployments run PostgreSQL 15 and 16, so this stays on 16.
+# A highly available database is not offered: postgres-highly-available is PostgreSQL 17.
+postgres:
+  image: postgres:16.15
+  config:
+    # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with the URL-safe
+    # keys username, password and database (see README Prerequisites).
+    credentialsSecretName: my-plane-db-credentials
+  resources:
+    minCpu: 250m
+    maxCpu: 1000m
+    minMemory: 512Mi
+    maxMemory: 1Gi
+  volumeset:
+    capacity: 10          # GiB (minimum 10)
+
+# ─── Redis (Valkey) — Django cache and live-editor sync; required ─────────────
+redis:
+  image: valkey/valkey:8.1.11
+  # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with one URL-safe key, password.
+  credentialsSecretName: my-plane-redis-credentials
+  resources:
+    cpu: 250m
+    memory: 512Mi
+  volumeset:
+    capacity: 10          # GiB (minimum 10)
+
+# ─── RabbitMQ — the Celery broker; required ───────────────────────────────────
+rabbitmq:
+  image: rabbitmq:4.3.7-management-alpine
+  # REQUIRED — MUST EXIST BEFORE INSTALL: a `dictionary` secret with the URL-safe keys
+  # username and password. Read on the broker's FIRST boot only.
+  credentialsSecretName: my-plane-mq-credentials
+  vhost: plane
+  resources:
+    cpu: 500m
+    memory: 768Mi
+  volumeset:
+    capacity: 10          # GiB (minimum 10)
+
+# ─── Access ───────────────────────────────────────────────────────────────────
+publicAccess:
+  enabled: false          # the first visitor to /god-mode claims the instance: claim it over port-forward, then set true
+internalAccess:
+  type: same-gvc          # same-gvc | same-org | workload-list
+  workloads: []           # workload-list only; this release's own workloads are always added
+  # workloads:
+  #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME

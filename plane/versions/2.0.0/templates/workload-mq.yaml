@@ -1,0 +1,109 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  RabbitMQ — the Celery broker, and REQUIRED.
+
+  Plane 1.x runs Celery over AMQP: settings/common.py builds CELERY_BROKER_URL
+  from AMQP_URL (or from RABBITMQ_*), and there is no Redis-broker code path.
+  Redis is the Django cache and the live editor's channel — a different job.
+
+  Bundled rather than vendoring the `rabbitmq` template: that template predates
+  the 3.4.0 values conventions (no credentialsSecretName, no internalAccess
+  shape) and offers no dependency contract. We copy its APPROACH — a stateful
+  workload with credentials supplied as env vars, plus one conf.d drop-in that
+  RabbitMQ 4.x needs for Celery (secret-mq-conf.yaml).
+
+  rabbitmq:4.3.7 (3.13 is out of community support). Verified locally against
+  the pinned tag: RABBITMQ_DEFAULT_USER/_PASS/_VHOST seed the user and vhost,
+  and a Celery worker from the backend image consumes tasks ONLY with the
+  transient_nonexcl_queues permit the drop-in sets.
+
+  `stateful` is load-bearing beyond the volumeset: RabbitMQ's mnesia directory
+  is named `rabbit@$(hostname)`, and a `standard` workload's random
+  `{workload}-{replicaset}-{random}` hostname would strand the previous node's
+  data on every restart. `stateful` gives a stable `{workload}-0`.
+
+  The image's entrypoint runs as root, chowns /var/lib/rabbitmq and drops to the
+  `rabbitmq` user — so the root-owned volumeset mount needs no
+  securityOptions.filesystemGroupId (this is also what the shipped `rabbitmq`
+  template does).
+*/}}
+kind: workload
+name: {{ include "plane.mq.name" . }}
+description: Plane RabbitMQ — the Celery broker
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+  containers:
+    - name: rabbitmq
+      image: {{ .Values.rabbitmq.image }}
+      inheritEnv: false
+      cpu: {{ .Values.rabbitmq.resources.cpu | quote }}
+      memory: {{ .Values.rabbitmq.resources.memory | quote }}
+      env:
+        # RabbitMQ reads these natively. They are env vars, not config-file
+        # entries, so the credentials stay cpln:// references from the
+        # prerequisite secret — a cpln:// written into a mounted file stays
+        # literal text.
+        # NOTE: RABBITMQ_DEFAULT_* apply on FIRST BOOT ONLY (they seed an empty
+        # data directory). Changing the secret on an existing release does not
+        # change the broker's credentials — see Important Notes in the README.
+        - name: RABBITMQ_DEFAULT_USER
+          value: cpln://secret/{{ .Values.rabbitmq.credentialsSecretName }}.username
+        - name: RABBITMQ_DEFAULT_PASS
+          value: cpln://secret/{{ .Values.rabbitmq.credentialsSecretName }}.password
+        - name: RABBITMQ_DEFAULT_VHOST
+          value: {{ .Values.rabbitmq.vhost | quote }}
+      ports:
+        - number: 5672
+          protocol: tcp
+        # Management UI. External inbound is always closed on this workload;
+        # reach it with `cpln port-forward` when you need to inspect the queue.
+        - number: 15672
+          protocol: http
+      readinessProbe:
+        exec:
+          command:
+            - rabbitmq-diagnostics
+            - -q
+            - ping
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        failureThreshold: 20
+        successThreshold: 1
+        timeoutSeconds: 10
+      volumes:
+        - path: /var/lib/rabbitmq
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "plane.mq.volumeset.name" . }}
+        # conf.d drop-in: permits the queue type Celery's control mailbox needs (see secret-mq-conf.yaml).
+        - path: /etc/rabbitmq/conf.d/90-plane.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "plane.secret.mqConf.name" . }}.payload
+  defaultOptions:
+    {{- include "plane.defaultOptions" (dict "timeout" 5) | nindent 4 }}
+  localOptions:
+    {{- include "plane.localOptions" (dict "root" . "replicas" 1 "timeout" 5) | nindent 4 }}
+  rolloutOptions:
+    {{- /*
+      maxUnavailableReplicas is deliberately NOT set: the API DROPS it on a
+      stateful workload, so sending it produces permanent drift AND implies a
+      rolling-restart limit that is not in force (minio 1.4.0 shape).
+      terminationGracePeriodSeconds is declared because the API backfills 90.
+    */}}
+    maxSurgeReplicas: 25%
+    minReadySeconds: 0
+    scalingPolicy: OrderedReady
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    external:
+      {{- include "plane.externalFirewall" (dict "root" . "public" false) | nindent 6 }}
+    internal:
+      {{- include "plane.internalFirewall" . | nindent 6 }}
+  loadBalancer:
+    direct:
+      enabled: false
+      ports: []
+    replicaDirect: false
+  supportDynamicTags: false

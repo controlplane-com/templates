@@ -1,0 +1,20 @@
+{{- include "plane.validate" . -}}
+kind: identity
+name: {{ include "plane.identity.name" . }}
+description: Plane identity
+tags: {{- include "plane.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "plane.s3.keyless" .) "true" }}
+{{- /*
+  Keyless S3: the cloud-account link materializes an AWS role the boto3 default
+  credential chain picks up, so no keys exist anywhere in the release.
+  NOTE: an identity's cloud binding block is never REMOVED once set — the API
+  merges on update. Switch storage providers with a fresh release, not an
+  upgrade.
+*/}}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

@@ -1,0 +1,35 @@
+{{- include "plane.validate" . -}}
+{{- /*
+  `reveal` on exactly the secrets this release's workloads read: the three
+  chart-created config files (Caddyfile, admin nginx.conf, RabbitMQ conf.d) and the user's
+  prerequisite secrets. The MinIO keys only with the bundled store, the S3 keys
+  only when that optional secret is named. `uniq` because nothing stops a user
+  pointing two settings at one secret, and a duplicate target link is noise.
+*/}}
+{{- $targets := list
+      (include "plane.secret.caddyfile.name" .)
+      (include "plane.secret.adminNginx.name" .)
+      (include "plane.secret.mqConf.name" .)
+      .Values.secrets.name
+      .Values.postgres.config.credentialsSecretName
+      .Values.redis.credentialsSecretName
+      .Values.rabbitmq.credentialsSecretName -}}
+{{- if eq .Values.storage.type "minio" }}
+{{- $targets = append $targets .Values.storage.minio.credentialsSecretName -}}
+{{- else if .Values.storage.s3.auth.secretName }}
+{{- $targets = append $targets .Values.storage.s3.auth.secretName -}}
+{{- end }}
+kind: policy
+name: {{ include "plane.policy.name" . }}
+description: Plane secret access
+tags: {{- include "plane.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "plane.identity.name" . }}
+targetKind: secret
+targetLinks:
+  {{- range ($targets | uniq) }}
+  - //secret/{{ . }}
+  {{- end }}

@@ -1,0 +1,755 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: Plane
+
+# Every Plane workload pins itself to the single `location` value, and Redis, RabbitMQ, the object store and
+# the bundled PostgreSQL are single-location stateful workloads: one location.
+gvc:
+  minLocations: 1
+  maxLocations: 1
+
+imports:
+  # Every postgres field Plane exposes is a parent field on the Datastores step, so the database sits in one
+  # step with the cache and the broker instead of three imported steps. The import still supplies the child's
+  # defaults, location limits and migrations.
+  - template: postgres
+    version: 3.4.1
+    title: PostgreSQL
+    exclude:
+      # Chosen on the first step, together with the other prerequisite secrets.
+      - config.credentialsSecretName
+      # Parent fields in the Database sections of the Datastores step.
+      - image
+      - resources
+      - volumeset
+      # A parent field without the "None" option, which Plane's chart refuses.
+      - internalAccess
+      # Plane connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+      # The postgres template's scheduled backups need PostgreSQL 17 or newer; Plane runs on 16 (yamlOnly below).
+      - backup
+
+steps:
+  - id: plane
+    title: Plane
+    description: Where Plane runs, where it keeps files, the prerequisite secrets, and the web and background tiers.
+    sections:
+      - title: Location
+        fields:
+          - path: location
+            type: ref
+            label: Location
+            required: true
+            description: >-
+              The one location of the GVC that Plane runs in. A location the GVC does not have runs nothing.
+            ref: { kind: location, scope: gvc, format: name, mustExist: error }
+        rules:
+          - rule: self.location != '' && self.location.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && !has(self.locations)
+            mirrors: plane.validateLocation
+            paths: [location]
+            message: >-
+              Plane runs in exactly one location: set the single `location` to a bare location name such as
+              aws-us-east-1, and remove `locations` from the values.
+          - rule: context.gvcLocations == null || self.location == '' || self.location in context.gvcLocations
+            paths: [location]
+            message: This location is not enabled on the target GVC; nothing would run.
+      - title: File storage
+        description: Where attachments, images and exports are stored. It decides which keys secret Plane needs below.
+        fields:
+          - path: storage.type
+            type: enum
+            label: Storage
+            widget: cards
+            required: true
+            options:
+              - value: minio
+                label: Bundled object store
+                description: A single-node, MinIO-compatible store on a volume set in this GVC.
+              - value: s3
+                label: Your S3 bucket
+                description: AWS S3 through a cloud account, or an S3-compatible server with access keys.
+          - id: s3Provider
+            virtual: true
+            type: enum
+            label: S3 provider
+            widget: segmented
+            required: true
+            when: self.storage.type == 's3'
+            init: "self.storage.s3.endpoint == null || self.storage.s3.endpoint == '' ? 'aws' : 'compatible'"
+            options:
+              - value: aws
+                label: AWS S3
+                description: Keyless access through a Control Plane cloud account and an IAM policy. Choosing it clears an S3-compatible endpoint and keys secret.
+                set: { storage.s3.endpoint: "", storage.s3.auth.secretName: "" }
+              - value: compatible
+                label: S3-compatible
+                description: MinIO, SeaweedFS or another S3 API server, with an access keys secret.
+        rules:
+          - rule: self.storage.type in ['minio', 's3']
+            mirrors: plane.validateStorage
+            paths: [storage.type]
+            message: Choose where attachments are stored.
+      - title: Prerequisite secrets
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Create these secrets **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all. The database, Redis and RabbitMQ values go into connection URLs,
+              so keep them URL-safe (letters, digits, `-`, `_`, `.`).
+          - type: note
+            text: >-
+              Plane and its datastores read these secrets when their replicas start. After creating a secret
+              late or changing one, run `cpln workload force-redeployment` on the `-plane`, `-plane-worker` and
+              `-plane-beat` workloads of this release, and on the datastore whose secret it is.
+          - path: secrets.name
+            type: ref
+            label: Application keys secret
+            required: true
+            description: A dictionary secret with `SECRET_KEY` and `LIVE_SERVER_SECRET_KEY`.
+            help: >-
+              `SECRET_KEY` signs sessions and encrypts the instance settings stored in the database; replacing it
+              signs everyone out and makes those settings unreadable.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [SECRET_KEY, LIVE_SERVER_SECRET_KEY]
+              create:
+                suggestName: "context.releaseName + '-plane-secrets'"
+          - path: postgres.config.credentialsSecretName
+            type: ref
+            label: Database credentials secret
+            required: true
+            description: A dictionary secret with the keys `username`, `password` and `database`.
+            help: >-
+              PostgreSQL reads these values only when its data directory is first initialized, and Plane connects
+              with them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password, database]
+              create:
+                suggestName: "context.releaseName + '-plane-db-credentials'"
+          - path: redis.credentialsSecretName
+            type: ref
+            label: Redis password secret
+            required: true
+            description: A dictionary secret with the key `password`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [password]
+              create:
+                suggestName: "context.releaseName + '-plane-redis-credentials'"
+          - path: rabbitmq.credentialsSecretName
+            type: ref
+            label: RabbitMQ login secret
+            required: true
+            description: A dictionary secret with the keys `username` and `password`.
+            help: >-
+              RabbitMQ creates this user only on its first start. Changing the secret later does not change the
+              broker's login.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [username, password]
+              create:
+                suggestName: "context.releaseName + '-plane-mq-credentials'"
+          - path: storage.minio.credentialsSecretName
+            type: ref
+            label: Object store keys secret
+            when: self.storage.type == 'minio'
+            required: true
+            description: A dictionary secret with `accessKey` (3 or more characters) and `secretKey` (8 or more).
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [accessKey, secretKey]
+              create:
+                suggestName: "context.releaseName + '-plane-minio-credentials'"
+          - path: storage.s3.auth.secretName
+            type: ref
+            label: S3 access keys secret
+            when: self.storage.type == 's3' && ui.s3Provider == 'compatible'
+            required: true
+            description: A dictionary secret with the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+              create:
+                suggestName: "context.releaseName + '-plane-s3-keys'"
+        rules:
+          - rule: >-
+              self.secrets.name != '' && self.redis.credentialsSecretName != '' &&
+              self.rabbitmq.credentialsSecretName != ''
+            mirrors: plane.validateSecrets
+            paths: [secrets.name, redis.credentialsSecretName, rabbitmq.credentialsSecretName]
+            message: The application keys, Redis and RabbitMQ secrets are required.
+          - rule: self.postgres.config.credentialsSecretName != '' && !has(self.postgres.credentials)
+            mirrors: plane.validateDatabase
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              The database credentials secret is required; postgres.credentials is not a setting of this chart,
+              remove it from the values.
+          # Restates the postgres chart's own credentials check, which the exclusion above dropped.
+          - rule: >-
+              !has(self.postgres.config.username) && !has(self.postgres.config.password) &&
+              !has(self.postgres.config.database)
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              postgres.config.username, postgres.config.password and postgres.config.database are not settings:
+              put the values in the database credentials secret and remove them from the values.
+          - rule: self.storage.type != 'minio' || self.storage.minio.credentialsSecretName != ''
+            mirrors: plane.validateStorage
+            paths: [storage.minio.credentialsSecretName]
+            message: The object store keys secret is required with the bundled object store.
+          - rule: oldSelf == null || self.postgres.config.credentialsSecretName == oldSelf.postgres.config.credentialsSecretName
+            severity: info
+            paths: [postgres.config.credentialsSecretName]
+            message: >-
+              PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
+              does not change the existing user or password.
+          - rule: oldSelf == null || self.rabbitmq.credentialsSecretName == oldSelf.rabbitmq.credentialsSecretName
+            severity: info
+            paths: [rabbitmq.credentialsSecretName]
+            message: >-
+              RabbitMQ reads the login only on its first start; pointing at another secret does not change the
+              broker's existing user, so Plane would fail to connect.
+      - title: Web tier
+        docs: "#configuration"
+        fields:
+          - path: plane.imageTag
+            type: string
+            label: Plane image tag
+            required: true
+            description: One tag for all six Plane images, which are released together.
+            help: >-
+              Upgrading the tag applies database migrations on the scheduler's next start, before the API and
+              worker become ready.
+          - path: plane.replicas
+            type: integer
+            label: Replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+            description: The proxy, web apps, live editor and API scale together; 2 keeps Plane up through restarts.
+          - path: plane.appUrl
+            type: string
+            format: url
+            label: Public URL
+            placeholder: https://plane.example.com
+            description: Only for a custom domain, with the scheme. Empty uses the canonical endpoint.
+            help: Invite links, CSRF and CORS origins and attachment URLs are built from this address.
+          - path: plane.fileSizeLimit
+            type: integer
+            label: Upload size limit
+            unit: bytes
+            required: true
+            min: 1
+            suggestions:
+              - { value: 5242880, label: "5 MiB" }
+              - { value: 20971520, label: "20 MiB" }
+              - { value: 104857600, label: "100 MiB" }
+          - path: plane.api.gunicornWorkers
+            type: integer
+            label: API worker processes
+            required: true
+            min: 1
+            advanced: true
+            suggestions: [1, 2, 4]
+            description: Each process needs roughly one more CPU and 300Mi of API memory.
+          - path: plane.resources.proxy
+            type: resources
+            label: Proxy resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: plane.resources.ui
+            type: resources
+            label: Web app resources
+            required: true
+            advanced: true
+            description: Applied to each of the web, space and admin apps.
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: plane.resources.live
+            type: resources
+            label: Live editor resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: plane.resources.api
+            type: resources
+            label: API resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.plane.replicas >= 1 && self.plane.api.gunicornWorkers >= 1
+            mirrors: plane.validateReplicas
+            paths: [plane.replicas, plane.api.gunicornWorkers]
+            message: Use at least one replica and one API worker process.
+          - rule: >-
+              self.plane.appUrl == '' || self.plane.appUrl.startsWith('http://') ||
+              self.plane.appUrl.startsWith('https://')
+            mirrors: plane.validateAppUrl
+            paths: [plane.appUrl]
+            message: The public URL needs its scheme, for example https://plane.example.com.
+      - title: Background jobs
+        description: >-
+          The Celery workers send notifications and run imports and exports. The scheduler is always one replica:
+          it runs Plane's periodic tasks and applies the database migrations on every start.
+        fields:
+          - path: worker.replicas
+            type: integer
+            label: Worker replicas
+            required: true
+            min: 1
+            suggestions: [1, 2, 3]
+          - path: worker.concurrency
+            type: integer
+            label: Tasks per worker replica
+            required: true
+            min: 1
+            suggestions: [2, 4, 8]
+            description: Celery child processes in each worker replica; raise the memory with it.
+          - path: worker.resources
+            type: resources
+            label: Worker resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+          - path: beat.resources
+            type: resources
+            label: Scheduler resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.worker.replicas >= 1 && self.worker.concurrency >= 1 && !has(self.beat.replicas)
+            mirrors: plane.validateReplicas
+            paths: [worker.replicas, worker.concurrency]
+            message: >-
+              Use at least one worker replica and one task per replica; beat.replicas is not a setting (the
+              scheduler is always one replica), remove it from the values.
+
+  - id: storage
+    title: File storage
+    description: The bucket that holds attachments, images and exports.
+    sections:
+      - title: Bundled object store
+        when: self.storage.type == 'minio'
+        fields:
+          - path: storage.minio.bucket
+            type: string
+            label: Bucket
+            required: true
+            description: Created by the API on its first start.
+          - path: storage.minio.volumeset.capacity
+            type: integer
+            label: Initial capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100]
+            help: Uninstalling the release deletes the volume set, so the files do not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: storage.minio.image
+            type: string
+            format: image
+            label: Object store image
+            required: true
+            advanced: true
+          - path: storage.minio.resources
+            type: resources
+            label: Object store resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: self.storage.type != 'minio' || self.storage.minio.bucket != ''
+            mirrors: plane.validateStorage
+            paths: [storage.minio.bucket]
+            message: The bucket is required.
+          - rule: >-
+              oldSelf == null || oldSelf.storage.type != 'minio' ||
+              self.storage.minio.volumeset.capacity >= oldSelf.storage.minio.volumeset.capacity
+            paths: [storage.minio.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: S3 bucket
+        when: self.storage.type == 's3'
+        docs: "#prerequisites"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Browsers upload to and download from the bucket directly, so it needs a CORS rule that allows your
+              Plane origin: methods `GET`, `PUT`, `POST` and `HEAD`, all headers, and `ETag` exposed. The README's
+              Storage setup has the rule to copy.
+          - path: storage.s3.bucket
+            type: string
+            label: Bucket
+            required: true
+            example: true
+          - path: storage.s3.region
+            type: string
+            label: Bucket region
+            required: true
+            placeholder: us-east-1
+          - path: storage.s3.cloudAccountName
+            type: ref
+            label: Cloud account
+            when: ui.s3Provider == 'aws'
+            required: true
+            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
+            ref:
+              kind: cloudaccount
+              format: name
+              filter: { provider: [aws] }
+              mustExist: error
+          - path: storage.s3.policyName
+            type: string
+            label: IAM policy name
+            when: ui.s3Provider == 'aws'
+            required: true
+            example: true
+            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
+          - path: storage.s3.endpoint
+            type: string
+            label: S3-compatible endpoint
+            when: ui.s3Provider == 'compatible'
+            required: true
+            placeholder: https://s3.example.com
+            pattern: '^(https?://.+)?$'
+            patternMessage: Include the scheme, for example https://s3.example.com.
+            description: >-
+              The server's S3 API address. It must be reachable from your users' browsers, which upload and
+              download through presigned URLs built from it; an internal `*.cpln.local` address is not.
+        rules:
+          - rule: self.storage.type != 's3' || self.storage.s3.bucket != ''
+            mirrors: plane.validateStorage
+            paths: [storage.s3.bucket]
+            message: The bucket is required for S3 storage.
+          - rule: self.storage.type != 's3' || self.storage.s3.auth.secretName == '' || self.storage.s3.endpoint != ''
+            mirrors: plane.validateStorage
+            paths: [storage.s3.endpoint, storage.s3.auth.secretName]
+            message: >-
+              Static keys are only for S3-compatible servers: set the endpoint, or choose AWS S3 and use the
+              keyless cloud account.
+          - rule: >-
+              self.storage.type != 's3' || self.storage.s3.auth.secretName != '' ||
+              (self.storage.s3.cloudAccountName != '' && self.storage.s3.policyName != '')
+            mirrors: plane.validateStorage
+            paths: [storage.s3.cloudAccountName, storage.s3.policyName, storage.s3.auth.secretName]
+            message: >-
+              AWS S3 needs the cloud account and the IAM policy name; an S3-compatible server needs the S3 access
+              keys secret on the first step.
+
+  - id: datastores
+    title: Datastores
+    description: The bundled PostgreSQL database, the Redis (Valkey) cache and the RabbitMQ broker.
+    sections:
+      - title: PostgreSQL
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              No scheduled backups and no high availability: both need PostgreSQL 17, and Plane runs on 16. Back
+              up with `pg_dump` in the `postgresql` container, and back up the object store too.
+          - path: postgres.volumeset.capacity
+            type: integer
+            label: Database capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20, 50, 100, 250, 500]
+            help: >-
+              Every project, work item, page and user lives on this volume. Uninstalling the release deletes the
+              volume set, so the data does not survive a reinstall.
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: postgres.image
+            type: string
+            format: image
+            label: PostgreSQL image
+            required: true
+            advanced: true
+            help: >-
+              Plane's own deployments run PostgreSQL 15 and 16; keep a 16.x tag. The data directory is specific to
+              a major version: a different major on an existing volume does not start.
+          - path: postgres.resources
+            type: resources
+            label: PostgreSQL resources
+            required: true
+            advanced: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
+              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            message: >-
+              The data directory belongs to the installed PostgreSQL major version; a different major version does
+              not start on it. Upgrade with a dump and restore instead.
+          - rule: oldSelf == null || self.postgres.volumeset.capacity >= oldSelf.postgres.volumeset.capacity
+            paths: [postgres.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - id: postgres-autoscaling
+        title: Grow database storage automatically
+        toggle: postgres.volumeset.autoscaling.enabled
+        docs: "/reference/volumeset#autoscaling"
+        fields:
+          - path: postgres.volumeset.autoscaling.maxCapacity
+            type: integer
+            label: Maximum database capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [50, 100, 250, 500, 1000, 2000]
+          - path: postgres.volumeset.autoscaling.minFreePercentage
+            type: integer
+            label: Scale up below this free space
+            unit: "%"
+            min: 1
+            max: 100
+            required: true
+            suggestions: [10, 20, 30]
+          - path: postgres.volumeset.autoscaling.scalingFactor
+            type: number
+            label: Scaling factor
+            min: 1.1
+            step: 0.1
+            required: true
+            suggestions:
+              - { value: 1.1, label: "1.1×" }
+              - { value: 1.2, label: "1.2× (default)" }
+              - { value: 1.5, label: "1.5×" }
+              - { value: 2, label: "2×" }
+        rules:
+          - rule: self.postgres.volumeset.autoscaling.maxCapacity >= self.postgres.volumeset.capacity
+            paths: [postgres.volumeset.autoscaling.maxCapacity]
+            message: The maximum capacity must be at least the database capacity.
+      - title: Database network
+        docs: /reference/workload/firewall
+        fields:
+          - path: postgres.internalAccess.type
+            type: enum
+            label: Who can connect to the database
+            widget: cards
+            required: true
+            description: >-
+              The Plane API, worker and scheduler connect to their database like any other workload: keep Same
+              GVC, or list all three under Allowed workloads.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below.
+          - path: postgres.internalAccess.workloads
+            type: list
+            label: Extra allowed database clients
+            when: self.postgres.internalAccess.type in ['same-gvc', 'workload-list']
+            widget: tags
+            description: >-
+              With Same GVC, workloads in other GVCs that may also connect. With Specific workloads, include the
+              `-plane`, `-plane-worker` and `-plane-beat` workloads of this release.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+                excludeTargetGvcWhen: self.postgres.internalAccess.type == 'same-gvc'
+        rules:
+          - rule: self.postgres.internalAccess.type != 'none'
+            mirrors: plane.validateDatabase
+            paths: [postgres.internalAccess.type]
+            message: '"None" also blocks Plane, whose API, worker and scheduler connect to the database like any other workload.'
+          - when: self.postgres.internalAccess.type == 'workload-list' && context.gvc != null
+            rule: >-
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plane') in self.postgres.internalAccess.workloads &&
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plane-worker') in self.postgres.internalAccess.workloads &&
+              ('//gvc/' + context.gvc + '/workload/' + context.releaseName + '-plane-beat') in self.postgres.internalAccess.workloads
+            mirrors: plane.validateDatabase
+            paths: [postgres.internalAccess.workloads]
+            messageExpression: >-
+              'Add //gvc/' + context.gvc + '/workload/' + context.releaseName + '-plane, -plane-worker and -plane-beat, or Plane cannot reach its database.'
+            message: Add the Plane, worker and scheduler workloads to the list, or Plane cannot reach its database.
+          - when: self.postgres.internalAccess.type == 'same-gvc' && context.gvc != null
+            rule: "!self.postgres.internalAccess.workloads.exists(w, w.startsWith('//gvc/' + context.gvc + '/workload/'))"
+            severity: info
+            paths: [postgres.internalAccess.workloads]
+            message: Same GVC already allows every workload in this GVC, so those entries can be removed from the list.
+      - title: Redis (Valkey)
+        fields:
+          - path: redis.volumeset.capacity
+            type: integer
+            label: Redis capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: redis.image
+            type: string
+            format: image
+            label: Redis image
+            required: true
+            advanced: true
+          - path: redis.resources
+            type: resources
+            label: Redis resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: oldSelf == null || self.redis.volumeset.capacity >= oldSelf.redis.volumeset.capacity
+            paths: [redis.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+      - title: RabbitMQ
+        fields:
+          - path: rabbitmq.volumeset.capacity
+            type: integer
+            label: RabbitMQ capacity
+            unit: GiB
+            min: 10
+            max: 65536
+            required: true
+            suggestions: [10, 20]
+            docs: "/reference/volumeset#capacity-and-billing"
+          - path: rabbitmq.vhost
+            type: string
+            label: Virtual host
+            required: true
+            advanced: true
+            immutable: true
+          - path: rabbitmq.image
+            type: string
+            format: image
+            label: RabbitMQ image
+            required: true
+            advanced: true
+          - path: rabbitmq.resources
+            type: resources
+            label: RabbitMQ resources
+            required: true
+            advanced: true
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: oldSelf == null || self.rabbitmq.volumeset.capacity >= oldSelf.rabbitmq.volumeset.capacity
+            paths: [rabbitmq.volumeset.capacity]
+            message: Keep the capacity at or above the installed value. Lowering it would not shrink the existing volume.
+
+  - id: access
+    title: Access
+    description: The public endpoint, and which workloads can reach Plane internally.
+    sections:
+      - title: Public endpoint
+        docs: "#connecting"
+        fields:
+          - type: note
+            severity: warning
+            text: >-
+              Whoever completes `/god-mode` first becomes the instance admin. Install with the public endpoint off,
+              claim the instance over `cpln port-forward`, then turn it on and upgrade the release.
+          - path: publicAccess.enabled
+            type: boolean
+            label: Serve on the public HTTPS endpoint
+            description: Off, reach Plane only through `cpln port-forward`.
+      - title: Internal access
+        fields:
+          - path: internalAccess.type
+            type: enum
+            label: Who can connect internally
+            widget: cards
+            required: true
+            description: Firewall changes take 30 seconds to a few minutes to take effect.
+            options:
+              - value: same-gvc
+                label: Same GVC
+                description: Any workload in this GVC.
+              - value: same-org
+                label: Same org
+                description: Any workload in this org.
+              - value: workload-list
+                label: Specific workloads
+                description: Only the workloads listed below, plus this release's own.
+          - path: internalAccess.workloads
+            type: list
+            label: Allowed workloads
+            when: self.internalAccess.type == 'workload-list'
+            widget: tags
+            description: This release's own workloads are always allowed; list only your own clients.
+            item:
+              type: ref
+              ref:
+                kind: workload
+                gvc: any
+                format: relativeLink
+                mustExist: warning
+        rules:
+          - rule: >-
+              self.internalAccess.type in ['same-gvc', 'same-org', 'workload-list'] &&
+              (self.internalAccess.type == 'workload-list' || size(self.internalAccess.workloads) == 0)
+            mirrors: plane.validateInternalAccess
+            paths: [internalAccess.type, internalAccess.workloads]
+            message: >-
+              Choose who can connect internally; allowed workloads apply only to Specific workloads, so clear the
+              list for the other choices.
+
+yamlOnly:
+  - path: postgres.pgbouncer
+    reason: Plane connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgres.backup
+    reason: The postgres template's scheduled backups need PostgreSQL 17 or newer, and Plane runs on PostgreSQL 16.
+
+# Claims the postgres child's backup.minio key migrations: this chart excludes the child's backup step
+# (PostgreSQL 16 has no scheduled backups), and no Plane release ever carried those keys.
+migrations:
+  - fromVersions: "<1.0.0"
+    from: postgres.backup.minio.accessKey
+    note: Plane's bundled PostgreSQL has no scheduled backups; the key is dropped.
+  - fromVersions: "<1.0.0"
+    from: postgres.backup.minio.secretKey
+    note: Plane's bundled PostgreSQL has no scheduled backups; the key is dropped.

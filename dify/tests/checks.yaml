@@ -1,7 +1,7 @@
 # Feature checks for the dify template. Each runs after install (and after each upgrade) on every version in
 # its since/until range. Add a check with `since: <new version>` for every change you ship.
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars
-# (dify_version, admin_email, admin_password, init_password, redis_password).
+# (dify_version, admin_email, admin_password, init_password, redis_password, pg_user, pg_password, pg_db).
 #
 # The checks are Python (standard library only) run in the API container against its own port 127.0.0.1:5001,
 # or through the gateway's internal address to prove its routing. The runner reads any {word} as a
@@ -652,3 +652,84 @@ checks:
         echo "TIMEOUTS $n"
     expect:
       stdout: "^TIMEOUTS 2$"
+
+  - id: fresh-is-19
+    description: >-
+      A fresh install runs the single-instance database on PostgreSQL 19, with Dify's tables migrated and the pgvector
+      extension available in the image (Dify creates it with its first high-quality knowledge index).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "DIFY_TABLES=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from information_schema.tables where table_name in ('apps', 'accounts', 'datasets')")"
+        echo "VECTOR=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from pg_available_extensions where name = 'vector'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=19[0-9]{4}$.*^DIFY_TABLES=3$.*^VECTOR=1$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pinned-stays-18
+    description: >-
+      A 1.0.1 release upgraded with postgres.image pinned to pgvector/pgvector:0.8.7-pg18 (the fix the README and
+      NOTES give) runs PostgreSQL 18 on its original data directory. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.1 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        H=$(hostname -i | awk '{print $1}')
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.0.1 release (data on PostgreSQL 18) is held by the postgres boot guard: the data
+      directory is still 18, no postgres process runs, and the guard names this chart's values path and README.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=pgvector/pgvector:0\\.8\\.7-pg18.*Upgrade > Database server > Postgres image.*Upgrading from 1\\.x"
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      with Dify's tables and the plugin daemon's database in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "DIFY_TABLES=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from information_schema.tables where table_name in ('apps', 'accounts', 'datasets')")"
+        echo "PLUGIN_DB=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from pg_database where datname = 'dify_plugin'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^DIFY_TABLES=3$.*^PLUGIN_DB=1$"
+    retries: 4
+    retryDelaySeconds: 15

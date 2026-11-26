@@ -217,3 +217,84 @@ checks:
       stdout: "^PERSISTED$"
     retries: 4
     retryDelaySeconds: 15
+
+  - id: fresh-is-19
+    description: >-
+      A fresh install runs the single-instance database on PostgreSQL 19 with the pgvector extension available
+      (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD="$POSTGRES_PASSWORD"
+        H=$(hostname -i | awk '{print $1}')
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c 'show server_version_num')"
+        echo "VECTOR=$(psql -h "$H" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c "select count(*) from pg_available_extensions where name = 'vector'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=19[0-9]{4}$.*^VECTOR=1$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: pinned-stays-18
+    description: >-
+      A 1.0.0 release upgraded with postgres.image pinned to pgvector/pgvector:0.8.7-pg18 runs PostgreSQL 18 on
+      its original data directory, with the pgvector extension still available. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        export PGPASSWORD="$POSTGRES_PASSWORD"
+        H=$(hostname -i | awk '{print $1}')
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        echo "SERVER_VERSION_NUM=$(psql -h "$H" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c 'show server_version_num')"
+        echo "VECTOR=$(psql -h "$H" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qtA -c "select count(*) from pg_available_extensions where name = 'vector'")"
+    expect:
+      stdout: "(?s)^DATA=18$.*^SERVER_VERSION_NUM=18[0-9]{4}$.*^VECTOR=1$"
+    retries: 4
+    retryDelaySeconds: 15
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.0.0 release (data on PostgreSQL 18) is held by the postgres boot guard: the data
+      directory is still 18, no postgres process runs, and the guard file names this chart's key (postgres.image).
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=18$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=pgvector/pgvector:0\\.8\\.7-pg18"
+    # an exec can land on the held container's restart
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available database runs PostgreSQL 18 behind the HAProxy leader endpoint,
+      with the pgvector extension available.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}'
+        P={release}-postgres-ha-proxy.{gvc}.cpln.local
+        echo "SERVER_VERSION_NUM=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c 'show server_version_num')"
+        echo "VECTOR=$(psql -h "$P" -U {pg_user} -d {pg_db} -qtA -c "select count(*) from pg_available_extensions where name = 'vector'")"
+    expect:
+      stdout: "(?s)^SERVER_VERSION_NUM=18[0-9]{4}$.*^VECTOR=1$"
+    retries: 4
+    retryDelaySeconds: 15

@@ -1,0 +1,30 @@
+kind: policy
+name: {{ include "dify.policy.name" . }}
+description: Dify secret access (api, worker, beat, plugin daemon)
+tags: {{- include "dify.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dify.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "dify.db.secretName" . }}
+  - //secret/{{ .Values.dify.secretName }}
+  - //secret/{{ include "dify.redis.secretName" . }}
+  - //secret/{{ .Values.codeExecution.apiKeySecretName }}
+{{- if not .Values.codeExecution.endpoint }}
+---
+kind: policy
+name: {{ include "dify.sandbox.policy.name" . }}
+description: Dify code sandbox secret access (the shared sandbox key only)
+tags: {{- include "dify.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "dify.sandbox.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ .Values.codeExecution.apiKeySecretName }}
+{{- end }}

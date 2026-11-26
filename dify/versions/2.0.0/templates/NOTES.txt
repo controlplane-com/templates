@@ -1,0 +1,26 @@
+Dify {{ .Chart.Version }} is deploying as {{ include "dify.name" . }} in GVC {{ .Values.global.cpln.gvc }}.
+
+  Status:   cpln workload get-deployments {{ include "dify.api.name" . }} --gvc {{ .Values.global.cpln.gvc }}
+  Endpoint: cpln workload get {{ include "dify.name" . }} --gvc {{ .Values.global.cpln.gvc }} -o yaml (status.canonicalEndpoint)
+  Database: {{ include "dify.db.host" . }}:5432
+{{- if .Values.postgres.enabled }}
+{{- $image := toString (dig "image" "" .Values.postgres) }}
+{{- if regexMatch "-pg18([^0-9]|$)" $image }}
+
+The database image is pinned to PostgreSQL 18 ({{ $image }}): the server stays on PostgreSQL 18.
+Keep postgres.image in your values for every later upgrade.
+{{- else }}
+
+UPGRADING A 1.x RELEASE? The single-instance database now defaults to PostgreSQL 19. Data from an
+earlier version of this chart is PostgreSQL 18, and the server REFUSES to start on it (your data is
+untouched). If `cpln workload get-deployments {{ .Release.Name }}-postgres --gvc {{ .Values.global.cpln.gvc }}` stays not ready and
+the logs say "REFUSING TO START", run this upgrade again with
+--set postgres.image=pgvector/pgvector:0.8.7-pg18 (the pgvector image, as the log says), and keep that image in your values for every
+later upgrade. To move existing data to
+PostgreSQL 19: README, "Upgrading from 1.x". A new install needs nothing: it starts on PostgreSQL 19.
+{{- end }}
+{{- else if .Values.postgresHA.enabled }}
+
+Highly available database: a new cluster runs PostgreSQL 18; a cluster created by a 1.x release keeps
+PostgreSQL 17 on upgrade. To move it to 18: README, "Upgrading from 1.x".
+{{- end }}

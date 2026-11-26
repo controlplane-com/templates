@@ -1,0 +1,119 @@
+{{- include "aegra.validate" . }}
+{{- $db := include "aegra.db.secretName" . }}
+kind: workload
+name: {{ include "aegra.name" . }}
+description: Aegra agent server (Agent Protocol / LangGraph API)
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "aegra.tags" . | nindent 4 }}
+spec:
+  type: standard
+  identityLink: //identity/{{ include "aegra.identity.name" . }}
+  containers:
+    - name: aegra
+      image: {{ .Values.aegra.image }}
+      inheritEnv: false
+      minCpu: {{ .Values.aegra.resources.minCpu | quote }}
+      minMemory: {{ .Values.aegra.resources.minMemory | quote }}
+      cpu: {{ .Values.aegra.resources.maxCpu | quote }}
+      memory: {{ .Values.aegra.resources.maxMemory | quote }}
+      env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "2026"
+        - name: POSTGRES_HOST
+          value: {{ include "aegra.db.host" . }}
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          value: 'cpln://secret/{{ $db }}.username'
+        - name: POSTGRES_PASSWORD
+          value: 'cpln://secret/{{ $db }}.password'
+        - name: POSTGRES_DB
+          value: 'cpln://secret/{{ $db }}.database'
+        - name: REDIS_BROKER_ENABLED
+          value: "true"
+        {{- if include "aegra.redis.authEnabled" . }}
+        - name: AEGRA_REDIS_PASSWORD
+          value: 'cpln://secret/{{ include "aegra.redis.secretName" . }}.{{ include "aegra.redis.secretKey" . }}'
+        - name: REDIS_URL
+          value: 'redis://:$(AEGRA_REDIS_PASSWORD)@{{ include "aegra.redis.host" . }}:6379/0'
+        {{- else }}
+        - name: REDIS_URL
+          value: 'redis://{{ include "aegra.redis.host" . }}:6379/0'
+        {{- end }}
+        {{- with .Values.langfuse.secretName }}
+        - name: OTEL_TARGETS
+          value: LANGFUSE
+        - name: LANGFUSE_BASE_URL
+          value: {{ $.Values.langfuse.baseUrl | quote }}
+        - name: LANGFUSE_PUBLIC_KEY
+          value: 'cpln://secret/{{ . }}.publicKey'
+        - name: LANGFUSE_SECRET_KEY
+          value: 'cpln://secret/{{ . }}.secretKey'
+        {{- end }}
+        {{- range .Values.agentSecrets.keys }}
+        - name: {{ . }}
+          value: 'cpln://secret/{{ $.Values.agentSecrets.secretName }}.{{ . }}'
+        {{- end }}
+        {{- range .Values.aegra.extraEnv }}
+        - name: {{ .name }}
+          value: {{ .value | toString | quote }}
+        {{- end }}
+      ports:
+        - number: 2026
+          protocol: http
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 2026
+          scheme: HTTP
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /live
+          port: 2026
+          scheme: HTTP
+        initialDelaySeconds: 60
+        periodSeconds: 30
+        failureThreshold: 5
+        successThreshold: 1
+        timeoutSeconds: 5
+  defaultOptions:
+    autoscaling:
+      maxConcurrency: 0
+      maxScale: {{ .Values.aegra.replicas }}
+      metric: disabled
+      minScale: {{ .Values.aegra.replicas }}
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: {{ .Values.aegra.requestTimeoutSeconds }}
+  firewallConfig:
+    external:
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      outboundAllowHostname: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      inboundAllowWorkload: {{- if .Values.internalAccess.workloads }}{{ .Values.internalAccess.workloads | toYaml | nindent 8 }}{{- else }} []{{- end }}
+  rolloutOptions:
+    maxSurgeReplicas: "1"
+    maxUnavailableReplicas: "0"
+    minReadySeconds: 0
+    scalingPolicy: Parallel
+    terminationGracePeriodSeconds: 90

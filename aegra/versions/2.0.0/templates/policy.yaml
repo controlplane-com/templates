@@ -1,0 +1,21 @@
+kind: policy
+name: {{ include "aegra.policy.name" . }}
+description: Aegra secret access
+tags: {{- include "aegra.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "aegra.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "aegra.db.secretName" . }}
+  {{- with .Values.agentSecrets.secretName }}
+  - //secret/{{ . }}
+  {{- end }}
+  {{- with .Values.langfuse.secretName }}
+  - //secret/{{ . }}
+  {{- end }}
+  {{- if include "aegra.redis.authEnabled" . }}
+  - //secret/{{ include "aegra.redis.secretName" . }}
+  {{- end }}

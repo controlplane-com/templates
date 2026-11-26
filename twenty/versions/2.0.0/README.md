@@ -414,7 +414,7 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
    OLD=OLD_RELEASE-twenty NEW=NEW_RELEASE-twenty GVC=GVC_NAME C=twenty
    # pack the files in the old container, split them, and list each piece's checksum
    cpln workload exec $OLD --gvc $GVC --container $C -- sh -c \
-     'cd /app/packages/twenty-server/.local-storage && tar czf /tmp/copy.tgz . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
+     'cd /app/packages/twenty-server/.local-storage && tar czf /tmp/copy.tgz --exclude=./.accesslog --exclude=./.config --exclude=./.stats . && cd /tmp && split -b 8m copy.tgz copypart. && rm copy.tgz && md5sum copypart.*; sleep 3' > copyparts.md5
    # fetch each piece until its checksum matches (the trailing sleep lets all output arrive)
    mkdir -p ./copyparts
    while read -r sum name; do
@@ -426,7 +426,7 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
    for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
    cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
      'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /app/packages/twenty-server/.local-storage && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
-   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c 'rm -f /tmp/copypart.* /tmp/copyparts.md5'
    ```
 
    If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.

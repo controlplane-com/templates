@@ -1,0 +1,14 @@
+{{- include "twenty.validate" . }}
+---
+kind: identity
+name: {{ include "twenty.identity.name" . }}
+description: Twenty CRM identity (shared by server, worker and Redis)
+tags: {{- include "twenty.tags" . | nindent 4 }}
+gvc: {{ .Values.global.cpln.gvc }}
+{{- if eq (include "twenty.s3.keyless" .) "true" }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
+  policyRefs:
+    - cpln-connector
+    - "{{ .Values.storage.s3.policyName }}"
+{{- end }}

@@ -10,6 +10,9 @@ resources: # single Go binary — light footprint
 # Persistent media uploads (filesystem media store), mounted at /listmonk/uploads
 volumeset:
   capacity: 10 # initial capacity in GiB (minimum is 10)
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
 
 # ─── Admin Bootstrap ──────────────────────────────────────────────────────────
 # REQUIRED PREREQUISITE SECRET — CREATE IT BEFORE YOU INSTALL. A `dictionary`

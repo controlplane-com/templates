@@ -1,0 +1,12 @@
+{{- include "plane.validate" . -}}
+{{- if eq .Values.storage.type "minio" }}
+kind: volumeset
+name: {{ include "plane.minio.volumeset.name" . }}
+description: Plane MinIO volume set
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "plane.tags" . | nindent 4 }}
+spec:
+  fileSystemType: ext4
+  initialCapacity: {{ .Values.storage.minio.volumeset.capacity }}
+  performanceClass: general-purpose-ssd
+{{- end }}

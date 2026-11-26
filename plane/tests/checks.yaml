@@ -203,3 +203,52 @@ checks:
     expect:
       stdout: "^SURVIVED e2e-[0-9]+\\.[0-9]+\\.[0-9]+ attachment=True$"
     retries: 3
+
+  - id: fresh-is-19
+    description: A fresh install runs the bundled PostgreSQL on 19 (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+    retries: 3
+
+  - id: pinned-stays-16
+    description: >-
+      A 1.0.0 release upgraded with postgres.image pinned to postgres:16 (the guard's fix) runs PostgreSQL 16
+      on its original data directory. The counterpart of fresh-is-19.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\.0\\.0 "
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "(?s)^DATA=16$.*^SERVER_VERSION_NUM=16[0-9]{4}$"
+    retries: 3
+
+  - id: guard-holds
+    description: >-
+      A plain upgrade of a 1.0.0 release (data on PostgreSQL 16) is held by the postgres boot guard: the data
+      directory is still 16, no postgres process runs, and the guard file names this chart's pin.
+    since: 2.0.0
+    phase: refused
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        grep -qx postgres /proc/[0-9]*/comm && echo POSTGRES_RUNNING || echo NO_POSTGRES
+        cat /tmp/pg-major-guard
+    expect:
+      stdout: "(?s)^DATA=16$.*^NO_POSTGRES$.*REFUSING TO START.*--set postgres\\.image=postgres:16.*Upgrade > Datastores > PostgreSQL image"
+    retries: 8
+    retryDelaySeconds: 15

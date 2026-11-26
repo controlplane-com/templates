@@ -3,12 +3,15 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db).
 #
-# Every check runs from the HA database's patroni-postgres container, which has curl, psql and python3.
-# Twenty is called at its internal address; the database is read through the HAProxy endpoint, the
-# address Twenty itself uses, so those checks only pass when the proxy routes to the current leader.
+# The HA checks (the baseline and the upgrade) run from the HA database's patroni-postgres container, which
+# has curl, psql and python3. Twenty is called at its internal address; the database is read through the
+# HAProxy endpoint, the address Twenty itself uses, so those checks only pass when the proxy routes to the
+# current leader. The [single] variant has no HA database: its checks run in the postgres container (psql)
+# and in Twenty's own container, which calls the API on 127.0.0.1 with node.
 # (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
 checks:
   - id: cluster-healthy
+    scenarios: "^(?!.*\\[single\\])"
     description: Patroni reports exactly one leader and every other member streaming from it.
     exec:
       workload: "{release}-postgres-ha"
@@ -29,6 +32,7 @@ checks:
     retryDelaySeconds: 15
 
   - id: twenty-healthy
+    scenarios: "^(?!.*\\[single\\])"
     description: The Twenty server answers its health endpoint on its internal address.
     exec:
       workload: "{release}-postgres-ha"
@@ -42,6 +46,7 @@ checks:
     retryDelaySeconds: 15
 
   - id: migrations-ran
+    scenarios: "^(?!.*\\[single\\])"
     description: >-
       Twenty's boot migrations created its core schema (workspaces and users) in the HA database, read
       through the HAProxy endpoint.
@@ -60,6 +65,7 @@ checks:
     retryDelaySeconds: 15
 
   - id: api-requires-auth
+    scenarios: "^(?!.*\\[single\\])"
     description: >-
       The REST API is served and refuses a call without a token, rather than the gateway answering for a
       server that is not there.
@@ -76,6 +82,7 @@ checks:
     retryDelaySeconds: 15
 
   - id: data-survives-upgrade
+    scenarios: "^(?!.*\\[single\\])"
     description: >-
       A row written to the database on the version this scenario installed first is still there. On a
       fresh install that is the same version; after an upgrade it proves the HA database's data carried
@@ -99,6 +106,7 @@ checks:
     retryDelaySeconds: 15
 
   - id: crm-record-survives-upgrade
+    scenarios: "^(?!.*\\[single\\])"
     description: >-
       Through Twenty's own API: the first user signs up and creates the workspace (on the first run), signs in
       with the real password while a wrong one is refused, writes a Company named after the running version,
@@ -175,6 +183,7 @@ checks:
     timeoutSeconds: 180
 
   - id: pgvector-0-8-7-available
+    scenarios: "^(?!.*\\[single\\])"
     description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.4.1.
     issue: "#5376"
     since: 1.4.1
@@ -195,6 +204,7 @@ checks:
     retryDelaySeconds: 30
 
   - id: every-patroni-member-on-0-8
+    scenarios: "^(?!.*\\[single\\])"
     description: >-
       Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
       not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
@@ -225,3 +235,135 @@ checks:
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
     retryDelaySeconds: 30
+
+  - id: ha-postgres-major
+    description: >-
+      The HA database (postgres-highly-available 3.0.0 from 2.0.0) runs PostgreSQL 18 on a cluster this version
+      created, and a cluster created by 1.x keeps PostgreSQL 17 after the upgrade, on every member.
+    since: 2.0.0
+    scenarios: "^(?!.*\\[single\\])"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        if [ "$(printf '%s\n' '{installed_version}' 2.0.0 | sort -V | head -1)" = 2.0.0 ]; then want=18; else want=17; fi
+        curl -s -m 10 localhost:8008/cluster | python3 -c '
+        import json, sys, urllib.request
+        want = int(sys.argv[1])
+        majors = []
+        for m in json.load(sys.stdin)["members"]:
+            v = json.load(urllib.request.urlopen(m["api_url"].rsplit("/", 1)[0] + "/patroni", timeout=5)).get("server_version", 0)
+            majors.append(v // 10000)
+        ok = len(majors) == 3 and all(x == want for x in majors)
+        print(("MAJOR " if ok else "WRONG ") + "want=%d members=%s" % (want, majors))
+        ' "$want"
+    expect:
+      stdout: "^MAJOR want="
+    # The members restart one after another after an upgrade; the old leader restarts last.
+    retries: 20
+    retryDelaySeconds: 30
+
+  # ── Single-instance mode ([single] variant): PostgreSQL 19 from 2.0.0 ──
+  - id: single-fresh-is-19
+    description: A fresh single-instance install runs PostgreSQL 19 (the postgres 4.0.2 subchart).
+    since: 2.0.0
+    scenarios: "^install .*\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')"
+    expect:
+      stdout: "^SERVER_VERSION_NUM=19[0-9]{4}$"
+    retries: 3
+
+  - id: single-guard-passes
+    description: >-
+      On its own PostgreSQL 19 data the major-version guard hands over to the server: no guard file, and
+      postgres is PID 1.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        [ -e /tmp/pg-major-guard ] && echo GUARD_FILE_PRESENT || echo NO_GUARD_FILE
+        echo "PID1=$(cat /proc/1/comm)"
+    expect:
+      stdout: "(?s)^NO_GUARD_FILE$.*^PID1=postgres$"
+
+  - id: single-crm-on-19
+    description: >-
+      Twenty serves on PostgreSQL 19, through its own API on 127.0.0.1 (node; the image has no curl or python):
+      the first user signs up and creates the workspace, signs in with the real password while a wrong one is
+      refused, and writes and reads back a Company.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-twenty"
+      container: twenty
+      shell: sh
+      script: |
+        node - <<'JS'
+        const B = "http://127.0.0.1:3000";
+        const EMAIL = "e2e-admin@example.com", PW = "E2e-" + "{pg_password}".slice(0, 20);
+        async function gql(path, query, variables, token) {
+          const headers = { "content-type": "application/json" };
+          if (token) headers.authorization = "Bearer " + token;
+          const r = await fetch(B + path, { method: "POST", headers: headers, body: JSON.stringify({ query: query, variables: variables }) });
+          try { return await r.json(); } catch (e) { return { errors: [ { message: "HTTP " + r.status } ] }; }
+        }
+        function data(resp, key) {
+          if (resp.errors) { console.log("API ERROR " + key + ": " + resp.errors[0].message); process.exit(0); }
+          return resp.data[key];
+        }
+        const login = (pw) => gql("/metadata", "mutation($e: String!, $p: String!, $o: String!) { getLoginTokenFromCredentials(email: $e, password: $p, origin: $o) { loginToken { token } } }", { e: EMAIL, p: pw, o: B });
+        async function access(lt) {
+          const r = await gql("/metadata", "mutation($t: String!, $o: String!) { getAuthTokensFromLoginToken(loginToken: $t, origin: $o) { tokens { accessOrWorkspaceAgnosticToken { token } } } }", { t: lt, o: B });
+          return data(r, "getAuthTokensFromLoginToken").tokens.accessOrWorkspaceAgnosticToken.token;
+        }
+        (async () => {
+          const exists = data(await gql("/metadata", "query($e: String!) { checkUserExists(email: $e) { exists } }", { e: EMAIL }), "checkUserExists").exists;
+          if (!exists) {
+            const t0 = data(await gql("/metadata", "mutation($e: String!, $p: String!) { signUp(email: $e, password: $p) { tokens { accessOrWorkspaceAgnosticToken { token } } } }", { e: EMAIL, p: PW }), "signUp").tokens.accessOrWorkspaceAgnosticToken.token;
+            const lt = data(await gql("/metadata", "mutation($i: SignUpInNewWorkspaceInput) { signUpInNewWorkspace(input: $i) { loginToken { token } } }", { i: { displayName: "E2E" } }, t0), "signUpInNewWorkspace").loginToken.token;
+            data(await gql("/metadata", "mutation($i: ActivateWorkspaceInput!) { activateWorkspace(data: $i) { id } }", { i: { } }, await access(lt)), "activateWorkspace");
+          }
+          const wrong = await login(PW + "-wrong");
+          const refused = Boolean(wrong.errors) && !(wrong.data && wrong.data.getLoginTokenFromCredentials);
+          const tok = await access(data(await login(PW), "getLoginTokenFromCredentials").loginToken.token);
+          const count = async (n) => data(await gql("/graphql", "query($n: String!) { companies(filter: { name: { eq: $n } }) { totalCount } }", { n: n }, tok), "companies").totalCount;
+          if (await count("e2e-{version}") === 0) {
+            data(await gql("/graphql", "mutation($n: String!) { createCompany(data: { name: $n }) { id } }", { n: "e2e-{version}" }, tok), "createCompany");
+          }
+          console.log("COMPANY " + (await count("e2e-{version}")) + " | CONTROL " + (await count("e2e-never-written")) + " | WRONG-PASSWORD " + (refused ? "REFUSED" : "ACCEPTED"));
+        })().catch((e) => console.log("SCRIPT ERROR " + e.message));
+        JS
+    expect:
+      stdout: "^COMPANY 1 \\| CONTROL 0 \\| WRONG-PASSWORD REFUSED$"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: single-workspace-in-19
+    description: >-
+      The workspace the API check created lives in PostgreSQL 19: Twenty's core schema holds it, and its own
+      workspace_ schema exists next to core, so Twenty's multi-schema layout works on 19.
+    since: 2.0.0
+    scenarios: "\\[single\\]"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "
+          select 'WORKSPACES=' || (select count(*) from core.workspace)
+            || ' SCHEMAS=' || (select count(*) from pg_namespace where nspname like 'workspace\_%')
+            || ' MAJOR=' || (current_setting('server_version_num')::int / 10000)" 2>&1
+    expect:
+      stdout: "^WORKSPACES=[1-9][0-9]* SCHEMAS=[1-9][0-9]* MAJOR=19$"
+    retries: 6
+    retryDelaySeconds: 15

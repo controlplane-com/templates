@@ -582,36 +582,6 @@ steps:
           PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
           does not change the existing user or password.
 
-  - id: bootstrap
-    title: Bootstrap
-    description: The one-time job that creates the realm schema and the root principal, then idles.
-    fields:
-      - path: bootstrap.image
-        type: string
-        format: image
-        label: Admin tool image
-        docs: "#bootstrap"
-        required: true
-        advanced: true
-        help: Keep this tag in lockstep with the Polaris image.
-      - path: bootstrap.resources
-        type: resources
-        label: Resources
-        required: true
-        advanced: true
-        description: Always one replica.
-        cpu: { min: 25m }
-        memory: { min: 32Mi }
-    rules:
-      - rule: cpuMillicores(self.bootstrap.resources.maxCpu) <= 4 * cpuMillicores(self.bootstrap.resources.minCpu)
-        mirrors: polaris.validate.resources
-        paths: [bootstrap.resources]
-        message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
-      - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
-        mirrors: polaris.validate.resources
-        paths: [bootstrap.resources]
-        message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
-
   # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
   # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
   - id: dbserver
@@ -666,6 +636,36 @@ steps:
               The data directory belongs to the installed Postgres major version; an image of a different major
               refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
               (README, Upgrading from 1.x).
+
+  - id: bootstrap
+    title: Bootstrap
+    description: The one-time job that creates the realm schema and the root principal, then idles.
+    fields:
+      - path: bootstrap.image
+        type: string
+        format: image
+        label: Admin tool image
+        docs: "#bootstrap"
+        required: true
+        advanced: true
+        help: Keep this tag in lockstep with the Polaris image.
+      - path: bootstrap.resources
+        type: resources
+        label: Resources
+        required: true
+        advanced: true
+        description: Always one replica.
+        cpu: { min: 25m }
+        memory: { min: 32Mi }
+    rules:
+      - rule: cpuMillicores(self.bootstrap.resources.maxCpu) <= 4 * cpuMillicores(self.bootstrap.resources.minCpu)
+        mirrors: polaris.validate.resources
+        paths: [bootstrap.resources]
+        message: The maximum CPU can be at most 4 times the minimum. Raise the minimum or lower the maximum.
+      - rule: "[self.bootstrap.resources.minMemory, self.bootstrap.resources.maxMemory].all(m, string(m).matches('^[0-9]+(Mi|Gi)$'))"
+        mirrors: polaris.validate.resources
+        paths: [bootstrap.resources]
+        message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
 
 # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
 rules:

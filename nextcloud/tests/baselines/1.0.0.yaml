@@ -31,6 +31,7 @@ secrets:
 vars:
   admin_user: e2eadmin
   admin_password: "{gen.adminpw}"
+  pg_password: "{gen.pgpw}"         # the ha-is-18 check (2.0.0) connects through the HAProxy endpoint
 
 values:
   location: aws-us-east-1

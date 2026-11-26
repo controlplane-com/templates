@@ -1,0 +1,70 @@
+# nextcloud 2.0.0 — the default production shape at the smallest size that runs: one Nextcloud web
+# replica and the cron worker on the shared volume, the bundled single PostgreSQL (19), and a one-node Redis
+# that requires a password (file locks, cache and sessions). Files on the shared volume. All
+# credentials are prerequisite secrets CI creates.
+locations: [aws-us-east-1]
+# First boot: code copy, database gate and the CLI install, inside the 920 s startup window, plus scheduling.
+timeoutSeconds: 1200
+
+generated:
+  adminpw: hex
+  pgpw: hex
+  redispw: hex
+
+secrets:
+  admin:
+    type: dictionary
+    entries:
+      username: e2eadmin
+      password: "{gen.adminpw}"
+  db:
+    type: dictionary
+    entries:
+      username: nextcloud
+      password: "{gen.pgpw}"
+      database: nextcloud
+  redis:
+    type: dictionary
+    entries:
+      password: "{gen.redispw}"
+
+vars:
+  admin_user: e2eadmin
+  admin_password: "{gen.adminpw}"
+  pg_password: "{gen.pgpw}"         # the ha-is-18 check (2.0.0) connects through the HAProxy endpoint
+
+values:
+  location: aws-us-east-1
+  admin:
+    secretName: "{secrets.admin.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+  redis:
+    enabled: true
+    redis:
+      auth:
+        fromSecret:
+          enabled: true
+          name: "{secrets.redis.name}"
+
+# The highly available database (postgres-highly-available 3.0.0): a fresh HA install, where Nextcloud runs
+# against the HAProxy leader endpoint and ha-is-18 proves the new cluster's major.
+variants:
+  - name: ha
+    values:
+      postgres:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1500
+
+# 2.0.0 runs the single-instance PostgreSQL on 19, so a plain upgrade of a 1.0.0 release (data on PostgreSQL
+# 18) must be REFUSED by the postgres boot guard with the data untouched; the upgrade pinned to postgres:18,
+# as the guard says, then succeeds and the file written on 1.0.0 survives.
+upgradeFrom:
+  - version: 1.0.0
+    refused: {timeoutSeconds: 420}
+    then: {set: {postgres: {image: "postgres:18"}}}

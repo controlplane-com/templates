@@ -12,6 +12,5 @@ gvc: {{ .Values.global.cpln.gvc }}
 aws:
   cloudAccountLink: //cloudaccount/{{ .Values.storage.s3.cloudAccountName }}
   policyRefs:
-    - cpln-connector
     - "{{ .Values.storage.s3.policyName }}"
 {{- end }}

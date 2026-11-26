@@ -12,7 +12,7 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.2
+    version: 4.0.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
     # After the Advanced step, which holds the server, storage and network of the same database.
@@ -29,13 +29,14 @@ imports:
       # Nextcloud connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
       # Bound in the Advanced step's database sections, so the defaults a first install keeps fill no step of
-      # their own (server, storage, network). The postgres chart's checks on them are restated there.
+      # their own (server, storage, network), and the server's upgrade note, cross-major warning and image
+      # migration name this chart's README section. The postgres chart's checks on them are restated there.
       - image
       - resources
       - volumeset
       - internalAccess
   - template: postgres-highly-available
-    version: 2.8.1
+    version: 3.0.0
     alias: postgresHA
     when: self.postgresHA.enabled
     title: Highly available PostgreSQL
@@ -154,6 +155,13 @@ steps:
             description: Set by the database choice above.
           - type: note
             text: Uninstalling deletes the database volume, and with it every user, share and the file index.
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0 && self.postgresHA.enabled
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
       - title: Prerequisite secrets
         docs: "#prerequisites"
         fields:
@@ -774,14 +782,24 @@ steps:
       - title: Database server
         when: self.postgres.enabled
         fields:
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its database was
+              created with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release, with a copy of the Nextcloud volume; see Upgrading from 1.x in the README.
           - path: postgres.image
             type: string
             format: image
             label: Postgres image
             required: true
             help: >-
-              For example `postgres:18` or `postgres:17`. The data directory is specific to a major version: a
-              different major on an existing volume does not start.
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
           - path: postgres.resources
             type: resources
             label: Postgres resources
@@ -791,13 +809,19 @@ steps:
             memory: { min: 32Mi }
         rules:
           - rule: >-
-              oldSelf == null || imageMajor(self.postgres.image) < 0 || imageMajor(oldSelf.postgres.image) < 0 ||
-              imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
             severity: warning
             paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
             message: >-
-              The data directory belongs to the installed Postgres major version; a different major version does
-              not start on it. Upgrade with a dump and restore instead.
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
       - title: Database storage
         when: self.postgres.enabled
         docs: "/reference/volumeset#capacity-and-billing"
@@ -1058,6 +1082,17 @@ yamlOnly:
 # redis keys this import excludes that the redis chart's own migrations touch (written for redis 3.7.0 and older
 # releases), so those migrations never run here.
 migrations:
+  # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+  # `image` and binds it in the Advanced step), so the note names this chart's README section.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    valueExpr: self.postgres.image
+    note: >-
+      The database keeps the PostgreSQL major it was created with, so the installed image is kept (Advanced,
+      Database server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release (README,
+      Upgrading from 1.x).
   - fromVersions: "<1.0.0"
     assume: { redis.engine: redis, redis.backup.enabled: false, redis.redis.replicaDirect: false, redis.redis.image: "redis:8" }
   - fromVersions: "<1.0.0"

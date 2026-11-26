@@ -1,14 +1,15 @@
 # NocoDB
 
-> **Upgrading from 1.3.x:** the database credentials and the Redis password are now secrets you create
-> before upgrading, under **new** names — see [Upgrading from 1.3.x](#upgrading-from-13x).
+> **Upgrading from 1.x:** a single-instance database (the default) needs `postgres.image: postgres:18` in your
+> values; the HA database upgrades in place and keeps PostgreSQL 17 — see [Upgrading from 1.x](#upgrading-from-1x).
+> From 1.3.x, also create the database and Redis secrets first — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
 NocoDB is a no-code database and spreadsheet-style app builder — the self-hosted Airtable alternative with grid, kanban, gallery and calendar views, forms, automations and a REST API. This template deploys NocoDB Community Edition backed by Postgres (all metadata), Redis (realtime, cache, rate limiting) and local or S3 attachment storage.
 
 ## Architecture
 
 - **NocoDB server** — a `stateful` HTTP workload (`{release}-nocodb`, port 8080) serving the UI, REST/GraphQL API and live updates; scale with `nocodb.replicas` (requires S3 storage). Runs meta-database migrations automatically on boot.
-- **PostgreSQL** — the metadata store holding every base, table, view, user and automation. Either the `postgres` subchart (single instance, default) or the `postgres-highly-available` subchart (3 Patroni replicas + 3 etcd + HAProxy, opt-in).
+- **PostgreSQL** — the metadata store holding every base, table, view, user and automation. Either the `postgres` subchart (single instance, default; PostgreSQL 19) or the `postgres-highly-available` subchart (3 Patroni replicas + 3 etcd + HAProxy, opt-in; PostgreSQL 18 for new clusters). In single-instance mode a boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
 - **Redis** — bundled single-node workload with AOF persistence; job/event pub-sub, metadata cache and rate limiter. Required — it is what makes more than one replica coherent. Live updates reach the browser over HTTP long-poll (`POST /jobs/listen`) backed by this pub-sub, not over websockets.
 - **Attachment volumeset** — local attachment storage at `/usr/app/data`; created only when `storage.type: local`.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and NocoDB connects with it, in either database mode.
@@ -164,7 +165,7 @@ Set `postgresHA.enabled: true` (and `postgres.enabled: false`) for near-zero-dow
 ```yaml
 postgres:
   enabled: true
-  image: postgres:18
+  image: postgres:19          # new installs; keep postgres:18 when upgrading a 1.x release (Upgrading from 1.x)
   config:
     credentialsSecretName: my-nocodb-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -174,10 +175,10 @@ postgres:
 
 postgresHA:
   enabled: false              # 3 Patroni replicas + 3 etcd + an HAProxy leader endpoint
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-nocodb-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
-  replicas: 3
+  replicas: 3                 # new clusters PostgreSQL 18; a 1.x cluster stays on 17
   volumeset:
     capacity: 10              # GiB per replica (minimum 10)
   backup:
@@ -232,7 +233,34 @@ cpln secret create-dictionary --name my-nocodb-s3-keys \
 
 Scheduled backups are configured on whichever database path you enabled — `postgres.backup.*` (single instance) or `postgresHA.backup.*` (highly available). They are off by default.
 
-**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The policy JSON is the same bucket-scoped document shown above for attachment storage.
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to that bucket, then set `…backup.enabled: true`, `…backup.provider: aws`, and `…backup.aws.{bucket,region,cloudAccountName,policyName}`. The backup identity carries only this policy, so it needs the multipart and version actions as well (replace `YOUR_BUCKET_NAME` with the `…backup.aws.bucket` value):
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
 
 **MinIO / S3-compatible** — set `…backup.provider: minio` and `…backup.minio.{endpoint,bucket}`; no cloud account is involved because the keys authenticate directly. On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
@@ -346,9 +374,68 @@ Redis keeps no password on disk: it takes the password from the secret each time
 
 Expect a short interruption: until both have restarted, one side holds the old password and NocoDB cannot reach Redis.
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes. NocoDB reconnects by itself.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [Database backups](#database-backups-aws-s3-and-minio) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new NocoDB release (same prerequisite secrets) in place of the second database release, the old release's `-nocodb` workload stopped during the copy, and the attachments copied as in step 2 below.
+
+**Single-instance database (`postgres.enabled: true`, the default):** new installs run PostgreSQL 19. A 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran), and a data directory only opens with its own major. The chart never converts data in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, NocoDB cannot reach its database, and the logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run.
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (NocoDB gets a new endpoint; writes pause during the copy):
+
+1. Install this version as a NEW release in the same GVC with the **same** `secrets.name` (its `NC_CONNECTION_ENCRYPT_KEY` decrypts the stored external data-source credentials, and the same `NC_AUTH_JWT_SECRET` keeps users signed in), the same `postgres.config.credentialsSecretName` and the same `storage` settings. NocoDB initializes an empty database in it; do not create anything there.
+2. With local attachment storage (`storage.type: local`), copy the attachments through your machine while the old NocoDB is still running (do this in a quiet window: a file uploaded after this step is not copied). With S3 storage, skip this step; both releases read the same bucket.
+
+   ```bash
+   mkdir -p ./nocodb-data
+   cpln workload exec OLD_RELEASE-nocodb --gvc GVC_NAME --container nocodb -- \
+     sh -c 'cd /usr/app/data && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./nocodb-data
+   cpln cp ./nocodb-data/. NEW_RELEASE-nocodb:/usr/app/data --gvc GVC_NAME --container nocodb
+   ```
+
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory cannot take the copied mode. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-nocodb --gvc GVC_NAME --container nocodb -- ls -la /usr/app/data/nc/uploads`.
+
+3. Stop both NocoDB workloads, so nothing writes to either database (the databases keep running): `cpln workload stop OLD_RELEASE-nocodb --gvc GVC_NAME` and `cpln workload stop NEW_RELEASE-nocodb --gvc GVC_NAME`.
+4. Replace the new release's empty database with a copy of the old one, from inside the new PostgreSQL container. The PostgreSQL 19 `pg_dump` reads the old server; every base is a schema in this one database, so the copy carries them all:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+5. Clear the new release's Redis, which still caches the empty install's metadata, then start NocoDB:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-nocodb-redis --gvc GVC_NAME --container redis -- \
+     sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning FLUSHALL'
+   cpln workload start NEW_RELEASE-nocodb --gvc GVC_NAME
+   ```
+
+6. Sign in with your existing account and check your bases, records and attachments. Point `nocodb.siteUrl` or your custom domain at the new release (invite and reset links use it), then uninstall the old release (this deletes its volumes).
+
 ## Upgrading from 1.4.0 or earlier (HA mode)
 
-1.4.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. NocoDB itself restarts as on any upgrade, and its bundled Redis restarts with it; with a single NocoDB replica (the default) that is the longer interruption, because the old replica stops before the new one serves. Upgrade in a quiet window. NocoDB does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
+1.4.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. NocoDB itself restarts as on any upgrade, and its bundled Redis restarts with it; with a single NocoDB replica (the default) that is the longer interruption, because the old replica stops before the new one serves. Upgrade in a quiet window. NocoDB does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. 1.4.1 left single-instance installs (`postgres`) unchanged; for 2.0.0 see [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Upgrading from 1.3.x
 
@@ -384,6 +471,7 @@ The upgrade restarts the bundled PostgreSQL and Redis too (they now read the new
 
 ## Important Notes
 
+- **2.0.0 moves new databases to PostgreSQL 19 (single-instance, the default) and 18 (HA).** A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: postgres:18` in its values; without it the database refuses to start and leaves the data untouched. An existing HA cluster keeps PostgreSQL 17 with no action. See [Upgrading from 1.x](#upgrading-from-1x).
 - **All three prerequisite secrets must exist before install** — a missing `secrets.name`, database credentials or Redis secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic. The `secrets.name` keys are write-once: rotating `NC_AUTH_JWT_SECRET` logs out every user, and changing `NC_CONNECTION_ENCRYPT_KEY` makes stored external-data-source credentials undecryptable.
 - **Signup is open by default** — with public access on, anyone who reaches the URL can create an account. Invite-only is an in-app setting (Team & Settings), not an environment variable, so turn it on in the UI right after install.
 - **`admin.secretName` re-applies on every boot** — if set, the password in that secret is re-imposed at each restart, silently reverting a password changed in the UI. Either leave it empty or treat the secret as the source of truth.

@@ -117,9 +117,18 @@ redis:
 # ─── Database: single-instance PostgreSQL (default) ───────────────
 # One Postgres workload holding all bases, tables, views, users and automations.
 # Enable exactly one of postgres / postgresHA.
+# set postgresHA.enabled: true (and postgres.enabled: false) for near-zero-downtime upgrades and failover
 postgres:
   enabled: true
-  image: postgres:18          # NocoDB supports PostgreSQL 12+ (the HA path below runs 17)
+  # PostgreSQL 19 for new installs. A release installed with an earlier version of this chart
+  # has PostgreSQL 18 data: keep image: postgres:18 in your values (README, "Upgrading from 1.x").
+  image: postgres:19
+  # How the database's major-version guard names its fix in the logs: this chart's values path,
+  # wizard field and README section. Leave as is.
+  upgradeHint:
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
   config:
     # REQUIRED PREREQUISITE SECRET (single-instance mode) — CREATE IT BEFORE YOU
     # INSTALL. If it does not exist the deployment WEDGES silently and looks like a
@@ -138,7 +147,7 @@ postgres:
 
   backup:                     # optional database backups — see README storage setup
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # tag must match the postgres major above
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0   # PostgreSQL 19 client; also backs up a server pinned to 18
     schedule: "0 2 * * *"     # daily at 2am UTC
     resources:
       cpu: 100m
@@ -162,13 +171,15 @@ postgres:
       credentialsSecretName: my-nocodb-minio-credentials
       prefix: postgres/backups
 
-# ─── Database: Highly Available PostgreSQL 17 (opt-in) ────────────
+# ─── Database: Highly Available PostgreSQL (opt-in) ───────────────
 # Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
 # replicas, and an HAProxy leader endpoint NocoDB connects to. Recommended for
-# production. Enable this and set postgres.enabled: false.
+# production. Enable this and set postgres.enabled: false. New clusters run
+# PostgreSQL 18; a cluster created by an earlier version of this chart keeps
+# PostgreSQL 17 (README, "Upgrading from 1.x").
 postgresHA:
   enabled: false
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     # REQUIRED PREREQUISITE SECRET (HA mode) — the same kind of `dictionary`
     # secret as postgres.config.credentialsSecretName above (keys: username,
@@ -188,9 +199,9 @@ postgresHA:
     mode: logical             # logical | wal-g
     resources:
       cpu: 100m
-      memory: 128Mi
+      memory: 512Mi           # 128Mi OOM-kills wal-g mid-backup
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0   # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"
     walg:
       intervalSeconds: 21600

@@ -199,7 +199,7 @@ cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set post
    for f in ./copyparts/copypart.* ./copyparts.md5; do cpln cp "$f" "$NEW:/tmp/$(basename "$f")" --gvc $GVC --container $C; done
    cpln workload exec $NEW --gvc $GVC --container $C -- sh -c \
      'cd /tmp && md5sum -c copyparts.md5 && cat copypart.* | tar xzf - -C /listmonk/uploads && rm -f /tmp/copypart.* /tmp/copyparts.md5; sleep 3'
-   cpln workload exec $OLD --gvc $GVC --container $C -- rm -f /tmp/copypart.* /tmp/copyparts.md5
+   cpln workload exec $OLD --gvc $GVC --container $C -- sh -c 'rm -f /tmp/copypart.* /tmp/copyparts.md5'
    ```
 
    If `md5sum -c` reports a piece as `FAILED`, nothing was unpacked: delete that piece from `./copyparts`, then run the fetch loop and the last three commands again.

@@ -4,20 +4,18 @@ kind: TemplateWizard
 title: Umami
 
 # Umami itself is stateless, but both bundled databases are single-location stateful workloads with no
-# location handling: postgres brings this limit with its import, and postgres-highly-available (no
-# descriptor of its own, so its keys are parent fields below) needs the same.
+# location handling: postgres and postgres-highly-available bring this limit with their imports.
 gvc:
   minLocations: 1
   maxLocations: 1
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: database
+    after: dbserver
     steps:
-      - { id: server, title: Database server }
       - { id: storage, title: Database storage }
       - { id: network, title: Database network, description: Who can connect to the bundled PostgreSQL. }
       - { id: backup, title: Database backups }
@@ -26,11 +24,47 @@ imports:
       - config.credentialsSecretName
       # Umami connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # The server step (image and compute) is bound in the parent's Database server step, so its upgrade note,
+      # cross-major warning and image migration name this chart's README section; the child's checks are
+      # restated there.
+      - image
+      - resources
     override:
       internalAccess.type:
         description: >-
           Umami connects to its database like any other workload: keep Same GVC, or add the Umami workload
           under Allowed workloads.
+
+  - template: postgres-highly-available
+    version: 3.0.0
+    alias: postgresHA
+    when: self.postgresHA.enabled
+    title: Highly available PostgreSQL
+    after: dbserver
+    steps:
+      - { id: cluster, title: Database cluster, description: The Patroni-managed PostgreSQL members Umami stores its analytics in. }
+      - { id: storage, title: Database storage }
+      - { id: etcd, title: Database consensus }
+      - { id: network, title: Database network }
+      - id: backup
+        title: Database backups
+        description: >-
+          Optional backups to object storage. Uninstalling the release deletes the database volumes, so turn
+          this on if your analytics data matters.
+    exclude:
+      # Named in the Database step, next to the single-instance mode's secret, so both modes ask for it in one place.
+      - config.credentialsSecretName
+      # Umami connects to the HAProxy leader endpoint directly: a pooler in front of it would sit unused (yamlOnly below).
+      - pgbouncer
+    override:
+      multiZone:
+        description: >-
+          Applies to the PostgreSQL members and their HAProxy workloads. Confirm that your location supports
+          multiple zones.
+      internal_access.type:
+        description: >-
+          Umami connects through the HAProxy endpoint like any other workload: keep Same GVC, or add the Umami
+          workload under Allowed workloads.
 
 steps:
   - id: umami
@@ -126,7 +160,6 @@ steps:
             paths: [app.appSecretName]
             message: The app secret is required.
       - title: Two-factor authentication
-        docs: "#prerequisites"
         description: Lets users protect their login with an authenticator app. Optional; without the key, 2FA is unavailable.
         fields:
           - path: app.twoFactorKeySecretName
@@ -175,7 +208,6 @@ steps:
   - id: access
     title: Access
     description: The public endpoint, and which workloads can reach Umami inside Control Plane.
-    docs: "#access"
     fields:
       - type: note
         severity: warning
@@ -192,6 +224,7 @@ steps:
       - path: internalAccess.type
         type: enum
         label: Who can connect internally
+        docs: "#access"
         widget: cards
         required: true
         description: Firewall changes take 30 seconds to a few minutes to take effect.
@@ -229,7 +262,6 @@ steps:
   - id: database
     title: Database
     description: Which PostgreSQL holds Umami's data, and the prerequisite secret with its credentials.
-    docs: "#backing-store"
     sections:
       - fields:
           - id: dbMode
@@ -237,6 +269,7 @@ steps:
             type: enum
             label: Database
             widget: cards
+            docs: "#backing-store"
             required: true
             init: "self.postgresHA.enabled && !self.postgres.enabled ? 'ha' : 'single'"
             options:
@@ -248,19 +281,30 @@ steps:
                 label: Highly available PostgreSQL
                 description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
                 set: { postgresHA.enabled: true, postgres.enabled: false }
-          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          # Declared so the imports' conditions are fields; the chooser above writes them, so they are never shown.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgres.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Database choice writes it
             description: Set by the database choice above.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null && semverCompare(context.fromVersion, '2.0.0') < 0 &&
+              self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
+            text: >-
+              Before you upgrade, update the IAM policy of your backup bucket to the action list in the README
+              (AWS S3). The backup identity no longer carries `aws::ReadOnlyAccess`, so with the old policy the
+              backups fail.
           - type: note
             severity: warning
             text: >-
@@ -297,17 +341,17 @@ steps:
         title: Highly available PostgreSQL
         when: self.postgresHA.enabled
         description: >-
-          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Umami connects through.
+          3 Patroni replicas, 3 etcd replicas and an HAProxy leader endpoint that Umami connects through. Its
+          cluster, storage, consensus, network and backups follow in the next steps.
         fields:
           - type: note
-            severity: warning
             when: >-
               context.mode == 'upgrade' && context.fromVersion != null &&
-              semverCompare(context.fromVersion, '1.5.0') < 0
+              semverCompare(context.fromVersion, '2.0.0') < 0
             text: >-
-              This upgrade moves the HA database to patroni-postgres 0.8 (pgvector 0.8.7). The database members
-              restart, with a brief interruption of writes while the leader changes, so upgrade in a quiet window.
-              Run `ALTER EXTENSION vector UPDATE;` in any database where you created the vector extension.
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              The database members restart one after another, with a brief interruption of writes while the leader
+              changes. Moving the cluster to 18 is a copy into a new release; see Upgrading from 1.x in the README.
           - path: postgresHA.config.credentialsSecretName
             type: ref
             label: Database credentials secret
@@ -320,7 +364,6 @@ steps:
               them. To change the password later, run `ALTER ROLE ... PASSWORD` first, then update the secret and
               force a redeployment of PostgreSQL, then of Umami.
               In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -330,209 +373,7 @@ steps:
               requiredKeys: [username, password, database]
               create:
                 suggestName: "context.releaseName + '-umami-db-credentials'"
-          - path: postgresHA.replicas
-            type: integer
-            label: PostgreSQL replicas
-            required: true
-            min: 1
-            suggestions: [3, 5]
-            description: Patroni replicas; one is the leader, the others are standbys ready to take over.
-          - path: postgresHA.image
-            type: string
-            format: image
-            label: Patroni PostgreSQL image
-            required: true
-            advanced: true
-            description: The HA database image; keep the chart default unless you mirror it to your own registry.
-            rules:
-              - rule: >-
-                  !self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '' && (
-                  !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
-                  size(self.postgresHA.image.split(':')) < 2 ||
-                  !self.postgresHA.image.split(':')[1].matches('^0[.][0-7]([.][0-9]+)?$')))
-                mirrors: umami.validatePostgresHAImage
-                message: >-
-                  This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
-                  create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
-          - path: postgresHA.volumeset.capacity
-            type: integer
-            label: Initial capacity
-            unit: GiB
-            min: 10
-            required: true
-            suggestions: [10, 20, 50, 100, 250, 500, 1000]
-            description: Per replica.
-            help: Uninstalling the release deletes the volume sets, so the data does not survive a reinstall.
-            docs: "/reference/volumeset#capacity-and-billing"
-        rules:
-          - rule: oldSelf == null || self.postgresHA.volumeset.capacity >= oldSelf.postgresHA.volumeset.capacity
-            paths: [postgresHA.volumeset.capacity]
-            message: A volume set cannot shrink. Keep the capacity at or above the installed size.
-      - id: ha-backup
-        title: Database backups
-        toggle: postgresHA.backup.enabled
-        when: self.postgresHA.enabled
-        description: Logical dumps on a schedule, or continuous WAL-G archiving, to object storage.
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.mode
-            type: enum
-            label: Backup mode
-            widget: segmented
-            required: true
-            options:
-              - { value: logical, label: Logical dumps }
-              - { value: wal-g, label: WAL-G }
-          - path: postgresHA.backup.provider
-            type: enum
-            label: Destination
-            widget: cards
-            required: true
-            options:
-              - { value: aws, label: AWS S3 }
-              - { value: gcp, label: Google Cloud Storage }
-              - { value: minio, label: MinIO or S3-compatible }
-          - path: postgresHA.backup.logical.schedule
-            type: string
-            format: cron
-            label: Schedule (UTC)
-            required: true
-            when: self.postgresHA.backup.mode == 'logical'
-          - path: postgresHA.backup.walg.intervalSeconds
-            type: integer
-            label: Interval between base backups
-            unit: s
-            min: 60
-            required: true
-            when: self.postgresHA.backup.mode == 'wal-g'
-            suggestions: [3600, 21600, 86400]
-          - path: postgresHA.backup.logical.image
-            type: string
-            format: image
-            label: Backup image
-            required: true
-            advanced: true
-            when: self.postgresHA.backup.mode == 'logical'
-            description: Tag 17.x.x for the bundled PostgreSQL 17.
-          - path: postgresHA.backup.resources
-            type: resources
-            label: Backup resources
-            required: true
-            advanced: true
-      - title: AWS S3
-        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.aws.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-            pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
-          - path: postgresHA.backup.aws.region
-            type: string
-            label: Bucket region
-            required: true
-            placeholder: us-east-1
-            pattern: '^[a-z]{2}(-[a-z]+)+-\d$'
-          - path: postgresHA.backup.aws.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: "An AWS [cloud account](/guides/create-cloud-account) that can reach the bucket."
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [aws] }
-              mustExist: error
-          - path: postgresHA.backup.aws.policyName
-            type: string
-            label: IAM policy name
-            required: true
-            example: true
-            description: An AWS IAM policy scoped to the bucket (an AWS object, not a Control Plane policy).
-          - path: postgresHA.backup.aws.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: Google Cloud Storage
-        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.gcp.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.gcp.cloudAccountName
-            type: ref
-            label: Cloud account
-            required: true
-            help: >-
-              A GCP [cloud account](/guides/create-cloud-account) whose service account has the Storage Object
-              Admin role on the bucket.
-            ref:
-              kind: cloudaccount
-              format: name
-              filter: { provider: [gcp] }
-              mustExist: error
-          - path: postgresHA.backup.gcp.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-      - title: MinIO or S3-compatible
-        when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
-        docs: "#backing-up"
-        fields:
-          - path: postgresHA.backup.minio.endpoint
-            type: string
-            format: url
-            label: S3 endpoint
-            required: true
-            example: true
-            placeholder: http://my-minio-workload:9000
-            description: The URL including the port.
-          - path: postgresHA.backup.minio.bucket
-            type: string
-            label: Bucket
-            required: true
-            example: true
-          - path: postgresHA.backup.minio.credentialsSecretName
-            type: ref
-            label: MinIO credentials secret
-            required: true
-            description: A dictionary secret with the keys `accessKey` and `secretKey`.
-            ref:
-              kind: secret
-              format: name
-              filter: { secretType: [dictionary] }
-              mustExist: error
-              allowCreate: true
-              requiredKeys: [accessKey, secretKey]
-          - path: postgresHA.backup.minio.prefix
-            type: string
-            label: Folder prefix
-            pattern: "^(?!/)"
-            patternMessage: Leave out the leading /.
-        rules:
-          - rule: "!has(self.postgresHA.backup.minio.accessKey) && !has(self.postgresHA.backup.minio.secretKey)"
-            paths: [postgresHA.backup.minio.credentialsSecretName]
-            message: >-
-              postgresHA.backup.minio.accessKey and secretKey were removed in 1.3.1. Put them in the MinIO
-              credentials secret and remove them from the values.
     rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: umami.validate
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
-      - rule: >-
-          !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
-          dyn(self.postgresHA)['proxy']['enabled'] == true
-        mirrors: umami.validate
-        paths: [postgresHA.enabled]
-        message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Umami's database endpoint.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
@@ -577,8 +418,78 @@ steps:
           PostgreSQL reads the credentials only when its data is first initialized; pointing at another secret
           does not change the existing user or password.
 
-# Rules over the imported values: their issues show on the imported fields' step (postgres:network).
+  # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
+  # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: dbserver
+    title: Database server
+    description: The Postgres image and the compute of the single-instance database's stateful replica.
+    when: self.postgres.enabled
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short write outage.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its database was
+              created with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+            message: >-
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
+
+# Rules over the imported values: their issues show on the imported fields' steps. Rules without paths only
+# trip on YAML edits (the Database choice writes the hidden switches); they block Install and show on Review.
 rules:
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: umami.validate
+    message: Enable exactly one database, either the single-instance or the highly available PostgreSQL.
+  - rule: >-
+      !self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled) ||
+      dyn(self.postgresHA)['proxy']['enabled'] == true
+    mirrors: umami.validate
+    message: postgresHA.proxy.enabled must stay true; the HAProxy leader endpoint is Umami's database endpoint.
+  # umami.validatePostgresHAImage also refuses tags 0.1-0.7; the import's own image rule says that, so this
+  # one keeps only the check the child does not make. The field is required, so it shows only in YAML mode.
+  - rule: "!self.postgresHA.enabled || (has(self.postgresHA.image) && self.postgresHA.image != '')"
+    mirrors: umami.validatePostgresHAImage
+    paths: [postgresHA.image]
+    message: Set postgresHA.image to controlplanecorporation/patroni-postgres:0.9, or remove it from the values to use the chart default.
   - when: self.postgres.enabled
     rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
@@ -593,8 +504,22 @@ rules:
 yamlOnly:
   - path: postgres.pgbouncer
     reason: Umami connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
+  - path: postgresHA.pgbouncer
+    reason: Umami connects to the HAProxy leader endpoint directly, so a PgBouncer in front of it would sit unused.
 
+# A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+# PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+# keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+# `image` and binds it in Database server), so the note names this chart's README section.
 migrations:
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    # has(): a values file from 1.x may leave the image out; every 1.x version defaulted it to postgres:18.
+    valueExpr: "has(self.postgres.image) ? self.postgres.image : 'postgres:18'"
+    note: >-
+      The database keeps the PostgreSQL major it was created with, so the installed image is kept (Database
+      server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading
+      from 1.x).
   - fromVersions: "<1.5.0"
     assume: { app.twoFactorKeySecretName: "" }
   - fromVersions: "<1.4.0"

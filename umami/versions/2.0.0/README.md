@@ -1,6 +1,8 @@
 # Umami
 
-> **Upgrading from 1.4.0:** Umami 3.4.1 fixes Critical vulnerabilities and migrates the database on first
+> **Upgrading from 1.x:** a single-instance database (the default) needs `postgres.image: postgres:18` in your
+> values; the HA database upgrades in place and keeps PostgreSQL 17 — see [Upgrading from 1.x](#upgrading-from-1x).
+> **From 1.4.0:** Umami 3.4.1 fixes Critical vulnerabilities and migrates the database on first
 > start — see [Upgrading from 1.4.0](#upgrading-from-140). **From 1.3.x:** the database credentials are now a
 > secret you create before upgrading, under a **new** name — see [Upgrading from 1.3.x](#upgrading-from-13x).
 
@@ -9,8 +11,8 @@ This app deploys [Umami](https://umami.is/) — a privacy-first, cookieless web 
 ## Architecture
 
 - **Umami**: Stateless `standard` workload on port 3000 — dashboard and tracking/collect endpoint share the same port. `replicas: 1` by default (proven single-instance shape); `≥2` forms an always-on scaled tier for zero-downtime rolling restarts. All state lives in PostgreSQL, so replicas are independent (no clustering).
-- **PostgreSQL (single-instance, default)**: The `postgres` template — the backing store for all users, websites, sessions, and events.
-- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store.
+- **PostgreSQL (single-instance, default)**: The `postgres` template (PostgreSQL 19) — the backing store for all users, websites, sessions, and events. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched (see [Upgrading from 1.x](#upgrading-from-1x)).
+- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas with automatic failover and an HAProxy leader endpoint, for a durable production store. New clusters run PostgreSQL 18; a cluster created by a 1.x release stays on PostgreSQL 17.
 - **Database credentials secret** (dictionary) — *not created by this template*; you create it before install. The bundled PostgreSQL initializes from it and Umami connects with it, in either store mode.
 - **Identity and policy**: A least-privilege policy granting the workload `reveal` on exactly the secrets you create — the app secret, the active database's credentials secret and, when set, the two-factor key.
 
@@ -88,6 +90,7 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres:             # default: single-instance PostgreSQL (or use postgresHA below for failover)
   enabled: true
+  image: postgres:19  # new installs; a release upgraded from 1.x keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-umami-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -109,8 +112,8 @@ postgresHA:           # durable HA: 3-replica Patroni store with an HAProxy lead
   enabled: true
   config:
     credentialsSecretName: my-umami-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
-  replicas: 3
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7 (CVE-2026-103484); tags 0.1-0.7 are refused
+  replicas: 3         # new clusters PostgreSQL 18; a 1.x cluster stays on 17
+  image: controlplanecorporation/patroni-postgres:0.9 # tags 0.1-0.7 are refused (CVE-2026-103484)
   volumeset:
     capacity: 10      # GiB per replica
   backup:
@@ -160,23 +163,32 @@ To start collecting data, add a website in the dashboard, then paste the generat
 
 Backups are off by default and need no cloud account. To turn them on, set `<store>.backup.enabled: true` (where `<store>` is `postgres` or `postgresHA`) and configure a provider. The backup runs in the backing Postgres store, so this is the same setup as that template.
 
-**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket:
+### AWS S3
+
+Create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket (replace `my-backup-bucket`). The backup identity carries no other AWS policy, so the backup job has exactly these permissions:
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [
-    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-backup-bucket" },
-    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-backup-bucket/*" }
-  ]
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:PutObject",
+               "s3:DeleteObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion",
+               "s3:AbortMultipartUpload", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
+    "Resource": ["arn:aws:s3:::my-backup-bucket", "arn:aws:s3:::my-backup-bucket/*"]
+  }]
 }
 ```
 
 Then set `provider: aws` and `aws.{bucket,region,cloudAccountName,policyName}`.
 
-**GCP Cloud Storage** — create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
+### Google Cloud Storage
 
-**MinIO / S3-compatible** — no cloud account needed, but the keys are a prerequisite secret. Create a `dictionary` secret with the endpoint's credentials, then set `provider: minio`, `minio.{endpoint,bucket}` and `minio.credentialsSecretName` to its name:
+Create the bucket and a cloud account, grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on the bucket, then set `provider: gcp` and `gcp.{bucket,cloudAccountName}`.
+
+### MinIO / S3-compatible
+
+No cloud account needed, but the keys are a prerequisite secret. Create a `dictionary` secret with the endpoint's credentials, then set `provider: minio`, `minio.{endpoint,bucket}` and `minio.credentialsSecretName` to its name:
 
 ```bash
 cpln secret create-dictionary --name my-umami-minio-credentials \
@@ -261,6 +273,47 @@ Then force-redeploy `RELEASE_NAME-umami`, which keeps the old password until it 
 pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 ```
 
+## Upgrading from 1.x
+
+**Highly available database (`postgresHA.enabled: true`)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `cpln-connector` or `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [AWS S3](#aws-s3) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Umami release (same prerequisite secrets) in place of the second database release, and the old Umami stopped during the copy.
+
+**Single-instance database (`postgres.enabled: true`, the default)** now installs PostgreSQL 19, while a 1.x release's data directory was created by PostgreSQL 18 (or the major of the `postgres.image` it ran). A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two majors, and on a mismatch it does not start the server and changes nothing on the volume. `RELEASE_NAME-postgres` then stays not ready, Umami cannot reach its database, and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** run the upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side** (Umami gets a new endpoint; events sent during the copy are lost). Umami keeps all of its state in this one database, so the dump carries every user, website, share link and event:
+
+1. Install this version as a NEW release in the same GVC with the **same** `app.appSecretName`, `postgres.config.credentialsSecretName` and, if set, `app.twoFactorKeySecretName` (it decrypts enrolled users' two-factor secrets). Umami migrates an empty database in it; do not sign in there yet.
+2. Stop the old Umami, so nothing writes to its database (the database keeps running):
+
+   ```bash
+   cpln workload stop OLD_RELEASE-umami --gvc GVC_NAME
+   ```
+
+3. Replace the new release's database with the old one, from inside the new database container. The PostgreSQL 19 `pg_dump` reads the old server, and `--clean --if-exists` first drops what the new Umami created:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q'
+   ```
+
+4. Run `cpln workload force-redeployment NEW_RELEASE-umami --gvc GVC_NAME`, sign in with your existing account to check your websites and their data, turn on `publicAccess.enabled` on the new release, and update the tracking `<script>` tag on your sites to the new endpoint (the website IDs are unchanged), then uninstall the old release.
+
 ## Upgrading from 1.4.0
 
 - The image moves from Umami 3.2.0 to **3.4.1**, which fixes Critical vulnerabilities in its bundled Next.js. The chart refuses any `ghcr.io/umami-software/umami` tag below 3.4.1, so if your values pin `image`, set it to `ghcr.io/umami-software/umami:3.4.1` or remove it.
@@ -294,6 +347,7 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 
 ## Important Notes
 
+- **Upgrading a 1.x release with the single-instance database needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. See [Upgrading from 1.x](#upgrading-from-1x).
 - **First run — secure the admin account, then publish.** The bootstrap admin is a hardcoded `admin` / `umami`, seeded by the first database migration, and there is no environment variable to override it, so the install starts private:
   1. Install with `publicAccess.enabled: false` (the default).
   2. Reach the dashboard privately with `cpln port-forward {release}-umami 3000:3000 --gvc {gvc}`, open `http://localhost:3000`, log in as `admin` / `umami`, and change the password in **Settings → Profile**.

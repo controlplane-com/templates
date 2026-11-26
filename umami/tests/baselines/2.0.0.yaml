@@ -1,0 +1,55 @@
+# umami 2.0.0 — the default install: one Umami replica on the bundled single-instance PostgreSQL, which 2.0.0
+# moves to PostgreSQL 19 (the postgres 4.0.2 subchart), one location, at the chart's default sizes. The app
+# secret and database credentials are prerequisite secrets CI creates. Public access stays off, as the chart
+# defaults it: Umami seeds a hardcoded admin/umami login.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  appsecret: hex
+  pgpw: hex
+
+secrets:
+  app:
+    type: opaque
+    payload: "{gen.appsecret}"
+  db:
+    type: dictionary
+    entries:
+      username: umami
+      password: "{gen.pgpw}"
+      database: umami
+
+vars:
+  pg_user: umami
+  pg_password: "{gen.pgpw}"
+  pg_db: umami
+
+values:
+  app:
+    appSecretName: "{secrets.app.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# The highly available database (postgres-highly-available 3.0.0): a fresh HA install, whose new cluster runs
+# PostgreSQL 18 behind the HAProxy leader endpoint.
+variants:
+  - name: ha
+    values:
+      postgres:
+        enabled: false
+      postgresHA:
+        enabled: true
+        config:
+          credentialsSecretName: "{secrets.db.name}"
+    timeoutSeconds: 1200
+
+# 1.5.0 is the previous version (same values shape). Its baseline runs the HA database, so this upgrade moves
+# postgres-highly-available 2.5.0 → 3.0.0, whose existing cluster keeps PostgreSQL 17: a plain upgrade, named
+# [ha] so the HA checks select it. A refused single-instance upgrade from 1.5.0 is not expressible: the
+# starting install always uses 1.5.0's own (HA) baseline.
+upgradeFrom:
+  - version: 1.5.0
+    name: ha
+    timeoutSeconds: 1200

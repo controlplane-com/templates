@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | `{release}-listmonk` (stateful, 1 replica, :9000 http) | Listmonk server + campaign workers |
-| `{release}-listmonk-uploads` volumeset (10 GiB, `/listmonk/uploads`) | uploaded media (images in emails) |
+| `{release}-listmonk-uploads` volumeset (10 GiB, `/listmonk/uploads`) | uploaded media (images in emails); daily snapshots kept 7 d from 1.7.0 (none were ever taken through 1.6.1) |
 | user's `admin.secretName` secret (dictionary, **prerequisite**) | bootstrap Super Admin `username`/`password` — user-created since 1.1.0, never by the chart |
 | user's DB credentials secret (dictionary, **prerequisite since 1.6.0**) | `username`/`password`/`database`; named by `postgres.config.credentialsSecretName` (default) or `postgresHA.config.credentialsSecretName` (HA). The active subchart initializes from it and listmonk reads all three keys as `LISTMONK_db__*` env vars. Chart-created from `postgres.credentials.*` in 1.2.0–1.5.0 |
 | identity + policy | `reveal` on exactly the user's admin secret + the active DB credentials secret |
@@ -34,6 +34,7 @@
 | `resources.*` | 500m/150m cpu · 512Mi/256Mi | minCpu kept at 150m for the 4:1 platform cap |
 | `admin.secretName` | `my-listmonk-admin` | **prerequisite dictionary secret** (`username` min 3, `password` min 8) — 1.1.0; first-install only |
 | `volumeset.capacity` | `10` | GiB of media storage |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | **1.7.0** — scheduled snapshots of the uploads volume; `""` = off; at most hourly (render guard) |
 | `timezone` | `Etc/UTC` | container TZ — governs campaign scheduling times |
 | `publicAccess.enabled` / `internalAccess.type` | `true` / `same-gvc` | `none` and `workload-list` both verified live |
 | `rootUrl` | `""` | **1.5.0** — public base URL for all subscriber links/email. Empty = auto-derive the canonical endpoint at boot when publicAccess is on; set to a custom domain to pin it |
@@ -71,3 +72,8 @@
 - **Single-instance mode is unaffected**: it runs the official `postgres:18`, which ships no pgvector. listmonk does not create the `vector` extension (grep of the chart, plus upstream source), so the README tells only users who created it themselves to run `ALTER EXTENSION vector UPDATE;`.
 - **The upgrade restarts the Patroni members, not the proxy: a brief write interruption while the leader changes.** Nothing limits the rollout of a stateful workload (`maxUnavailableReplicas` is dropped there), so the members do not restart one at a time; the HAProxy proxy workload does not restart (helm may print `Updated` for it from a tag bump, but its replicas keep running). The app restart is the longer interruption: the single listmonk replica stops before the new one serves (measured ~83 s); pooled database connections also fail a few writes right after the leader change. Not deployed in this change; the E2E suite onboarded in 1.6.1 (`listmonk/tests/`, HA baseline, `upgradeFrom: 1.6.0`) proves the upgrade and the `pgvector-0-8-7-available` check in CI.
 
+## 1.7.0 — scheduled volume snapshots (work item 5219)
+- The uploads volumeset now takes a snapshot daily at 03:00 UTC (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Through 1.6.1 it rendered `retentionDuration: 7d` with no schedule, so the platform never took one. A schedule more frequent than hourly fails at render (`listmonk.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- Covers uploaded media only. Lists, subscribers and campaigns live in the database subchart, whose own volumeset is out of scope here.
+- Wizard: also dropped two step-level `docs` links and three duplicate `#backing-up` links that the current `tw lint` rejects (wizard-only, no render change).
+- E2E: `baselines/1.7.0.yaml` (HA path, as 1.6.1) upgrades from 1.6.1.

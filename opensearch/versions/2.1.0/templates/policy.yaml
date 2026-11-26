@@ -1,0 +1,44 @@
+kind: policy
+name: {{ include "opensearch.policy.name" . }}
+description: OpenSearch nodes reveal the startup script, the credentials and the CA
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.identity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secretStartup.name" . }}
+  - //secret/{{ include "opensearch.secret.credentials.name" . }}
+  - //secret/{{ include "opensearch.secret.ca.name" . }}
+---
+kind: policy
+name: {{ include "opensearch.clientPolicy.name" . }}
+description: Dashboards and the setup jobs reveal the credentials only (never the CA)
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secret.credentials.name" . }}
+
+{{- if .Values.demoLogs.enabled }}
+---
+kind: policy
+name: {{ include "opensearch.demoLogsPolicy.name" . }}
+description: OpenSearch demo logs app reveals its Fluent Bit config and the credentials
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "opensearch.secretFluentBitDemo.name" . }}
+  - //secret/{{ include "opensearch.secret.credentials.name" . }}
+{{- end }}

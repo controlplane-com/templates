@@ -1,0 +1,15 @@
+kind: policy
+name: {{ include "maria.policy.name" . }}
+description: MariaDB policy
+tags:
+  {{- include "maria.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "maria.identity.name" . }}
+targetKind: secret
+targetLinks:
+  # Exactly the two user-created credential secrets — nothing else.
+  - //secret/{{ .Values.credentialsSecretName }}
+  - //secret/{{ .Values.rootPasswordSecretName }}

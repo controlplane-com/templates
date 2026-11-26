@@ -1,0 +1,227 @@
+## MongoDB
+
+Creates a single replica MongoDB database with a dedicated persistent volume with an optional backup configuration.
+
+### Architecture
+
+- **Stateful MongoDB workload** (`RELEASE_NAME-mongo`) — one replica serving `27017`, pinned to a single instance.
+- **Volume set** (`RELEASE_NAME-mongo-vs`) — the data directory, with optional autoscaling and daily snapshots.
+- **Identity and policy** — grants `reveal` on exactly the credentials secret you create, plus the backup config secret and Cloud Account binding when backups are on.
+- **Backup config secret** *(optional)* — the bucket and region only; created when `backup.enabled`. It holds no credentials.
+- **Backup cron workload** *(optional)* — a scheduled `mongodump` writing compressed archives to S3 or GCS.
+
+This template creates no credential secret of its own, and does not create a GVC.
+
+### Warning
+
+This application works only with a single replica, do not scale up the replicas.
+
+<b>Upgrading from 1.1.x or older:</b> 1.2.0 renamed the workload and volume set (`RELEASE_NAME` → `RELEASE_NAME-mongo` and `RELEASE_NAME-mongo-vs`), so an in-place `helm upgrade` starts the database on a new, empty volume and removes the old one. Install a new release of this version instead, move the data across, then remove the old release.
+
+### Prerequisites
+
+**One `dictionary` secret must exist BEFORE you install.** These are the credentials you put in every application's connection string, so they are not values — putting them in values would leave them in the Helm release.
+
+```bash
+cpln secret create-dictionary --name my-mongodb-credentials \
+  --entry username=myuser \
+  --entry password='YOUR-STRONG-PASSWORD' \
+  --entry database=mydb
+```
+
+Set `config.credentialsSecretName` to the name you used. Secret names are organization-wide, so give each release its own.
+
+On first boot MongoDB creates the user in the `admin` database with the `root` role, so connection strings must carry `authSource=admin`. The `database` entry is the name your applications use in their connection strings — MongoDB does not create it up front; it appears on the first write.
+
+**If the secret does not exist at install time, the deployment wedges silently.** `cpln logs` returns **zero lines** — the container never starts, so it has nothing to log. The one place the reason appears is `status.versions[].message`:
+
+```bash
+cpln workload get-deployments RELEASE_NAME-mongo --gvc GVC_NAME -o yaml
+```
+
+Note this is `get-deployments` — plain `cpln workload get` has no `versions` field. Creating the secret repairs the deployment on its own in roughly 5.5 to 10.5 minutes, or force a redeployment to skip the wait.
+
+<b>Upgrading from 1.3.x:</b> delete `config.username` and `config.password` from your values and create the secret instead, using the credentials the database <b>already has</b> — they were applied when the data directory was first initialised, and a new value in the secret will not change them. An upgrade that still carries either key is refused at render. If the workload then stays at "transitioning to version …" with "not allowed to reveal the secret" in its deployment status, run <code>cpln workload force-redeployment RELEASE_NAME-mongo --gvc GVC_NAME</code> to resume it.
+
+### Configuration
+
+**Database credentials** — the name of the secret above:
+```yaml
+config:
+  credentialsSecretName: my-mongodb-credentials
+```
+
+**Resources** — adjust CPU and memory parameters:
+```yaml
+resources:
+  minCpu: 200m
+  minMemory: 256Mi
+  maxCpu: 500m
+  maxMemory: 512Mi
+```
+
+**Volume** — set the initial storage capacity (minimum 10 GiB). Optionally enable autoscaling to expand the volume automatically as it fills up:
+```yaml
+volumeset:
+  capacity: 10
+  autoscaling:
+    enabled: true
+    maxCapacity: 100
+    minFreePercentage: 10
+    scalingFactor: 1.2
+  snapshots:
+    schedule: "0 3 * * *"    # volume snapshots, daily at 3am UTC; at most hourly; "" turns them off
+    retentionDuration: 7d    # how long each snapshot is kept
+```
+
+The schedule is a 5-field cron in UTC with a single fixed minute: the platform takes snapshots at most
+hourly, and the chart refuses a more frequent schedule at render. Deleting the volume set (uninstall)
+takes a final snapshot whatever the schedule. Upgrading from 1.4.2 or earlier turns on daily volume
+snapshots: earlier versions kept snapshots for 7 days but never scheduled any, so none were taken. Set
+`volumeset.snapshots.schedule: ""` to keep them off.
+
+**Internal access** — controls which workloads can reach MongoDB on port 27017. Use `same-gvc` to allow any workload in the same GVC, `same-org` for any workload in the org, or `workload-list` to specify exact workloads:
+```yaml
+internalAccess:
+  type: workload-list
+  workloads:
+    - //gvc/my-gvc/workload/my-app
+```
+
+**Direct load balancer** — set to `true` to expose MongoDB externally via a dedicated load balancer IP:
+```yaml
+directLoadBalancer:
+  enabled: false
+```
+
+### Connecting
+
+Once deployed, MongoDB will be reachable at:
+
+```
+RELEASE_NAME-mongo.GVC_NAME.cpln.local:27017
+```
+
+The user lives in the `admin` database, so connection strings must carry `authSource=admin`:
+
+```
+mongodb://USERNAME:PASSWORD@RELEASE_NAME-mongo.GVC_NAME.cpln.local:27017/DATABASE?authSource=admin
+```
+
+### Backing Up
+
+Set `backup.enabled` to `true`, configure your provider, and set your desired schedule. The backup image is compatible with all MongoDB versions.
+
+```yaml
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # daily at 2am UTC
+  provider: aws           # Options: aws or gcp
+```
+
+#### AWS S3
+
+
+<b>Upgrading from 1.4.2 or earlier:</b> the backup identity no longer attaches the <code>cpln-connector</code> AWS policy;
+only your bucket-scoped policy is attached, and it is all the backup needs. No action is needed.
+
+<b>Upgrading from 1.4.0:</b> this version removes <code>aws::ReadOnlyAccess</code> from the backup identity.
+That managed policy granted read access to every bucket in your AWS account and contained no write actions,
+so it was never carrying the backup itself — but it <i>was</i> silently supplying any read action your
+bucket-scoped policy happened to omit. <b>Update your IAM policy to the full action list in this section before
+upgrading</b>; if it already matches, no action is needed. Nothing else changes.
+
+
+For the backup cron job to access an S3 bucket, complete the following in your AWS account first:
+
+1. Create your bucket. Set `backup.aws.bucket` to its name and `backup.aws.region` to its region.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.aws.cloudAccountName` to its name.
+
+3. Create a new IAM policy with the following JSON (replace `YOUR_BUCKET_NAME`) and set `backup.aws.policyName` to match:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+                "s3:GetObjectVersion",
+                "s3:DeleteObjectVersion",
+                "s3:GetBucketLocation",
+                "s3:AbortMultipartUpload",
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+                "arn:aws:s3:::YOUR_BUCKET_NAME",
+                "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+            ]
+        }
+    ]
+}
+```
+
+#### GCS
+
+For the backup cron job to access a GCS bucket, complete the following in your GCP account first:
+
+1. Create your bucket. Set `backup.gcp.bucket` to its name.
+
+2. If you do not have a Cloud Account set up, refer to the docs to [Create a Cloud Account](https://docs.controlplane.com/guides/create-cloud-account). Set `backup.gcp.cloudAccountName` to its name.
+
+**Important**: You must add the `Storage Admin` role when creating your GCP service account.
+
+#### Backup retention
+
+The backup job only uploads; it never deletes old backups. To keep a fixed window, add a lifecycle rule on the bucket that expires objects under the backup prefix. Each backup is a complete, standalone copy, so expiring old ones never affects restoring a newer one. Set the window to at least your retention plus one backup interval, and note that an age rule keeps no minimum: if backups stop running, the last ones expire too.
+
+The rules below use the default prefix `mongodb/backups/`; change it if you changed `backup.<provider>.prefix`.
+
+**AWS S3.** `put-bucket-lifecycle-configuration` **replaces every existing rule on the bucket**, so check for existing rules first and add them to the file:
+
+```bash
+aws s3api get-bucket-lifecycle-configuration --bucket BUCKET_NAME
+cat > lifecycle.json <<'EOF'
+{"Rules":[{"ID":"expire-db-backups","Filter":{"Prefix":"mongodb/backups/"},"Status":"Enabled",
+  "Expiration":{"Days":30},"NoncurrentVersionExpiration":{"NoncurrentDays":1}}]}
+EOF
+aws s3api put-bucket-lifecycle-configuration --bucket BUCKET_NAME --lifecycle-configuration file://lifecycle.json
+```
+
+**Google Cloud Storage.** `--lifecycle-file` also **replaces the bucket's existing rules**; check with `gcloud storage buckets describe gs://BUCKET_NAME --format='json(lifecycle_config)'` first:
+
+```bash
+cat > lifecycle.json <<'EOF'
+{"rule":[
+  {"action":{"type":"Delete"},"condition":{"age":30,"matchesPrefix":["mongodb/backups/"]}},
+  {"action":{"type":"Delete"},"condition":{"daysSinceNoncurrentTime":1,"isLive":false,"matchesPrefix":["mongodb/backups/"]}}]}
+EOF
+gcloud storage buckets update gs://BUCKET_NAME --lifecycle-file=lifecycle.json
+```
+
+Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
+
+### Restoring a Backup
+
+Each backup is a `mongodump --archive --gzip` file of every database on the instance. Run the following from a client that can reach both the bucket and the server — a workload inside the GVC, or your own machine with `cpln port-forward RELEASE_NAME-mongo 27017:27017 --gvc GVC_NAME` open and `--host=127.0.0.1` in place of the internal hostname (replace `aws s3 cp` with `gsutil cp` for GCS). The user lives in `admin`, so `--authenticationDatabase=admin` is required. By default `mongorestore` adds the archive's documents to existing collections and keeps any document whose `_id` already exists; add `--drop` to replace each collection with the backup's contents.
+
+```sh
+aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.archive.gz - \
+  | gunzip \
+  | mongorestore \
+      --host=RELEASE_NAME-mongo.GVC_NAME.cpln.local \
+      --port=27017 \
+      --username=USERNAME \
+      --password='PASSWORD' \
+      --authenticationDatabase=admin \
+      --archive
+```
+
+### Supported External Services
+- [MongoDB docs](https://www.mongodb.com/docs)

@@ -19,7 +19,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-vllm` (stateful) | `vllm serve <model>` on :8000, one GPU set per replica; `/metrics` scraped into built-in metrics |
-| volumeset `{release}-vllm-models` (50 GiB, ext4) | per-replica cache at `/models` (`HF_HOME=/models/hf`, `VLLM_CACHE_ROOT=/models/vllm`); no snapshots, no final snapshot |
+| volumeset `{release}-vllm-models` (50 GiB, ext4) | per-replica cache at `/models` (`HF_HOME=/models/hf`, `VLLM_CACHE_ROOT=/models/vllm`); no final snapshot, scheduled snapshots off by default (1.2.0 knob) |
 | identity + policy | `reveal` on the API key secret (+ HF token secret when set) |
 
 - `gpu.type: builtin` → `gpu.nvidia {a10g|t4}`; `byok` → `gpu.custom {nvidia.com/gpu, runtimeClass nvidia}`. The built-in form CANNOT target BYOK nodes (it needs a `cpln.io/gpu=nvidia-a10g` node label).
@@ -28,7 +28,7 @@
 - `gvc` limited to exactly one location (wizard): N locations = N copies × N GPUs, and a BYOK GVC with a Control Plane location runs a GPU-less copy that crash-loops.
 
 ## Key knobs (shipped defaults)
-`model.name` Qwen/Qwen2.5-1.5B-Instruct · `model.maxModelLen` 8192 · `model.gpuMemoryUtilization` null (vLLM sizes it; 0.90 in 1.0.0) · `model.dtype` auto · `model.toolCallParser` hermes · `model.extraArgs` [] · `gpu.type`/`model`/`quantity` builtin/a10g/1 · `resources.cpu`/`memory` 6000m/16Gi · `replicas` 1 · `startupTimeoutSeconds` 900 · `volumeset.capacity` 50 · `apiKey.secretName` my-vllm-api-key (required) · `huggingFace.tokenSecretName` "" · `publicAccess.enabled` false · `internalAccess.type` same-gvc
+`model.name` Qwen/Qwen2.5-1.5B-Instruct · `model.maxModelLen` 8192 · `model.gpuMemoryUtilization` null (vLLM sizes it; 0.90 in 1.0.0) · `model.dtype` auto · `model.toolCallParser` hermes · `model.extraArgs` [] · `gpu.type`/`model`/`quantity` builtin/a10g/1 · `resources.cpu`/`memory` 6000m/16Gi · `replicas` 1 · `startupTimeoutSeconds` 900 · `volumeset.capacity` 50 · `volumeset.snapshots.schedule` "" (off; 1.2.0) / `.retentionDuration` 1d · `apiKey.secretName` my-vllm-api-key (required) · `huggingFace.tokenSecretName` "" · `publicAccess.enabled` false · `internalAccess.type` same-gvc
 
 ## Probe design
 - Startup window ≈ `initialDelaySeconds + 30 × periodSeconds`; `failureThreshold` does not count. The chart derives `periodSeconds = ceil((startupTimeoutSeconds − 30) / 30)` (29 at the default, 300-1830 allowed → 9-60) with `failureThreshold: 3`, so a hung server leaves rotation after ~90 s. Liveness uses the same numbers; the platform's derived startup probe holds it off during boot — measured: 164 s and 340 s boots with zero restarts, and `startupTimeoutSeconds: 300` with a cold 7B was killed at ~338 s.
@@ -63,3 +63,7 @@
 - Freeing an old model: `hf cache rm model/ORG/NAME -y` (freed 15.2 G); `rm -rf .../hub/models--ORG--NAME` frees nothing because the weights live in the shared `hub/blobs/` store.
 - BYOK only: `cpln port-forward` returns `502 Unable to connect to upstream workload` with `internalAccess: none` (works with `same-gvc`, and on built-in with `none`). Unexplained; README tells users.
 - Public access works on both targets; on BYOK the traffic goes through the cluster's own Istio ingress load balancer.
+
+## 1.2.0 — volume snapshot schedule knob (work item 5219)
+- New `volumeset.snapshots.schedule` (default `""`, off) and `volumeset.snapshots.retentionDuration` (default `1d`, as before). Off by default per the maintainer ruling of 2026-11-25: the volume is a re-downloadable model cache. `createFinalSnapshot` stays `false`. The rendered volumeset is unchanged apart from the quoted retention. A schedule more frequent than hourly fails at render (`vllm.validateSnapshots`, mirrored in the wizard on the Model cache step).
+- E2E: `baselines/1.2.0.yaml` = 1.1.0's (T4 shape), `upgradeFrom: 1.1.0`.

@@ -14,7 +14,7 @@
 | Resource | Purpose |
 |---|---|
 | workload `{release}-jenkins` (stateful, 1 replica) | The controller, HTTP 8080 |
-| volumeset `{release}-jenkins-vs` (ext4, 10 GiB) | `/var/jenkins_home` — jobs, history, plugin state |
+| volumeset `{release}-jenkins-vs` (ext4, 10 GiB) | `/var/jenkins_home` — jobs, history, plugin state; daily snapshots kept 7 d from 1.1.0 (none were ever taken in 1.0.0) |
 | secret `{release}-jenkins-cloud` (opaque, plain) | The JCasC cloud block, rendered by the chart, mounted at `/var/jenkins_conf/20-cloud.yaml` |
 | identity + policy | `reveal` on exactly: the admin secret, the API key secret, the cloud secret |
 | agent workloads | Created and deleted **by Jenkins**, not by this chart |
@@ -22,8 +22,13 @@
 - Two REQUIRED prerequisite secrets: the admin password and a Control Plane API key. Both are `opaque`.
 - Private by default (`publicAccess.enabled: false`); reach it with `cpln port-forward`, which works because Jenkins listens on container loopback.
 
-## Key knobs (shipped 1.0.0 defaults)
-`image` | `admin.username` (admin) / `admin.passwordSecretName` (`my-jenkins-admin-password`, **must exist before install**) | `cloud.enabled` (true) | `cloud.apiKeySecretName` (`my-jenkins-cpln-api-key`, **must exist before install**) | `cloud.gvc` (`""` = the GVC Jenkins runs in) | `cloud.labels` (`cpln`) | `cloud.useUniqueAgents` (true) | `cloud.allowJobsWithoutLabels` (true) | `cloud.executors` (1) | `cloud.cpu` (300) / `cloud.memory` (512) | `cloud.retentionMins` (5) | `resources.*` (500m-1000m / 1-2Gi) | `volumeset.capacity` (10) | `publicAccess.enabled` (**false**) | `internalAccess.type` (`same-gvc`)
+## Key knobs (shipped 1.1.0 defaults)
+`image` | `admin.username` (admin) / `admin.passwordSecretName` (`my-jenkins-admin-password`, **must exist before install**) | `cloud.enabled` (true) | `cloud.apiKeySecretName` (`my-jenkins-cpln-api-key`, **must exist before install**) | `cloud.gvc` (`""` = the GVC Jenkins runs in) | `cloud.labels` (`cpln`) | `cloud.useUniqueAgents` (true) | `cloud.allowJobsWithoutLabels` (true) | `cloud.executors` (1) | `cloud.cpu` (300) / `cloud.memory` (512) | `cloud.retentionMins` (5) | `resources.*` (500m-1000m / 1-2Gi) | `volumeset.capacity` (10) | `volumeset.snapshots.schedule` (`0 3 * * *`) / `.retentionDuration` (7d) | `publicAccess.enabled` (**false**) | `internalAccess.type` (`same-gvc`)
+
+## What 1.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`cpln-jenkins.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`admin-login`, `rejects-unknown-login`, `create-job`, `data-survives-upgrade`; upgrade from 1.0.0). The baseline gives the cloud a random API key: Jenkins boots with it, and no check provisions an agent.
 
 ## Troubleshooting / considerations
 - **`securityOptions.filesystemGroupId: 1000` is load-bearing — do not remove it.** The image runs as `jenkins` (uid/gid 1000) but a freshly provisioned volumeset mounts root-owned. Without it, `JENKINS_HOME` is unwritable, the container exits 1 in a loop, and the only clue is a bare `Permission denied`. Same pattern as `n8n` and `sftpgo`.

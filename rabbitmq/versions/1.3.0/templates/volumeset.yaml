@@ -1,0 +1,19 @@
+{{- include "rabbitmq.validate" . -}}
+{{- if .Values.volumeset }}
+{{- include "rabbitmq.validateSnapshots" . }}
+kind: volumeset
+name: {{ include "rabbitmq.volume.name" . }}
+tags: {{- include "rabbitmq.tags" . | nindent 2 }}
+spec:
+  fileSystemType: {{ .Values.volumeset.volume.fileSystemType }}
+  initialCapacity: {{ .Values.volumeset.volume.initialCapacity }}
+  performanceClass: {{ .Values.volumeset.volume.performanceClass }}
+  {{- /* Declared because the API backfills both; omitting them makes a default
+  install drift from the moment it is created. */}}
+  snapshots:
+    createFinalSnapshot: true
+    retentionDuration: {{ .Values.volumeset.snapshots.retentionDuration | quote }}
+    {{- if .Values.volumeset.snapshots.schedule }}
+    schedule: {{ .Values.volumeset.snapshots.schedule | quote }}
+    {{- end }}
+{{- end }}

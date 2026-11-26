@@ -1,0 +1,32 @@
+# seaweedfs 1.2.0 — the default install: one all-in-one `weed mini` node (single replica by design), admin UI
+# on, private (no public access), default sizes. Both prerequisite dictionary secrets are CI-generated:
+# the S3 keys (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) and the admin UI login (username / password).
+# One startup bucket, as most installs set for their backup tool. Daily volume snapshots are on by default
+# from this version.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+secrets:
+  s3:
+    type: dictionary
+    keys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+  admin:
+    type: dictionary
+    keys: [password]
+    entries: {username: admin}
+
+vars:
+  s3_access_key: "{secrets.s3.AWS_ACCESS_KEY_ID}"
+  s3_secret_key: "{secrets.s3.AWS_SECRET_ACCESS_KEY}"
+  bucket: e2e
+
+values:
+  s3:
+    credentialsSecretName: "{secrets.s3.name}"
+    buckets: [e2e]
+  adminUI:
+    enabled: true
+    credentialsSecretName: "{secrets.admin.name}"
+
+upgradeFrom:
+  - version: 1.1.0

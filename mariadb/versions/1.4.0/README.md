@@ -194,7 +194,7 @@ aws s3 cp s3://BUCKET_NAME/PREFIX/BACKUP_FILE.gz - \
 - **`phpMyAdmin.publicAccess.enabled: true` puts a database console on the internet.** Anyone reaching it needs only a valid database password to read and write everything. Prefer leaving it off and reaching the console from inside the GVC.
 - **Access changes take up to a couple of minutes** to propagate after an `internalAccess` or `publicAccess` change.
 - **Data lives on the volume set** and survives redeploys; `cpln helm uninstall` deletes it, taking the database with it.
-- **Upgrading from 1.3.x is a breaking change.** `config.*` and `enablePhpMyAdmin` no longer exist — an install that still sets them fails at render with instructions. Create the two secrets first, and expect the credentials on an existing volume to stay whatever they already were.
+- **Upgrading from 1.3.x is a breaking change.** `config.*` and `enablePhpMyAdmin` no longer exist — an install that still sets them fails at render with instructions. Create the two secrets first, and expect the credentials on an existing volume to stay whatever they already were. If the workload then stays at "transitioning to version …" with "not allowed to reveal the secret" in its deployment status, run `cpln workload force-redeployment RELEASE_NAME-maria --gvc GVC_NAME` to resume it.
 
 ## Links
 

@@ -1,0 +1,30 @@
+# timescaledb-highly-available 1.3.0 — the recommended install: credentials in a prerequisite secret.
+# Prod shape for this template (three Patroni members, three etcd members, two HAProxy replicas, one
+# location) at its default size.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  pgpw: hex
+
+secrets:
+  creds:
+    type: dictionary
+    entries:
+      username: e2e
+      password: "{gen.pgpw}"
+      database: e2e
+
+vars:
+  pg_user: e2e
+  pg_password: "{gen.pgpw}"
+  pg_db: e2e
+
+values:
+  postgres:
+    credentialsSecretName: "{secrets.creds.name}"
+
+# 1.2.1 is the previous version (same values): the upgrade adds the daily snapshot schedule to its volume
+# set.
+upgradeFrom:
+  - version: 1.2.1

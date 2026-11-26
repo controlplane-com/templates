@@ -1,0 +1,18 @@
+# cockroach 2.1.0 — the default install: three nodes in one location (CockroachDB's replication factor is 3),
+# PgBouncer in front, default sizes. Insecure mode, so no prerequisite secrets.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+vars:
+  nodes: "3"
+  db_name: mydb
+
+values:
+  locations:
+    - name: aws-us-east-1
+      replicas: 3
+
+# 2.0.0 is the only version that deploys into an existing GVC; 1.x creates its own and is refused by
+# design (install 2.x as a new release and restore, as the README says).
+upgradeFrom:
+  - version: 2.0.0

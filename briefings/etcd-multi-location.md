@@ -18,7 +18,7 @@
 | Resource | Purpose |
 |---|---|
 | `workload` (stateful) `{release}-etcd` | The members; exactly 1 replica per location, `replicaDirect: true` |
-| `volumeset` `{release}-etcd-vs` | `/var/lib/etcd` — raft WAL and snapshots, 10 GiB, `ext4`, final snapshot on uninstall |
+| `volumeset` `{release}-etcd-vs` | `/var/lib/etcd` — raft WAL and snapshots, 10 GiB, `ext4`, daily snapshots kept 7 d from 2.1.0 (none were ever taken through 2.0.0), final snapshot on uninstall |
 | `identity` + `policy` `{release}-etcd-policy` | `reveal` on exactly the startup secret, nothing else |
 | `policy` `{release}-etcd-gvc-policy` | **New in 2.0.0.** `view` on exactly the one install GVC, for the boot-time location check. Never `target: all` |
 | `secret` (opaque, plain) `{release}-etcd-startup` | `start.sh`, which computes member name, peer URLs and the full cluster list at boot |
@@ -39,6 +39,7 @@
 | `tuning.autoCompactionMode` / `.autoCompactionRetention` | `periodic` / `1h` | Cannot be set to "off" |
 | `tuning.quotaBackendBytes` | `0` | Backend ceiling in bytes; `0` means etcd's own 2 GiB, and is omitted from the render |
 | `volumeset.capacity` | `10` GiB | Platform minimum |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 2.1.0; `""` = off |
 | `internalAccess.type` / `.workloads` | `same-gvc` / `[]` | Who may reach `:2379`. The list also governs **raft peer traffic between the members**, so the chart appends its own workload — list only clients. Omitting it destroyed the cluster while Helm reported success (2026-08-27). |
 | `recovery.forceNewClusterInLocation` | `""` | Emergency single-member rebuild after permanent quorum loss |
 
@@ -113,3 +114,8 @@ A default install originally showed configuration drift against its own manifest
 - **Declare what the API backfills**: `rolloutOptions.terminationGracePeriodSeconds: 90`.
 - The `staticPlacement.locationLinks` sorting fix from 1.0.1 is moot in 2.0.0 — the chart no longer renders a GVC.
 - Check with a no-op `helm upgrade` — every resource must report `Unchanged`.
+
+## What 2.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 2.0.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`etcd-ml.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`cluster-healthy`, `write-read`, `replicated-cross-location`, `data-survives-upgrade`; baseline one member in each of aws-us-east-1, aws-us-east-2, aws-us-west-2; upgrade from 2.0.0).

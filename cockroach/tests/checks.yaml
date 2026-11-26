@@ -1,0 +1,55 @@
+# Feature checks for the cockroach template. Each runs after install (and after each upgrade) on every
+# version in its since/until range. Add a check with `since: <new version>` for every change you ship.
+# Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (db_name).
+#
+# The cluster runs in insecure mode (no SQL credentials), so there is no wrong-password control; the
+# checks assert on data that only a working cluster returns. SQL runs from the cockroach container,
+# which carries the `cockroach` CLI.
+checks:
+  - id: nodes-live
+    description: Every node of the baseline has joined the cluster and is live.
+    exec:
+      workload: "{release}-cockroach"
+      container: cockroach
+      shell: bash
+      script: |
+        n=$(cockroach node status --insecure --host=localhost:26257 --format=csv | awk -F, 'NR==1{for(i=1;i<=NF;i++)if($i=="is_live")c=i;next} $c=="true"' | wc -l | tr -d ' ')
+        echo "LIVE $n WANT {nodes}"
+    expect:
+      stdout: '^LIVE (\d+) WANT \1$'
+    retries: 8
+    retryDelaySeconds: 15
+
+  - id: write-read-via-pgbouncer
+    description: A row written through the PgBouncer endpoint reads back.
+    exec:
+      workload: "{release}-cockroach"
+      container: cockroach
+      shell: bash
+      script: |
+        set -e
+        H={release}-cockroach-pgbouncer.{gvc}.cpln.local:5432
+        M="e2e-$(date +%s%N)"
+        cockroach sql --insecure --host="$H" --database={db_name} -e \
+          "create table if not exists e2e (id uuid primary key default gen_random_uuid(), version string not null, marker string not null);
+           insert into e2e (version, marker) values ('{version}', '$M');" >/dev/null
+        cockroach sql --insecure --host="$H" --database={db_name} --format=tsv -e "select marker from e2e where marker = '$M'" | grep -qx "$M" && echo "READ $M"
+    expect:
+      stdout: "^READ e2e-"
+    retries: 6
+    retryDelaySeconds: 20
+    timeoutSeconds: 180
+
+  - id: data-survives-upgrade
+    description: >-
+      The row written on the version this scenario installed first is still there. On a fresh install
+      that is the same version; after an upgrade it proves the volumes carried over.
+    exec:
+      workload: "{release}-cockroach"
+      container: cockroach
+      shell: bash
+      script: |
+        n=$(cockroach sql --insecure --host=localhost:26257 --database={db_name} --format=tsv -e "select count(*) from e2e where version = '{installed_version}'" | tail -1)
+        [ "${n:-0}" -ge 1 ] && echo PERSISTED || echo "MISSING (rows for {installed_version}: ${n:-none})"
+    expect:
+      stdout: "^PERSISTED$"

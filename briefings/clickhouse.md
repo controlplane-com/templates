@@ -41,15 +41,15 @@ read cache — or, **from 3.1.0, `provider: local`: all data on the server volum
 | `server.image` / `keeper.image` | `clickhouse/clickhouse-{server,keeper}:25.10` | |
 | `server.resources` / `keeper.resources` | `cpu: 2`, `memory: 2Gi` | limit only, so bare names |
 | `volumeset.{server,keeper}.capacity` | `10` | GiB |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | 3.2.0; one knob for the server and Keeper volumesets; `""` = off |
 | `server.internalAccess.type` | `same-gvc` | renamed from `internal_access` in 3.0.0; the `workloads` list is now actually applied — in 2.x it was hardcoded to `[]`, so `workload-list` silently blocked everything |
 
 - **3.1.0 `provider: local`** (work item 4912, built for plausible's bundled ClickHouse): the only render change is
   `validateStorage` accepting `local`; every provider-specific block was already gated, so aws/gcp/azure/hetzner
   render byte-identically to 3.0.0 apart from version labels (proved per provider × single/one-shard/multi-shard).
   It also onboards `clickhouse/tests/` (the baseline uses `local`, so CI needs no bucket).
-  `local` is for a single node only (cluster modes render but are not a supported shape), and it has **no
-  scheduled snapshot or backup**: the server volume is the only copy; uninstall keeps one final snapshot
-  for 7 days. `upgradeFrom: []` in the 3.1.0 baseline (3.0.0 needs a bucket) is pending a maintainer ruling.
+  `local` is for a single node only (cluster modes render but are not a supported shape), and the server volume is the only copy: through 3.1.0 it had **no scheduled snapshot or backup**
+  (uninstall kept one final snapshot for 7 days); from 3.2.0 the daily volume snapshots are its only backup. `upgradeFrom: []` in the 3.1.0 baseline (3.0.0 needs a bucket) is pending a maintainer ruling.
 
 ## Troubleshooting / considerations
 
@@ -97,3 +97,9 @@ read cache — or, **from 3.1.0, `provider: local`: all data on the server volum
 - **Keep locations and the bucket in one region family.** Distributed queries fan out cross-region and every
   cache miss pulls from object storage — both are billed.
 - **The boot-time GVC read is bounded with `timeout`, and that bound is load-bearing.** `-T` is a per-operation timeout, not a retry cap: GNU wget (the server image) defaults to `--tries=20` and retries connect and DNS failures, so an unreachable API could consume ~200 s per invocation and ~600 s across the three-attempt loop — past the platform's readiness budget, in exactly the transient failure the guard exists to tolerate. BusyBox wget (keeper) has no `--tries`, so the bound cannot come from wget itself. `timeout` is present in both images. Measured: server 15 s / rc=124 (vs 33 s for only three retries); keeper stops at its own `-T 10`. Worst case is now 45 s. Do not remove the `timeout` prefix.
+
+## What 3.2.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). 3.1.0 and earlier rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`clickhouse.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply. One knob covers both volumesets (server and, in cluster modes, Keeper): with a bucket provider the server volume holds the object-storage disk metadata, without which the bucket's objects are unreadable, so it is real data, not cache.
+- E2E baseline `3.2.0` added (upgrade from 3.1.0, `provider: local`).
+- **3.2.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

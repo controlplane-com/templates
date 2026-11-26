@@ -1,0 +1,224 @@
+{{- include "redis-ml.validate" . -}}
+kind: workload
+name: {{ include "redis-ml.sentinel.name" . }}
+description: Sentinel
+tags:
+  cpln/publishNotReadyAddresses: "true"
+  {{- include "redis-ml.tags" . | nindent 2 }}
+gvc: {{ .Values.global.cpln.gvc }}
+spec:
+  type: stateful
+  containers:
+    - name: sentinel
+      command: /bin/sh
+      args:
+        - '-c'
+        - |-
+          mkdir -p /etc/sentinel
+
+          # Only write sentinel.conf if sentinel hasn't already taken ownership.
+          # The marker is `sentinel myid <hex>`, which sentinel writes via CONFIG REWRITE
+          # within milliseconds of first startup. Preserving sentinel-managed state across
+          # restarts ensures the post-failover master survives a sentinel pod restart.
+          bootstrap_sentinel_conf() {
+            if [ -s /etc/sentinel/sentinel.conf ] && grep -q "^sentinel myid " /etc/sentinel/sentinel.conf; then
+              echo "sentinel.conf already bootstrapped; preserving sentinel-managed state"
+              return 0
+            fi
+            echo "Bootstrapping sentinel.conf from static config"
+            cp /config/sentinel.conf /etc/sentinel/sentinel.conf
+
+            POD_ID=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
+            LOCATION=${CPLN_LOCATION##*/}
+            SENTINEL_WORKLOAD=${CPLN_WORKLOAD##*/}
+
+            echo "\nport 26379" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-ip replica-${POD_ID}.${SENTINEL_WORKLOAD}.${LOCATION}.${CPLN_GVC}.cpln.local" >> /etc/sentinel/sentinel.conf
+            echo "\nsentinel announce-port 26379" >> /etc/sentinel/sentinel.conf
+            # All sentinels agree on the same initial master: replica-0 of the primary (first) location.
+            # After any failover, sentinel persists the elected master via CONFIG REWRITE so this
+            # bootstrap line only matters on a completely fresh (never-started) sentinel.
+            echo "sentinel monitor mymaster replica-0.{{ include "redis-ml.name" . }}.{{ (index .Values.global.locations 0).name }}.${CPLN_GVC}.cpln.local 6379 {{ add (div (len .Values.global.locations) 2) 1 }}" >> /etc/sentinel/sentinel.conf
+          }
+
+          # Passwords come from user-created secrets, so they cannot live in the
+          # config secret. This runs UNCONDITIONALLY and strips first: sentinel.conf
+          # lives on a retained volume set, so a gated version would leave a stale
+          # credential in force after a password was turned off — sentinel would keep
+          # AUTHing with it and could no longer reach the master. Stripping every time
+          # makes rotation AND removal take effect on the next restart. Both lines must
+          # follow the `sentinel monitor` line, hence running after bootstrap.
+          #
+          # THREE lines are stripped, not two. `user default ...` is the one that is
+          # easy to miss and it silently defeats the other two: sentinel materialises
+          # its current auth state into an ACL line via CONFIG REWRITE, e.g.
+          #   user default on nopass sanitize-payload ~* &* +@all
+          # and an ACL entry for `default` OVERRIDES `requirepass`. Persisted during an
+          # authless period, it survives on the retained volume and every later boot
+          # keeps answering unauthenticated no matter what requirepass says — while
+          # every status surface reports success. Measured 2026-08-13: enabling auth on
+          # a running authless install left all three sentinels answering PONG to
+          # unauthenticated clients. It breaks in both directions, so stripping it is
+          # what makes the paragraph above true rather than aspirational:
+          #   removal  — persisted hash with requirepass gone still demanded the old password
+          #   rotation — the OLD password kept working and the new one was rejected
+          # Redis itself never had this bug because workload-redis.yaml re-copies its
+          # whole config from the secret on every boot; sentinel deliberately preserves
+          # its file (myid, epochs, elected master), so the stale line rides along.
+          # Values are written quoted and escaped, so a password containing a space,
+          # a `#` or a quote cannot corrupt the config.
+          conf_escape() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
+
+          apply_auth() {
+            CONF=/etc/sentinel/sentinel.conf
+            grep -v '^sentinel auth-pass mymaster ' "$CONF" \
+              | grep -v '^requirepass ' \
+              | grep -v '^user default ' > "$CONF.tmp"
+            mv "$CONF.tmp" "$CONF"
+            if [ -n "$REDIS_PASSWORD" ]; then
+              printf 'sentinel auth-pass mymaster "%s"\n' "$(conf_escape "$REDIS_PASSWORD")" >> "$CONF"
+            fi
+            if [ -n "$SENTINEL_PASSWORD" ]; then
+              printf 'requirepass "%s"\n' "$(conf_escape "$SENTINEL_PASSWORD")" >> "$CONF"
+            fi
+          }
+
+          # --- Never start in a location this release did not declare ---
+          # defaultOptions.minScale/maxScale are 0, so the platform should never
+          # place a Sentinel in an undeclared location. This is the last line of
+          # defence if it does, and a stray Sentinel is not harmless: it joins
+          # the Sentinel gossip and counts toward the ODOWN agreement, skewing
+          # the very quorum arithmetic the location list was chosen for.
+          # No API call here on purpose — this check needs only the rendered list
+          # and $CPLN_LOCATION, so the Sentinel identity needs no GVC-read grant.
+          # The GVC itself is reconciled by the Redis tier, which has the
+          # data-directory freshness signal the fatal/warn split depends on.
+          SENTINEL_LOCATION=${CPLN_LOCATION##*/}
+          CONFIGURED_LOCS="{{- range $loc := .Values.global.locations }}{{ $loc.name }} {{ end }}"
+          CONFIGURED_LOCS="${CONFIGURED_LOCS% }"
+          case " ${CONFIGURED_LOCS} " in
+            *" ${SENTINEL_LOCATION} "*) : ;;
+            *) echo "[sentinel] FATAL: this Sentinel is running in location '${SENTINEL_LOCATION}', which is not in the configured location list (${CONFIGURED_LOCS})." >&2
+               echo "[sentinel] It would join the Sentinel quorum and vote on failovers for a location this release does not manage." >&2
+               echo "[sentinel] Remove this location from GVC '${CPLN_GVC}', or add it to global.locations in your values." >&2
+               exit 1 ;;
+          esac
+
+          bootstrap_sentinel_conf
+          apply_auth
+          exec redis-sentinel /etc/sentinel/sentinel.conf {{ .Values.sentinel.extraArgs | default "" }}
+      cpu: {{ .Values.sentinel.resources.cpu | quote }}
+      memory: {{ .Values.sentinel.resources.memory | quote }}
+      image: {{ include "redis-ml.sentinelImage" . }}
+      inheritEnv: false
+      {{- if or .Values.redis.passwordSecretName .Values.sentinel.passwordSecretName }}
+      env:
+        {{- if .Values.redis.passwordSecretName }}
+        - name: REDIS_PASSWORD
+          value: cpln://secret/{{ .Values.redis.passwordSecretName }}.payload
+        {{- end }}
+        {{- if .Values.sentinel.passwordSecretName }}
+        - name: SENTINEL_PASSWORD
+          value: cpln://secret/{{ .Values.sentinel.passwordSecretName }}.payload
+        {{- end }}
+      {{- else }}
+      env: []
+      {{- end }}
+      ports:
+        - number: 26379
+          protocol: tcp
+      volumes:
+        - path: /config/sentinel.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "redis-ml.sentinelSecretConfig.name" . }}
+        - path: /etc/sentinel
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "redis-ml.sentinelVolume.name" . }}
+  defaultOptions:
+    {{- /*
+    minScale/maxScale are 0 so a GVC location this release did not ask for runs
+    NOTHING — the deployment there reads `This workload location is deactivated
+    because maxScale is set to 0`. localOptions below supplies the real count of
+    exactly 1 per declared location. Without this, an extra GVC location silently
+    starts a Sentinel that votes in failovers for a cluster it is not part of.
+    */}}
+    autoscaling:
+      maxConcurrency: 0
+      metric: disabled
+      minScale: 0
+      maxScale: 0
+      scaleToZeroDelay: 300
+      target: 100
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 5
+  rolloutOptions:
+    {{- /*
+    See the Redis workload: maxUnavailableReplicas is dropped by the API on a
+    stateful workload, and terminationGracePeriodSeconds is backfilled to 90.
+    minReadySeconds is declared because the API backfills 0 -- measured on
+    both workloads 2026-08-28, where it was the only render-vs-stored
+    difference left.
+    */}}
+    scalingPolicy: Parallel
+    minReadySeconds: 0
+    terminationGracePeriodSeconds: 90
+  firewallConfig:
+    {{- /* Always rendered and fully declared — see the Redis workload. */}}
+    external:
+      {{- if or .Values.firewall.externalInboundAllowCIDR .Values.sentinel.publicAccess.enabled }}
+      inboundAllowCIDR:
+        {{- if .Values.firewall.externalInboundAllowCIDR }}
+        {{- range (splitList "," .Values.firewall.externalInboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+        {{- else }}
+        - 0.0.0.0/0
+        {{- end }}
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+      {{- if .Values.firewall.externalOutboundAllowCIDR }}
+      outboundAllowCIDR:
+        {{- range (splitList "," .Values.firewall.externalOutboundAllowCIDR) }}
+        - {{ . | trim }}
+        {{- end }}
+      {{- else }}
+      outboundAllowCIDR: []
+      {{- end }}
+      inboundBlockedCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      {{- /*
+      One helper, one `inboundAllowWorkload` key — identical to the Redis tier.
+      This list governs Sentinel's monitoring of every Redis instance and its
+      gossip with its peer Sentinels, so a list naming only clients would leave
+      every Sentinel isolated while all of them still report ready.
+      */}}
+      {{- include "redis-ml.internalFirewall" . | nindent 6 }}
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.sentinelIdentity.name" . }}
+  loadBalancer:
+    replicaDirect: true
+  localOptions:
+    {{- /*
+    Written in FULL for every location, for the same reason as the Redis tier:
+    a minimal entry makes the API backfill its own autoscaling defaults.
+    */}}
+    {{- range $location := .Values.global.locations }}
+    - location: //location/{{ $location.name }}
+      autoscaling:
+        maxConcurrency: 0
+        metric: disabled
+        minScale: 1
+        maxScale: 1
+        scaleToZeroDelay: 300
+        target: 100
+      capacityAI: false
+      debug: false
+      suspend: false
+      timeoutSeconds: 5
+    {{- end }}
+  supportDynamicTags: false

@@ -13,7 +13,7 @@ region, and multi-region deployments needing a single logical database rather th
 |---|---|
 | workload `-cockroach` (stateful) | nodes per location, `replicaDirect`, drain hook on shutdown |
 | workload `-cockroach-pgbouncer` (standard) | connection pooler, autoscales on RPS **per location** |
-| volumeset | `ext4`, one per node, 7-day snapshots |
+| volumeset | `ext4`, one per node; daily snapshots kept 7 d from 2.1.0 (none were ever taken through 2.0.0) |
 | secrets | cockroach startup script, pgbouncer startup script, a `dictionary` db-config secret |
 | workload `-cockroach-backup` (cron, optional) | `BACKUP INTO` S3/GCS; **carries no identity** — the nodes do the upload |
 | identity + policy | `reveal` on this release's secrets |
@@ -40,6 +40,11 @@ region, and multi-region deployments needing a single logical database rather th
 - **Render-time check that `backup.location` is one of `locations`.**
 - **`replicas: 0` is now refused** — it used to suspend a location while still counting it as a region.
 
+## What 2.1.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`cockroach.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- E2E tests onboarded (`nodes-live`, `write-read-via-pgbouncer`, `data-survives-upgrade`; upgrade from 2.0.0).
+
 ## Troubleshooting traps
 
 - **multiZone is one-way (measured on pgedge 2026-11-11):** true → false strands replicas whose volumes are in another zone (unschedulable, rollout stalls); false → true is safe. `cpln helm upgrade` has no `--reuse-values`, so an upgrade that omits it turns it off. Recovery: upgrade with true + force-redeployment. README Important Notes says so (in-place, 2026-11-11).
@@ -50,3 +55,4 @@ region, and multi-region deployments needing a single logical database rather th
 - **Survivability comes from location count.** Fewer than three locations cannot survive a region loss no matter what CockroachDB is configured to do, and 2.0.0's default is one location.
 - **Env vars are `CRDB_`, not `COCKROACH_`.** The cockroach binary maps `COCKROACH_<FLAG>` onto its own flag defaults, so that namespace belongs to it. (Measured: unknown `COCKROACH_*` names are currently ignored without complaint — but the collision risk is free to avoid.) `CPLN_*` is rejected outright by the API at apply time.
 - **The GVC read is bounded with `timeout`, not curl's `--retry`.** Measured in this image against an unroutable address: `--max-time 10 --retry 3 --retry-delay 2` cost **46 s per call**, because `--max-time` is per attempt. The shipped form (3 shell retries of `timeout 8 curl --max-time 6`) completes the whole guard in ~22 s worst case and still starts the node with a warning.
+- **2.1.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

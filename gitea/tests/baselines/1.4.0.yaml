@@ -1,0 +1,47 @@
+# gitea 1.4.0 — the default install: one Gitea replica on its volume set, the bundled single PostgreSQL,
+# public HTTPS, Git-over-SSH off, default sizes. Both prerequisite secrets are created by CI.
+locations: [aws-us-east-1]
+timeoutSeconds: 900
+
+generated:
+  adminpw: hex
+  pgpw: hex
+  secretkey: hex
+  internaltoken: hex
+  jwt: kraft-cluster-id
+
+secrets:
+  auth:
+    type: dictionary
+    entries:
+      adminUsername: gitea_admin
+      adminPassword: "{gen.adminpw}"
+      adminEmail: admin@example.com
+      secretKey: "{gen.secretkey}"
+      internalToken: "{gen.internaltoken}"
+      # Gitea needs base64url (no padding) of exactly 32 bytes, i.e. 43 characters: 22 random characters
+      # (a kraft-cluster-id is base64url of 16 random bytes) padded with 21 fixed ones.
+      jwtSecret: "{gen.jwt}AAAAAAAAAAAAAAAAAAAAA"
+  db:
+    type: dictionary
+    entries:
+      username: gitea
+      password: "{gen.pgpw}"
+      database: gitea
+
+vars:
+  admin_user: gitea_admin
+  admin_password: "{gen.adminpw}"
+
+values:
+  gitea:
+    auth:
+      secretName: "{secrets.auth.name}"
+  postgres:
+    config:
+      credentialsSecretName: "{secrets.db.name}"
+
+# 1.2.0 and earlier render their own database secret; upgrading across 1.3.0 needs a new prerequisite
+# secret holding the current credentials (README), so the plain upgrade path starts at 1.3.0.
+upgradeFrom:
+  - version: 1.3.0

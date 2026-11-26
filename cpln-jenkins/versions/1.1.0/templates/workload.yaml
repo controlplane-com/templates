@@ -1,0 +1,84 @@
+{{- include "cpln-jenkins.validate" . -}}
+kind: workload
+name: {{ include "cpln-jenkins.name" . }}
+gvc: {{ .Values.global.cpln.gvc }}
+tags: {{- include "cpln-jenkins.tags" . | nindent 4 }}
+spec:
+  type: stateful
+  identityLink: //identity/{{ include "cpln-jenkins.identity.name" . }}
+  defaultOptions:
+    capacityAI: false
+    autoscaling:
+      # Jenkins keeps its state on one volume and is not clustered here, so the
+      # controller is a singleton. Agents provide the scale.
+      minScale: 1
+      maxScale: 1
+  containers:
+    - name: jenkins
+      image: {{ .Values.image | quote }}
+      minCpu: {{ .Values.resources.minCpu }}
+      cpu: {{ .Values.resources.maxCpu }}
+      minMemory: {{ .Values.resources.minMemory }}
+      memory: {{ .Values.resources.maxMemory }}
+      ports:
+        - number: 8080
+          protocol: http
+      env:
+        - name: JENKINS_ADMIN_ID
+          value: {{ .Values.admin.username | quote }}
+        - name: JENKINS_ADMIN_PASSWORD
+          value: 'cpln://secret/{{ .Values.admin.passwordSecretName }}.payload'
+        # The address AGENTS dial back on. It must be the fully-qualified
+        # internal name: the short workload name does not resolve from every
+        # workload type, and agents connect over WebSocket to this URL.
+        - name: JENKINS_URL
+          value: 'http://{{ include "cpln-jenkins.name" . }}.{{ .Values.global.cpln.gvc }}.cpln.local:8080/'
+      {{- if .Values.cloud.enabled }}
+        # NOT named CPLN_*: the platform reserves that prefix and rejects the
+        # workload at apply time. JCasC interpolates this into the cloud config.
+        - name: CONTROLPLANE_API_KEY
+          value: 'cpln://secret/{{ .Values.cloud.apiKeySecretName }}.payload'
+      {{- end }}
+      volumes:
+        - uri: cpln://volumeset/{{ include "cpln-jenkins.volumeset.name" . }}
+          path: /var/jenkins_home
+      {{- if .Values.cloud.enabled }}
+        - uri: cpln://secret/{{ include "cpln-jenkins.secret.cloud.name" . }}.payload
+          path: /var/jenkins_conf/20-cloud.yaml
+      {{- end }}
+      readinessProbe:
+        httpGet:
+          path: /login
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        # 18 x 10s = 180s. The platform caps failureThreshold at 20.
+        failureThreshold: 18
+      livenessProbe:
+        httpGet:
+          path: /login
+          port: 8080
+        initialDelaySeconds: 120
+        periodSeconds: 20
+        failureThreshold: 10
+  # The image runs as jenkins (uid/gid 1000), but a freshly provisioned
+  # volumeset mounts root-owned. Without this, JENKINS_HOME is unwritable and
+  # the container exits 1 in a loop with only "Permission denied" to show for it.
+  securityOptions:
+    filesystemGroupId: 1000
+  firewallConfig:
+    external:
+      outboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- if .Values.publicAccess.enabled }}
+      inboundAllowCIDR:
+        - 0.0.0.0/0
+      {{- else }}
+      inboundAllowCIDR: []
+      {{- end }}
+    internal:
+      inboundAllowType: {{ .Values.internalAccess.type }}
+      {{- if eq .Values.internalAccess.type "workload-list" }}
+      inboundAllowWorkload:
+        {{- toYaml .Values.internalAccess.workloads | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,10 @@
+# uptime-kuma 1.4.0 — the default install: one Uptime Kuma replica on its volume set with daily snapshots,
+# one location, public access off (the admin account is claimed over port-forward). No prerequisite secrets.
+locations: [aws-us-east-1]
+timeoutSeconds: 600
+
+values: {}
+
+# 1.3.0 is the previous version (same values).
+upgradeFrom:
+  - version: 1.3.0

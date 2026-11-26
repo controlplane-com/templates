@@ -16,7 +16,7 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 | Resource | Notes |
 |---|---|
 | workload (stateful) | `replicas` nodes forming the cluster |
-| volumeset | per-node persistence |
+| volumeset | per-node persistence (AOF on); daily snapshots kept 7 d + a final snapshot on delete from 1.8.0 (no `snapshots` block through 1.7.0) |
 | secret `-config`, `-start-script` | cluster config and the startup/bootstrap script |
 | secret auth *(optional)* | `REDIS_PASSWORD`, created **only** when an inline `redis.password` is set |
 | user secret *(optional, prerequisite)* | dictionary, key `password` by default; read via `cpln://secret/` env, never rendered (1.7.0+) |
@@ -36,7 +36,12 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
 | `redis.auth.fromSecret.enabled` / `.name` / `.passwordKey` | `false` / `""` / `password` | recommended auth; the chart `fail`s on both options at once, or on an empty name/key. **1.7.0+** |
 | `redis.password` | unset (commented) | inline auth, less secure — **auth is off by default** |
 | `internalAccess` | — | the only access control when no password is set |
+| `volumeset.snapshots.schedule` / `.retentionDuration` | `"0 3 * * *"` / `7d` | `""` = no scheduled snapshots; more often than hourly fails at render (`redis-cluster.validateSnapshots`, mirrored in the wizard). **1.8.0+** |
 | `backup.enabled` | `false` | |
+
+## What 1.8.0 changed
+
+- The volume set gets a whole `snapshots` block for the first time (work item 5219): `createFinalSnapshot: true`, `volumeset.snapshots.schedule` (daily 03:00 UTC) and `retentionDuration` (7d). Through 1.7.0 no snapshot was ever taken, not even on uninstall. CI baseline 1.8.0 upgrades from 1.7.0 and 1.4.3.
 
 ## Troubleshooting traps
 
@@ -98,3 +103,4 @@ client can speak the Redis Cluster protocol and follow `MOVED`/`ASK` redirects.
   API on this stateful workload and `terminationGracePeriodSeconds: 90` is backfilled.
 - **The start script runs `set -f`**: `$AUTH_PARAMS` is unquoted, so without it a password such as `/e*/..` globs
   to a path and the node never passes its health wait (proven locally 10-22).
+- **1.8.0:** `cpln-connector` dropped from the identity's AWS `policyRefs` (ruling 2026-11-20: unnecessary, over-grants IAM role creation); only the user's scoped policy remains.

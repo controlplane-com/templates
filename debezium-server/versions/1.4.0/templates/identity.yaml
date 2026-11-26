@@ -1,0 +1,19 @@
+{{- include "debezium.validateSource" . -}}
+{{- include "debezium.validateSink" . -}}
+{{- include "debezium.validateOffsetStorage" . -}}
+kind: identity
+name: {{ include "debezium.identity.name" . }}
+description: Debezium Server identity for secret access and cloud integration
+gvc: {{ .Values.global.cpln.gvc }}
+tags:
+  {{- include "debezium.tags" . | nindent 2 }}
+{{- if and (eq .Values.sink.type "kinesis") .Values.sink.kinesis.cloudAccount.enabled }}
+aws:
+  cloudAccountLink: //cloudaccount/{{ .Values.sink.kinesis.cloudAccount.name }}
+{{- end }}
+{{- if and (eq .Values.sink.type "pubsub") .Values.sink.pubsub.cloudAccount.enabled }}
+gcp:
+  cloudAccountLink: //cloudaccount/{{ .Values.sink.pubsub.cloudAccount.name }}
+  scopes:
+    - https://www.googleapis.com/auth/pubsub
+{{- end }}

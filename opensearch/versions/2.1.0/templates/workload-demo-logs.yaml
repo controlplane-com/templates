@@ -1,0 +1,205 @@
+{{- if .Values.demoLogs.enabled }}
+---
+kind: workload
+name: {{ include "opensearch.demoLogs.name" . }}
+description: Demo app generating logs for OpenSearch
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: log-generator
+      args:
+        - '-u'
+        - '-c'
+        - >
+          import json
+
+          import time
+
+          import random
+
+          from datetime import datetime
+
+          import os
+
+
+          os.makedirs('/var/log/app', exist_ok=True)
+
+          log_file = '/var/log/app/app.log'
+
+
+          services = ['api-gateway', 'payment-service', 'user-service',
+          'inventory-service']
+
+          levels = ['INFO', 'WARN', 'ERROR', 'DEBUG']
+
+          weights = [60, 20, 10, 10]
+
+
+          actions = [
+              'User login successful',
+              'Payment processed',
+              'Product added to cart',
+              'Order created',
+              'Database query executed',
+              'API request received',
+              'Cache hit',
+              'Cache miss',
+              'Email sent',
+              'File uploaded'
+          ]
+
+
+          errors = [
+              'Connection timeout to database',
+              'Payment gateway unavailable',
+              'Invalid authentication token',
+              'Rate limit exceeded',
+              'Resource not found',
+              'Internal server error'
+          ]
+
+
+          print("Starting log generator...")
+
+          print(f"Writing logs to: {log_file}")
+
+
+          counter = 0
+
+          with open(log_file, 'a', buffering=1) as f:
+              while True:
+                  counter += 1
+                  level = random.choices(levels, weights=weights)[0]
+                  service = random.choice(services)
+                  
+                  if level == 'ERROR':
+                      message = random.choice(errors)
+                  else:
+                      message = random.choice(actions)
+                  
+                  log_entry = {
+                      'timestamp': datetime.utcnow().isoformat() + 'Z',
+                      'level': level,
+                      'service': service,
+                      'message': message,
+                      'user_id': f'user-{random.randint(1000,9999)}',
+                      'request_id': f'req-{random.randint(10000,99999)}',
+                      'duration_ms': random.randint(10, 500),
+                      'status_code': random.choice([200, 201, 400, 404, 500]) if level == 'ERROR' else 200,
+                      'ip_address': f'{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}'
+                  }
+                  
+                  f.write(json.dumps(log_entry) + '\n')
+                  f.flush()
+                  
+                  if counter % 10 == 0:
+                      print(f"Generated {counter} logs... (Level: {level}, Service: {service})")
+                  
+                  time.sleep(random.uniform(1, 3))
+      command: python3
+      cpu: 100m
+      env: []
+      image: python:3.11-slim
+      inheritEnv: false
+      memory: 128Mi
+      ports: []
+      volumes:
+        - path: /var/log/app
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.demoLogsVolume.name" . }}
+    - name: fluent-bit
+      cpu: 50m
+      env:
+        - name: OPENSEARCH_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.password
+      image: fluent/fluent-bit:3.2
+      inheritEnv: false
+      memory: 64Mi
+      ports: []
+      volumes:
+        - path: /var/log/app
+          recoveryPolicy: retain
+          uri: cpln://volumeset/{{ include "opensearch.demoLogsVolume.name" . }}
+        - path: /fluent-bit/etc/fluent-bit.conf
+          recoveryPolicy: retain
+          uri: cpln://secret/{{ include "opensearch.secretFluentBitDemo.name" . }}.payload
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    multiZone:
+      enabled: false
+    suspend: false
+    timeoutSeconds: 30
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.demoLogsIdentity.name" . }}
+  loadBalancer:
+    replicaDirect: false
+  localOptions: []
+  supportDynamicTags: false
+
+{{- if not .Values.demoLogs.remove_setup_workload }}
+---
+kind: workload
+name: {{ include "opensearch.demoLogsSetup.name" . }}
+description: One-time setup job for OpenSearch demo
+tags: {{ include "opensearch.tags" . | nindent 4 }}
+spec:
+  type: standard
+  containers:
+    - name: setup
+      image: curlimages/curl:8.22.0
+      cpu: 100m
+      memory: 128Mi
+      command: /bin/sh
+      args:
+        - -c
+        - {{- include "opensearch.inlineScript" (include "opensearch.script.demoSetup" .) | nindent 10 }}
+      env:
+        - name: OS_ADMIN_PASSWORD
+          value: cpln://secret/{{ include "opensearch.secret.credentials.name" . }}.password
+      inheritEnv: false
+  defaultOptions:
+    autoscaling:
+      metric: disabled
+      minScale: 1
+      maxScale: 1
+      maxConcurrency: 0
+      scaleToZeroDelay: 300
+      target: 95
+    capacityAI: false
+    debug: false
+    suspend: false
+    timeoutSeconds: 600  # 10 minutes timeout
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+      inboundBlockedCIDR: []
+      outboundAllowCIDR: []
+      outboundAllowHostname: []
+      outboundAllowPort: []
+      outboundBlockedCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      inboundAllowWorkload: []
+  identityLink: //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "opensearch.clientIdentity.name" . }}
+  supportDynamicTags: false
+{{- end }}
+{{- end }}

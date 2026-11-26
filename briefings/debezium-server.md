@@ -11,7 +11,7 @@ or an HTTP endpoint, without running Kafka Connect.
 | Resource | Notes |
 |---|---|
 | workload `{release}-debezium` | Debezium Server, one connector per deployment, port 8080; stateful when a volumeset exists, standard otherwise |
-| volumeset | offset and schema-history storage, so the connector resumes rather than re-snapshotting; rendered only when offsets or schema history use `file` storage |
+| volumeset | offset and schema-history storage, so the connector resumes rather than re-snapshotting; rendered only when offsets or schema history use `file` storage; daily snapshots kept 7 d from 1.4.0 (none were ever taken through 1.3.0) |
 | secret `-config` | the generated `application.properties`; credentials appear as `${ENV}` references |
 | secret `-credentials` | a dictionary the workload reads via `cpln://`, mixing user credentials with chart-derived values |
 | secret `-entrypoint` | the PostgreSQL startup step: waits for the database and creates the `debezium_heartbeat` table (1.3.0: Java source run by the image's JDK, no slot); only with `source.type: postgres` and `heartbeatIntervalMs > 0` |
@@ -32,6 +32,11 @@ Does not create a GVC.
 | `source.postgres.slotFailover` | `true` | 1.3.0: Debezium's `slot.failover` — a PG 17 failover slot that replicas with `sync_replication_slots` keep in sync; Debezium omits `FAILOVER` on PG < 17 (measured on PG 16) |
 | `source.postgres.heartbeatIntervalMs` | `0` | set ~5000 for HA; see below |
 | `sink.type` | `kafka` | also redis, nats-jetstream, http, kinesis, pubsub, pulsar, eventhubs |
+
+## What 1.4.0 changed
+
+- Volume snapshots are scheduled, daily at 03:00 UTC by default (`volumeset.snapshots.schedule`, `""` = off; `retentionDuration` 7d). Earlier versions rendered `retentionDuration` with no schedule, so the platform never took one (work item 5219). A schedule more frequent than hourly fails at render (`debezium.validateSnapshots`, mirrored in the wizard); the API would reject it only at apply.
+- No `tests/` of its own: the install becomes ready only with a reachable source database and sink, which a one-chart CI run cannot stand up. It is exercised as a subchart by `cdc-pipeline/tests` (still pinned to 1.3.0; 1.4.0 is covered when cdc-pipeline bumps its dependency).
 
 ## Troubleshooting traps
 

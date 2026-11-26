@@ -1,0 +1,23 @@
+{{- include "redis-ml.validate" . -}}
+kind: policy
+name: {{ include "redis-ml.sentinelPolicy.name" . }}
+description: Sentinel Policy
+tags: {{- include "redis-ml.tags" . | nindent 4 }}
+bindings:
+  - permissions:
+      - reveal
+    principalLinks:
+      - //gvc/{{ .Values.global.cpln.gvc }}/identity/{{ include "redis-ml.sentinelIdentity.name" . }}
+targetKind: secret
+targetLinks:
+  - //secret/{{ include "redis-ml.sentinelSecretConfig.name" . }}
+  {{- /*
+  Sentinel authenticates TO Redis (auth-pass) and optionally requires a password
+  of its own, so it reads both — each only when that feature is on.
+  */}}
+  {{- if .Values.redis.passwordSecretName }}
+  - //secret/{{ .Values.redis.passwordSecretName }}
+  {{- end }}
+  {{- if .Values.sentinel.passwordSecretName }}
+  - //secret/{{ .Values.sentinel.passwordSecretName }}
+  {{- end }}

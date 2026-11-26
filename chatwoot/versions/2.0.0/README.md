@@ -1,7 +1,8 @@
 # Chatwoot
 
-> **Upgrading from 1.2.x:** the database credentials and the Redis password are now secrets you create
-> before upgrading, under **new** names — see [Upgrading from 1.2.x](#upgrading-from-12x).
+> **Upgrading from 1.x:** the default HA database upgrades in place and keeps PostgreSQL 17; a single-instance
+> database needs `postgres.image: pgvector/pgvector:0.8.7-pg18` in your values — see [Upgrading from 1.x](#upgrading-from-1x).
+> From 1.2.x, also create the database and Redis secrets first — see [Upgrading from 1.2.x](#upgrading-from-12x).
 
 Chatwoot is an open-source customer engagement platform — a live-chat widget, shared email inbox, and omni-channel agent desk. This template deploys the **Community Edition** (MIT core) as a Rails web tier plus a Sidekiq worker, backed by a highly available pgvector-capable PostgreSQL and a bundled Redis, with local or object-storage attachments.
 
@@ -9,7 +10,7 @@ Chatwoot is an open-source customer engagement platform — a live-chat widget, 
 
 - **Chatwoot web** — a `stateful` HTTP workload (`{release}-chatwoot`, port 3000) serving the dashboard, API, chat widget, and ActionCable WebSockets; scale with `chatwoot.replicas` (requires object storage).
 - **Chatwoot worker** — a `standard` workload (`{release}-chatwoot-worker`) running Sidekiq; it also runs the database migrations and the first-run onboarding bootstrap, so it stays at one replica.
-- **PostgreSQL** — highly available by default (`postgres-highly-available` subchart: 3 Patroni replicas on PostgreSQL 17.5, 3 etcd replicas, an HAProxy leader endpoint). Its image ships **pgvector**, which Chatwoot's schema requires. A single-instance `postgres` alternative is available for dev.
+- **PostgreSQL** — highly available by default (`postgres-highly-available` subchart: 3 Patroni replicas, PostgreSQL 18 for new clusters, 3 etcd replicas, an HAProxy leader endpoint). Its image ships **pgvector**, which Chatwoot's schema requires. A single-instance `postgres` alternative (PostgreSQL 19 with pgvector) is available for dev; a boot guard refuses to start its server on a data directory of another PostgreSQL major and leaves it untouched.
 - **Redis** — a single-node `stateful` workload (`{release}-chatwoot-redis`, port 6379) with AOF persistence and password auth; Sidekiq queues, ActionCable pub/sub, cache, and the one-time install-onboarding flag.
 - **Attachment volumeset** — local attachment storage at `/app/storage`; rendered only when `storage.type: local`.
 - **Redis volumeset** — AOF persistence at `/data`.
@@ -153,7 +154,7 @@ Enable exactly one of `postgresHA` (default) and `postgres`.
 ```yaml
 postgresHA:
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
+  image: controlplanecorporation/patroni-postgres:0.9   # PostgreSQL 18 for new clusters (bundles 14-18), pgvector 0.8.7; tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-chatwoot-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -166,7 +167,7 @@ postgresHA:
 
 postgres:                     # single-instance alternative (dev/lightweight)
   enabled: false
-  image: pgvector/pgvector:pg18   # MUST carry pgvector — stock postgres:18 does not
+  image: pgvector/pgvector:0.8.7-pg19   # MUST carry pgvector (stock postgres does not); a 1.x release keeps pgvector/pgvector:0.8.7-pg18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-chatwoot-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   volumeset:
@@ -239,7 +240,21 @@ cpln secret create-dictionary --name my-chatwoot-s3-keys \
 
 Set `postgresHA.backup.enabled: true` (or `postgres.backup.enabled: true` in single-instance mode) and pick a provider (the same `aws`/`gcp`/`minio` sub-keys exist under both blocks):
 
-- **AWS** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and create an IAM policy with the JSON above (substituting your backup bucket). Set `backup.provider: aws` plus `backup.aws.bucket`, `region`, `cloudAccountName`, and `policyName`.
+- **AWS** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and create an IAM policy with the JSON below (replace `YOUR_BACKUP_BUCKET`). Set `backup.provider: aws` plus `backup.aws.bucket`, `region`, `cloudAccountName`, and `policyName`. The backup identity carries only this policy, so it needs every action listed:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
+                 "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+                 "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
+      "Resource": ["arn:aws:s3:::YOUR_BACKUP_BUCKET", "arn:aws:s3:::YOUR_BACKUP_BUCKET/*"]
+    }]
+  }
+  ```
+
 - **GCP** — create the bucket, create a [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and grant its service account **Storage Object Admin** (`roles/storage.objectAdmin`) on that bucket. Set `backup.provider: gcp` plus `backup.gcp.bucket` and `cloudAccountName`.
 - **MinIO / S3-compatible** — create the bucket on your server. Set `backup.provider: minio` plus `backup.minio.endpoint` (scheme + port) and `bucket`. On both paths the keys are a prerequisite dictionary secret, named by `postgresHA.backup.minio.credentialsSecretName` or `postgres.backup.minio.credentialsSecretName`. The same secret serves either:
 
@@ -345,14 +360,73 @@ Redis keeps no password on disk: it takes the password from the secret each time
 
 Chatwoot cannot reach Redis from step 2 until its own redeploys finish, so expect a few minutes of interruption and rotate in a quiet window.
 
+## Upgrading from 1.x
+
+**HA mode (the default)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes. Chatwoot reconnects by itself.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [Database backups](#database-backups) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Chatwoot release (same prerequisite secrets) in place of the second database release, and the old release's `-chatwoot` and `-chatwoot-worker` workloads stopped during the copy.
+
+**Single-instance mode** (`postgres.enabled: true`) now installs PostgreSQL 19 (`pgvector/pgvector:0.8.7-pg19`), while a 1.x release's database is PostgreSQL 18 (`pgvector/pgvector:pg18`). A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, Chatwoot cannot reach its database, and the logs repeat `[pg-guard] REFUSING TO START` every 30 seconds:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: pgvector/pgvector:0.8.7-pg18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). It is the same PostgreSQL 18 with pgvector 0.8.7, under a fixed tag instead of 1.x's floating `pg18`. The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=pgvector/pgvector:0.8.7-pg18
+```
+
+**Move to PostgreSQL 19, side by side** (Chatwoot gets a new endpoint; conversations are down during the copy). Do it in a quiet window: anything written to the old release after step 3 is not copied.
+
+1. Install this version as a NEW release in single-instance mode with the **same prerequisite secrets** (`secrets.name`, `postgres.config.credentialsSecretName`, `redis.credentialsSecretName`) and the same `storage` settings. The root keys must be the same, or the two-factor secrets in the copied database cannot be decrypted; with `s3` or `s3-compatible` storage both releases read the same bucket.
+2. With `storage.type: local` only, copy the attachments through your machine while both releases run:
+
+   ```bash
+   mkdir -p ./chatwoot-storage
+   cpln workload exec OLD_RELEASE-chatwoot --gvc GVC_NAME --container chatwoot -- \
+     sh -c 'cd /app/storage && tar czf - --exclude="./.*" . | base64' | base64 -d | tar xzf - -C ./chatwoot-storage
+   cpln cp ./chatwoot-storage/. NEW_RELEASE-chatwoot:/app/storage --gvc GVC_NAME --container chatwoot
+   ```
+
+   `cpln cp` may end with `Cannot change mode ... Operation not permitted` and exit 2: the volume's root directory belongs to root, so its mode cannot be copied. The files themselves arrive; check with `cpln workload exec NEW_RELEASE-chatwoot --gvc GVC_NAME --container chatwoot -- ls -la /app/storage`.
+
+3. Stop the old Chatwoot, so nothing writes to its database: `cpln workload stop OLD_RELEASE-chatwoot --gvc GVC_NAME` and `cpln workload stop OLD_RELEASE-chatwoot-worker --gvc GVC_NAME`.
+4. Stop the new Chatwoot the same way (`NEW_RELEASE-chatwoot` and `NEW_RELEASE-chatwoot-worker`), then replace its empty database with a copy of the old one, from inside the new PostgreSQL container. The PostgreSQL 19 `pg_dump` reads the old server, and the dump recreates the `vector` extension:
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+5. The new release's first boot left the "create the first admin" flag in its Redis. Clear it, or the dashboard sends every visitor to the onboarding page (prints `1`):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-chatwoot-redis --gvc GVC_NAME --container redis -- \
+     sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning DEL alfred:CHATWOOT_INSTALLATION_ONBOARDING'
+   ```
+
+6. Start the new worker, then the web tier (`cpln workload start NEW_RELEASE-chatwoot-worker --gvc GVC_NAME`, then `cpln workload start NEW_RELEASE-chatwoot --gvc GVC_NAME`), log in, and check your inboxes, conversations and attachments.
+7. Move what points at the old endpoint: the website widget script, channel webhooks and callback URLs (or set `chatwoot.frontendUrl` and move your custom domain). Then uninstall the old release (this deletes its volumes).
+
 ## Upgrading from 1.3.0 or earlier
 
 1.3.1 moves the HA database (`postgresHA`) to `controlplanecorporation/patroni-postgres:0.8`, which carries
 pgvector 0.8.7 (CVE-2026-103484). The fix is in the server library and takes effect when the upgrade restarts
 the Patroni members; existing data needs nothing. Nothing limits that rollout, so expect a
 brief interruption of writes while the leader changes. Chatwoot itself restarts as on any upgrade; with a single Chatwoot web replica (the default) that is the longer interruption, because the old replica stops before the new one serves. Upgrade in a quiet window. If you pinned
-`postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Chatwoot's schema creates the `vector` extension, so in the Chatwoot database `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` as the database user, through the proxy endpoint `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432`; it only updates that record.
-Single-instance mode (`postgres`) is unchanged.
+`postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. Chatwoot's schema creates the `vector` extension, so in the Chatwoot database `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` as the database user, through the proxy endpoint `RELEASE_NAME-postgres-ha-proxy.GVC_NAME.cpln.local:5432`; it only updates that record.
+1.3.1 left single-instance mode (`postgres`) unchanged; for 2.0.0 see [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Upgrading from 1.2.x
 
@@ -393,11 +467,12 @@ The upgrade restarts the bundled PostgreSQL too (it now reads the new secret), s
 - **Restart the web workload after any Redis restart.** If the bundled Redis restarts (a redeploy, a reschedule, or an upgrade), background jobs and the cache reconnect on their own, but the web tier's real-time subscriber does **not** — live updates stop silently. Nothing is logged and the health endpoint stays green, so the only symptom is that agents and visitors stop seeing new messages until they refresh. Force-redeploy the `{release}-chatwoot` workload to restore it (about 3–4 minutes).
 - **Expect a few minutes of 503s during `helm upgrade`.** The upgrade restarts the bundled Redis, and the web readiness endpoint reports unhealthy without Redis, so every replica leaves the load balancer until Redis is back — measured at roughly 32% failed requests over a ~3 minute window. Upgrade during a quiet period.
 
-- **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 17.5 for the HA path, 18 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
+- **Choose the database mode before installing — it cannot be switched later.** Flipping `postgresHA.enabled` / `postgres.enabled` on a live release points Chatwoot at a different, empty database (separate volume set, and a different PostgreSQL major: 18 for a new HA cluster, 19 for single-instance), so the app re-runs onboarding and your existing data is orphaned rather than migrated.
 
 - **All three prerequisite secrets must exist before install** — a missing `secrets.name`, database credentials or Redis password secret wedges the deployment with zero log lines; see Prerequisites for the diagnostic.
 - **Rotating the database password needs `ALTER ROLE` plus a forced redeployment of Chatwoot** (not the database) — see [Rotating the database password](#rotating-the-database-password). Rotating the Redis password needs a forced redeployment of Redis, then the worker and web — see [Rotating the Redis password](#rotating-the-redis-password).
 - **Complete the onboarding wizard promptly** — the first browser session to reach the endpoint creates the super admin account with no email confirmation.
+- **2.0.0 moves new databases to PostgreSQL 18 (HA, the default) and 19 (single-instance).** An existing HA cluster keeps PostgreSQL 17 with no action. A single-instance release from 1.x keeps PostgreSQL 18 only with `postgres.image: pgvector/pgvector:0.8.7-pg18` in its values; without it the database refuses to start and leaves the data untouched. See [Upgrading from 1.x](#upgrading-from-1x).
 - **The bundled database image must carry pgvector** — Chatwoot's schema runs `CREATE EXTENSION "vector"`. The HA path has it natively; in single-instance mode keep `postgres.image` on a pgvector build (the chart refuses to render against a stock `postgres:` image).
 - **`chatwoot.replicas > 1` requires `storage.type` `s3` or `s3-compatible`** — local attachments live on a per-replica volumeset; the chart refuses to render otherwise.
 - **In `local` storage mode the Sidekiq worker cannot read attachments** — the volumeset is attached to the web workload only, so attachment emails and ActiveStorage analyze/purge jobs fail. Use object storage for production.

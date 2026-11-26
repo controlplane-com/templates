@@ -91,13 +91,15 @@ internalAccess:
   #   - //gvc/GVC_NAME/workload/WORKLOAD_NAME
 
 # ─── Database: highly available PostgreSQL (default) ──────────────
-# Deploys the postgres-highly-available template: 3 Patroni replicas (PostgreSQL
-# 17.5), 3 etcd replicas, and an HAProxy leader endpoint Chatwoot connects to.
-# Its image ships pgvector, which Chatwoot's schema REQUIRES.
+# Deploys the postgres-highly-available template: 3 Patroni replicas, 3 etcd
+# replicas, and an HAProxy leader endpoint Chatwoot connects to. New clusters run
+# PostgreSQL 18; a cluster created by an earlier version of this chart keeps
+# PostgreSQL 17 (README, "Upgrading from 1.x"). Its image ships pgvector, which
+# Chatwoot's schema REQUIRES.
 # Enable exactly one of postgresHA / postgres.
 postgresHA:
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8   # pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
+  image: controlplanecorporation/patroni-postgres:0.9   # PostgreSQL 18 for new clusters (bundles 14-18), pgvector 0.8.7; tags 0.1-0.7 are refused (CVE-2026-103484)
   config:
     # REQUIRED PREREQUISITE SECRET (HA mode) — CREATE IT BEFORE YOU INSTALL. If
     # it does not exist the deployment WEDGES silently and looks like a platform
@@ -117,7 +119,7 @@ postgresHA:
     enabled: false
     mode: logical             # logical | wal-g
     logical:
-      image: ghcr.io/controlplane-com/backup-images/postgres-backup:17.1.0   # 17.1.0 matches PostgreSQL 17
+      image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.2.0   # backs up PostgreSQL 17 and 18 clusters
       schedule: "0 2 * * *"   # daily at 2am UTC
     walg:
       intervalSeconds: 21600
@@ -144,12 +146,19 @@ postgresHA:
 # ─── Database: single-instance PostgreSQL (dev/lightweight) ───────
 # Enable this and disable postgresHA for a smaller, non-HA deployment.
 # The image MUST carry pgvector — Chatwoot's schema runs CREATE EXTENSION
-# "vector", which the stock postgres:18 image does NOT provide (install fails on
+# "vector", which the stock postgres image does NOT provide (install fails on
 # the schema load). The pgvector/pgvector image below is the same Debian base
 # with the extension preinstalled; keep it unless you supply your own build.
 postgres:
   enabled: false
-  image: pgvector/pgvector:pg18
+  # PostgreSQL 19 for new installs. A release installed with an earlier version of this chart has
+  # PostgreSQL 18 data: keep image: pgvector/pgvector:0.8.7-pg18 in your values (README, "Upgrading from 1.x").
+  image: pgvector/pgvector:0.8.7-pg19
+  upgradeHint: # how the PostgreSQL boot guard names the fix in its log; leave as is
+    imageKey: postgres.image
+    consoleField: "Upgrade > Database server > Postgres image"
+    readme: 'README, "Upgrading from 1.x"'
+    pinImage: "pgvector/pgvector:0.8.7-pg{major}"   # the guard's log names the pgvector image to pin
   config:
     # REQUIRED PREREQUISITE SECRET (single-instance mode) — the same kind of
     # `dictionary` secret as postgresHA.config.credentialsSecretName above
@@ -164,7 +173,7 @@ postgres:
     capacity: 10              # GiB (minimum 10)
   backup:                     # optional database backups — see README storage setup
     enabled: false
-    image: ghcr.io/controlplane-com/backup-images/postgres-backup:18.1.0   # 18.1.0 matches PostgreSQL 18
+    image: ghcr.io/controlplane-com/backup-images/postgres-backup:19.1.0   # PostgreSQL 19 client; also backs up a server pinned to 18
     schedule: "0 2 * * *"     # daily at 2am UTC
     provider: aws             # aws | gcp | minio
     aws:

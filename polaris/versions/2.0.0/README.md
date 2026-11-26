@@ -1,5 +1,9 @@
 # Apache Polaris
 
+> **Upgrading from 1.x:** the single-instance metastore now installs PostgreSQL 19, and a 1.x release's data is
+> PostgreSQL 18: upgrade with `--set postgres.image=postgres:18`, or the database refuses to start (data untouched).
+> The HA metastore upgrades in place and keeps PostgreSQL 17. See [Upgrading from 1.x](#upgrading-from-1x).
+>
 > **Upgrading from 1.2.1:** the metastore credentials are now a secret you create before upgrading,
 > under a **new** name — see [Upgrading from 1.2.1](#upgrading-from-121).
 
@@ -11,8 +15,8 @@ This app deploys [Apache Polaris](https://polaris.apache.org/) — an Apache Ice
 - **Bootstrap workload**: Runs the official `polaris-admin-tool` image once to create the realm schema and the root principal, then idles. Always one replica; the operation is idempotent, so restarts and upgrades re-run it harmlessly.
 - **Bootstrap script secret**: The shell script the bootstrap workload runs (opaque secret, mounted as a file).
 - **Two identities and two policies**: Least privilege — only the bootstrap principal can reveal the root credentials; only the server principal can reveal the token signing key and the object-storage credentials. Both can reveal your metastore credentials secret.
-- **PostgreSQL (single-instance, default)**: The `postgres` template — every catalog, namespace, table pointer, principal and grant lives here.
-- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead — 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
+- **PostgreSQL (single-instance, default)**: The `postgres` template (PostgreSQL 19) — every catalog, namespace, table pointer, principal and grant lives here. A boot guard refuses to start the server on a data directory of another PostgreSQL major and leaves it untouched.
+- **PostgreSQL (HA, optional)**: The `postgres-highly-available` template instead (PostgreSQL 18 for new clusters) — 3 Patroni replicas, 3 etcd replicas, and an HAProxy leader endpoint.
 - **Metastore credentials secret** (dictionary) — *not created by this template*; you create it before install. The database initializes from it, and the Polaris server and bootstrap workload connect with it, in either metastore mode.
 - **No volumeset**: The Polaris server writes nothing to local disk that must survive a restart.
 
@@ -161,6 +165,7 @@ Exactly one of the two stores must be enabled (the chart enforces this at render
 ```yaml
 postgres: # default: single-instance PostgreSQL
   enabled: true
+  image: postgres:19 # new installs; a release upgraded from 1.x keeps postgres:18 (see Upgrading from 1.x)
   config:
     credentialsSecretName: my-polaris-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   resources:
@@ -185,7 +190,7 @@ postgres:
   enabled: false
 postgresHA: # set postgresHA.enabled: true for near-zero-downtime upgrades and failover
   enabled: true
-  image: controlplanecorporation/patroni-postgres:0.8 # pgvector 0.8.7; tags 0.1-0.7 are refused
+  image: controlplanecorporation/patroni-postgres:0.9 # PostgreSQL 18 for new clusters (bundles 14-18); tags 0.1-0.7 are refused
   config:
     credentialsSecretName: my-polaris-db-credentials # PREREQUISITE dictionary secret (username, password, database) — must exist BEFORE install
   replicas: 3
@@ -297,15 +302,18 @@ Then `CREATE SCHEMA iceberg.demo`, `CREATE TABLE`, `INSERT` and `SELECT` work ag
 
 Backups are off by default and need no cloud account. To turn them on, set `<store>.backup.enabled: true` (where `<store>` is `postgres` or `postgresHA`) and configure a provider. The backup runs inside the backing Postgres store, so this is that template's setup.
 
-**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket:
+**AWS S3** — create the bucket, a Control Plane [cloud account](https://docs.controlplane.com/guides/create-cloud-account), and an IAM policy scoped to the bucket. The backup identity carries only this policy, so it must hold every action below (WAL-G mode uses the multipart and version actions):
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [
-    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-polaris-backup-bucket" },
-    { "Effect": "Allow", "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"], "Resource": "arn:aws:s3:::my-polaris-backup-bucket/*" }
-  ]
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject", "s3:GetObjectVersion",
+               "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+               "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"],
+    "Resource": ["arn:aws:s3:::my-polaris-backup-bucket", "arn:aws:s3:::my-polaris-backup-bucket/*"]
+  }]
 }
 ```
 
@@ -360,9 +368,64 @@ mc ilm rule ls ALIAS/BUCKET_NAME
 
 Lifecycle rules run in the background; objects are removed within about a day of reaching the age. The `Noncurrent` parts matter only on a versioned bucket, where expiry otherwise just adds a delete marker.
 
+## Upgrading from 1.x
+
+**HA metastore (`postgresHA.enabled: true`)** moves to the `postgres-highly-available` 3.0.0 template. New clusters run PostgreSQL 18; an existing cluster keeps PostgreSQL 17 in place, because the new image (`controlplanecorporation/patroni-postgres:0.9`) bundles PostgreSQL 14 to 18 and each member runs the version of its data directory. The upgrade needs no pin. What changes:
+
+- The database members restart one after another onto the new image (and the latest 17 minor release), so writes pause briefly while the leader changes. Polaris reconnects by itself.
+- If your values set `postgresHA.image`, use the `0.9` tag (`0.8` also keeps a 17 cluster running); tags `0.1` to `0.7` are refused at render.
+- The default logical backup image moves to `postgres-backup:18.2.0`, which backs up 17 and 18 clusters, and the backup job gets 512Mi of memory.
+- The backup identity no longer carries `aws::ReadOnlyAccess`. With AWS backups, **update your IAM policy to the action list in [Storage setup](#storage-setup-only-if-you-enable-backups) before upgrading.**
+
+To move an existing HA cluster to PostgreSQL 18, copy it into a new release: follow [Upgrading an existing cluster to PostgreSQL 18](https://github.com/controlplane-com/templates/blob/main/postgres-highly-available/versions/3.0.0/README.md#upgrading-an-existing-cluster-to-postgresql-18) in the `postgres-highly-available` README, with a new Polaris release (same three prerequisite secrets, same `realm`) in place of the second database release, and the old release's `-polaris` workload stopped during the copy.
+
+**Single-instance metastore (`postgres.enabled: true`, the default)** now installs PostgreSQL 19, while a 1.x release's database is PostgreSQL 18. A data directory only opens with its own major, and the chart never converts it in place: before PostgreSQL starts, a guard compares the two, and on a mismatch it does not start the server and changes nothing on the volume. `cpln workload get-deployments RELEASE_NAME-postgres --gvc GVC_NAME` then stays not ready, Polaris and its bootstrap workload wait for the metastore, and the database logs repeat `[pg-guard] REFUSING TO START` with the exact `--set postgres.image=...` to run:
+
+```bash
+cpln logs '{gvc="GVC_NAME", workload="RELEASE_NAME-postgres"} |= "pg-guard"' --since 15m
+```
+
+**Stay on PostgreSQL 18:** upgrade with the image pinned, and keep `postgres.image: postgres:18` in your values file for every later upgrade (`cpln helm upgrade` does not reuse the installed values). The Console upgrade wizard keeps the installed image for you.
+
+```bash
+cpln helm upgrade RELEASE_NAME CHART --gvc GVC_NAME -f my-values.yaml --set postgres.image=postgres:18
+```
+
+**Move to PostgreSQL 19, side by side.** Every catalog, namespace, table pointer, principal, grant and the realm itself live in one schema of the metastore database (`polaris_schema`, owned by the credentials secret's `username`), so a dump of that database carries the whole catalog; the Iceberg data stays where it is in your bucket. Polaris gets a new endpoint, so query engines are repointed at the end, and catalog writes pause during the copy:
+
+1. Install this version as a NEW release in single-instance mode with the **same three prerequisite secrets** (metastore credentials, root credentials, token signing key), the same `realm` and the same `storage` settings. Its bootstrap creates an empty realm, which the copy replaces.
+2. Once `NEW_RELEASE-polaris` is ready, stop the old server so nothing writes to its metastore, and stop the new release's server and bootstrap workload (the databases keep running):
+
+   ```bash
+   cpln workload stop OLD_RELEASE-polaris --gvc GVC_NAME
+   cpln workload stop NEW_RELEASE-polaris --gvc GVC_NAME
+   cpln workload stop NEW_RELEASE-polaris-bootstrap --gvc GVC_NAME
+   ```
+
+3. Replace the new release's empty metastore with a copy of the old one, from inside the new PostgreSQL container. The PostgreSQL 19 `pg_dump` reads the old server (with `postgres.internalAccess.type: workload-list` on the old release, add `//gvc/GVC_NAME/workload/NEW_RELEASE-postgres` to its list first):
+
+   ```bash
+   cpln workload exec NEW_RELEASE-postgres --gvc GVC_NAME --container postgresql -- bash -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"
+      psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"$POSTGRES_DB\" WITH (FORCE)" -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\"" &&
+      pg_dump -h OLD_RELEASE-postgres.GVC_NAME.cpln.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" |
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q'
+   ```
+
+4. Start the bootstrap workload, then the server. The bootstrap finds the copied realm and changes nothing (its log says `Realm 'POLARIS' is already bootstrapped; skipping`, with your realm name):
+
+   ```bash
+   cpln workload start NEW_RELEASE-polaris-bootstrap --gvc GVC_NAME
+   cpln workload start NEW_RELEASE-polaris --gvc GVC_NAME
+   ```
+
+5. Get a token from `http://NEW_RELEASE-polaris.GVC_NAME.cpln.local:8181` (see [Connecting](#connecting)) with the client credentials your engines already use, and list your catalogs (`GET /api/management/v1/catalogs`). Principals created through the management API came across with the copy and keep their credentials.
+6. Point your query engines at the new release (the `iceberg.rest-catalog.uri` of the `trino` template, or your public endpoint), then uninstall the old release (this deletes its volumes).
+
 ## Upgrading from 1.3.0 or earlier (HA mode)
 
-1.3.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Polaris itself restarts without a gap (the new replica serves before the old one stops); while the leader changes, Polaris's token endpoint can briefly refuse requests. Upgrade in a quiet window. Polaris does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.8` tag: tags `0.1` to `0.7` are refused at render. Single-instance installs (`postgres`) are unaffected.
+1.3.1 runs the highly available database (`postgresHA`) on `controlplanecorporation/patroni-postgres:0.8`, which carries pgvector 0.8.7 (CVE-2026-103484); earlier versions ran `0.7`. The fix takes effect when the upgrade restarts the Patroni members, and existing data needs nothing. Nothing limits that rollout, so expect a brief interruption of writes while the leader changes. Polaris itself restarts without a gap (the new replica serves before the old one stops); while the leader changes, Polaris's token endpoint can briefly refuse requests. Upgrade in a quiet window. Polaris does not use the `vector` extension; if you created it yourself in a database, `\dx` keeps reporting the old version until you run `ALTER EXTENSION vector UPDATE;` there. If you set `postgresHA.image` in your values, set it to the `0.9` tag: tags `0.1` to `0.7` are refused at render. 1.3.1 left single-instance installs (`postgres`) unchanged; for 2.0.0 see [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Upgrading from 1.2.1
 
@@ -419,6 +482,7 @@ pgx N curl -s -XPOST -d '{"force": true}' localhost:8008/reinitialize
 
 ## Important Notes
 
+- **Upgrading a 1.x release with the single-instance metastore needs `postgres.image: postgres:18`** in your values on that and every later upgrade, or the database refuses to start (data untouched); moving the data to PostgreSQL 19 is a dump and restore into a new release. An HA metastore keeps PostgreSQL 17 with no action. See [Upgrading from 1.x](#upgrading-from-1x).
 - **Create all three prerequisite secrets before installing** — without them the workloads wait on a secret that does not exist, with zero log lines; see Prerequisites for how to diagnose it.
 - **Expect a warm-up while the metastore comes up, and do not interrupt it.** The server may restart a few times and the bootstrap workload retries until PostgreSQL answers; both self-heal. The `postgresHA` metastore takes noticeably longer than the single instance.
 - **Use `replicas: 2` or more for rolling upgrades without downtime** — all replicas share the signing key and the metastore, so a token or catalog from one is valid on every other.

@@ -12,12 +12,11 @@ gvc:
 
 imports:
   - template: postgres
-    version: 3.4.1
+    version: 4.0.2
     when: self.postgres.enabled
     title: Single-instance PostgreSQL
-    after: database
+    after: dbserver
     steps:
-      - { id: server, title: Metastore server }
       - { id: storage, title: Metastore storage }
       - { id: network, title: Metastore network, description: Who can connect to the bundled PostgreSQL. }
       - { id: backup, title: Metastore backups }
@@ -26,6 +25,11 @@ imports:
       - config.credentialsSecretName
       # Polaris connects to <release>-postgres directly: a pooler in front of it would sit unused (yamlOnly below).
       - pgbouncer
+      # The server step (image and compute) is bound in the parent's Metastore server step, so its upgrade note,
+      # cross-major warning and image migration name this chart's README section; the child's checks are
+      # restated there.
+      - image
+      - resources
     override:
       internalAccess.type:
         description: >-
@@ -111,91 +115,92 @@ steps:
 
   - id: credentials
     title: Credentials
-    description: The prerequisite secrets for the root principal and the token signing key.
-    docs: "#credentials"
-    fields:
-      - type: note
-        severity: warning
-        text: >-
-          Both secrets must exist **before** you install. If one is missing, the deployment waits and
-          `cpln logs` shows nothing at all.
-      - path: rootCredentials.secretName
-        type: ref
-        label: Root credentials secret
-        required: true
-        description: >-
-          A dictionary secret with the keys `CLIENT_ID` and `CLIENT_SECRET`, neither containing a comma. Trino,
-          Spark and other clients authenticate with them.
-        help: >-
-          Applied once, when the realm is first bootstrapped; changing them later has no effect. Rotate by
-          creating a new principal through the management API.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [dictionary] }
-          mustExist: error
-          allowCreate: true
-          requiredKeys: [CLIENT_ID, CLIENT_SECRET]
-          create:
-            suggestName: "context.releaseName + '-polaris-root-credentials'"
-      - path: tokenSigningKey.secretName
-        type: ref
-        label: Token signing key secret
-        required: true
-        description: An opaque secret with plain encoding holding a random string of 32 or more characters.
-        help: Every replica signs and validates access tokens with it. Changing it invalidates every outstanding token.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [opaque] }
-          mustExist: error
-          allowCreate: true
-          create:
-            suggestName: "context.releaseName + '-polaris-signing-key'"
+    description: >-
+      The prerequisite secrets for the root principal and the token signing key, and the optional object
+      storage credentials.
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            text: >-
+              Both secrets must exist **before** you install. If one is missing, the deployment waits and
+              `cpln logs` shows nothing at all.
+          - path: rootCredentials.secretName
+            type: ref
+            label: Root credentials secret
+            required: true
+            docs: "#credentials"
+            description: >-
+              A dictionary secret with the keys `CLIENT_ID` and `CLIENT_SECRET`, neither containing a comma. Trino,
+              Spark and other clients authenticate with them.
+            help: >-
+              Applied once, when the realm is first bootstrapped; changing them later has no effect. Rotate by
+              creating a new principal through the management API.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [CLIENT_ID, CLIENT_SECRET]
+              create:
+                suggestName: "context.releaseName + '-polaris-root-credentials'"
+          - path: tokenSigningKey.secretName
+            type: ref
+            label: Token signing key secret
+            required: true
+            description: An opaque secret with plain encoding holding a random string of 32 or more characters.
+            help: Every replica signs and validates access tokens with it. Changing it invalidates every outstanding token.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [opaque] }
+              mustExist: error
+              allowCreate: true
+              create:
+                suggestName: "context.releaseName + '-polaris-signing-key'"
+      - title: Object storage
+        description: Credentials Polaris uses for its own table-metadata I/O in an S3 or S3-compatible bucket.
+        docs: "#object-storage"
+        fields:
+          - path: storage.credentialsSecretName
+            type: ref
+            label: Object storage credentials secret
+            description: >-
+              Optional. A dictionary secret with the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Leave
+              empty to run without object storage; catalogs on S3 then cannot read or write.
+            help: >-
+              A seaweedfs credentials secret works as-is. Query engines keep their own copy of the keys: this
+              template does not vend credentials.
+            ref:
+              kind: secret
+              format: name
+              filter: { secretType: [dictionary] }
+              mustExist: error
+              allowCreate: true
+              requiredKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+              create:
+                suggestName: "context.releaseName + '-polaris-s3-credentials'"
+          - path: storage.region
+            type: string
+            label: Region
+            required: true
+            placeholder: us-east-1
+            description: The bucket's AWS region. S3-compatible servers ignore it, but the SDK requires one.
     rules:
       - rule: self.rootCredentials.secretName != '' && self.tokenSigningKey.secretName != ''
         mirrors: polaris.validate
         paths: [rootCredentials.secretName, tokenSigningKey.secretName]
         message: The root credentials secret and the token signing key secret are required.
 
-  - id: storage
-    title: Object storage
-    description: Credentials Polaris uses for its own table-metadata I/O in an S3 or S3-compatible bucket.
-    docs: "#object-storage"
-    fields:
-      - path: storage.credentialsSecretName
-        type: ref
-        label: Object storage credentials secret
-        description: >-
-          Optional. A dictionary secret with the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Leave
-          empty to run without object storage; catalogs on S3 then cannot read or write.
-        help: >-
-          A seaweedfs credentials secret works as-is. Query engines keep their own copy of the keys: this
-          template does not vend credentials.
-        ref:
-          kind: secret
-          format: name
-          filter: { secretType: [dictionary] }
-          mustExist: error
-          allowCreate: true
-          requiredKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
-          create:
-            suggestName: "context.releaseName + '-polaris-s3-credentials'"
-      - path: storage.region
-        type: string
-        label: Region
-        required: true
-        placeholder: us-east-1
-        description: The bucket's AWS region. S3-compatible servers ignore it, but the SDK requires one.
-
   - id: access
     title: Access
     description: The public endpoint, and which workloads can reach Polaris inside Control Plane.
-    docs: "#access"
     fields:
       - path: publicAccess.enabled
         type: boolean
         label: Serve on the public HTTPS endpoint
+        docs: "#access"
         description: >-
           The Iceberg REST and management APIs on the canonical endpoint. Health and metrics stay internal.
       - path: internalAccess.type
@@ -260,19 +265,28 @@ steps:
                 label: Highly available PostgreSQL
                 description: Three Patroni replicas with automatic failover, etcd and an HAProxy leader endpoint.
                 set: { postgresHA.enabled: true, postgres.enabled: false }
-          # Declared so the postgres import's condition is a field; the chooser above writes it.
+          # Declared so the postgres import's condition is a field; the chooser above writes it, so they are never shown.
           - path: postgres.enabled
             type: boolean
             label: Single-instance PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgres.enabled == null   # never shown: the Metastore choice writes it
             description: Set by the metastore choice above.
           - path: postgresHA.enabled
             type: boolean
             label: Highly available PostgreSQL on
             readOnly: true
             advanced: true
+            when: self.postgresHA.enabled == null   # never shown: the Metastore choice writes it
             description: Set by the metastore choice above.
+          - type: note
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0 && self.postgresHA.enabled
+            text: >-
+              New highly available clusters run PostgreSQL 18; this release's cluster keeps PostgreSQL 17 in place.
+              Moving it to 18 is a copy into a new release; see Upgrading from 1.x in the README.
           - type: note
             severity: warning
             text: >-
@@ -325,7 +339,6 @@ steps:
               them. To change the password later, change it in the database first, then update the secret and
               force a redeployment.
               In HA mode the order differs: move the leader to member -0 first (see the README's HA rotation steps).
-            docs: "#prerequisites"
             ref:
               kind: secret
               format: name
@@ -347,7 +360,9 @@ steps:
             format: image
             label: Patroni PostgreSQL image
             required: true
-            description: The PostgreSQL server image the HA members run.
+            description: >-
+              The PostgreSQL server image the HA members run. New clusters run PostgreSQL 18; an existing cluster
+              keeps the major it was created with.
             rules:
               - rule: >-
                   !(self.postgresHA.image.split(':')[0] in ['controlplanecorporation/patroni-postgres', 'docker.io/controlplanecorporation/patroni-postgres']) ||
@@ -356,7 +371,7 @@ steps:
                 mirrors: polaris.validatePostgresHAImage
                 message: >-
                   This image carries a pgvector older than 0.8.7, which is open to CVE-2026-103484: a database user who can
-                  create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.8.
+                  create an IVFFlat index can run arbitrary code. Use controlplanecorporation/patroni-postgres:0.9.
           - path: postgresHA.volumeset.capacity
             type: integer
             label: Initial capacity
@@ -416,7 +431,7 @@ steps:
             required: true
             advanced: true
             when: self.postgresHA.backup.mode == 'logical'
-            description: Tag 17.x.x for the bundled PostgreSQL 17.
+            description: The 18.x.x tags back up PostgreSQL 17 and 18 clusters.
           - path: postgresHA.backup.resources
             type: resources
             label: Backup resources
@@ -424,7 +439,6 @@ steps:
             advanced: true
       - title: AWS S3
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'aws'
-        docs: "#backing-up"
         fields:
           - path: postgresHA.backup.aws.bucket
             type: string
@@ -461,7 +475,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: Google Cloud Storage
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'gcp'
-        docs: "#backing-up"
         fields:
           - path: postgresHA.backup.gcp.bucket
             type: string
@@ -487,7 +500,6 @@ steps:
             patternMessage: Leave out the leading /.
       - title: MinIO or S3-compatible
         when: self.postgresHA.enabled && self.postgresHA.backup.enabled && self.postgresHA.backup.provider == 'minio'
-        docs: "#backing-up"
         fields:
           - path: postgresHA.backup.minio.endpoint
             type: string
@@ -526,16 +538,6 @@ steps:
               postgresHA.backup.minio.accessKey and secretKey were removed in 1.2.1. Put them in the MinIO
               credentials secret and remove them from the values.
     rules:
-      - rule: self.postgresHA.enabled != self.postgres.enabled
-        mirrors: polaris.validate
-        paths: [postgresHA.enabled, postgres.enabled]
-        message: Enable exactly one metastore, either the single-instance or the highly available PostgreSQL.
-      - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
-        mirrors: polaris.validate
-        paths: [postgresHA.enabled]
-        message: >-
-          postgresHA.proxy.enabled must remain true: the HAProxy leader endpoint is Polaris's database endpoint.
-          Remove it from the values.
       - rule: >-
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != null &&
           (self.postgresHA.enabled ? self.postgresHA.config.credentialsSecretName : self.postgres.config.credentialsSecretName) != ''
@@ -583,12 +585,12 @@ steps:
   - id: bootstrap
     title: Bootstrap
     description: The one-time job that creates the realm schema and the root principal, then idles.
-    docs: "#bootstrap"
     fields:
       - path: bootstrap.image
         type: string
         format: image
         label: Admin tool image
+        docs: "#bootstrap"
         required: true
         advanced: true
         help: Keep this tag in lockstep with the Polaris image.
@@ -610,8 +612,73 @@ steps:
         paths: [bootstrap.resources]
         message: Give memory in Mi or Gi (for example 512Mi or 2Gi).
 
+  # The single-instance PostgreSQL's image and compute, bound here instead of in the imported Server step (the
+  # postgres import excludes these paths); the checks of the postgres descriptor are restated below.
+  - id: dbserver
+    title: Metastore server
+    description: The Postgres image and the compute of the single-instance metastore's stateful replica.
+    when: self.postgres.enabled
+    sections:
+      - fields:
+          - type: note
+            severity: warning
+            when: context.mode == 'upgrade'
+            text: >-
+              Every upgrade restarts the database server. Nothing limits the rollout of a stateful workload, so
+              plan a short write outage.
+          - type: note
+            severity: warning
+            when: >-
+              context.mode == 'upgrade' && context.fromVersion != null &&
+              semverCompare(context.fromVersion, '2.0.0') < 0
+            text: >-
+              New installs of this version run PostgreSQL 19. This release keeps the major its metastore was
+              created with, so the image below stays on it. Moving the data to 19 is a dump and restore into a new
+              release; see Upgrading from 1.x in the README.
+          - path: postgres.image
+            type: string
+            format: image
+            label: Postgres image
+            required: true
+            help: >-
+              New installs run `postgres:19`; `postgres:18` and `postgres:17` also work. The data directory is
+              specific to a major version: on an existing volume, an image of another major does not start, and
+              the database logs the image to set instead.
+          - path: postgres.resources
+            type: resources
+            label: Postgres resources
+            required: true
+            maxRatio: 4
+            cpu: { min: 25m }
+            memory: { min: 32Mi }
+        rules:
+          - rule: >-
+              oldSelf == null || !has(oldSelf.postgres.image) || imageMajor(self.postgres.image) < 0 ||
+              imageMajor(oldSelf.postgres.image) < 0 || imageMajor(self.postgres.image) == imageMajor(oldSelf.postgres.image)
+            severity: warning
+            paths: [postgres.image]
+            messageExpression: >-
+              'This release\'s data directory is PostgreSQL ' + string(imageMajor(oldSelf.postgres.image)) +
+              '; a PostgreSQL ' + string(imageMajor(self.postgres.image)) + ' image refuses to start on it. Keep the image at ' +
+              oldSelf.postgres.image + ', or move to PostgreSQL ' + string(imageMajor(self.postgres.image)) +
+              ' with a dump and restore into a new release (README, Upgrading from 1.x).'
+            message: >-
+              The data directory belongs to the installed Postgres major version; an image of a different major
+              refuses to start on it. Keep the installed image, or move with a dump and restore into a new release
+              (README, Upgrading from 1.x).
+
 # Rules over the imported values: their issues show on the imported fields' step (postgres:network).
 rules:
+  # Root rules without paths: the Metastore choice writes postgres.enabled / postgresHA.enabled (hidden
+  # fields), so these only trip on YAML edits; they block Install and show on Review.
+  - rule: self.postgresHA.enabled != self.postgres.enabled
+    mirrors: polaris.validate
+    message: Enable exactly one metastore, either the single-instance or the highly available PostgreSQL.
+  - rule: "!self.postgresHA.enabled || !has(self.postgresHA.proxy) || !has(self.postgresHA.proxy.enabled)"
+    mirrors: polaris.validate
+    message: >-
+      postgresHA.proxy.enabled must remain true: the HAProxy leader endpoint is Polaris's database endpoint.
+      Remove it from the values.
   - when: self.postgres.enabled
     rule: self.postgres.internalAccess.type != 'none'
     paths: [postgres.internalAccess.type]
@@ -632,6 +699,18 @@ yamlOnly:
     reason: Polaris connects to <release>-postgres directly, so a PgBouncer in front of it would sit unused.
 
 migrations:
+  # A 1.x release that never set postgres.image runs postgres:18 (1.x's default), and its data directory is
+  # PostgreSQL 18. Carry-over would hand it the new default postgres:19, which refuses to start on that data:
+  # keep the installed image instead. Claims the postgres import's own image migration (the import excludes
+  # `image` and binds it in Metastore server), so the note names this chart's README section.
+  - fromVersions: ">=1.0.0 <2.0.0"
+    to: postgres.image
+    # has(): the previous version's own values.yaml leaves the image to the postgres 3.4.1 default, postgres:18.
+    valueExpr: "has(self.postgres.image) ? self.postgres.image : 'postgres:18'"
+    note: >-
+      The metastore keeps the PostgreSQL major it was created with, so the installed image is kept (Metastore
+      server, Postgres image). To move to PostgreSQL 19, dump and restore into a new release (README, Upgrading
+      from 1.x).
   - fromVersions: "<1.3.0"
     from: postgres.credentials
     note: >-

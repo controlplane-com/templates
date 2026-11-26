@@ -3,14 +3,17 @@
 # Placeholders: {release} {gvc} {org} {version} {installed_version}, and the baseline vars (pg_user,
 # pg_password, pg_db, client_id, client_secret).
 #
-# Every check runs from the HA metastore's patroni-postgres container, which has curl, psql and python3,
-# and calls Polaris at its internal address, as an in-GVC query engine would. Polaris keeps its realm,
+# The Polaris checks run in the Polaris container itself (the apache/polaris image has bash, curl and
+# python3) against 127.0.0.1, so they run the same in both metastore modes. Polaris keeps its realm,
 # principals and catalogs in PostgreSQL, so a token and a catalog read back only pass when the server,
-# the bootstrap and the metastore all worked.
+# the bootstrap and the metastore all worked. The database checks run in the metastore's own container:
+# the HA ones in patroni-postgres (scenarios: "[ha]", and every 1.x install, which runs HA), the
+# single-instance ones in the postgres container (from 2.0.0, whose default install is single-instance).
 # (Inside scripts, write $VAR rather than the braced form: the runner fills {name} placeholders.)
 checks:
   - id: cluster-healthy
     description: Patroni reports exactly one leader and every other member streaming from it.
+    scenarios: "\\[ha\\]|^install 1\\.|^upgrade "   # HA metastore runs only; the 2.0.0 default install is single-instance
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -30,13 +33,13 @@ checks:
     retryDelaySeconds: 15
 
   - id: polaris-healthy
-    description: Polaris reports itself up on its in-GVC health interface.
+    description: Polaris reports itself up on its health interface, with its database connection up.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
+      workload: "{release}-polaris"
+      container: polaris
       shell: bash
       script: |
-        curl -s -m 10 http://{release}-polaris.{gvc}.cpln.local:8182/q/health
+        curl -s -m 10 http://127.0.0.1:8182/q/health
     expect:
       stdout: '"status":\s*"UP"'
     retries: 10
@@ -47,11 +50,11 @@ checks:
       The root principal gets a token with its client credentials, creates a catalog named after the
       running version, and reads it back through the management API.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
+      workload: "{release}-polaris"
+      container: polaris
       shell: bash
       script: |
-        U=http://{release}-polaris.{gvc}.cpln.local:8181
+        U=http://127.0.0.1:8181
         N="e2e_$(echo '{version}' | tr . _)"
         T=$(curl -s -m 15 --user '{client_id}:{client_secret}' -d grant_type=client_credentials \
           -d scope=PRINCIPAL_ROLE:ALL "$U/api/catalog/v1/oauth/tokens" |
@@ -73,12 +76,12 @@ checks:
   - id: rejects-bad-secret
     description: A wrong client secret gets no token (the control for the check above).
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
+      workload: "{release}-polaris"
+      container: polaris
       shell: bash
       script: |
         curl -s -m 15 -o /dev/null -D - --user '{client_id}:wrong-secret' -d grant_type=client_credentials \
-          -d scope=PRINCIPAL_ROLE:ALL http://{release}-polaris.{gvc}.cpln.local:8181/api/catalog/v1/oauth/tokens |
+          -d scope=PRINCIPAL_ROLE:ALL http://127.0.0.1:8181/api/catalog/v1/oauth/tokens |
           awk 'NR==1 {print "TOKEN " $2}'
     expect:
       stdout: "^TOKEN 40[01]$"
@@ -88,11 +91,11 @@ checks:
       The catalog created on the version this scenario installed first is still there. On a fresh install
       that is the same version; after an upgrade it proves the metastore carried over.
     exec:
-      workload: "{release}-postgres-ha"
-      container: patroni-postgres
+      workload: "{release}-polaris"
+      container: polaris
       shell: bash
       script: |
-        U=http://{release}-polaris.{gvc}.cpln.local:8181
+        U=http://127.0.0.1:8181
         N="e2e_$(echo '{installed_version}' | tr . _)"
         T=$(curl -s -m 15 --user '{client_id}:{client_secret}' -d grant_type=client_credentials \
           -d scope=PRINCIPAL_ROLE:ALL "$U/api/catalog/v1/oauth/tokens" |
@@ -105,9 +108,10 @@ checks:
     retryDelaySeconds: 15
 
   - id: pgvector-0-8-7-available
-    description: The HA leader runs patroni-postgres 0.8, with pgvector 0.8.7 (CVE-2026-103484), from 1.3.1.
+    description: The HA leader runs patroni-postgres 0.8 or later, with pgvector 0.8.7 (CVE-2026-103484), from 1.3.1.
     issue: "#5376"
     since: 1.3.1
+    scenarios: "\\[ha\\]|^install 1\\.|^upgrade "   # HA metastore runs only
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -126,13 +130,14 @@ checks:
 
   - id: every-patroni-member-on-0-8
     description: >-
-      Every Patroni member restarted onto patroni-postgres 0.8 (pgvector 0.8.7) and is back in the cluster,
+      Every Patroni member restarted onto patroni-postgres 0.8 or later (pgvector 0.8.7) and is back in the cluster,
       not only the leader. The pgvector-0-8-7-available check passes as soon as the leader has moved to a
       restarted member, and the runner's readiness wait returns while the old leader is still restarting, so
       without this a member that never comes back (seen once in testing: the old leader stuck initializing for
       17 min) goes unseen.
     issue: "#5376"
     since: 1.3.1
+    scenarios: "\\[ha\\]|^install 1\\.|^upgrade "   # HA metastore runs only
     exec:
       workload: "{release}-postgres-ha"
       container: patroni-postgres
@@ -154,4 +159,59 @@ checks:
       stdout: "^MEMBERS 0=0\\.8\\.7 1=0\\.8\\.7 2=0\\.8\\.7 HEALTHY 3/3$"
     # The old leader restarts last, a few minutes after the runner's readiness wait returns.
     retries: 24
+    retryDelaySeconds: 30
+
+  - id: fresh-is-19
+    description: >-
+      A fresh install runs the single-instance metastore on PostgreSQL 19, and the bootstrap created the realm's
+      schema in it (an upgrade pinned to an older major keeps that major).
+    since: 2.0.0
+    scenarios: "^install (?!.*\\[ha\\])"
+    exec:
+      workload: "{release}-postgres"
+      container: postgresql
+      shell: bash
+      script: |
+        echo "DATA=$(cat "$PGDATA/PG_VERSION")"
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num') || ' SCHEMA=' || coalesce(to_regclass('polaris_schema.entities')::text, 'missing')"
+    expect:
+      stdout: "(?s)^DATA=19$.*^SERVER_VERSION_NUM=19[0-9]{4} SCHEMA=polaris_schema\\.entities$"
+    retries: 3
+
+  - id: ha-is-18
+    description: >-
+      A fresh install with the highly available metastore runs PostgreSQL 18 (postgres-highly-available 3.0.0's
+      new-cluster major) behind the HAProxy leader endpoint, with the realm's schema in it.
+    since: 2.0.0
+    scenarios: "\\[ha\\]"
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num') || ' SCHEMA=' || coalesce(to_regclass('polaris_schema.entities')::text, 'missing')" 2>&1
+    expect:
+      stdout: "^SERVER_VERSION_NUM=18[0-9]{4} SCHEMA=polaris_schema\\.entities$"
+    retries: 10
+    retryDelaySeconds: 15
+
+  - id: ha-upgrade-keeps-17
+    description: >-
+      A 1.x HA metastore (PostgreSQL 17) upgraded onto postgres-highly-available 3.0.0 keeps PostgreSQL 17 on
+      its data, behind the HAProxy leader endpoint: the plain upgrade needs no pin.
+    since: 2.0.0
+    scenarios: "^upgrade 1\\."
+    exec:
+      workload: "{release}-postgres-ha"
+      container: patroni-postgres
+      shell: bash
+      script: |
+        export PGPASSWORD='{pg_password}' PGCONNECT_TIMEOUT=5
+        psql -h {release}-postgres-ha-proxy.{gvc}.cpln.local -U {pg_user} -d {pg_db} -qtA \
+          -c "SELECT 'SERVER_VERSION_NUM=' || current_setting('server_version_num')" 2>&1
+    expect:
+      stdout: "^SERVER_VERSION_NUM=17[0-9]{4}$"
+    retries: 20
     retryDelaySeconds: 30

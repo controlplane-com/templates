@@ -1,0 +1,80 @@
+{{- include "qscs.validate" . }}
+{{- $counts := dict .Values.initialLocation 1 -}}
+{{- range .Values.additionalNodes -}}
+{{- $_ := set $counts . (add 1 (default 0 (get $counts .))) -}}
+{{- end }}
+kind: workload
+name: {{ include "qscs.node" . }}
+gvc: {{ include "qscs.gvc" . }}
+description: QSCS application delivery
+tags: {{ include "qscs.tags" . | nindent 2 }}
+  cpln/publishNotReadyAddresses: "true"
+spec:
+  type: stateful
+  containers:
+    - name: qscs
+      image: {{ .Values.image | quote }}
+      cpu: {{ .Values.resources.cpu | quote }}
+      memory: {{ .Values.resources.memory | quote }}
+      inheritEnv: false
+      env:
+        - {name: ORIGIN, value: {{ .Values.origin | quote }}}
+        - {name: QSCS_BOOTSTRAP_MODE, value: auto-cpln}
+        - {name: QSCS_INITIAL_LOCATION, value: {{ .Values.initialLocation | quote }}}
+        - {name: QSCS_REPLICA_NAME, value: "cpln://reference/metadata.name"}
+        {{- if .Values.publicTopology }}
+        - {name: QSCS_PUBLIC_TOPOLOGY, value: "1"}
+        {{- end }}
+        {{- with .Values.frontend }}
+        - {name: FRONTEND, value: {{ . | quote }}}
+        {{- end }}
+        {{- with .Values.upstream }}
+        - {name: UPSTREAM, value: {{ . | quote }}}
+        {{- end }}
+      ports:
+        - {protocol: http, number: 8080}
+        - {protocol: tcp, number: 4443}
+        - {protocol: http, number: 4444}
+      readinessProbe:
+        httpGet: {path: /readyz, port: 8081, scheme: HTTP}
+        initialDelaySeconds: 2
+        periodSeconds: 5
+        timeoutSeconds: 4
+        failureThreshold: 2
+        successThreshold: 1
+      volumes:
+        - path: /var/lib/qscs
+          uri: cpln://volumeset/{{ include "qscs.volume" . }}
+          recoveryPolicy: retain
+  securityOptions: {runAsUser: 10001, filesystemGroupId: 10001}
+  supportDynamicTags: false
+  defaultOptions:
+    suspend: true
+    capacityAI: false
+    debug: false
+    timeoutSeconds: 5
+    autoscaling: {metric: disabled, minScale: 1, maxScale: 1, maxConcurrency: 0, scaleToZeroDelay: 300, target: 95}
+  localOptions:
+    {{- range $location, $count := $counts }}
+    - location: //location/{{ $location }}
+      suspend: false
+      capacityAI: false
+      debug: false
+      timeoutSeconds: 5
+      autoscaling: {metric: disabled, minScale: {{ $count }}, maxScale: {{ $count }}, maxConcurrency: 0, scaleToZeroDelay: 300, target: 95}
+    {{- end }}
+  rolloutOptions:
+    scalingPolicy: OrderedReady
+    maxSurgeReplicas: "0"
+    minReadySeconds: 0
+    terminationGracePeriodSeconds: 90
+  networking: {internal: {routing: gvcEndpoint}}
+  loadBalancer: {replicaDirect: true}
+  firewallConfig:
+    internal:
+      inboundAllowType: workload-list
+      inboundAllowWorkload:
+        - {{ printf "//gvc/%s/workload/%s" (include "qscs.gvc" .) (include "qscs.node" .) | quote }}
+    external:
+      inboundAllowCIDR: {{ .Values.publicCIDRs | toJson }}
+      outboundAllowCIDR: ["0.0.0.0/0"]

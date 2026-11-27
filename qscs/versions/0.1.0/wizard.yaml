@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../../.schema/wizard.v1.schema.json
+apiVersion: template-wizard.controlplane.com/v1
+kind: TemplateWizard
+title: QSCS
+gvc:
+  minLocations: 1
+steps:
+- id: application
+  title: Application and nodes
+  sections:
+  - title: Application
+    description: On the Release step, select an existing GVC or use Create GVC to choose a name and regions. No pre-created GVC is required.
+    fields:
+    - path: origin
+      type: string
+      label: Origin address
+      required: true
+      example: true
+      pattern: '^(https?://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?/?|(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?)$'
+      description: Upstream HTTP(S) URL or hostname/IP with an optional port, such as 203.0.113.110:80. A bare address uses HTTP. Do not include credentials, a path prefix, query or fragment.
+    - path: frontend
+      type: string
+      label: Frontend hostname
+      advanced: true
+      description: Leave empty for the generated Control Plane global endpoint. A custom hostname also
+        needs a Control Plane domain route.
+    - path: upstream
+      type: string
+      label: Upstream Host header
+      advanced: true
+      description: Leave empty to use the origin host. HTTPS SNI and certificate verification use the
+        origin URL.
+  - title: Placement
+    description: The initializer is one node. Add one location entry for each additional node; repeating
+      a location puts nodes together. Node quantities are unlimited; infrastructure charges still apply.
+    fields:
+    - path: initialLocation
+      type: ref
+      label: Initial location
+      required: true
+      immutable: Keep the initializer location unchanged to preserve deployment identity.
+      ref: &id001
+        kind: location
+        scope: gvc
+        format: name
+        mustExist: error
+    - path: additionalNodes
+      type: list
+      label: Additional nodes
+      item:
+        type: ref
+        label: Location
+        ref: *id001
+      description: Only listed locations run. Adding a GVC region alone does not create another QSCS node.
+- id: storage
+  title: Persistent storage
+  sections:
+  - title: Storage per node
+    description: Each replica receives a separate volume. Two nodes with 10 GB each allocate 20 GB. Retained
+      volumes and snapshots can incur charges after uninstall.
+    fields:
+    - path: storage.capacityGiB
+      type: integer
+      label: Capacity per node (GiB)
+      min: 10
+      max: 10000
+    - path: storage.fileSystemType
+      type: enum
+      label: Filesystem
+      immutable: true
+      advanced: true
+      options:
+      - value: xfs
+        label: XFS
+      - value: ext4
+        label: ext4
+    - path: storage.retainOnUninstall
+      type: boolean
+      label: Keep storage after uninstall
+      description: Preserves identities and saved state. Delete retained storage separately when retiring
+        the deployment.
+    - path: storage.createFinalSnapshot
+      type: boolean
+      label: Snapshot before deleting storage
+      advanced: true
+    - path: storage.snapshotRetention
+      type: string
+      format: retention
+      label: Snapshot retention
+      advanced: true
+      when: self.storage.createFinalSnapshot
+- id: resources
+  title: Resources and access
+  sections:
+  - title: Per-node resources
+    fields:
+    - path: resources.cpu
+      type: quantity
+      quantity: cpu
+      label: CPU per node
+    - path: resources.memory
+      type: quantity
+      quantity: memory
+      label: Memory per node
+    - path: image
+      type: string
+      format: image
+      label: Container image
+      advanced: true
+      description: Use latest or an approved immutable image. Dynamic tag updates are disabled.
+    - path: publicCIDRs
+      type: list
+      label: Public client networks
+      minItems: 1
+      unique: true
+      item:
+        type: string
+        format: cidr
+      advanced: true
+      description: Applies to application ingress. Peer and join connections use the same-workload private
+        network.
+    - path: publicTopology
+      type: boolean
+      label: Publish deployment topology
+      advanced: true
+      description: Off by default. Publishes node UUIDs, roles, substrate ID and placement labels for
+        applications that show a deployment diagram. This is public membership information, not private
+        SpookVis telemetry or a live health check.
+rules:
+- rule: size(context.releaseName) <= 44
+  message: Use a release name of at most 44 characters to leave room for the workload and volume suffixes.
+  mirrors: qscs.validate
+- rule: oldSelf == null || self.storage.capacityGiB >= oldSelf.storage.capacityGiB
+  message: Keep capacity at or above the installed value. Lowering it changes new volumes without shrinking existing ones.
+  paths:
+  - storage.capacityGiB
+yamlOnly:
+- path: global
+  reason: The catalogue supplies the selected or newly created GVC; CLI installs supply --gvc after creating it if needed.
+- path: claimedDeployment
+  reason: Deprecated compatibility setting; quantities are unlimited and this value is ignored.

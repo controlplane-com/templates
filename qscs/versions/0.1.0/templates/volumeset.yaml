@@ -1,0 +1,15 @@
+{{- include "qscs.validate" . }}
+kind: volumeset
+name: {{ include "qscs.volume" . }}
+gvc: {{ include "qscs.gvc" . }}
+tags: {{ include "qscs.tags" . | nindent 2 }}
+  {{- if .Values.storage.retainOnUninstall }}
+  helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  fileSystemType: {{ .Values.storage.fileSystemType }}
+  initialCapacity: {{ .Values.storage.capacityGiB }}
+  performanceClass: general-purpose-ssd
+  snapshots:
+    createFinalSnapshot: {{ .Values.storage.createFinalSnapshot }}
+    retentionDuration: {{ .Values.storage.snapshotRetention }}

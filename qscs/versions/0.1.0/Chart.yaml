@@ -1,0 +1,10 @@
+apiVersion: v2
+name: qscs
+description: Stateful QSCS delivery with automatic enrollment and authenticated regional membership
+type: application
+version: 0.1.0
+appVersion: "4.3.39"
+annotations:
+  created: "2026-11-17"
+  lastModified: "2026-11-27"
+  createsGvc: false

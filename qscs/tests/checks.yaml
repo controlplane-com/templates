@@ -1,0 +1,69 @@
+# Upstream runner also checks all-replica readiness, drift, two no-op upgrades
+# and complete uninstall. Enable driftBlocks only after a clean maintainer run.
+driftBlocks: false
+checks:
+  - id: initializer-serving-and-persistent-identity
+    since: 0.1.0
+    description: The initializer enrolls, admits its peer and serves the example application.
+    exec:
+      workload: "{release}-qscs"
+      container: qscs
+      location: "{locations.0}"
+      replica: "{release}-qscs-0"
+      shell: sh
+      script: |
+        set -eu
+        test "$(wget -q -T 10 -O- http://127.0.0.1:8081/serving)" = serving
+        status=$(qscs status)
+        printf '%s\n' "$status" | grep -Fx 'Role: master'
+        printf '%s\n' "$status" | grep -Fx 'Can approve claims: yes'
+        printf '%s\n' "$status" | grep -Fx 'Registration: unclaimed'
+        printf '%s\n' "$status" | grep -Fx 'Replication peers (1)'
+        uuid=$(printf '%s\n' "$status" | sed -n 's/^Node UUID: //p')
+        test -n "$uuid"
+        saved=/var/lib/qscs/node/template-e2e.uuid
+        if test -f "$saved"; then test "$(cat "$saved")" = "$uuid"; else printf '%s\n' "$uuid" > "$saved"; fi
+        frontend=$(printf '%s\n' "$status" | sed -n '/^Origins (1)$/{n;s/^  //;p;}')
+        test -n "$frontend"
+        wget -q -T 20 --header="Host: $frontend" -O- http://127.0.0.1:8080/ | grep -q 'Example Domain'
+        printf 'QSCS_INITIALIZER_OK\n'
+    expect: {exitCode: 0, stdout: '^QSCS_INITIALIZER_OK$'}
+    retries: 6
+    retryDelaySeconds: 15
+    timeoutSeconds: 120
+  - id: second-location-serving-and-replication
+    since: 0.1.0
+    description: The second location joins as a thin node, receives state and serves the application.
+    exec:
+      workload: "{release}-qscs"
+      container: qscs
+      location: "{locations.1}"
+      replica: "{release}-qscs-0"
+      shell: sh
+      script: |
+        set -eu
+        test "$(wget -q -T 10 -O- http://127.0.0.1:8081/serving)" = serving
+        status=$(qscs status)
+        printf '%s\n' "$status" | grep -Fx 'Role: thin'
+        printf '%s\n' "$status" | grep -Fx 'Can approve claims: no'
+        printf '%s\n' "$status" | grep -Fx 'Registration: unclaimed'
+        printf '%s\n' "$status" | grep -Fx 'Replication peers (1)'
+        uuid=$(printf '%s\n' "$status" | sed -n 's/^Node UUID: //p')
+        test -n "$uuid"
+        saved=/var/lib/qscs/node/template-e2e.uuid
+        if test -f "$saved"; then test "$(cat "$saved")" = "$uuid"; else printf '%s\n' "$uuid" > "$saved"; fi
+        frontend=$(printf '%s\n' "$status" | sed -n '/^Origins (1)$/{n;s/^  //;p;}')
+        test -n "$frontend"
+        response=$(mktemp)
+        headers=$(mktemp)
+        trap 'rm -f "$response" "$headers"' EXIT
+        wget -S -T 20 --header="Host: $frontend" -O "$response" http://127.0.0.1:8080/ 2> "$headers"
+        grep -q 'Example Domain' "$response"
+        grep -Eq 'X-QSCS-(Cache: (HIT|PERSISTED|PEER)|Mode: headless)' "$headers"
+        hits=$(qscs enrollment status | sed -n 's/.*"cache_hits":\([0-9]*\).*/\1/p')
+        test -n "$hits" && test "$hits" -gt 0
+        printf 'QSCS_SECOND_LOCATION_OK\n'
+    expect: {exitCode: 0, stdout: '^QSCS_SECOND_LOCATION_OK$'}
+    retries: 6
+    retryDelaySeconds: 15
+    timeoutSeconds: 120

@@ -1,0 +1,13 @@
+apiVersion: catalog.controlplane.com/v1
+kind: TemplateCatalogEntry
+title: QSCS
+category: cache
+topology: multi-location
+summary: Deploy your own CDN in an existing GVC or create one across your chosen regions. Enroll without a Spook Systems account, replicate eligible application state, and optionally claim the deployment. Node, domain and origin quantities are unlimited.
+keywords: [origin caching, state replication, http delivery, dynamic edge cache, registration-free, failure protection, monitoring]
+useCases:
+  - Deliver eligible HTTP application content through nodes in your selected regions
+  - Retain eligible application state when the upstream becomes unavailable
+  - Reduce origin bandwidth and latency by caching content closer to your users
+  - Claim an existing deployment without replacing its node identities
+prerequisites: []

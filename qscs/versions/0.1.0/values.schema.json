@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "origin",
+    "initialLocation",
+    "additionalNodes",
+    "image",
+    "resources",
+    "storage"
+  ],
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "cpln": {
+          "type": "object",
+          "properties": {
+            "gvc": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "cpln": {
+      "type": "object",
+      "description": "Injected by cpln helm, not a customer setting."
+    },
+    "origin": {
+      "type": "string",
+      "pattern": "^(https?://(\\[[0-9A-Fa-f:]+\\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?/?|(\\[[0-9A-Fa-f:]+\\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?)$",
+      "maxLength": 255
+    },
+    "initialLocation": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "minLength": 1,
+      "maxLength": 63
+    },
+    "additionalNodes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        "minLength": 1,
+        "maxLength": 63
+      }
+    },
+    "claimedDeployment": {
+      "type": "boolean",
+      "description": "Deprecated compatibility field, ignored. No quantity entitlement limit."
+    },
+    "frontend": {
+      "type": "string",
+      "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9.-]*$",
+      "maxLength": 253
+    },
+    "upstream": {
+      "type": "string",
+      "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$",
+      "maxLength": 260
+    },
+    "image": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$"
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "string",
+          "pattern": "^([1-9][0-9]*m|[1-9][0-9]*(\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+        }
+      }
+    },
+    "publicCIDRs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-fA-F:.]+/[0-9]{1,3}$"
+      }
+    },
+    "publicTopology": {
+      "type": "boolean",
+      "description": "Publish minimal deployment membership on configured public origins. Disabled by default."
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capacityGiB",
+        "fileSystemType",
+        "retainOnUninstall",
+        "createFinalSnapshot",
+        "snapshotRetention"
+      ],
+      "properties": {
+        "capacityGiB": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "fileSystemType": {
+          "enum": [
+            "xfs",
+            "ext4"
+          ]
+        },
+        "retainOnUninstall": {
+          "type": "boolean"
+        },
+        "createFinalSnapshot": {
+          "type": "boolean"
+        },
+        "snapshotRetention": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(d|h|m)$"
+        }
+      }
+    },
+    "globals": {
+      "type": "object",
+      "description": "Compatibility context injected by cpln helm."
+    }
+  }
+}

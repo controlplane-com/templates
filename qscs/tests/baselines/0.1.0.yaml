@@ -1,0 +1,12 @@
+# Intended for Control Plane's E2E runner in a maintainer-authorized test org.
+# No private Spook account, application, credential or service-account key is needed.
+locations: [aws-us-east-1, aws-us-east-2]
+timeoutSeconds: 900
+values:
+  origin: https://example.com
+  initialLocation: aws-us-east-1
+  additionalNodes: [aws-us-east-2]
+  storage:
+    retainOnUninstall: false
+    createFinalSnapshot: false
+upgradeFrom: [] # First proposed template release; no published upgrade source exists.

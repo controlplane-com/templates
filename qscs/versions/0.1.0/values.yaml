@@ -1,0 +1,24 @@
+global:
+  cpln:
+    gvc: "" # Selected/created in the catalogue. CLI installs accept --gvc; scripts/install.py can create it first.
+
+origin: https://origin.example.com # Replace with an HTTP(S) URL or bare address, e.g. 203.0.113.110:80 (HTTP).
+initialLocation: aws-eu-central-1 # Bootstrap location in the selected GVC; its initial master needs access to the upstream.
+additionalNodes: [] # One location name per extra node; repeat a location to place nodes together.
+claimedDeployment: false # Deprecated compatibility value; no effect. Quantity limits are removed.
+
+frontend: "" # Optional public hostname. Empty uses Control Plane's generated global endpoint.
+upstream: "" # Optional upstream HTTP Host header; TLS SNI still uses the origin hostname.
+image: spooksystems/qscs:latest # Resolved at deployment; dynamic image updates are disabled.
+resources:
+  cpu: 500m # Per replica. Adjust for application workload.
+  memory: 512Mi # Per replica. Adjust for response size and retained working state.
+publicCIDRs: ["0.0.0.0/0"] # Public application ingress. Peering is restricted to this workload.
+publicTopology: false # Opt in to publicly exposing node UUIDs, roles, substrate ID and placement for a deployment diagram.
+
+storage:
+  capacityGiB: 10 # PER NODE: two nodes allocate twice this amount.
+  fileSystemType: xfs # xfs or ext4. Each replica receives its own volume.
+  retainOnUninstall: true # Retain the volume set when uninstalling the Helm release.
+  createFinalSnapshot: true # Applies when the retained volume set/volume is later deleted.
+  snapshotRetention: 7d # Retained volumes and snapshots can continue to incur provider charges.

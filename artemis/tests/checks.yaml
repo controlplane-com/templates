@@ -252,6 +252,8 @@ checks:
       refused the other's action, the producer is refused an address outside its pattern, and the
       producer is refused by the web console's Jolokia (the admin is not).
     since: 1.1.0
+    # Fresh installs only: an upgrade from 1.0.0 keeps 1.0.0's values, which list no application users.
+    scenarios: "^install "
     exec:
       workload: "{release}-artemis"
       container: artemis
